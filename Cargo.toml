@@ -1,0 +1,15 @@
+[package]
+name = "p2p"
+version = "0.1.0"
+authors = ["piaoliu <441594700@qq.com>"]
+edition = "2018"
+
+[dependencies]
+yamux = { git = "https://github.com/TheWaWaR/yamux.git" }
+futures = "0.1"
+tokio = "0.1"
+log = "0.4"
+bytes = "0.4"
+
+[dev-dependencies]
+env_logger = "0.6.0"
