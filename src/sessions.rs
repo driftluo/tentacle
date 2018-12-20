@@ -268,6 +268,7 @@ where
                 }
             }
             SessionEvent::SessionClose { .. } => {
+                // todo: notify sub stream closed
                 let _ = self.socket.shutdown();
                 self.sub_streams.clear();
             }

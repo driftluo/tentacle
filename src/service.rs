@@ -11,7 +11,7 @@ use tokio::net::{
 };
 use yamux::session::SessionType;
 
-use crate::sessions::{ProtocolId, ProtocolMeta, Session, SessionEvent, SessionId, StreamId};
+use crate::sessions::{ProtocolId, ProtocolMeta, Session, SessionEvent, SessionId};
 
 /// All functions on this trait will block the entire server running, do not insert long-time tasks,
 /// you can use the futures task instead.
@@ -26,21 +26,9 @@ pub trait ServiceHandle {
 pub trait ProtocolHandle {
     fn received(&mut self, _control: &mut ServiceContext, _data: Message) {}
 
-    fn opened(
-        &mut self,
-        _control: &mut ServiceContext,
-        _session_id: SessionId,
-        _stream_id: StreamId,
-    ) {
-    }
+    fn connected(&mut self, _control: &mut ServiceContext, _session_id: SessionId) {}
 
-    fn closed(
-        &mut self,
-        _control: &mut ServiceContext,
-        _session_id: SessionId,
-        _stream_id: StreamId,
-    ) {
-    }
+    fn closed(&mut self, _control: &mut ServiceContext, _session_id: SessionId) {}
 }
 
 #[derive(Debug)]
@@ -150,7 +138,8 @@ pub struct Service<T, U> {
 
     handle: T,
 
-    proto_handles: HashMap<(SessionId, ProtocolId), Box<dyn ProtocolHandle + Send + 'static>>,
+    proto_handles:
+        HashMap<SessionId, HashMap<ProtocolId, Box<dyn ProtocolHandle + Send + 'static>>>,
 
     /// send events to service, clone to session
     session_event_sender: mpsc::Sender<SessionEvent>,
@@ -281,46 +270,55 @@ where
                 let _ = self.sessions.remove(&id);
                 self.handle
                     .session_handle(&mut self.service_context, ServiceEvent::SessionClose { id });
+                if let Some(handles) = self.proto_handles.remove(&id) {
+                    for (_, mut handle) in handles {
+                        handle.closed(&mut self.service_context, id);
+                    }
+                }
             }
             SessionEvent::ProtocolMessage { id, proto_id, data } => {
                 debug!(
                     "service receive session [{}] proto [{}] data: {:?}",
                     id, proto_id, data
                 );
-                if let Some(handle) = self.proto_handles.get_mut(&(id, proto_id)) {
-                    handle.received(
-                        &mut self.service_context,
-                        Message {
-                            id,
-                            proto_id,
-                            data: data.to_vec(),
-                        },
-                    );
+                if let Some(handles) = self.proto_handles.get_mut(&id) {
+                    if let Some(handle) = handles.get_mut(&proto_id) {
+                        handle.received(
+                            &mut self.service_context,
+                            Message {
+                                id,
+                                proto_id,
+                                data: data.to_vec(),
+                            },
+                        );
+                    } else {
+                        error!("can't find proto [{}] on protocol message event", proto_id);
+                    }
                 } else {
-                    error!("can't find proto [{}] on protocol message event", proto_id);
+                    error!("can't find session [{}] on protocol message event", id);
                 }
             }
-            SessionEvent::ProtocolOpen {
-                id,
-                proto_id,
-                stream_id,
-            } => {
+            SessionEvent::ProtocolOpen { id, proto_id, .. } => {
                 if let Some(mut handle) = self.get_proto_handle(proto_id) {
-                    handle.opened(&mut self.service_context, id, stream_id);
-                    self.proto_handles.insert((id, proto_id), handle);
+                    handle.connected(&mut self.service_context, id);
+
+                    self.proto_handles
+                        .entry(id)
+                        .or_default()
+                        .insert(proto_id, handle);
                 } else {
                     error!("can't create proto [{}] handle on protocol open", proto_id);
                 }
             }
-            SessionEvent::ProtocolClose {
-                id,
-                proto_id,
-                stream_id,
-            } => {
-                if let Some(mut handle) = self.proto_handles.remove(&(id, proto_id)) {
-                    handle.closed(&mut self.service_context, id, stream_id);
+            SessionEvent::ProtocolClose { id, proto_id, .. } => {
+                if let Some(handles) = self.proto_handles.get_mut(&id) {
+                    if let Some(mut handle) = handles.remove(&proto_id) {
+                        handle.closed(&mut self.service_context, id);
+                    } else {
+                        error!("can't find proto [{}] on protocol close event", proto_id);
+                    }
                 } else {
-                    error!("can't find proto [{}] on protocol close event", proto_id);
+                    error!("can't find session [{}] on protocol close event", id);
                 }
             }
         }
@@ -339,6 +337,11 @@ where
                 }
                 self.handle
                     .session_handle(&mut self.service_context, ServiceEvent::SessionClose { id });
+                if let Some(handles) = self.proto_handles.remove(&id) {
+                    for (_, mut handle) in handles {
+                        handle.closed(&mut self.service_context, id);
+                    }
+                }
             }
             ServiceTask::FutureTask { task } => {
                 tokio::spawn(task);
