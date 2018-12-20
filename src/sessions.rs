@@ -27,14 +27,16 @@ pub enum SessionEvent {
     ProtocolOpen {
         id: SessionId,
         proto_id: ProtocolId,
+        stream_id: StreamId,
     },
-    //    ProtocolClose {
-    //        id: SessionId,
-    //        proto_id: ProtocolId,
-    //    },
+    ProtocolClose {
+        id: SessionId,
+        proto_id: ProtocolId,
+        stream_id: StreamId,
+    },
 }
 
-pub trait ProtocolUpgrade<U>
+pub trait ProtocolMeta<U>
 where
     U: Decoder<Item = bytes::BytesMut> + Encoder<Item = bytes::Bytes> + Send + 'static,
     <U as Decoder>::Error: error::Error,
@@ -45,13 +47,13 @@ where
     }
     fn id(&self) -> ProtocolId;
     fn framed(&self, stream: StreamHandle) -> Framed<StreamHandle, U>;
-    fn handle(&self) -> Box<dyn ProtocolHandle>;
+    fn handle(&self) -> Box<dyn ProtocolHandle + Send + 'static>;
 }
 
 pub struct Session<T, U> {
     socket: YamuxSession<T>,
 
-    protocol_configs: Arc<HashMap<String, Box<dyn ProtocolUpgrade<U> + Send + Sync>>>,
+    protocol_configs: Arc<HashMap<String, Box<dyn ProtocolMeta<U> + Send + Sync>>>,
 
     id: SessionId,
 
@@ -85,7 +87,7 @@ where
         service_sender: mpsc::Sender<SessionEvent>,
         service_receiver: mpsc::Receiver<SessionEvent>,
         id: SessionId,
-        protocol_configs: Arc<HashMap<String, Box<dyn ProtocolUpgrade<U> + Send + Sync>>>,
+        protocol_configs: Arc<HashMap<String, Box<dyn ProtocolMeta<U> + Send + Sync>>>,
     ) -> Self {
         let config = Config::default();
         let socket = YamuxSession::new_client(socket, config);
@@ -110,7 +112,7 @@ where
         service_sender: mpsc::Sender<SessionEvent>,
         service_receiver: mpsc::Receiver<SessionEvent>,
         id: SessionId,
-        protocol_configs: Arc<HashMap<String, Box<dyn ProtocolUpgrade<U> + Send + Sync>>>,
+        protocol_configs: Arc<HashMap<String, Box<dyn ProtocolMeta<U> + Send + Sync>>>,
     ) -> Self {
         let config = Config::default();
         let socket = YamuxSession::new_client(socket, config);
@@ -219,37 +221,25 @@ where
                 self.sub_streams
                     .insert(self.next_stream, session_to_proto_sender);
                 self.proto_streams.insert(proto.id(), self.next_stream);
-                self.next_stream += 1;
 
                 self.event_output(SessionEvent::ProtocolOpen {
                     id: self.id,
+                    stream_id: self.next_stream,
                     proto_id: proto.id(),
                 });
+                self.next_stream += 1;
 
                 tokio::spawn(proto_stream.for_each(|_| Ok(())));
             }
             ProtocolEvent::ProtocolClose { id, proto_id } => {
-                // todo: Automatically try to reopen the protocol stream?
+                debug!("session [{}] proto [{}] closed", self.id, proto_id);
                 let _ = self.sub_streams.remove(&id);
                 let _ = self.proto_streams.remove(&proto_id);
-                if self.sub_streams.remove(&id).is_some() {
-                    let name = self
-                        .protocol_configs
-                        .values()
-                        .map(|proto| {
-                            if proto.id() == proto_id {
-                                proto.name().to_string()
-                            } else {
-                                String::new()
-                            }
-                        })
-                        .collect::<Vec<String>>()
-                        .pop()
-                        .unwrap();
-                    if !name.is_empty() {
-                        self.open_proto_stream(name);
-                    }
-                }
+                self.event_output(SessionEvent::ProtocolClose {
+                    id: self.id,
+                    proto_id,
+                    stream_id: id,
+                })
             }
             ProtocolEvent::ProtocolMessage { data, proto_id, .. } => {
                 debug!("get proto [{}] data: {:?}", proto_id, data);

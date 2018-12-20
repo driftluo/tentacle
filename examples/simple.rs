@@ -3,9 +3,9 @@ use futures::prelude::*;
 use log::info;
 use p2p::{
     service::{
-        Message, ProtocolHandle, Service, ServiceContext, ServiceHandle, ServiceIn, ServiceOut,
+        Message, ProtocolHandle, Service, ServiceContext, ServiceEvent, ServiceHandle, ServiceTask,
     },
-    sessions::{ProtocolId, ProtocolUpgrade},
+    sessions::{ProtocolId, ProtocolMeta},
 };
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -27,27 +27,32 @@ impl Protocol {
     }
 }
 
-impl ProtocolUpgrade<BytesCodec> for Protocol {
+impl ProtocolMeta<BytesCodec> for Protocol {
     fn id(&self) -> ProtocolId {
         self.id
     }
     fn framed(&self, stream: StreamHandle) -> Framed<StreamHandle, BytesCodec> {
         Framed::new(stream, BytesCodec::new())
     }
-    fn handle(&self) -> Box<dyn ProtocolHandle> {
-        Box::new(PHandle)
+    fn handle(&self) -> Box<dyn ProtocolHandle + Send + 'static> {
+        Box::new(PHandle::default())
     }
 }
 
-struct PHandle;
+#[derive(Default)]
+struct PHandle {
+    count: usize,
+}
 
 impl ProtocolHandle for PHandle {
     fn received(&mut self, _env: &mut ServiceContext, data: Message) {
+        self.count += 1;
         info!(
-            "received from [{}]: proto [{}] data {:?}",
+            "received from [{}]: proto [{}] data {:?}, message count: {}",
             data.id,
             data.proto_id,
-            str::from_utf8(&data.data).unwrap()
+            str::from_utf8(&data.data).unwrap(),
+            self.count
         );
     }
 }
@@ -55,44 +60,42 @@ impl ProtocolHandle for PHandle {
 struct SHandle;
 
 impl ServiceHandle for SHandle {
-    fn error_handle(&mut self, _env: &mut ServiceContext, error: ServiceOut) {
+    fn error_handle(&mut self, _env: &mut ServiceContext, error: ServiceEvent) {
         info!("service error: {:?}", error);
     }
-    fn session_handle(&mut self, env: &mut ServiceContext, event: ServiceOut) {
+    fn session_handle(&mut self, env: &mut ServiceContext, event: ServiceEvent) {
         info!("service event: {:?}", event);
-        if let ServiceOut::ProtocolOpen { id, proto_id } = event {
-            if proto_id == 0 {
-                let mut delay_sender = env.sender().clone();
-                let mut interval_sender = env.sender().clone();
-                let delay_task = Delay::new(Instant::now() + Duration::from_secs(3))
-                    .and_then(move |_| {
-                        let _ = delay_sender.try_send(ServiceIn::ProtocolMessage {
-                            ids: None,
-                            message: Message {
-                                id,
-                                proto_id: 0,
-                                data: b"I am a delayed message".to_vec(),
-                            },
-                        });
-                        Ok(())
-                    })
-                    .map_err(|err| info!("{}", err));
-                let interval_task = Interval::new(Instant::now(), Duration::from_secs(5))
-                    .for_each(move |_| {
-                        let _ = interval_sender.try_send(ServiceIn::ProtocolMessage {
-                            ids: None,
-                            message: Message {
-                                id,
-                                proto_id: 1,
-                                data: b"I am a interval message".to_vec(),
-                            },
-                        });
-                        Ok(())
-                    })
-                    .map_err(|err| info!("{}", err));
-                env.future_task(Box::new(delay_task));
-                env.future_task(Box::new(interval_task));
-            }
+        if let ServiceEvent::SessionOpen { id, .. } = event {
+            let mut delay_sender = env.sender().clone();
+            let mut interval_sender = env.sender().clone();
+            let delay_task = Delay::new(Instant::now() + Duration::from_secs(3))
+                .and_then(move |_| {
+                    let _ = delay_sender.try_send(ServiceTask::ProtocolMessage {
+                        ids: None,
+                        message: Message {
+                            id,
+                            proto_id: 0,
+                            data: b"I am a delayed message".to_vec(),
+                        },
+                    });
+                    Ok(())
+                })
+                .map_err(|err| info!("{}", err));
+            let interval_task = Interval::new(Instant::now(), Duration::from_secs(5))
+                .for_each(move |_| {
+                    let _ = interval_sender.try_send(ServiceTask::ProtocolMessage {
+                        ids: None,
+                        message: Message {
+                            id,
+                            proto_id: 1,
+                            data: b"I am a interval message".to_vec(),
+                        },
+                    });
+                    Ok(())
+                })
+                .map_err(|err| info!("{}", err));
+            env.future_task(Box::new(delay_task));
+            env.future_task(Box::new(interval_task));
         }
     }
 }
@@ -117,11 +120,11 @@ fn create_service() -> Service<SHandle, BytesCodec> {
     let mut config = HashMap::new();
     config.insert(
         name_0,
-        Box::new(proto_0) as Box<dyn ProtocolUpgrade<_> + Send + Sync>,
+        Box::new(proto_0) as Box<dyn ProtocolMeta<_> + Send + Sync>,
     );
     config.insert(
         name_1,
-        Box::new(proto_1) as Box<dyn ProtocolUpgrade<_> + Send + Sync>,
+        Box::new(proto_1) as Box<dyn ProtocolMeta<_> + Send + Sync>,
     );
     Service::new(Arc::new(config), SHandle)
 }
