@@ -6,6 +6,7 @@ edition = "2018"
 
 [dependencies]
 yamux = { git = "https://github.com/TheWaWaR/yamux.git" }
+#yamux = { path = "../yamux" }
 futures = "0.1"
 tokio = "0.1"
 log = "0.4"

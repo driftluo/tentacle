@@ -1,5 +1,5 @@
 use futures::{prelude::*, sync::mpsc};
-use log::{debug, warn};
+use log::{debug, error, warn};
 use std::collections::VecDeque;
 use std::error;
 use tokio::codec::{Decoder, Encoder, Framed};
@@ -29,9 +29,9 @@ pub struct SubStream<U> {
     proto_id: ProtocolId,
     data_buf: VecDeque<bytes::Bytes>,
 
-    /// clone to new sub stream
+    /// send event to session
     event_sender: mpsc::Sender<ProtocolEvent>,
-    /// receive events from sub streams
+    /// receive events from session
     event_receiver: mpsc::Receiver<ProtocolEvent>,
 }
 
@@ -82,6 +82,7 @@ where
                 return Err(());
             }
         };
+        debug!("send success, proto_id: {}", self.proto_id);
         Ok(Async::Ready(()))
     }
 }
@@ -99,11 +100,14 @@ where
         loop {
             match self.sub_stream.poll() {
                 Ok(Async::Ready(Some(data))) => {
-                    let _ = self.event_sender.try_send(ProtocolEvent::ProtocolMessage {
+                    debug!("protocol [{}] receive data: {:?}", self.proto_id, data);
+                    if let Err(e) = self.event_sender.try_send(ProtocolEvent::ProtocolMessage {
                         id: self.id,
                         proto_id: self.proto_id,
                         data: data.into(),
-                    });
+                    }) {
+                        error!("proto send to session error: {}", e);
+                    }
                 }
                 Ok(Async::Ready(None)) => {
                     let _ = self.event_sender.try_send(ProtocolEvent::ProtocolClose {
@@ -129,7 +133,10 @@ where
                         }
                     }
                 }
-                Ok(Async::Ready(None)) => unreachable!(),
+                Ok(Async::Ready(None)) => {
+                    // Must be session close
+                    return Ok(Async::Ready(None));
+                }
                 Ok(Async::NotReady) => break,
                 Err(err) => {
                     warn!("{:?}", err);

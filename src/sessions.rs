@@ -1,12 +1,13 @@
 use futures::{prelude::*, sync::mpsc};
-use log::{trace, warn, info, debug};
+use log::{debug, error, trace, warn};
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::{error, io};
 use tokio::codec::{Decoder, Encoder, Framed};
 use tokio::prelude::{AsyncRead, AsyncWrite};
-use yamux::{Config, Session, StreamHandle, session::SessionType};
+use yamux::{session::SessionType, Config, Session as YamuxSession, StreamHandle};
 
+use crate::service::ProtocolHandle;
 use crate::substream::{ProtocolEvent, SubStream};
 
 pub type StreamId = usize;
@@ -33,22 +34,24 @@ pub enum SessionEvent {
     //    },
 }
 
-pub trait ProtocolUpgrade<T, U>
+pub trait ProtocolUpgrade<U>
 where
-    T: AsyncRead + AsyncWrite,
     U: Decoder<Item = bytes::BytesMut> + Encoder<Item = bytes::Bytes> + Send + 'static,
     <U as Decoder>::Error: error::Error,
     <U as Encoder>::Error: error::Error,
 {
-    fn name(&self) -> &str;
+    fn name(&self) -> String {
+        format!("/p2p/{}", self.id())
+    }
     fn id(&self) -> ProtocolId;
-    fn framed(&self, stream: T) -> Framed<T, U>;
+    fn framed(&self, stream: StreamHandle) -> Framed<StreamHandle, U>;
+    fn handle(&self) -> Box<dyn ProtocolHandle>;
 }
 
-pub struct SessionManager<T, U> {
-    socket: Session<T>,
+pub struct Session<T, U> {
+    socket: YamuxSession<T>,
 
-    protocol_configs: Arc<HashMap<String, Box<dyn ProtocolUpgrade<StreamHandle, U> + Send + Sync>>>,
+    protocol_configs: Arc<HashMap<String, Box<dyn ProtocolUpgrade<U> + Send + Sync>>>,
 
     id: SessionId,
 
@@ -60,9 +63,9 @@ pub struct SessionManager<T, U> {
     proto_streams: HashMap<ProtocolId, StreamId>,
 
     /// clone to new sub stream
-    event_sender: mpsc::Sender<ProtocolEvent>,
+    proto_event_sender: mpsc::Sender<ProtocolEvent>,
     /// receive events from sub streams
-    event_receiver: mpsc::Receiver<ProtocolEvent>,
+    proto_event_receiver: mpsc::Receiver<ProtocolEvent>,
 
     /// send events to service
     service_sender: mpsc::Sender<SessionEvent>,
@@ -70,7 +73,7 @@ pub struct SessionManager<T, U> {
     service_receiver: mpsc::Receiver<SessionEvent>,
 }
 
-impl<T, U> SessionManager<T, U>
+impl<T, U> Session<T, U>
 where
     T: AsyncRead + AsyncWrite,
     U: Decoder<Item = bytes::BytesMut> + Encoder<Item = bytes::Bytes> + Send + 'static,
@@ -82,14 +85,12 @@ where
         service_sender: mpsc::Sender<SessionEvent>,
         service_receiver: mpsc::Receiver<SessionEvent>,
         id: SessionId,
-        protocol_configs: Arc<
-            HashMap<String, Box<dyn ProtocolUpgrade<StreamHandle, U> + Send + Sync>>,
-        >,
+        protocol_configs: Arc<HashMap<String, Box<dyn ProtocolUpgrade<U> + Send + Sync>>>,
     ) -> Self {
         let config = Config::default();
-        let socket = Session::new_client(socket, config);
-        let (event_sender, event_receiver) = mpsc::channel(256);
-        SessionManager {
+        let socket = YamuxSession::new_client(socket, config);
+        let (proto_event_sender, proto_event_receiver) = mpsc::channel(256);
+        Session {
             socket,
             protocol_configs,
             id,
@@ -97,8 +98,8 @@ where
             next_stream: 0,
             sub_streams: HashMap::default(),
             proto_streams: HashMap::default(),
-            event_sender,
-            event_receiver,
+            proto_event_sender,
+            proto_event_receiver,
             service_sender,
             service_receiver,
         }
@@ -109,14 +110,12 @@ where
         service_sender: mpsc::Sender<SessionEvent>,
         service_receiver: mpsc::Receiver<SessionEvent>,
         id: SessionId,
-        protocol_configs: Arc<
-            HashMap<String, Box<dyn ProtocolUpgrade<StreamHandle, U> + Send + Sync>>,
-        >,
+        protocol_configs: Arc<HashMap<String, Box<dyn ProtocolUpgrade<U> + Send + Sync>>>,
     ) -> Self {
         let config = Config::default();
-        let socket = Session::new_client(socket, config);
-        let (event_sender, event_receiver) = mpsc::channel(32);
-        SessionManager {
+        let socket = YamuxSession::new_client(socket, config);
+        let (proto_event_sender, proto_event_receiver) = mpsc::channel(32);
+        Session {
             socket,
             protocol_configs,
             id,
@@ -124,8 +123,8 @@ where
             next_stream: 0,
             sub_streams: HashMap::default(),
             proto_streams: HashMap::default(),
-            event_sender,
-            event_receiver,
+            proto_event_sender,
+            proto_event_receiver,
             service_sender,
             service_receiver,
         }
@@ -133,12 +132,12 @@ where
 
     pub fn open_proto_stream(&mut self, proto_name: String) {
         debug!("open proto, {}", proto_name);
-        let event_sender = self.event_sender.clone();
+        let event_sender = self.proto_event_sender.clone();
         let handle = self.socket.open_stream().unwrap();
         let task = tokio::io::write_all(handle, format!("{}\n", proto_name))
             .and_then(move |(sub_stream, _)| {
                 let mut send_task = event_sender.send(ProtocolEvent::ProtocolOpen {
-                    sub_stream: sub_stream,
+                    sub_stream,
                     proto_name: proto_name.into_bytes(),
                 });
                 loop {
@@ -152,18 +151,19 @@ where
             })
             .map_err(|err| {
                 trace!("stream protocol identify err: {:?}", err);
-                ()
             });
         tokio::spawn(task);
     }
 
     fn event_output(&mut self, event: SessionEvent) {
-        let _ = self.service_sender.try_send(event);
+        if let Err(e) = self.service_sender.try_send(event) {
+            error!("session send to service error: {}", e);
+        }
     }
 
     fn handle_sub_stream(&mut self, sub_stream: StreamHandle) {
         debug!("new handle start");
-        let event_sender = self.event_sender.clone();
+        let event_sender = self.proto_event_sender.clone();
         let task = tokio::io::read_until(io::BufReader::new(sub_stream), b'\n', Vec::new())
             .and_then(move |(sub_stream, proto_name)| {
                 let mut send_task = event_sender.send(ProtocolEvent::ProtocolOpen {
@@ -181,7 +181,6 @@ where
             })
             .map_err(|err| {
                 trace!("stream protocol identify err: {:?}", err);
-                ()
             });
         tokio::spawn(task);
     }
@@ -209,30 +208,31 @@ where
                     }
                 };
                 let frame = proto.framed(sub_stream);
-                let (event_sender, event_receiver) = mpsc::channel(32);
-                let sub_stream = SubStream::new(
+                let (session_to_proto_sender, session_to_proto_receiver) = mpsc::channel(32);
+                let proto_stream = SubStream::new(
                     frame,
-                    self.event_sender.clone(),
-                    event_receiver,
+                    self.proto_event_sender.clone(),
+                    session_to_proto_receiver,
                     self.next_stream,
                     proto.id(),
                 );
-                self.sub_streams.insert(self.next_stream, event_sender);
+                self.sub_streams
+                    .insert(self.next_stream, session_to_proto_sender);
                 self.proto_streams.insert(proto.id(), self.next_stream);
                 self.next_stream += 1;
 
-                let _ = self.event_output(SessionEvent::ProtocolOpen {
+                self.event_output(SessionEvent::ProtocolOpen {
                     id: self.id,
                     proto_id: proto.id(),
                 });
 
-                tokio::spawn(sub_stream.for_each(|_| Ok(())));
+                tokio::spawn(proto_stream.for_each(|_| Ok(())));
             }
             ProtocolEvent::ProtocolClose { id, proto_id } => {
                 // todo: Automatically try to reopen the protocol stream?
                 let _ = self.sub_streams.remove(&id);
                 let _ = self.proto_streams.remove(&proto_id);
-                if let Some(_) = self.sub_streams.remove(&id) {
+                if self.sub_streams.remove(&id).is_some() {
                     let name = self
                         .protocol_configs
                         .values()
@@ -252,35 +252,41 @@ where
                 }
             }
             ProtocolEvent::ProtocolMessage { data, proto_id, .. } => {
-                let _ = self.event_output(SessionEvent::ProtocolMessage {
+                debug!("get proto [{}] data: {:?}", proto_id, data);
+                self.event_output(SessionEvent::ProtocolMessage {
                     id: self.id,
                     proto_id,
                     data,
-                });
+                })
             }
         }
     }
 
     fn handle_session_event(&mut self, event: SessionEvent) {
-        debug!("start send");
         match event {
             SessionEvent::ProtocolMessage { proto_id, data, .. } => {
                 if let Some(stream_id) = self.proto_streams.get(&proto_id) {
-                    self.sub_streams.get_mut(stream_id).map(|sender| {
+                    if let Some(sender) = self.sub_streams.get_mut(stream_id) {
                         let _ = sender.try_send(ProtocolEvent::ProtocolMessage {
                             id: *stream_id,
                             proto_id,
                             data,
                         });
-                    });
+                    };
+                } else {
+                    debug!("protocol {} not ready", proto_id);
                 }
+            }
+            SessionEvent::SessionClose { .. } => {
+                let _ = self.socket.shutdown();
+                self.sub_streams.clear();
             }
             _ => (),
         }
     }
 }
 
-impl<T, U> Stream for SessionManager<T, U>
+impl<T, U> Stream for Session<T, U>
 where
     T: AsyncRead + AsyncWrite,
     U: Decoder<Item = bytes::BytesMut> + Encoder<Item = bytes::Bytes> + Send + 'static,
@@ -291,7 +297,7 @@ where
     type Error = ();
 
     fn poll(&mut self) -> Poll<Option<Self::Item>, Self::Error> {
-        info!("[{:?}] do something", self.ty);
+        trace!("[{:?}] do something", self.ty);
         match self.socket.poll() {
             Ok(Async::Ready(Some(sub_stream))) => self.handle_sub_stream(sub_stream),
             Ok(Async::Ready(None)) => {
@@ -308,7 +314,7 @@ where
         }
 
         loop {
-            match self.event_receiver.poll() {
+            match self.proto_event_receiver.poll() {
                 Ok(Async::Ready(Some(event))) => self.handle_stream_event(event),
                 Ok(Async::Ready(None)) => unreachable!(),
                 Ok(Async::NotReady) => break,
@@ -322,7 +328,10 @@ where
         loop {
             match self.service_receiver.poll() {
                 Ok(Async::Ready(Some(event))) => self.handle_session_event(event),
-                Ok(Async::Ready(None)) => unreachable!(),
+                Ok(Async::Ready(None)) => {
+                    // Must stop by service
+                    return Ok(Async::Ready(None));
+                }
                 Ok(Async::NotReady) => break,
                 Err(err) => {
                     warn!("{:?}", err);
