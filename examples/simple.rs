@@ -6,6 +6,7 @@ use p2p::{
         Message, ProtocolHandle, Service, ServiceContext, ServiceEvent, ServiceHandle, ServiceTask,
     },
     sessions::{ProtocolId, ProtocolMeta},
+    StreamHandle,
 };
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -13,9 +14,8 @@ use std::{
     str,
     time::{Duration, Instant},
 };
-use tokio::codec::{BytesCodec, Framed};
+use tokio::codec::{length_delimited::LengthDelimitedCodec, Framed};
 use tokio::timer::{Delay, Interval};
-use yamux::StreamHandle;
 
 pub struct Protocol {
     id: ProtocolId,
@@ -27,12 +27,12 @@ impl Protocol {
     }
 }
 
-impl ProtocolMeta<BytesCodec> for Protocol {
+impl ProtocolMeta<LengthDelimitedCodec> for Protocol {
     fn id(&self) -> ProtocolId {
         self.id
     }
-    fn framed(&self, stream: StreamHandle) -> Framed<StreamHandle, BytesCodec> {
-        Framed::new(stream, BytesCodec::new())
+    fn framed(&self, stream: StreamHandle) -> Framed<StreamHandle, LengthDelimitedCodec> {
+        Framed::new(stream, LengthDelimitedCodec::new())
     }
     fn handle(&self) -> Box<dyn ProtocolHandle + Send + 'static> {
         Box::new(PHandle::default())
@@ -60,10 +60,10 @@ impl ProtocolHandle for PHandle {
 struct SHandle;
 
 impl ServiceHandle for SHandle {
-    fn error_handle(&mut self, _env: &mut ServiceContext, error: ServiceEvent) {
+    fn handle_error(&mut self, _env: &mut ServiceContext, error: ServiceEvent) {
         info!("service error: {:?}", error);
     }
-    fn session_handle(&mut self, env: &mut ServiceContext, event: ServiceEvent) {
+    fn handle_event(&mut self, env: &mut ServiceContext, event: ServiceEvent) {
         info!("service event: {:?}", event);
         if let ServiceEvent::SessionOpen { id, .. } = event {
             let mut delay_sender = env.sender().clone();
@@ -112,7 +112,7 @@ fn main() {
     }
 }
 
-fn create_service() -> Service<SHandle, BytesCodec> {
+fn create_service() -> Service<SHandle, LengthDelimitedCodec> {
     let proto_0 = Protocol::new(0);
     let name_0 = proto_0.name();
     let proto_1 = Protocol::new(1);

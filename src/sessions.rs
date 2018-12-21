@@ -39,8 +39,8 @@ pub enum SessionEvent {
 pub trait ProtocolMeta<U>
 where
     U: Decoder<Item = bytes::BytesMut> + Encoder<Item = bytes::Bytes> + Send + 'static,
-    <U as Decoder>::Error: error::Error,
-    <U as Encoder>::Error: error::Error,
+    <U as Decoder>::Error: error::Error + Into<io::Error>,
+    <U as Encoder>::Error: error::Error + Into<io::Error>,
 {
     fn name(&self) -> String {
         format!("/p2p/{}", self.id())
@@ -79,8 +79,8 @@ impl<T, U> Session<T, U>
 where
     T: AsyncRead + AsyncWrite,
     U: Decoder<Item = bytes::BytesMut> + Encoder<Item = bytes::Bytes> + Send + 'static,
-    <U as Decoder>::Error: error::Error,
-    <U as Encoder>::Error: error::Error,
+    <U as Decoder>::Error: error::Error + Into<io::Error>,
+    <U as Encoder>::Error: error::Error + Into<io::Error>,
 {
     pub fn new_client(
         socket: T,
@@ -281,8 +281,8 @@ impl<T, U> Stream for Session<T, U>
 where
     T: AsyncRead + AsyncWrite,
     U: Decoder<Item = bytes::BytesMut> + Encoder<Item = bytes::Bytes> + Send + 'static,
-    <U as Decoder>::Error: error::Error,
-    <U as Encoder>::Error: error::Error,
+    <U as Decoder>::Error: error::Error + Into<io::Error>,
+    <U as Encoder>::Error: error::Error + Into<io::Error>,
 {
     type Item = ();
     type Error = ();

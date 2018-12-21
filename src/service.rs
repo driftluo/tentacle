@@ -16,9 +16,9 @@ use crate::sessions::{ProtocolId, ProtocolMeta, Session, SessionEvent, SessionId
 /// All functions on this trait will block the entire server running, do not insert long-time tasks,
 /// you can use the futures task instead.
 pub trait ServiceHandle {
-    fn error_handle(&mut self, _control: &mut ServiceContext, _error: ServiceEvent) {}
+    fn handle_error(&mut self, _control: &mut ServiceContext, _error: ServiceEvent) {}
 
-    fn session_handle(&mut self, _control: &mut ServiceContext, _event: ServiceEvent) {}
+    fn handle_event(&mut self, _control: &mut ServiceContext, _event: ServiceEvent) {}
 }
 
 /// All functions on this trait will block the entire server running, do not insert long-time tasks,
@@ -28,7 +28,7 @@ pub trait ProtocolHandle {
 
     fn connected(&mut self, _control: &mut ServiceContext, _session_id: SessionId) {}
 
-    fn closed(&mut self, _control: &mut ServiceContext, _session_id: SessionId) {}
+    fn disconnected(&mut self, _control: &mut ServiceContext, _session_id: SessionId) {}
 }
 
 #[derive(Debug)]
@@ -136,6 +136,7 @@ pub struct Service<T, U> {
 
     next_session: SessionId,
 
+    /// can be upgrade to list service level protocols
     handle: T,
 
     proto_handles:
@@ -156,8 +157,8 @@ impl<T, U> Service<T, U>
 where
     T: ServiceHandle,
     U: Decoder<Item = bytes::BytesMut> + Encoder<Item = bytes::Bytes> + Send + 'static,
-    <U as Decoder>::Error: error::Error,
-    <U as Encoder>::Error: error::Error,
+    <U as Decoder>::Error: error::Error + Into<io::Error>,
+    <U as Encoder>::Error: error::Error + Into<io::Error>,
 {
     pub fn new(
         protocol_configs: Arc<HashMap<String, Box<dyn ProtocolMeta<U> + Send + Sync>>>,
@@ -269,10 +270,10 @@ where
             SessionEvent::SessionClose { id } => {
                 let _ = self.sessions.remove(&id);
                 self.handle
-                    .session_handle(&mut self.service_context, ServiceEvent::SessionClose { id });
+                    .handle_event(&mut self.service_context, ServiceEvent::SessionClose { id });
                 if let Some(handles) = self.proto_handles.remove(&id) {
                     for (_, mut handle) in handles {
-                        handle.closed(&mut self.service_context, id);
+                        handle.disconnected(&mut self.service_context, id);
                     }
                 }
             }
@@ -313,7 +314,7 @@ where
             SessionEvent::ProtocolClose { id, proto_id, .. } => {
                 if let Some(handles) = self.proto_handles.get_mut(&id) {
                     if let Some(mut handle) = handles.remove(&proto_id) {
-                        handle.closed(&mut self.service_context, id);
+                        handle.disconnected(&mut self.service_context, id);
                     } else {
                         error!("can't find proto [{}] on protocol close event", proto_id);
                     }
@@ -336,10 +337,10 @@ where
                     let _ = session_sender.try_send(SessionEvent::SessionClose { id });
                 }
                 self.handle
-                    .session_handle(&mut self.service_context, ServiceEvent::SessionClose { id });
+                    .handle_event(&mut self.service_context, ServiceEvent::SessionClose { id });
                 if let Some(handles) = self.proto_handles.remove(&id) {
                     for (_, mut handle) in handles {
-                        handle.closed(&mut self.service_context, id);
+                        handle.disconnected(&mut self.service_context, id);
                     }
                 }
             }
@@ -375,7 +376,7 @@ where
 
                     tokio::spawn(session.for_each(|_| Ok(())));
 
-                    self.handle.session_handle(
+                    self.handle.handle_event(
                         &mut self.service_context,
                         ServiceEvent::SessionOpen {
                             id: self.next_session,
@@ -390,14 +391,14 @@ where
                     no_ready_client.push((address, dialer));
                 }
                 Err(err) => {
-                    self.handle.error_handle(
+                    self.handle.handle_error(
                         &mut self.service_context,
                         ServiceEvent::DialerError {
                             address,
                             error: err,
                         },
                     );
-                    return Some(());
+                    return None;
                 }
             }
         }
@@ -405,8 +406,16 @@ where
         None
     }
 
-    fn listen_poll(&mut self) -> Option<bool> {
-        for (address, listen) in self.listens.iter_mut() {
+    fn listen_poll(&mut self) -> Poll<Option<()>, ()> {
+        if self.listens.is_empty() {
+            return Ok(Async::NotReady);
+        }
+
+        let mut listen_len = self.listens.len();
+        let mut no_ready_len = listen_len;
+        let mut dead_listen = Vec::new();
+
+        for (index, (address, listen)) in self.listens.iter_mut().enumerate() {
             match listen.poll() {
                 Ok(Async::Ready(Some(socket))) => {
                     self.next_session += 1;
@@ -425,7 +434,7 @@ where
 
                     tokio::spawn(session.for_each(|_| Ok(())));
 
-                    self.handle.session_handle(
+                    self.handle.handle_event(
                         &mut self.service_context,
                         ServiceEvent::SessionOpen {
                             id: self.next_session,
@@ -433,27 +442,43 @@ where
                             ty: SessionType::Server,
                         },
                     );
-                    return Some(false);
                 }
                 Ok(Async::Ready(None)) => {
+                    dead_listen.push(index);
+
                     if self.sessions.is_empty() {
-                        return Some(true);
+                        listen_len -= 1;
                     }
                 }
-                Ok(Async::NotReady) => (),
+                Ok(Async::NotReady) => no_ready_len -= 1,
                 Err(err) => {
-                    self.handle.error_handle(
+                    self.handle.handle_error(
                         &mut self.service_context,
                         ServiceEvent::ListenError {
                             address: *address,
                             error: err,
                         },
                     );
-                    return Some(false);
                 }
             }
         }
-        None
+
+        dead_listen.into_iter().for_each(|index| {
+            let _ = self.listens.remove(index);
+        });
+
+        // If all listens return NotReady, then it is NotReady
+        if no_ready_len == 0 {
+            return Ok(Async::NotReady);
+        }
+
+        // If all listens return None and the count of sessions is 0, then it returns None
+        // others will return Some(())
+        if listen_len == 0 {
+            Ok(Async::Ready(None))
+        } else {
+            Ok(Async::Ready(Some(())))
+        }
     }
 }
 
@@ -461,19 +486,17 @@ impl<T, U> Stream for Service<T, U>
 where
     T: ServiceHandle,
     U: Decoder<Item = bytes::BytesMut> + Encoder<Item = bytes::Bytes> + Send + 'static,
-    <U as Decoder>::Error: error::Error,
-    <U as Encoder>::Error: error::Error,
+    <U as Decoder>::Error: error::Error + Into<io::Error>,
+    <U as Encoder>::Error: error::Error + Into<io::Error>,
 {
     type Item = ();
     type Error = ();
 
     fn poll(&mut self) -> Poll<Option<Self::Item>, Self::Error> {
-        if let Some(result) = self.listen_poll() {
-            if result {
-                return Ok(Async::Ready(None));
-            } else {
-                return Ok(Async::Ready(Some(())));
-            }
+        match self.listen_poll() {
+            Ok(Async::Ready(None)) => return Ok(Async::Ready(None)),
+            Ok(Async::Ready(Some(_))) => return Ok(Async::Ready(Some(()))),
+            _ => {}
         }
 
         if self.client_poll().is_some() {

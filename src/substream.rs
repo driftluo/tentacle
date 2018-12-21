@@ -1,7 +1,10 @@
 use futures::{prelude::*, sync::mpsc};
 use log::{debug, error, warn};
 use std::collections::VecDeque;
-use std::error;
+use std::{
+    error,
+    io::{self, ErrorKind},
+};
 use tokio::codec::{Decoder, Encoder, Framed};
 use yamux::StreamHandle;
 
@@ -38,8 +41,8 @@ pub struct SubStream<U> {
 impl<U> SubStream<U>
 where
     U: Decoder<Item = bytes::BytesMut> + Encoder<Item = bytes::Bytes> + Send + 'static,
-    <U as Decoder>::Error: error::Error,
-    <U as Encoder>::Error: error::Error,
+    <U as Decoder>::Error: error::Error + Into<io::Error>,
+    <U as Encoder>::Error: error::Error + Into<io::Error>,
 {
     pub fn new(
         sub_stream: Framed<StreamHandle, U>,
@@ -90,8 +93,8 @@ where
 impl<U> Stream for SubStream<U>
 where
     U: Decoder<Item = bytes::BytesMut> + Encoder<Item = bytes::Bytes> + Send + 'static,
-    <U as Decoder>::Error: error::Error,
-    <U as Encoder>::Error: error::Error,
+    <U as Decoder>::Error: error::Error + Into<io::Error>,
+    <U as Encoder>::Error: error::Error + Into<io::Error>,
 {
     type Item = ();
     type Error = ();
@@ -119,7 +122,19 @@ where
                 Ok(Async::NotReady) => break,
                 Err(err) => {
                     warn!("{:?}", err);
-                    break;
+                    match err.into().kind() {
+                        ErrorKind::BrokenPipe
+                        | ErrorKind::ConnectionAborted
+                        | ErrorKind::ConnectionReset
+                        | ErrorKind::NotConnected => {
+                            let _ = self.event_sender.try_send(ProtocolEvent::ProtocolClose {
+                                id: self.id,
+                                proto_id: self.proto_id,
+                            });
+                            return Ok(Async::Ready(None));
+                        }
+                        _ => break,
+                    }
                 }
             }
         }
