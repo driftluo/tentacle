@@ -1,5 +1,5 @@
 use futures::{prelude::*, sync::mpsc};
-use log::{debug, error, warn};
+use log::{debug, trace, warn};
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -11,7 +11,7 @@ use tokio::net::{
 };
 use yamux::session::SessionType;
 
-use crate::sessions::{ProtocolId, ProtocolMeta, Session, SessionEvent, SessionId};
+use crate::session::{ProtocolId, ProtocolMeta, Session, SessionEvent, SessionId};
 
 /// All functions on this trait will block the entire server running, do not insert long-time tasks,
 /// you can use the futures task instead.
@@ -53,13 +53,13 @@ impl Default for Message {
 // TODO: Need to maintain the network topology map here?
 #[derive(Clone)]
 pub struct ServiceContext {
-    service_event_sender: mpsc::Sender<ServiceTask>,
+    service_task_sender: mpsc::Sender<ServiceTask>,
 }
 
 impl ServiceContext {
-    fn new(service_event_sender: mpsc::Sender<ServiceTask>) -> Self {
+    fn new(service_task_sender: mpsc::Sender<ServiceTask>) -> Self {
         ServiceContext {
-            service_event_sender,
+            service_task_sender,
         }
     }
 
@@ -80,11 +80,11 @@ impl ServiceContext {
     }
 
     pub fn sender(&mut self) -> &mut mpsc::Sender<ServiceTask> {
-        &mut self.service_event_sender
+        &mut self.service_task_sender
     }
 
     fn send(&mut self, event: ServiceTask) {
-        let _ = self.service_event_sender.try_send(event);
+        let _ = self.service_task_sender.try_send(event);
     }
 }
 
@@ -117,11 +117,13 @@ pub enum ServiceTask {
         proto_id: ProtocolId,
         token: u64,
     },
+    ProtocolSessionNotify {
+        id: SessionId,
+        proto_id: ProtocolId,
+        token: u64,
+    },
     FutureTask {
         task: Box<dyn Future<Item = (), Error = ()> + 'static + Send>,
-    },
-    StreamTask {
-        task: Box<dyn Stream<Item = (), Error = ()> + 'static + Send>,
     },
     Disconnect {
         id: SessionId,
@@ -147,6 +149,9 @@ pub struct Service<T, U> {
 
     proto_handles: HashMap<ProtocolId, Box<dyn ProtocolHandle + Send + 'static>>,
 
+    proto_session_handles:
+        HashMap<SessionId, HashMap<ProtocolId, Box<dyn ProtocolHandle + Send + 'static>>>,
+
     /// send events to service, clone to session
     session_event_sender: mpsc::Sender<SessionEvent>,
     /// receive event from service
@@ -155,7 +160,7 @@ pub struct Service<T, U> {
     /// external event is passed in from this
     service_context: ServiceContext,
     /// external event receiver
-    service_event_receiver: mpsc::Receiver<ServiceTask>,
+    service_task_receiver: mpsc::Receiver<ServiceTask>,
 }
 
 impl<T, U> Service<T, U>
@@ -170,19 +175,20 @@ where
         handle: T,
     ) -> Self {
         let (session_event_sender, session_event_receiver) = mpsc::channel(256);
-        let (service_event_sender, service_event_receiver) = mpsc::channel(256);
+        let (service_task_sender, service_task_receiver) = mpsc::channel(256);
         Service {
             protocol_configs,
             handle,
             sessions: HashMap::default(),
             proto_handles: HashMap::default(),
+            proto_session_handles: HashMap::default(),
             listens: Vec::new(),
             dial: Vec::new(),
             next_session: 0,
             session_event_sender,
             session_event_receiver,
-            service_context: ServiceContext::new(service_event_sender),
-            service_event_receiver,
+            service_context: ServiceContext::new(service_task_sender),
+            service_task_receiver,
         }
     }
 
@@ -198,6 +204,7 @@ where
         self
     }
 
+    #[inline]
     pub fn send_message(&mut self, message: Message) {
         if let Some(sender) = self.sessions.get_mut(&message.id) {
             let _ = sender.try_send(SessionEvent::ProtocolMessage {
@@ -208,6 +215,7 @@ where
         }
     }
 
+    #[inline]
     pub fn filter_broadcast(&mut self, ids: Option<Vec<SessionId>>, message: Message) {
         match ids {
             None => self.broadcast(message),
@@ -227,9 +235,10 @@ where
         }
     }
 
+    #[inline]
     fn broadcast(&mut self, message: Message) {
         debug!(
-            "broadcast message, peer number: {}, proto_id: {}",
+            "broadcast message, peer count: {}, proto_id: {}",
             self.sessions.len(),
             message.proto_id
         );
@@ -244,8 +253,10 @@ where
         });
     }
 
+    #[inline]
     fn get_proto_handle(
         &self,
+        session: bool,
         proto_id: ProtocolId,
     ) -> Option<Box<dyn ProtocolHandle + Send + 'static>> {
         let handle = self
@@ -253,7 +264,11 @@ where
             .values()
             .map(|proto| {
                 if proto.id() == proto_id {
-                    Some(proto.handle())
+                    if session {
+                        proto.session_handle()
+                    } else {
+                        proto.handle()
+                    }
                 } else {
                     None
                 }
@@ -265,95 +280,154 @@ where
         if let Some(Some(handle)) = handle {
             Some(handle)
         } else {
-            error!("can't find proto [{}] handle", proto_id);
+            trace!("can't find proto [{}] handle", proto_id);
             None
+        }
+    }
+
+    #[inline]
+    fn session_close(&mut self, id: SessionId) {
+        debug!("service session [{}] close", id);
+        if let Some(mut session_sender) = self.sessions.remove(&id) {
+            let _ = session_sender.try_send(SessionEvent::SessionClose { id });
+        }
+
+        // service handle processing flow
+        self.handle
+            .handle_event(&mut self.service_context, ServiceEvent::SessionClose { id });
+
+        // global proto handle processing flow
+        for handle in self.proto_handles.values_mut() {
+            handle.disconnected(&mut self.service_context, id);
+        }
+
+        // session proto handle processing flow
+        if let Some(handles) = self.proto_session_handles.remove(&id) {
+            for (_, mut handle) in handles {
+                handle.disconnected(&mut self.service_context, id);
+            }
+        }
+    }
+
+    #[inline]
+    fn protocol_open(&mut self, id: SessionId, proto_id: ProtocolId) {
+        debug!("service session [{}] proto [{}] open", id, proto_id);
+
+        // global proto handle processing flow
+        if let Some(handle) = self.proto_handles.get_mut(&proto_id) {
+            handle.connected(&mut self.service_context, id);
+        } else if let Some(mut handle) = self.get_proto_handle(false, proto_id) {
+            handle.init(&mut self.service_context);
+            handle.connected(&mut self.service_context, id);
+            self.proto_handles.insert(proto_id, handle);
+        }
+
+        // session proto handle processing flow
+        if let Some(mut handle) = self.get_proto_handle(true, proto_id) {
+            handle.init(&mut self.service_context);
+            handle.connected(&mut self.service_context, id);
+
+            self.proto_session_handles
+                .entry(id)
+                .or_default()
+                .insert(proto_id, handle);
+        }
+    }
+
+    #[inline]
+    fn protocol_message(&mut self, id: SessionId, proto_id: ProtocolId, data: &bytes::Bytes) {
+        debug!(
+            "service receive session [{}] proto [{}] data: {:?}",
+            id, proto_id, data
+        );
+
+        // global proto handle processing flow
+        if let Some(handle) = self.proto_handles.get_mut(&proto_id) {
+            handle.received(
+                &mut self.service_context,
+                Message {
+                    id,
+                    proto_id,
+                    data: data.to_vec(),
+                },
+            );
+        }
+
+        // session proto handle processing flow
+        if let Some(handles) = self.proto_session_handles.get_mut(&id) {
+            if let Some(handle) = handles.get_mut(&proto_id) {
+                handle.received(
+                    &mut self.service_context,
+                    Message {
+                        id,
+                        proto_id,
+                        data: data.to_vec(),
+                    },
+                );
+            }
+        }
+    }
+
+    #[inline]
+    fn protocol_close(&mut self, id: SessionId, proto_id: ProtocolId) {
+        debug!("service session [{}] proto [{}] close", id, proto_id);
+
+        // global proto handle processing flow
+        if let Some(handle) = self.proto_handles.get_mut(&proto_id) {
+            handle.disconnected(&mut self.service_context, id);
+        }
+
+        // session proto handle processing flow
+        if let Some(handles) = self.proto_session_handles.get_mut(&id) {
+            if let Some(mut handle) = handles.remove(&proto_id) {
+                handle.disconnected(&mut self.service_context, id);
+            }
         }
     }
 
     fn handle_session_event(&mut self, event: SessionEvent) {
         match event {
-            SessionEvent::SessionClose { id } => {
-                let _ = self.sessions.remove(&id);
-                self.handle
-                    .handle_event(&mut self.service_context, ServiceEvent::SessionClose { id });
-                for handle in self.proto_handles.values_mut() {
-                    handle.disconnected(&mut self.service_context, id);
-                }
-            }
+            SessionEvent::SessionClose { id } => self.session_close(id),
             SessionEvent::ProtocolMessage { id, proto_id, data } => {
-                debug!(
-                    "service receive session [{}] proto [{}] data: {:?}",
-                    id, proto_id, data
-                );
-                if let Some(handle) = self.proto_handles.get_mut(&proto_id) {
-                    handle.received(
-                        &mut self.service_context,
-                        Message {
-                            id,
-                            proto_id,
-                            data: data.to_vec(),
-                        },
-                    );
-                } else {
-                    error!("can't find proto [{}] on protocol message event", proto_id);
-                }
+                self.protocol_message(id, proto_id, &data)
             }
-            SessionEvent::ProtocolOpen { id, proto_id, .. } => {
-                if let Some(handle) = self.proto_handles.get_mut(&proto_id) {
-                    handle.connected(&mut self.service_context, id);
-                } else {
-                    // session has checked proto, so use unwrap is safe
-                    let mut handle = self.get_proto_handle(proto_id).unwrap();
-                    handle.init(&mut self.service_context);
-                    handle.connected(&mut self.service_context, id);
-                    self.proto_handles.insert(proto_id, handle);
-                }
-            }
-            SessionEvent::ProtocolClose { id, proto_id, .. } => {
-                if let Some(handle) = self.proto_handles.get_mut(&proto_id) {
-                    handle.disconnected(&mut self.service_context, id);
-                } else {
-                    error!("can't find proto [{}] on protocol close event", proto_id);
-                }
-            }
+            SessionEvent::ProtocolOpen { id, proto_id, .. } => self.protocol_open(id, proto_id),
+            SessionEvent::ProtocolClose { id, proto_id, .. } => self.protocol_close(id, proto_id),
         }
     }
 
-    fn handle_service_event(&mut self, event: ServiceTask) {
+    fn handle_service_task(&mut self, event: ServiceTask) {
         match event {
             ServiceTask::ProtocolMessage { ids, message } => self.filter_broadcast(ids, message),
             ServiceTask::Dial { address } => {
                 let dial = TcpStream::connect(&address);
                 self.dial.push((address, dial));
             }
-            ServiceTask::Disconnect { id } => {
-                if let Some(mut session_sender) = self.sessions.remove(&id) {
-                    let _ = session_sender.try_send(SessionEvent::SessionClose { id });
-                }
-                self.handle
-                    .handle_event(&mut self.service_context, ServiceEvent::SessionClose { id });
-
-                for handle in self.proto_handles.values_mut() {
-                    handle.disconnected(&mut self.service_context, id);
-                }
-            }
+            ServiceTask::Disconnect { id } => self.session_close(id),
             ServiceTask::FutureTask { task } => {
                 tokio::spawn(task);
-            }
-            ServiceTask::StreamTask { task } => {
-                tokio::spawn(task.for_each(|_| Ok(())));
             }
             ServiceTask::ProtocolNotify { proto_id, token } => {
                 if let Some(handle) = self.proto_handles.get_mut(&proto_id) {
                     handle.notify(&mut self.service_context, token);
-                } else {
-                    error!("can't find proto [{}] on notify", proto_id);
+                }
+            }
+            ServiceTask::ProtocolSessionNotify {
+                id,
+                proto_id,
+                token,
+            } => {
+                if let Some(handles) = self.proto_session_handles.get_mut(&id) {
+                    if let Some(mut handle) = handles.remove(&proto_id) {
+                        handle.notify(&mut self.service_context, token);
+                    }
                 }
             }
         }
     }
 
-    fn client_poll(&mut self) -> Option<()> {
+    #[inline]
+    fn client_poll(&mut self) {
         let mut no_ready_client = Vec::new();
         while let Some((address, mut dialer)) = self.dial.pop() {
             match dialer.poll() {
@@ -384,10 +458,9 @@ where
                             ty: SessionType::Client,
                         },
                     );
-                    return Some(());
                 }
                 Ok(Async::NotReady) => {
-                    debug!("client not ready");
+                    trace!("client not ready");
                     no_ready_client.push((address, dialer));
                 }
                 Err(err) => {
@@ -398,17 +471,16 @@ where
                             error: err,
                         },
                     );
-                    return None;
                 }
             }
         }
         self.dial = no_ready_client;
-        None
     }
 
+    #[inline]
     fn listen_poll(&mut self) -> Poll<Option<()>, ()> {
-        if self.listens.is_empty() {
-            return Ok(Async::NotReady);
+        if self.listens.is_empty() && self.dial.is_empty() && self.sessions.is_empty() {
+            return Ok(Async::Ready(None));
         }
 
         let mut listen_len = self.listens.len();
@@ -493,14 +565,10 @@ where
     type Error = ();
 
     fn poll(&mut self) -> Poll<Option<Self::Item>, Self::Error> {
-        match self.listen_poll() {
-            Ok(Async::Ready(None)) => return Ok(Async::Ready(None)),
-            Ok(Async::Ready(Some(_))) => return Ok(Async::Ready(Some(()))),
-            _ => {}
-        }
+        self.client_poll();
 
-        if self.client_poll().is_some() {
-            return Ok(Async::Ready(Some(())));
+        if let Ok(Async::Ready(None)) = self.listen_poll() {
+            return Ok(Async::Ready(None));
         }
 
         loop {
@@ -509,19 +577,19 @@ where
                 Ok(Async::Ready(None)) => unreachable!(),
                 Ok(Async::NotReady) => break,
                 Err(err) => {
-                    warn!("{:?}", err);
+                    warn!("receive session error: {:?}", err);
                     break;
                 }
             }
         }
 
         loop {
-            match self.service_event_receiver.poll() {
-                Ok(Async::Ready(Some(event))) => self.handle_service_event(event),
+            match self.service_task_receiver.poll() {
+                Ok(Async::Ready(Some(task))) => self.handle_service_task(task),
                 Ok(Async::Ready(None)) => unreachable!(),
                 Ok(Async::NotReady) => break,
                 Err(err) => {
-                    warn!("{:?}", err);
+                    warn!("receive service task error: {:?}", err);
                     break;
                 }
             }

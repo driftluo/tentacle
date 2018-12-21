@@ -5,10 +5,13 @@ use std::{
     error,
     io::{self, ErrorKind},
 };
-use tokio::codec::{Decoder, Encoder, Framed};
+use tokio::{
+    codec::{Decoder, Encoder, Framed},
+    prelude::AsyncWrite,
+};
 use yamux::StreamHandle;
 
-use crate::sessions::{ProtocolId, StreamId};
+use crate::session::{ProtocolId, StreamId};
 
 pub enum ProtocolEvent {
     ProtocolOpen {
@@ -72,7 +75,7 @@ where
                 }
                 Ok(AsyncSink::Ready) => {}
                 Err(err) => {
-                    debug!("framed_stream error: {:?}", err);
+                    debug!("framed_stream send error: {:?}", err);
                     return Err(());
                 }
             }
@@ -87,6 +90,14 @@ where
         };
         debug!("send success, proto_id: {}", self.proto_id);
         Ok(Async::Ready(()))
+    }
+
+    fn close(&mut self) {
+        let _ = self.event_sender.try_send(ProtocolEvent::ProtocolClose {
+            id: self.id,
+            proto_id: self.proto_id,
+        });
+        let _ = self.sub_stream.get_mut().shutdown();
     }
 }
 
@@ -113,24 +124,20 @@ where
                     }
                 }
                 Ok(Async::Ready(None)) => {
-                    let _ = self.event_sender.try_send(ProtocolEvent::ProtocolClose {
-                        id: self.id,
-                        proto_id: self.proto_id,
-                    });
+                    warn!("protocol [{}] close", self.proto_id);
+                    self.close();
                     return Ok(Async::Ready(None));
                 }
                 Ok(Async::NotReady) => break,
                 Err(err) => {
-                    warn!("{:?}", err);
+                    warn!("sub stream error: {:?}", err);
                     match err.into().kind() {
                         ErrorKind::BrokenPipe
                         | ErrorKind::ConnectionAborted
                         | ErrorKind::ConnectionReset
-                        | ErrorKind::NotConnected => {
-                            let _ = self.event_sender.try_send(ProtocolEvent::ProtocolClose {
-                                id: self.id,
-                                proto_id: self.proto_id,
-                            });
+                        | ErrorKind::NotConnected
+                        | ErrorKind::UnexpectedEof => {
+                            self.close();
                             return Ok(Async::Ready(None));
                         }
                         _ => break,
@@ -143,13 +150,26 @@ where
             match self.event_receiver.poll() {
                 Ok(Async::Ready(Some(event))) => {
                     if let ProtocolEvent::ProtocolMessage { data, .. } = event {
-                        if let Ok(Async::NotReady) = self.send_data(data) {
-                            break;
+                        match self.send_data(data) {
+                            Err(_) => {
+                                // Whether it is a read send error or a flush error,
+                                // the most essential problem is that there is a problem with the external network.
+                                // Close the protocol stream directly.
+                                warn!(
+                                    "protocol [{}] close because of extern network",
+                                    self.proto_id
+                                );
+                                self.close();
+                                return Ok(Async::Ready(None));
+                            }
+                            Ok(Async::NotReady) => break,
+                            Ok(Async::Ready(_)) => (),
                         }
                     }
                 }
                 Ok(Async::Ready(None)) => {
                     // Must be session close
+                    self.close();
                     return Ok(Async::Ready(None));
                 }
                 Ok(Async::NotReady) => break,

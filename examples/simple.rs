@@ -1,21 +1,21 @@
 use env_logger;
-use futures::prelude::*;
+use futures::{oneshot, prelude::*, sync::oneshot::Sender};
 use log::info;
 use p2p::{
+    config::ConfigBuilder,
     service::{
         Message, ProtocolHandle, Service, ServiceContext, ServiceEvent, ServiceHandle, ServiceTask,
     },
-    sessions::{ProtocolId, ProtocolMeta, SessionId},
+    session::{ProtocolId, ProtocolMeta, SessionId},
     StreamHandle,
 };
 use std::collections::HashMap;
-use std::sync::Arc;
 use std::{
     str,
     time::{Duration, Instant},
 };
 use tokio::codec::{length_delimited::LengthDelimitedCodec, Framed};
-use tokio::timer::{Delay, Interval};
+use tokio::timer::{Delay, Error, Interval};
 
 pub struct Protocol {
     id: ProtocolId,
@@ -34,12 +34,13 @@ impl ProtocolMeta<LengthDelimitedCodec> for Protocol {
     fn framed(&self, stream: StreamHandle) -> Framed<StreamHandle, LengthDelimitedCodec> {
         Framed::new(stream, LengthDelimitedCodec::new())
     }
-    fn handle(&self) -> Box<dyn ProtocolHandle + Send + 'static> {
-        Box::new(PHandle {
+    fn handle(&self) -> Option<Box<dyn ProtocolHandle + Send + 'static>> {
+        Some(Box::new(PHandle {
             proto_id: self.id,
             count: 0,
             connected_session_ids: Vec::new(),
-        })
+            clear_handle: HashMap::new(),
+        }))
     }
 }
 
@@ -48,6 +49,7 @@ struct PHandle {
     proto_id: ProtocolId,
     count: usize,
     connected_session_ids: Vec<SessionId>,
+    clear_handle: HashMap<SessionId, Sender<()>>,
 }
 
 impl ProtocolHandle for PHandle {
@@ -63,29 +65,61 @@ impl ProtocolHandle for PHandle {
                 })
                 .map_err(|err| info!("{}", err));
             control.future_task(Box::new(interval_task));
-        } else {
-            let mut interval_sender = control.sender().clone();
-            let interval_task = Interval::new(Instant::now(), Duration::from_secs(5))
-                .for_each(move |_| {
-                    let _ = interval_sender.try_send(ServiceTask::ProtocolMessage {
-                        ids: None,
-                        message: Message {
-                            id: 0,
-                            proto_id: 1,
-                            data: b"I am a interval message".to_vec(),
-                        },
-                    });
-                    Ok(())
-                })
-                .map_err(|err| info!("{}", err));
-            control.future_task(Box::new(interval_task));
         }
     }
 
-    fn connected(&mut self, _control: &mut ServiceContext, session_id: SessionId) {
+    fn connected(&mut self, control: &mut ServiceContext, session_id: SessionId) {
         self.connected_session_ids.push(session_id);
+        info!(
+            "proto id [{}] open on session [{}]",
+            self.proto_id, session_id
+        );
         info!("connected sessions are: {:?}", self.connected_session_ids);
+
+        // Register a scheduled task to send data to the remote peer.
+        // Clear the task via channel when disconnected
+        let (sender, mut receiver) = oneshot();
+        self.clear_handle.insert(session_id, sender);
+        let mut interval_sender = control.sender().clone();
+        let interval_task = Interval::new(Instant::now(), Duration::from_secs(5))
+            .for_each(move |_| {
+                let _ = interval_sender.try_send(ServiceTask::ProtocolMessage {
+                    ids: Some(vec![session_id]),
+                    message: Message {
+                        id: 0,
+                        proto_id: session_id,
+                        data: b"I am a interval message".to_vec(),
+                    },
+                });
+                if let Ok(Async::Ready(_)) = receiver.poll() {
+                    Err(Error::shutdown())
+                } else {
+                    Ok(())
+                }
+            })
+            .map_err(|err| info!("{}", err));
+        control.future_task(Box::new(interval_task));
     }
+
+    fn disconnected(&mut self, _control: &mut ServiceContext, session_id: SessionId) {
+        let new_list = self
+            .connected_session_ids
+            .iter()
+            .filter(|&id| id != &session_id)
+            .cloned()
+            .collect();
+        self.connected_session_ids = new_list;
+
+        if let Some(handle) = self.clear_handle.remove(&session_id) {
+            let _ = handle.send(());
+        }
+
+        info!(
+            "proto id [{}] close on session [{}]",
+            self.proto_id, session_id
+        );
+    }
+
     fn received(&mut self, _env: &mut ServiceContext, data: Message) {
         self.count += 1;
         info!(
@@ -144,32 +178,35 @@ fn main() {
     }
 }
 
-fn create_service() -> Service<SHandle, LengthDelimitedCodec> {
-    let proto_0 = Protocol::new(0);
-    let name_0 = proto_0.name();
-    let proto_1 = Protocol::new(1);
-    let name_1 = proto_1.name();
-    let mut config = HashMap::new();
-    config.insert(
-        name_0,
-        Box::new(proto_0) as Box<dyn ProtocolMeta<_> + Send + Sync>,
-    );
-    config.insert(
-        name_1,
-        Box::new(proto_1) as Box<dyn ProtocolMeta<_> + Send + Sync>,
-    );
-    Service::new(Arc::new(config), SHandle)
+fn create_server() -> Service<SHandle, LengthDelimitedCodec> {
+    let config = ConfigBuilder::default()
+        .push(Protocol::new(0))
+        .push(Protocol::new(1));
+    Service::new(config.build(), SHandle)
+}
+
+/// proto 0 open success
+/// proto 1 open success
+/// proto 2 open failure
+///
+/// because server only supports 0,1
+fn create_client() -> Service<SHandle, LengthDelimitedCodec> {
+    let config = ConfigBuilder::default()
+        .push(Protocol::new(0))
+        .push(Protocol::new(1))
+        .push(Protocol::new(2));
+    Service::new(config.build(), SHandle)
 }
 
 fn server() {
-    let mut service = create_service();
+    let mut service = create_server();
     let _ = service.listen("127.0.0.1:1337".parse().unwrap());
 
     tokio::run(service.for_each(|_| Ok(())))
 }
 
 fn client() {
-    let mut service = create_service().dial("127.0.0.1:1337".parse().unwrap());
+    let mut service = create_client().dial("127.0.0.1:1337".parse().unwrap());
     let _ = service.listen("127.0.0.1:1337".parse().unwrap());
 
     tokio::run(service.for_each(|_| Ok(())))

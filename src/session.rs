@@ -42,12 +42,20 @@ where
     <U as Decoder>::Error: error::Error + Into<io::Error>,
     <U as Encoder>::Error: error::Error + Into<io::Error>,
 {
+    #[inline]
     fn name(&self) -> String {
         format!("/p2p/{}", self.id())
     }
     fn id(&self) -> ProtocolId;
     fn framed(&self, stream: StreamHandle) -> Framed<StreamHandle, U>;
-    fn handle(&self) -> Box<dyn ProtocolHandle + Send + 'static>;
+    #[inline]
+    fn handle(&self) -> Option<Box<dyn ProtocolHandle + Send + 'static>> {
+        None
+    }
+    #[inline]
+    fn session_handle(&self) -> Option<Box<dyn ProtocolHandle + Send + 'static>> {
+        None
+    }
 }
 
 pub struct Session<T, U> {
@@ -133,7 +141,7 @@ where
     }
 
     pub fn open_proto_stream(&mut self, proto_name: String) {
-        debug!("open proto, {}", proto_name);
+        debug!("try open proto, {}", proto_name);
         let event_sender = self.proto_event_sender.clone();
         let handle = self.socket.open_stream().unwrap();
         let task = tokio::io::write_all(handle, format!("{}\n", proto_name))
@@ -164,10 +172,10 @@ where
     }
 
     fn handle_sub_stream(&mut self, sub_stream: StreamHandle) {
-        debug!("new handle start");
         let event_sender = self.proto_event_sender.clone();
         let task = tokio::io::read_until(io::BufReader::new(sub_stream), b'\n', Vec::new())
             .and_then(move |(sub_stream, proto_name)| {
+                debug!("new proto start, proto name: {:?}", proto_name);
                 let mut send_task = event_sender.send(ProtocolEvent::ProtocolOpen {
                     sub_stream: sub_stream.into_inner(),
                     proto_name,
@@ -188,7 +196,6 @@ where
     }
 
     fn handle_stream_event(&mut self, event: ProtocolEvent) {
-        debug!("start proto event");
         match event {
             ProtocolEvent::ProtocolOpen {
                 proto_name,
@@ -205,10 +212,15 @@ where
                 let proto = match self.protocol_configs.get(&name) {
                     Some(proto) => proto,
                     None => {
-                        let _ = sub_stream.shutdown();
+                        if let Err(err) = sub_stream.shutdown() {
+                            error!("shutdown err: {}", err);
+                        };
+                        warn!("Can't support proto name: {}", name);
                         return;
                     }
                 };
+
+                let proto_id = proto.id();
                 let frame = proto.framed(sub_stream);
                 let (session_to_proto_sender, session_to_proto_receiver) = mpsc::channel(32);
                 let proto_stream = SubStream::new(
@@ -216,18 +228,20 @@ where
                     self.proto_event_sender.clone(),
                     session_to_proto_receiver,
                     self.next_stream,
-                    proto.id(),
+                    proto_id,
                 );
                 self.sub_streams
                     .insert(self.next_stream, session_to_proto_sender);
-                self.proto_streams.insert(proto.id(), self.next_stream);
+                self.proto_streams.insert(proto_id, self.next_stream);
 
                 self.event_output(SessionEvent::ProtocolOpen {
                     id: self.id,
                     stream_id: self.next_stream,
-                    proto_id: proto.id(),
+                    proto_id,
                 });
                 self.next_stream += 1;
+
+                debug!("session [{}] proto [{}] open", self.id, proto_id);
 
                 tokio::spawn(proto_stream.for_each(|_| Ok(())));
             }
@@ -264,7 +278,7 @@ where
                         });
                     };
                 } else {
-                    debug!("protocol {} not ready", proto_id);
+                    trace!("protocol {} not ready", proto_id);
                 }
             }
             SessionEvent::SessionClose { .. } => {
@@ -288,7 +302,12 @@ where
     type Error = ();
 
     fn poll(&mut self) -> Poll<Option<Self::Item>, Self::Error> {
-        trace!("[{:?}] do something", self.ty);
+        debug!(
+            "session [{}], [{:?}], proto count [{}] ",
+            self.id,
+            self.ty,
+            self.sub_streams.len()
+        );
         match self.socket.poll() {
             Ok(Async::Ready(Some(sub_stream))) => self.handle_sub_stream(sub_stream),
             Ok(Async::Ready(None)) => {
@@ -300,7 +319,7 @@ where
             }
             Ok(Async::NotReady) => (),
             Err(err) => {
-                warn!("{:?}", err);
+                warn!("create sub stream error: {:?}", err);
             }
         }
 
@@ -310,7 +329,7 @@ where
                 Ok(Async::Ready(None)) => unreachable!(),
                 Ok(Async::NotReady) => break,
                 Err(err) => {
-                    warn!("{:?}", err);
+                    warn!("receive proto event error: {:?}", err);
                     break;
                 }
             }
@@ -325,7 +344,7 @@ where
                 }
                 Ok(Async::NotReady) => break,
                 Err(err) => {
-                    warn!("{:?}", err);
+                    warn!("receive service message error: {:?}", err);
                     break;
                 }
             }
