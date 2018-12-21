@@ -24,11 +24,13 @@ pub trait ServiceHandle {
 /// All functions on this trait will block the entire server running, do not insert long-time tasks,
 /// you can use the futures task instead.
 pub trait ProtocolHandle {
+    fn init(&mut self, _control: &mut ServiceContext) {}
     fn received(&mut self, _control: &mut ServiceContext, _data: Message) {}
 
     fn connected(&mut self, _control: &mut ServiceContext, _session_id: SessionId) {}
 
     fn disconnected(&mut self, _control: &mut ServiceContext, _session_id: SessionId) {}
+    fn notify(&mut self, _control: &mut ServiceContext, _token: u64) {}
 }
 
 #[derive(Debug)]
@@ -111,6 +113,10 @@ pub enum ServiceTask {
         ids: Option<Vec<SessionId>>,
         message: Message,
     },
+    ProtocolNotify {
+        proto_id: ProtocolId,
+        token: u64,
+    },
     FutureTask {
         task: Box<dyn Future<Item = (), Error = ()> + 'static + Send>,
     },
@@ -139,8 +145,7 @@ pub struct Service<T, U> {
     /// can be upgrade to list service level protocols
     handle: T,
 
-    proto_handles:
-        HashMap<SessionId, HashMap<ProtocolId, Box<dyn ProtocolHandle + Send + 'static>>>,
+    proto_handles: HashMap<ProtocolId, Box<dyn ProtocolHandle + Send + 'static>>,
 
     /// send events to service, clone to session
     session_event_sender: mpsc::Sender<SessionEvent>,
@@ -271,10 +276,8 @@ where
                 let _ = self.sessions.remove(&id);
                 self.handle
                     .handle_event(&mut self.service_context, ServiceEvent::SessionClose { id });
-                if let Some(handles) = self.proto_handles.remove(&id) {
-                    for (_, mut handle) in handles {
-                        handle.disconnected(&mut self.service_context, id);
-                    }
+                for handle in self.proto_handles.values_mut() {
+                    handle.disconnected(&mut self.service_context, id);
                 }
             }
             SessionEvent::ProtocolMessage { id, proto_id, data } => {
@@ -282,44 +285,35 @@ where
                     "service receive session [{}] proto [{}] data: {:?}",
                     id, proto_id, data
                 );
-                if let Some(handles) = self.proto_handles.get_mut(&id) {
-                    if let Some(handle) = handles.get_mut(&proto_id) {
-                        handle.received(
-                            &mut self.service_context,
-                            Message {
-                                id,
-                                proto_id,
-                                data: data.to_vec(),
-                            },
-                        );
-                    } else {
-                        error!("can't find proto [{}] on protocol message event", proto_id);
-                    }
+                if let Some(handle) = self.proto_handles.get_mut(&proto_id) {
+                    handle.received(
+                        &mut self.service_context,
+                        Message {
+                            id,
+                            proto_id,
+                            data: data.to_vec(),
+                        },
+                    );
                 } else {
-                    error!("can't find session [{}] on protocol message event", id);
+                    error!("can't find proto [{}] on protocol message event", proto_id);
                 }
             }
             SessionEvent::ProtocolOpen { id, proto_id, .. } => {
-                if let Some(mut handle) = self.get_proto_handle(proto_id) {
+                if let Some(handle) = self.proto_handles.get_mut(&proto_id) {
                     handle.connected(&mut self.service_context, id);
-
-                    self.proto_handles
-                        .entry(id)
-                        .or_default()
-                        .insert(proto_id, handle);
                 } else {
-                    error!("can't create proto [{}] handle on protocol open", proto_id);
+                    // session has checked proto, so use unwrap is safe
+                    let mut handle = self.get_proto_handle(proto_id).unwrap();
+                    handle.init(&mut self.service_context);
+                    handle.connected(&mut self.service_context, id);
+                    self.proto_handles.insert(proto_id, handle);
                 }
             }
             SessionEvent::ProtocolClose { id, proto_id, .. } => {
-                if let Some(handles) = self.proto_handles.get_mut(&id) {
-                    if let Some(mut handle) = handles.remove(&proto_id) {
-                        handle.disconnected(&mut self.service_context, id);
-                    } else {
-                        error!("can't find proto [{}] on protocol close event", proto_id);
-                    }
+                if let Some(handle) = self.proto_handles.get_mut(&proto_id) {
+                    handle.disconnected(&mut self.service_context, id);
                 } else {
-                    error!("can't find session [{}] on protocol close event", id);
+                    error!("can't find proto [{}] on protocol close event", proto_id);
                 }
             }
         }
@@ -338,10 +332,9 @@ where
                 }
                 self.handle
                     .handle_event(&mut self.service_context, ServiceEvent::SessionClose { id });
-                if let Some(handles) = self.proto_handles.remove(&id) {
-                    for (_, mut handle) in handles {
-                        handle.disconnected(&mut self.service_context, id);
-                    }
+
+                for handle in self.proto_handles.values_mut() {
+                    handle.disconnected(&mut self.service_context, id);
                 }
             }
             ServiceTask::FutureTask { task } => {
@@ -349,6 +342,13 @@ where
             }
             ServiceTask::StreamTask { task } => {
                 tokio::spawn(task.for_each(|_| Ok(())));
+            }
+            ServiceTask::ProtocolNotify { proto_id, token } => {
+                if let Some(handle) = self.proto_handles.get_mut(&proto_id) {
+                    handle.notify(&mut self.service_context, token);
+                } else {
+                    error!("can't find proto [{}] on notify", proto_id);
+                }
             }
         }
     }

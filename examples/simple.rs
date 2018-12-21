@@ -5,7 +5,7 @@ use p2p::{
     service::{
         Message, ProtocolHandle, Service, ServiceContext, ServiceEvent, ServiceHandle, ServiceTask,
     },
-    sessions::{ProtocolId, ProtocolMeta},
+    sessions::{ProtocolId, ProtocolMeta, SessionId},
     StreamHandle,
 };
 use std::collections::HashMap;
@@ -35,16 +35,57 @@ impl ProtocolMeta<LengthDelimitedCodec> for Protocol {
         Framed::new(stream, LengthDelimitedCodec::new())
     }
     fn handle(&self) -> Box<dyn ProtocolHandle + Send + 'static> {
-        Box::new(PHandle::default())
+        Box::new(PHandle {
+            proto_id: self.id,
+            count: 0,
+            connected_session_ids: Vec::new(),
+        })
     }
 }
 
 #[derive(Default)]
 struct PHandle {
+    proto_id: ProtocolId,
     count: usize,
+    connected_session_ids: Vec<SessionId>,
 }
 
 impl ProtocolHandle for PHandle {
+    fn init(&mut self, control: &mut ServiceContext) {
+        if self.proto_id == 0 {
+            let mut interval_sender = control.sender().clone();
+            let proto_id = self.proto_id;
+            let interval_task = Interval::new(Instant::now(), Duration::from_secs(5))
+                .for_each(move |_| {
+                    let _ = interval_sender
+                        .try_send(ServiceTask::ProtocolNotify { proto_id, token: 3 });
+                    Ok(())
+                })
+                .map_err(|err| info!("{}", err));
+            control.future_task(Box::new(interval_task));
+        } else {
+            let mut interval_sender = control.sender().clone();
+            let interval_task = Interval::new(Instant::now(), Duration::from_secs(5))
+                .for_each(move |_| {
+                    let _ = interval_sender.try_send(ServiceTask::ProtocolMessage {
+                        ids: None,
+                        message: Message {
+                            id: 0,
+                            proto_id: 1,
+                            data: b"I am a interval message".to_vec(),
+                        },
+                    });
+                    Ok(())
+                })
+                .map_err(|err| info!("{}", err));
+            control.future_task(Box::new(interval_task));
+        }
+    }
+
+    fn connected(&mut self, _control: &mut ServiceContext, session_id: SessionId) {
+        self.connected_session_ids.push(session_id);
+        info!("connected sessions are: {:?}", self.connected_session_ids);
+    }
     fn received(&mut self, _env: &mut ServiceContext, data: Message) {
         self.count += 1;
         info!(
@@ -54,6 +95,10 @@ impl ProtocolHandle for PHandle {
             str::from_utf8(&data.data).unwrap(),
             self.count
         );
+    }
+
+    fn notify(&mut self, _control: &mut ServiceContext, token: u64) {
+        info!("proto [{}] received notify token: {}", self.proto_id, token);
     }
 }
 
@@ -67,7 +112,7 @@ impl ServiceHandle for SHandle {
         info!("service event: {:?}", event);
         if let ServiceEvent::SessionOpen { id, .. } = event {
             let mut delay_sender = env.sender().clone();
-            let mut interval_sender = env.sender().clone();
+
             let delay_task = Delay::new(Instant::now() + Duration::from_secs(3))
                 .and_then(move |_| {
                     let _ = delay_sender.try_send(ServiceTask::ProtocolMessage {
@@ -81,21 +126,8 @@ impl ServiceHandle for SHandle {
                     Ok(())
                 })
                 .map_err(|err| info!("{}", err));
-            let interval_task = Interval::new(Instant::now(), Duration::from_secs(5))
-                .for_each(move |_| {
-                    let _ = interval_sender.try_send(ServiceTask::ProtocolMessage {
-                        ids: None,
-                        message: Message {
-                            id,
-                            proto_id: 1,
-                            data: b"I am a interval message".to_vec(),
-                        },
-                    });
-                    Ok(())
-                })
-                .map_err(|err| info!("{}", err));
+
             env.future_task(Box::new(delay_task));
-            env.future_task(Box::new(interval_task));
         }
     }
 }
