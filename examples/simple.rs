@@ -35,6 +35,8 @@ impl ProtocolMeta<LengthDelimitedCodec> for Protocol {
         Framed::new(stream, LengthDelimitedCodec::new())
     }
     fn handle(&self) -> Option<Box<dyn ProtocolHandle + Send + 'static>> {
+        // All protocol use the same handle.
+        // This is just an example. In the actual environment, this should be a different handle.
         Some(Box::new(PHandle {
             proto_id: self.id,
             count: 0,
@@ -76,6 +78,10 @@ impl ProtocolHandle for PHandle {
         );
         info!("connected sessions are: {:?}", self.connected_session_ids);
 
+        if self.proto_id != 1 {
+            return;
+        }
+
         // Register a scheduled task to send data to the remote peer.
         // Clear the task via channel when disconnected
         let (sender, mut receiver) = oneshot();
@@ -87,7 +93,7 @@ impl ProtocolHandle for PHandle {
                     ids: Some(vec![session_id]),
                     message: Message {
                         id: 0,
-                        proto_id: session_id,
+                        proto_id: 1,
                         data: b"I am a interval message".to_vec(),
                     },
                 });

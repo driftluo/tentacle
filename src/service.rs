@@ -248,7 +248,7 @@ pub struct Service<T, U> {
     proto_handles: HashMap<ProtocolId, Box<dyn ProtocolHandle + Send + 'static>>,
 
     proto_session_handles:
-        HashMap<SessionId, HashMap<ProtocolId, Box<dyn ProtocolHandle + Send + 'static>>>,
+        HashMap<SessionId, HashMap<ProtocolId, Option<Box<dyn ProtocolHandle + Send + 'static>>>>,
 
     /// Send events to service, clone to session
     session_event_sender: mpsc::Sender<SessionEvent>,
@@ -418,12 +418,15 @@ where
         // Session proto handle processing flow
         let mut close_proto_ids = Vec::new();
         if let Some(handles) = self.proto_session_handles.remove(&id) {
-            for (proto_id, mut handle) in handles {
-                handle.disconnected(&mut self.service_context, id);
+            for (proto_id, handle) in handles {
+                if let Some(mut handle) = handle {
+                    handle.disconnected(&mut self.service_context, id);
+                }
                 close_proto_ids.push(proto_id);
             }
         }
 
+        debug!("session [{}] close proto [{:?}]", id, close_proto_ids);
         // Global proto handle processing flow
         //
         // You must first confirm that the protocol is open in the session,
@@ -450,15 +453,22 @@ where
         }
 
         // Session proto handle processing flow
-        if let Some(mut handle) = self.get_proto_handle(true, proto_id) {
-            handle.init(&mut self.service_context);
-            handle.connected(&mut self.service_context, id);
+        // Regardless of the existence of the session level handle,
+        // you **must record** which protocols are opened for each session.
+        let session_level_handle = match self.get_proto_handle(true, proto_id) {
+            Some(mut handle) => {
+                debug!("init session [{}] level proto [{}] handle", id, proto_id);
+                handle.init(&mut self.service_context);
+                handle.connected(&mut self.service_context, id);
+                Some(handle)
+            }
+            None => None,
+        };
 
-            self.proto_session_handles
-                .entry(id)
-                .or_default()
-                .insert(proto_id, handle);
-        }
+        self.proto_session_handles
+            .entry(id)
+            .or_default()
+            .insert(proto_id, session_level_handle);
     }
 
     /// Processing the received data
@@ -483,7 +493,7 @@ where
 
         // Session proto handle processing flow
         if let Some(handles) = self.proto_session_handles.get_mut(&id) {
-            if let Some(handle) = handles.get_mut(&proto_id) {
+            if let Some(Some(handle)) = handles.get_mut(&proto_id) {
                 handle.received(
                     &mut self.service_context,
                     Message {
@@ -508,7 +518,7 @@ where
 
         // Session proto handle processing flow
         if let Some(handles) = self.proto_session_handles.get_mut(&id) {
-            if let Some(mut handle) = handles.remove(&proto_id) {
+            if let Some(Some(mut handle)) = handles.remove(&proto_id) {
                 handle.disconnected(&mut self.service_context, id);
             }
         }
@@ -549,7 +559,7 @@ where
                 token,
             } => {
                 if let Some(handles) = self.proto_session_handles.get_mut(&id) {
-                    if let Some(handle) = handles.get_mut(&proto_id) {
+                    if let Some(Some(handle)) = handles.get_mut(&proto_id) {
                         handle.notify(&mut self.service_context, token);
                     }
                 }
@@ -726,6 +736,11 @@ where
                     break;
                 }
             }
+        }
+
+        // Double check service state
+        if self.listens.is_empty() && self.dial.is_empty() && self.sessions.is_empty() {
+            return Ok(Async::Ready(None));
         }
 
         Ok(Async::NotReady)
