@@ -10,54 +10,95 @@ use yamux::{session::SessionType, Config, Session as YamuxSession, StreamHandle}
 use crate::service::ProtocolHandle;
 use crate::substream::{ProtocolEvent, SubStream};
 
+/// Index of sub/protocol stream
 pub type StreamId = usize;
+/// Protocol id
 pub type ProtocolId = usize;
+/// Index of session
 pub type SessionId = usize;
 
+/// Event generated/received by the Session
 #[derive(Debug)]
 pub enum SessionEvent {
+    /// Session close event
     SessionClose {
+        /// Session id
         id: SessionId,
     },
+    /// Protocol data
     ProtocolMessage {
+        /// Session id
         id: SessionId,
+        /// Protocol id
         proto_id: ProtocolId,
+        /// Data
         data: bytes::Bytes,
     },
+    /// Protocol open event
     ProtocolOpen {
+        /// Session id
         id: SessionId,
+        /// Protocol id
         proto_id: ProtocolId,
+        /// Stream id
         stream_id: StreamId,
     },
+    /// Protocol close event
     ProtocolClose {
+        /// Session id
         id: SessionId,
+        /// Protocol id
         proto_id: ProtocolId,
+        /// Stream id
         stream_id: StreamId,
     },
 }
 
+/// Define the minimum data required for a custom protocol
 pub trait ProtocolMeta<U>
 where
     U: Decoder<Item = bytes::BytesMut> + Encoder<Item = bytes::Bytes> + Send + 'static,
     <U as Decoder>::Error: error::Error + Into<io::Error>,
     <U as Encoder>::Error: error::Error + Into<io::Error>,
 {
+    /// Protocol name, default is "/p2p/protocol_id"
     #[inline]
     fn name(&self) -> String {
         format!("/p2p/{}", self.id())
     }
+    /// Protocol id
     fn id(&self) -> ProtocolId;
+    /// The codec used by the custom protocol, such as `LengthDelimitedCodec` by tokio
     fn framed(&self, stream: StreamHandle) -> Framed<StreamHandle, U>;
+    /// A global callback handle for a protocol.
+    ///
+    /// ---
+    ///
+    /// #### Behavior
+    ///
+    /// This function is called when the protocol is first opened in the service
+    /// and remains in memory until the entire service is closed.
     #[inline]
     fn handle(&self) -> Option<Box<dyn ProtocolHandle + Send + 'static>> {
         None
     }
+    /// A session-level callback handle for a protocol
+    ///
+    /// ---
+    ///
+    /// #### Behavior
+    ///
+    /// When a session is opened, whenever the protocol of the session is opened,
+    /// the function will be called again to generate the corresponding exclusive handle.
+    ///
+    /// Correspondingly, whenever the protocol is closed, the corresponding exclusive handle is cleared.
     #[inline]
     fn session_handle(&self) -> Option<Box<dyn ProtocolHandle + Send + 'static>> {
         None
     }
 }
 
+/// Wrapper for real data streams, such as TCP stream
 pub struct Session<T, U> {
     socket: YamuxSession<T>,
 
@@ -66,20 +107,21 @@ pub struct Session<T, U> {
     id: SessionId,
 
     next_stream: StreamId,
+    /// Indicates the identity of the current session
     ty: SessionType,
 
-    /// sub streams maps a stream id to a sender of sub stream
+    /// Sub streams maps a stream id to a sender of sub stream
     sub_streams: HashMap<StreamId, mpsc::Sender<ProtocolEvent>>,
     proto_streams: HashMap<ProtocolId, StreamId>,
 
-    /// clone to new sub stream
+    /// Clone to new sub stream
     proto_event_sender: mpsc::Sender<ProtocolEvent>,
-    /// receive events from sub streams
+    /// Receive events from sub streams
     proto_event_receiver: mpsc::Receiver<ProtocolEvent>,
 
-    /// send events to service
+    /// Send events to service
     service_sender: mpsc::Sender<SessionEvent>,
-    /// receive event from service
+    /// Receive event from service
     service_receiver: mpsc::Receiver<SessionEvent>,
 }
 
@@ -90,6 +132,7 @@ where
     <U as Decoder>::Error: error::Error + Into<io::Error>,
     <U as Encoder>::Error: error::Error + Into<io::Error>,
 {
+    /// As a client, open a session
     pub fn new_client(
         socket: T,
         service_sender: mpsc::Sender<SessionEvent>,
@@ -115,6 +158,7 @@ where
         }
     }
 
+    /// As a listener, open a session
     pub fn new_server(
         socket: T,
         service_sender: mpsc::Sender<SessionEvent>,
@@ -140,6 +184,7 @@ where
         }
     }
 
+    /// After the session is established, the client is requested to open some custom protocol sub stream.
     pub fn open_proto_stream(&mut self, proto_name: String) {
         debug!("try open proto, {}", proto_name);
         let event_sender = self.proto_event_sender.clone();
@@ -165,12 +210,14 @@ where
         tokio::spawn(task);
     }
 
+    /// Push the generated event to the Service
     fn event_output(&mut self, event: SessionEvent) {
         if let Err(e) = self.service_sender.try_send(event) {
             error!("session send to service error: {}", e);
         }
     }
 
+    /// Handling client-initiated open protocol sub stream requests
     fn handle_sub_stream(&mut self, sub_stream: StreamHandle) {
         let event_sender = self.proto_event_sender.clone();
         let task = tokio::io::read_until(io::BufReader::new(sub_stream), b'\n', Vec::new())
@@ -195,6 +242,7 @@ where
         tokio::spawn(task);
     }
 
+    /// Handling events uploaded by the protocol stream
     fn handle_stream_event(&mut self, event: ProtocolEvent) {
         match event {
             ProtocolEvent::ProtocolOpen {
@@ -266,6 +314,7 @@ where
         }
     }
 
+    /// Handling events send by the service
     fn handle_session_event(&mut self, event: SessionEvent) {
         match event {
             SessionEvent::ProtocolMessage { proto_id, data, .. } => {
@@ -339,7 +388,7 @@ where
             match self.service_receiver.poll() {
                 Ok(Async::Ready(Some(event))) => self.handle_session_event(event),
                 Ok(Async::Ready(None)) => {
-                    // Must stop by service
+                    // Must drop by service
                     return Ok(Async::Ready(None));
                 }
                 Ok(Async::NotReady) => break,

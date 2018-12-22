@@ -13,31 +13,48 @@ use yamux::StreamHandle;
 
 use crate::session::{ProtocolId, StreamId};
 
+/// Event generated/received by the protocol stream,
+/// but at present, the reason for the failure of
+/// parsing is not thrown to the upper layer,
+/// but is directly ignored.
+// todo: encode decode error to user?
 pub enum ProtocolEvent {
+    /// The protocol is normally open
     ProtocolOpen {
+        /// Protocol name
         proto_name: Vec<u8>,
+        /// Yamux sub stream handle
         sub_stream: StreamHandle,
     },
+    /// The protocol close
     ProtocolClose {
+        /// Stream id
         id: StreamId,
+        /// Protocol id
         proto_id: ProtocolId,
     },
+    /// Protocol data outbound and inbound
     ProtocolMessage {
+        /// Stream id
         id: StreamId,
+        /// Protocol id
         proto_id: ProtocolId,
+        /// Data
         data: bytes::Bytes,
     },
 }
 
+/// Each custom protocol in a session corresponds to a sub stream
+/// Can be seen as the route of each protocol
 pub struct SubStream<U> {
     sub_stream: Framed<StreamHandle, U>,
     id: StreamId,
     proto_id: ProtocolId,
     data_buf: VecDeque<bytes::Bytes>,
 
-    /// send event to session
+    /// Send event to session
     event_sender: mpsc::Sender<ProtocolEvent>,
-    /// receive events from session
+    /// Receive events from session
     event_receiver: mpsc::Receiver<ProtocolEvent>,
 }
 
@@ -47,6 +64,7 @@ where
     <U as Decoder>::Error: error::Error + Into<io::Error>,
     <U as Encoder>::Error: error::Error + Into<io::Error>,
 {
+    /// New a protocol sub stream
     pub fn new(
         sub_stream: Framed<StreamHandle, U>,
         event_sender: mpsc::Sender<ProtocolEvent>,
@@ -64,6 +82,7 @@ where
         }
     }
 
+    /// Send data to the lower `yamux` sub stream
     fn send_data(&mut self, data: bytes::Bytes) -> Poll<(), ()> {
         self.data_buf.push_back(data);
         while let Some(frame) = self.data_buf.pop_front() {
@@ -92,6 +111,7 @@ where
         Ok(Async::Ready(()))
     }
 
+    /// Close protocol sub stream
     fn close(&mut self) {
         let _ = self.event_sender.try_send(ProtocolEvent::ProtocolClose {
             id: self.id,

@@ -13,30 +13,79 @@ use yamux::session::SessionType;
 
 use crate::session::{ProtocolId, ProtocolMeta, Session, SessionEvent, SessionId};
 
+/// Service handle
+///
+/// #### Note
+///
 /// All functions on this trait will block the entire server running, do not insert long-time tasks,
 /// you can use the futures task instead.
+///
+/// #### Behavior
+///
+/// The handle that exists when the Service is created.
+///
+/// Mainly handle some Service-level errors thrown at runtime, such as listening errors.
+///
+/// At the same time, the session establishment and disconnection messages will also be perceived here.
 pub trait ServiceHandle {
+    /// Handling runtime errors
     fn handle_error(&mut self, _control: &mut ServiceContext, _error: ServiceEvent) {}
-
+    /// Handling session establishment and disconnection events
     fn handle_event(&mut self, _control: &mut ServiceContext, _event: ServiceEvent) {}
 }
 
+/// Protocol handle
+///
+/// #### Note
+///
 /// All functions on this trait will block the entire server running, do not insert long-time tasks,
 /// you can use the futures task instead.
+///
+/// #### Behavior
+///
+/// Define the behavior of each custom protocol in each state.
+///
+/// Depending on whether the user defines a global handle or a session exclusive handle,
+/// the runtime has different performance.
+///
+/// The **important difference** is that some state values are allowed in the global handle,
+/// and the handle exclusive to the session is "stateless", relative to the global handle,
+/// it can only retain the information between a protocol stream on and off.
+///
+/// The opening and closing of the protocol will create and clean up the handle exclusive
+/// to the session, but the global handle will remain in the state until the service is closed.
+///
 pub trait ProtocolHandle {
+    /// This function is called when the protocol is opened.
+    ///
+    /// The global handle will only be called once, and the session exclusive handle will be called each time it is opened.
     fn init(&mut self, _control: &mut ServiceContext) {}
+    /// Called when the corresponding protocol message is received
+    ///
+    /// Session exclusive handle can only receive messages from the own session
     fn received(&mut self, _control: &mut ServiceContext, _data: Message) {}
-
+    /// Called when opening protocol
     fn connected(&mut self, _control: &mut ServiceContext, _session_id: SessionId) {}
-
+    /// Called when closing protocol
     fn disconnected(&mut self, _control: &mut ServiceContext, _session_id: SessionId) {}
+    /// Called when the Service receives the notify task
+    ///
+    /// Similarly, session notify and notify correspond to session exclusive handle and global handle respectively.
     fn notify(&mut self, _control: &mut ServiceContext, _token: u64) {}
 }
 
+/// Protocol message
+///
+/// > The structure may be adjusted in the future
 #[derive(Debug)]
 pub struct Message {
+    /// This field is used to indicate from
+    /// which session the message was received,
+    /// but this field is useless when sending a message.
     pub id: SessionId,
+    /// Protocol id
     pub proto_id: ProtocolId,
+    /// Data
     pub data: Vec<u8>,
 }
 
@@ -50,6 +99,8 @@ impl Default for Message {
     }
 }
 
+/// The Service runtime can send some instructions to the inside of the handle.
+/// This is the sending channel.
 // TODO: Need to maintain the network topology map here?
 #[derive(Clone)]
 pub struct ServiceContext {
@@ -57,82 +108,129 @@ pub struct ServiceContext {
 }
 
 impl ServiceContext {
+    /// New
     fn new(service_task_sender: mpsc::Sender<ServiceTask>) -> Self {
         ServiceContext {
             service_task_sender,
         }
     }
 
+    /// Initiate a connection request to address
     pub fn dial(&mut self, address: SocketAddr) {
         self.send(ServiceTask::Dial { address })
     }
 
+    /// Disconnect a connection
     pub fn disconnect(&mut self, id: SessionId) {
         self.send(ServiceTask::Disconnect { id })
     }
 
+    /// Send message
     pub fn send_message(&mut self, ids: Option<Vec<SessionId>>, message: Message) {
         self.send(ServiceTask::ProtocolMessage { ids, message })
     }
 
-    pub fn future_task(&mut self, task: Box<dyn Future<Item = (), Error = ()> + 'static + Send>) {
-        self.send(ServiceTask::FutureTask { task })
+    /// Send a future task
+    pub fn future_task<T>(&mut self, task: T)
+    where
+        T: Future<Item = (), Error = ()> + 'static + Send,
+    {
+        self.send(ServiceTask::FutureTask {
+            task: Box::new(task),
+        })
     }
 
+    /// Get the internal channel sender side handle
     pub fn sender(&mut self) -> &mut mpsc::Sender<ServiceTask> {
         &mut self.service_task_sender
     }
 
+    /// Real send function
+    #[inline]
     fn send(&mut self, event: ServiceTask) {
         let _ = self.service_task_sender.try_send(event);
     }
 }
 
+/// Event generated by the Service
 #[derive(Debug)]
 pub enum ServiceEvent {
+    /// When dial remote error
     DialerError {
+        /// Remote address
         address: SocketAddr,
+        /// Io error
         error: io::Error,
     },
+    /// When listen error
     ListenError {
+        /// Listen address
         address: SocketAddr,
+        /// Io error
         error: io::Error,
     },
+    /// A session close
     SessionClose {
+        /// Session id
         id: SessionId,
     },
+    /// A session open
     SessionOpen {
+        /// Session id
         id: SessionId,
+        /// Remote address
         address: SocketAddr,
+        /// Outbound or Inbound
         ty: SessionType,
     },
 }
 
+/// Task received by the Service.
+///
+/// An instruction that the outside world can send to the service
 pub enum ServiceTask {
+    /// Send protocol data task
     ProtocolMessage {
+        /// Specify which sessions to send to,
+        /// None means broadcast
         ids: Option<Vec<SessionId>>,
+        /// data
         message: Message,
     },
+    /// Service-level notify task
     ProtocolNotify {
+        /// Protocol id
         proto_id: ProtocolId,
+        /// Notify token
         token: u64,
     },
+    /// Session-level notify task
     ProtocolSessionNotify {
+        /// Session id
         id: SessionId,
+        /// Protocol id
         proto_id: ProtocolId,
+        /// Notify token
         token: u64,
     },
+    /// Future task
     FutureTask {
+        /// Future
         task: Box<dyn Future<Item = (), Error = ()> + 'static + Send>,
     },
+    /// Disconnect task
     Disconnect {
+        /// Session id
         id: SessionId,
     },
+    /// Dial task
     Dial {
+        /// Remote address
         address: SocketAddr,
     },
 }
 
+/// An abstraction of p2p service, currently only supports TCP protocol
 pub struct Service<T, U> {
     protocol_configs: Arc<HashMap<String, Box<dyn ProtocolMeta<U> + Send + Sync>>>,
 
@@ -144,7 +242,7 @@ pub struct Service<T, U> {
 
     next_session: SessionId,
 
-    /// can be upgrade to list service level protocols
+    /// Can be upgrade to list service level protocols
     handle: T,
 
     proto_handles: HashMap<ProtocolId, Box<dyn ProtocolHandle + Send + 'static>>,
@@ -152,14 +250,14 @@ pub struct Service<T, U> {
     proto_session_handles:
         HashMap<SessionId, HashMap<ProtocolId, Box<dyn ProtocolHandle + Send + 'static>>>,
 
-    /// send events to service, clone to session
+    /// Send events to service, clone to session
     session_event_sender: mpsc::Sender<SessionEvent>,
-    /// receive event from service
+    /// Receive event from service
     session_event_receiver: mpsc::Receiver<SessionEvent>,
 
-    /// external event is passed in from this
+    /// External event is passed in from this
     service_context: ServiceContext,
-    /// external event receiver
+    /// External event receiver
     service_task_receiver: mpsc::Receiver<ServiceTask>,
 }
 
@@ -170,6 +268,7 @@ where
     <U as Decoder>::Error: error::Error + Into<io::Error>,
     <U as Encoder>::Error: error::Error + Into<io::Error>,
 {
+    /// New a Service
     pub fn new(
         protocol_configs: Arc<HashMap<String, Box<dyn ProtocolMeta<U> + Send + Sync>>>,
         handle: T,
@@ -192,18 +291,30 @@ where
         }
     }
 
+    /// Listen on the given address.
     pub fn listen(&mut self, address: SocketAddr) -> Result<(), io::Error> {
         let tcp = TcpListener::bind(&address)?;
         self.listens.push((address, tcp.incoming()));
         Ok(())
     }
 
+    /// Dial the given address, doesn't actually make a request, just generate a future
     pub fn dial(mut self, address: SocketAddr) -> Self {
         let dial = TcpStream::connect(&address);
         self.dial.push((address, dial));
         self
     }
 
+    /// Get service current protocol configure
+    pub fn get_protocol_configs(
+        &self,
+    ) -> &Arc<HashMap<String, Box<dyn ProtocolMeta<U> + Send + Sync>>> {
+        &self.protocol_configs
+    }
+
+    /// Send data to the specified protocol for the specified session.
+    ///
+    /// Valid after Service starts
     #[inline]
     pub fn send_message(&mut self, message: Message) {
         if let Some(sender) = self.sessions.get_mut(&message.id) {
@@ -215,6 +326,9 @@ where
         }
     }
 
+    /// Send data to the specified protocol for the specified sessions.
+    ///
+    /// Valid after Service starts
     #[inline]
     pub fn filter_broadcast(&mut self, ids: Option<Vec<SessionId>>, message: Message) {
         match ids {
@@ -235,8 +349,11 @@ where
         }
     }
 
+    /// Broadcast data for a specified protocol.
+    ///
+    /// Valid after Service starts
     #[inline]
-    fn broadcast(&mut self, message: Message) {
+    pub fn broadcast(&mut self, message: Message) {
         debug!(
             "broadcast message, peer count: {}, proto_id: {}",
             self.sessions.len(),
@@ -253,6 +370,7 @@ where
         });
     }
 
+    /// Get the callback handle of the specified protocol
     #[inline]
     fn get_proto_handle(
         &self,
@@ -285,6 +403,7 @@ where
         }
     }
 
+    /// Close the specified session, clean up the handle
     #[inline]
     fn session_close(&mut self, id: SessionId) {
         debug!("service session [{}] close", id);
@@ -292,28 +411,36 @@ where
             let _ = session_sender.try_send(SessionEvent::SessionClose { id });
         }
 
-        // service handle processing flow
+        // Service handle processing flow
         self.handle
             .handle_event(&mut self.service_context, ServiceEvent::SessionClose { id });
 
-        // global proto handle processing flow
-        for handle in self.proto_handles.values_mut() {
-            handle.disconnected(&mut self.service_context, id);
-        }
-
-        // session proto handle processing flow
+        // Session proto handle processing flow
+        let mut close_proto_ids = Vec::new();
         if let Some(handles) = self.proto_session_handles.remove(&id) {
-            for (_, mut handle) in handles {
+            for (proto_id, mut handle) in handles {
                 handle.disconnected(&mut self.service_context, id);
+                close_proto_ids.push(proto_id);
             }
         }
+
+        // Global proto handle processing flow
+        //
+        // You must first confirm that the protocol is open in the session,
+        // otherwise a false positive will occur.
+        close_proto_ids.into_iter().for_each(|proto_id| {
+            if let Some(handle) = self.proto_handles.get_mut(&proto_id) {
+                handle.disconnected(&mut self.service_context, id);
+            }
+        });
     }
 
+    /// Open the handle corresponding to the protocol
     #[inline]
     fn protocol_open(&mut self, id: SessionId, proto_id: ProtocolId) {
         debug!("service session [{}] proto [{}] open", id, proto_id);
 
-        // global proto handle processing flow
+        // Global proto handle processing flow
         if let Some(handle) = self.proto_handles.get_mut(&proto_id) {
             handle.connected(&mut self.service_context, id);
         } else if let Some(mut handle) = self.get_proto_handle(false, proto_id) {
@@ -322,7 +449,7 @@ where
             self.proto_handles.insert(proto_id, handle);
         }
 
-        // session proto handle processing flow
+        // Session proto handle processing flow
         if let Some(mut handle) = self.get_proto_handle(true, proto_id) {
             handle.init(&mut self.service_context);
             handle.connected(&mut self.service_context, id);
@@ -334,6 +461,7 @@ where
         }
     }
 
+    /// Processing the received data
     #[inline]
     fn protocol_message(&mut self, id: SessionId, proto_id: ProtocolId, data: &bytes::Bytes) {
         debug!(
@@ -341,7 +469,7 @@ where
             id, proto_id, data
         );
 
-        // global proto handle processing flow
+        // Global proto handle processing flow
         if let Some(handle) = self.proto_handles.get_mut(&proto_id) {
             handle.received(
                 &mut self.service_context,
@@ -353,7 +481,7 @@ where
             );
         }
 
-        // session proto handle processing flow
+        // Session proto handle processing flow
         if let Some(handles) = self.proto_session_handles.get_mut(&id) {
             if let Some(handle) = handles.get_mut(&proto_id) {
                 handle.received(
@@ -368,16 +496,17 @@ where
         }
     }
 
+    /// Protocol stream is closed, clean up data
     #[inline]
     fn protocol_close(&mut self, id: SessionId, proto_id: ProtocolId) {
         debug!("service session [{}] proto [{}] close", id, proto_id);
 
-        // global proto handle processing flow
+        // Global proto handle processing flow
         if let Some(handle) = self.proto_handles.get_mut(&proto_id) {
             handle.disconnected(&mut self.service_context, id);
         }
 
-        // session proto handle processing flow
+        // Session proto handle processing flow
         if let Some(handles) = self.proto_session_handles.get_mut(&id) {
             if let Some(mut handle) = handles.remove(&proto_id) {
                 handle.disconnected(&mut self.service_context, id);
@@ -385,6 +514,7 @@ where
         }
     }
 
+    /// Handling various events uploaded by the session
     fn handle_session_event(&mut self, event: SessionEvent) {
         match event {
             SessionEvent::SessionClose { id } => self.session_close(id),
@@ -396,6 +526,7 @@ where
         }
     }
 
+    /// Handling various tasks sent externally
     fn handle_service_task(&mut self, event: ServiceTask) {
         match event {
             ServiceTask::ProtocolMessage { ids, message } => self.filter_broadcast(ids, message),
@@ -426,6 +557,7 @@ where
         }
     }
 
+    /// Poll client requests
     #[inline]
     fn client_poll(&mut self) {
         let mut no_ready_client = Vec::new();
@@ -477,6 +609,7 @@ where
         self.dial = no_ready_client;
     }
 
+    /// Poll listen connections
     #[inline]
     fn listen_poll(&mut self) -> Poll<Option<()>, ()> {
         if self.listens.is_empty() && self.dial.is_empty() && self.sessions.is_empty() {

@@ -2,7 +2,7 @@ use env_logger;
 use futures::{oneshot, prelude::*, sync::oneshot::Sender};
 use log::info;
 use p2p::{
-    config::ConfigBuilder,
+    builder::ServiceBuilder,
     service::{
         Message, ProtocolHandle, Service, ServiceContext, ServiceEvent, ServiceHandle, ServiceTask,
     },
@@ -64,7 +64,7 @@ impl ProtocolHandle for PHandle {
                     Ok(())
                 })
                 .map_err(|err| info!("{}", err));
-            control.future_task(Box::new(interval_task));
+            control.future_task(interval_task);
         }
     }
 
@@ -98,7 +98,7 @@ impl ProtocolHandle for PHandle {
                 }
             })
             .map_err(|err| info!("{}", err));
-        control.future_task(Box::new(interval_task));
+        control.future_task(interval_task);
     }
 
     fn disconnected(&mut self, _control: &mut ServiceContext, session_id: SessionId) {
@@ -179,23 +179,23 @@ fn main() {
 }
 
 fn create_server() -> Service<SHandle, LengthDelimitedCodec> {
-    let config = ConfigBuilder::default()
-        .push(Protocol::new(0))
-        .push(Protocol::new(1));
-    Service::new(config.build(), SHandle)
+    ServiceBuilder::default()
+        .insert_protocol(Protocol::new(0))
+        .insert_protocol(Protocol::new(1))
+        .build(SHandle)
 }
 
-/// proto 0 open success
-/// proto 1 open success
-/// proto 2 open failure
+/// Proto 0 open success
+/// Proto 1 open success
+/// Proto 2 open failure
 ///
-/// because server only supports 0,1
+/// Because server only supports 0,1
 fn create_client() -> Service<SHandle, LengthDelimitedCodec> {
-    let config = ConfigBuilder::default()
-        .push(Protocol::new(0))
-        .push(Protocol::new(1))
-        .push(Protocol::new(2));
-    Service::new(config.build(), SHandle)
+    ServiceBuilder::default()
+        .insert_protocol(Protocol::new(0))
+        .insert_protocol(Protocol::new(1))
+        .insert_protocol(Protocol::new(2))
+        .build(SHandle)
 }
 
 fn server() {
