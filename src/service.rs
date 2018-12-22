@@ -549,7 +549,7 @@ where
                 token,
             } => {
                 if let Some(handles) = self.proto_session_handles.get_mut(&id) {
-                    if let Some(mut handle) = handles.remove(&proto_id) {
+                    if let Some(handle) = handles.get_mut(&proto_id) {
                         handle.notify(&mut self.service_context, token);
                     }
                 }
