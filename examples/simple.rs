@@ -7,14 +7,13 @@ use p2p::{
         Message, ProtocolHandle, Service, ServiceContext, ServiceEvent, ServiceHandle, ServiceTask,
     },
     session::{ProtocolId, ProtocolMeta, SessionId},
-    StreamHandle,
 };
 use std::collections::HashMap;
 use std::{
     str,
     time::{Duration, Instant},
 };
-use tokio::codec::{length_delimited::LengthDelimitedCodec, Framed};
+use tokio::codec::length_delimited::LengthDelimitedCodec;
 use tokio::timer::{Delay, Error, Interval};
 
 pub struct Protocol {
@@ -31,8 +30,8 @@ impl ProtocolMeta<LengthDelimitedCodec> for Protocol {
     fn id(&self) -> ProtocolId {
         self.id
     }
-    fn framed(&self, stream: StreamHandle) -> Framed<StreamHandle, LengthDelimitedCodec> {
-        Framed::new(stream, LengthDelimitedCodec::new())
+    fn framed(&self) -> LengthDelimitedCodec {
+        LengthDelimitedCodec::new()
     }
     fn handle(&self) -> Option<Box<dyn ProtocolHandle + Send + 'static>> {
         // All protocol use the same handle.

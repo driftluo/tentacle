@@ -112,12 +112,42 @@ where
     }
 
     /// Close protocol sub stream
-    fn close(&mut self) {
+    fn close_proto_stream(&mut self) {
         let _ = self.event_sender.try_send(ProtocolEvent::ProtocolClose {
             id: self.id,
             proto_id: self.proto_id,
         });
+        self.event_receiver.close();
         let _ = self.sub_stream.get_mut().shutdown();
+    }
+
+    /// Handling commands send by session
+    fn handle_proto_event(&mut self, event: ProtocolEvent) -> Poll<Option<()>, ()> {
+        match event {
+            ProtocolEvent::ProtocolMessage { data, .. } => {
+                match self.send_data(data) {
+                    Err(_) => {
+                        // Whether it is a read send error or a flush error,
+                        // the most essential problem is that there is a problem with the external network.
+                        // Close the protocol stream directly.
+                        warn!(
+                            "protocol [{}] close because of extern network",
+                            self.proto_id
+                        );
+                        self.close_proto_stream();
+                        return Ok(Async::Ready(None));
+                    }
+                    Ok(Async::NotReady) => (),
+                    Ok(Async::Ready(_)) => (),
+                }
+            }
+            ProtocolEvent::ProtocolClose { .. } => {
+                self.close_proto_stream();
+                return Ok(Async::Ready(None));
+            }
+            _ => (),
+        }
+        Ok(Async::Ready(Some(())))
     }
 }
 
@@ -145,7 +175,7 @@ where
                 }
                 Ok(Async::Ready(None)) => {
                     warn!("protocol [{}] close", self.proto_id);
-                    self.close();
+                    self.close_proto_stream();
                     return Ok(Async::Ready(None));
                 }
                 Ok(Async::NotReady) => break,
@@ -157,7 +187,7 @@ where
                         | ErrorKind::ConnectionReset
                         | ErrorKind::NotConnected
                         | ErrorKind::UnexpectedEof => {
-                            self.close();
+                            self.close_proto_stream();
                             return Ok(Async::Ready(None));
                         }
                         _ => break,
@@ -168,28 +198,14 @@ where
 
         loop {
             match self.event_receiver.poll() {
-                Ok(Async::Ready(Some(event))) => {
-                    if let ProtocolEvent::ProtocolMessage { data, .. } = event {
-                        match self.send_data(data) {
-                            Err(_) => {
-                                // Whether it is a read send error or a flush error,
-                                // the most essential problem is that there is a problem with the external network.
-                                // Close the protocol stream directly.
-                                warn!(
-                                    "protocol [{}] close because of extern network",
-                                    self.proto_id
-                                );
-                                self.close();
-                                return Ok(Async::Ready(None));
-                            }
-                            Ok(Async::NotReady) => break,
-                            Ok(Async::Ready(_)) => (),
-                        }
-                    }
-                }
+                Ok(Async::Ready(Some(event))) => match self.handle_proto_event(event) {
+                    Ok(Async::NotReady) => break,
+                    Ok(Async::Ready(None)) => return Ok(Async::Ready(None)),
+                    _ => (),
+                },
                 Ok(Async::Ready(None)) => {
                     // Must be session close
-                    self.close();
+                    self.close_proto_stream();
                     return Ok(Async::Ready(None));
                 }
                 Ok(Async::NotReady) => break,

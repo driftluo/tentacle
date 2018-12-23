@@ -9,7 +9,7 @@ use tokio::net::{
     tcp::{ConnectFuture, Incoming},
     TcpListener, TcpStream,
 };
-use yamux::session::SessionType;
+use yamux::{session::SessionType, Config};
 
 use crate::session::{ProtocolId, ProtocolMeta, Session, SessionEvent, SessionId};
 
@@ -577,12 +577,14 @@ where
                     self.next_session += 1;
                     let address = socket.peer_addr().unwrap();
                     let (service_event_sender, service_event_receiver) = mpsc::channel(256);
-                    let mut session = Session::new_client(
+                    let mut session = Session::new(
                         socket,
                         self.session_event_sender.clone(),
                         service_event_receiver,
                         self.next_session,
                         self.protocol_configs.clone(),
+                        SessionType::Client,
+                        Config::default(),
                     );
                     self.protocol_configs
                         .keys()
@@ -636,12 +638,14 @@ where
                     self.next_session += 1;
                     let address = socket.peer_addr().unwrap();
                     let (service_event_sender, service_event_receiver) = mpsc::channel(256);
-                    let session = Session::new_server(
+                    let session = Session::new(
                         socket,
                         self.session_event_sender.clone(),
                         service_event_receiver,
                         self.next_session,
                         self.protocol_configs.clone(),
+                        SessionType::Server,
+                        Config::default(),
                     );
 
                     self.sessions

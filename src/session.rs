@@ -69,7 +69,7 @@ where
     /// Protocol id
     fn id(&self) -> ProtocolId;
     /// The codec used by the custom protocol, such as `LengthDelimitedCodec` by tokio
-    fn framed(&self, stream: StreamHandle) -> Framed<StreamHandle, U>;
+    fn framed(&self) -> U;
     /// A global callback handle for a protocol.
     ///
     /// ---
@@ -132,48 +132,23 @@ where
     <U as Decoder>::Error: error::Error + Into<io::Error>,
     <U as Encoder>::Error: error::Error + Into<io::Error>,
 {
-    /// As a client, open a session
-    pub fn new_client(
+    /// New a session
+    pub fn new(
         socket: T,
         service_sender: mpsc::Sender<SessionEvent>,
         service_receiver: mpsc::Receiver<SessionEvent>,
         id: SessionId,
         protocol_configs: Arc<HashMap<String, Box<dyn ProtocolMeta<U> + Send + Sync>>>,
+        ty: SessionType,
+        config: Config,
     ) -> Self {
-        let config = Config::default();
         let socket = YamuxSession::new_client(socket, config);
         let (proto_event_sender, proto_event_receiver) = mpsc::channel(256);
         Session {
             socket,
             protocol_configs,
             id,
-            ty: SessionType::Client,
-            next_stream: 0,
-            sub_streams: HashMap::default(),
-            proto_streams: HashMap::default(),
-            proto_event_sender,
-            proto_event_receiver,
-            service_sender,
-            service_receiver,
-        }
-    }
-
-    /// As a listener, open a session
-    pub fn new_server(
-        socket: T,
-        service_sender: mpsc::Sender<SessionEvent>,
-        service_receiver: mpsc::Receiver<SessionEvent>,
-        id: SessionId,
-        protocol_configs: Arc<HashMap<String, Box<dyn ProtocolMeta<U> + Send + Sync>>>,
-    ) -> Self {
-        let config = Config::default();
-        let socket = YamuxSession::new_client(socket, config);
-        let (proto_event_sender, proto_event_receiver) = mpsc::channel(32);
-        Session {
-            socket,
-            protocol_configs,
-            id,
-            ty: SessionType::Server,
+            ty,
             next_stream: 0,
             sub_streams: HashMap::default(),
             proto_streams: HashMap::default(),
@@ -269,7 +244,7 @@ where
                 };
 
                 let proto_id = proto.id();
-                let frame = proto.framed(sub_stream);
+                let frame = Framed::new(sub_stream, proto.framed());
                 let (session_to_proto_sender, session_to_proto_receiver) = mpsc::channel(32);
                 let proto_stream = SubStream::new(
                     frame,
@@ -331,12 +306,28 @@ where
                 }
             }
             SessionEvent::SessionClose { .. } => {
-                // todo: notify sub stream closed
+                self.close_session();
                 let _ = self.socket.shutdown();
-                self.sub_streams.clear();
             }
             _ => (),
         }
+    }
+
+    /// Close session
+    fn close_session(&mut self) {
+        let _ = self
+            .service_sender
+            .try_send(SessionEvent::SessionClose { id: self.id });
+
+        for (proto_id, mut sender) in self.sub_streams.drain() {
+            let _ = sender.try_send(ProtocolEvent::ProtocolClose {
+                id: self.id,
+                proto_id,
+            });
+        }
+
+        self.service_receiver.close();
+        self.proto_event_receiver.close();
     }
 }
 
@@ -360,10 +351,7 @@ where
         match self.socket.poll() {
             Ok(Async::Ready(Some(sub_stream))) => self.handle_sub_stream(sub_stream),
             Ok(Async::Ready(None)) => {
-                let _ = self
-                    .service_sender
-                    .try_send(SessionEvent::SessionClose { id: self.id });
-                self.sub_streams.clear();
+                self.close_session();
                 return Ok(Async::Ready(None));
             }
             Ok(Async::NotReady) => (),
@@ -389,6 +377,7 @@ where
                 Ok(Async::Ready(Some(event))) => self.handle_session_event(event),
                 Ok(Async::Ready(None)) => {
                     // Must drop by service
+                    self.close_session();
                     return Ok(Async::Ready(None));
                 }
                 Ok(Async::NotReady) => break,

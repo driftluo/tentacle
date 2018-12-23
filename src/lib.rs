@@ -13,4 +13,4 @@ pub mod session;
 /// Each custom protocol in a session corresponds to a sub stream
 pub mod substream;
 /// Re-pub some useful structures in yamux
-pub use yamux::{session::SessionType, Session, StreamHandle};
+pub use yamux::{session::SessionType, Session};
