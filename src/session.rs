@@ -142,7 +142,7 @@ where
         ty: SessionType,
         config: Config,
     ) -> Self {
-        let socket = YamuxSession::new_client(socket, config);
+        let socket = YamuxSession::new(socket, config, ty);
         let (proto_event_sender, proto_event_receiver) = mpsc::channel(256);
         Session {
             socket,
