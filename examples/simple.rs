@@ -30,7 +30,7 @@ impl ProtocolMeta<LengthDelimitedCodec> for Protocol {
     fn id(&self) -> ProtocolId {
         self.id
     }
-    fn framed(&self) -> LengthDelimitedCodec {
+    fn codec(&self) -> LengthDelimitedCodec {
         LengthDelimitedCodec::new()
     }
     fn handle(&self) -> Option<Box<dyn ProtocolHandle + Send + 'static>> {
@@ -60,9 +60,12 @@ impl ProtocolHandle for PHandle {
             let proto_id = self.proto_id;
             let interval_task = Interval::new(Instant::now(), Duration::from_secs(5))
                 .for_each(move |_| {
-                    let _ = interval_sender
-                        .try_send(ServiceTask::ProtocolNotify { proto_id, token: 3 });
-                    Ok(())
+                    match interval_sender
+                        .try_send(ServiceTask::ProtocolNotify { proto_id, token: 3 })
+                    {
+                        Ok(_) => Ok(()),
+                        Err(_) => Err(Error::shutdown()),
+                    }
                 })
                 .map_err(|err| info!("{}", err));
             control.future_task(interval_task);

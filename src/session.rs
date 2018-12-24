@@ -69,7 +69,7 @@ where
     /// Protocol id
     fn id(&self) -> ProtocolId;
     /// The codec used by the custom protocol, such as `LengthDelimitedCodec` by tokio
-    fn framed(&self) -> U;
+    fn codec(&self) -> U;
     /// A global callback handle for a protocol.
     ///
     /// ---
@@ -244,7 +244,7 @@ where
                 };
 
                 let proto_id = proto.id();
-                let frame = Framed::new(sub_stream, proto.framed());
+                let frame = Framed::new(sub_stream, proto.codec());
                 let (session_to_proto_sender, session_to_proto_receiver) = mpsc::channel(32);
                 let proto_stream = SubStream::new(
                     frame,
