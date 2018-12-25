@@ -1,19 +1,16 @@
 [package]
-name = "p2p"
+name = "yamux"
 version = "0.1.0"
 authors = ["Nervos Core Dev <dev@nervos.org>"]
 edition = "2018"
 
 [dependencies]
-#yamux = { git = "https://github.com/TheWaWaR/yamux.git" }
-yamux = { path = "yamux" }
+bytes = "0.4"
+byteorder = "1.2"
+fnv = "1.0"
 futures = "0.1"
 tokio = "0.1"
 log = "0.4"
-bytes = "0.4"
 
 [dev-dependencies]
-env_logger = "0.6.0"
-
-[workspace]
-members = ["yamux"]
+env_logger = "0.6"
