@@ -42,6 +42,10 @@ pub enum SessionEvent {
         proto_id: ProtocolId,
         /// Stream id
         stream_id: StreamId,
+        /// Remote address
+        remote_address: ::std::net::SocketAddr,
+        /// Session type
+        ty: SessionType,
     },
     /// Protocol close event
     ProtocolClose {
@@ -99,12 +103,14 @@ where
 }
 
 /// Wrapper for real data streams, such as TCP stream
-pub struct Session<T, U> {
+pub(crate) struct Session<T, U> {
     socket: YamuxSession<T>,
 
     protocol_configs: Arc<HashMap<String, Box<dyn ProtocolMeta<U> + Send + Sync>>>,
 
     id: SessionId,
+
+    remote_address: ::std::net::SocketAddr,
 
     next_stream: StreamId,
     /// Indicates the identity of the current session
@@ -137,18 +143,16 @@ where
         socket: T,
         service_sender: mpsc::Sender<SessionEvent>,
         service_receiver: mpsc::Receiver<SessionEvent>,
-        id: SessionId,
-        protocol_configs: Arc<HashMap<String, Box<dyn ProtocolMeta<U> + Send + Sync>>>,
-        ty: SessionType,
-        config: Config,
+        meta: SessionMeta<U>,
     ) -> Self {
-        let socket = YamuxSession::new(socket, config, ty);
+        let socket = YamuxSession::new(socket, meta.config, meta.ty);
         let (proto_event_sender, proto_event_receiver) = mpsc::channel(256);
         Session {
             socket,
-            protocol_configs,
-            id,
-            ty,
+            protocol_configs: meta.protocol_configs,
+            id: meta.id,
+            remote_address: meta.remote_address,
+            ty: meta.ty,
             next_stream: 0,
             sub_streams: HashMap::default(),
             proto_streams: HashMap::default(),
@@ -261,6 +265,8 @@ where
                     id: self.id,
                     stream_id: self.next_stream,
                     proto_id,
+                    remote_address: self.remote_address,
+                    ty: self.ty,
                 });
                 self.next_stream += 1;
 
@@ -389,5 +395,38 @@ where
         }
 
         Ok(Async::NotReady)
+    }
+}
+
+pub(crate) struct SessionMeta<U> {
+    config: Config,
+    id: SessionId,
+    protocol_configs: Arc<HashMap<String, Box<dyn ProtocolMeta<U> + Send + Sync>>>,
+    ty: SessionType,
+    remote_address: ::std::net::SocketAddr,
+}
+
+impl<U> SessionMeta<U>
+where
+    U: Decoder<Item = bytes::BytesMut> + Encoder<Item = bytes::Bytes> + Send + 'static,
+    <U as Decoder>::Error: error::Error + Into<io::Error>,
+    <U as Encoder>::Error: error::Error + Into<io::Error>,
+{
+    pub fn new(id: SessionId, ty: SessionType, remote_address: ::std::net::SocketAddr) -> Self {
+        SessionMeta {
+            config: Config::default(),
+            id,
+            ty,
+            remote_address,
+            protocol_configs: Arc::new(HashMap::new()),
+        }
+    }
+
+    pub fn protocol(
+        mut self,
+        config: Arc<HashMap<String, Box<dyn ProtocolMeta<U> + Send + Sync>>>,
+    ) -> Self {
+        self.protocol_configs = config;
+        self
     }
 }

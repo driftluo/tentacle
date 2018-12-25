@@ -9,9 +9,9 @@ use tokio::net::{
     tcp::{ConnectFuture, Incoming},
     TcpListener, TcpStream,
 };
-use yamux::{session::SessionType, Config};
+use yamux::session::SessionType;
 
-use crate::session::{ProtocolId, ProtocolMeta, Session, SessionEvent, SessionId};
+use crate::session::{ProtocolId, ProtocolMeta, Session, SessionEvent, SessionId, SessionMeta};
 
 /// Service handle
 ///
@@ -65,7 +65,14 @@ pub trait ProtocolHandle {
     /// Session exclusive handle can only receive messages from the own session
     fn received(&mut self, _control: &mut ServiceContext, _data: Message) {}
     /// Called when opening protocol
-    fn connected(&mut self, _control: &mut ServiceContext, _session_id: SessionId) {}
+    fn connected(
+        &mut self,
+        _control: &mut ServiceContext,
+        _session_id: SessionId,
+        _address: SocketAddr,
+        _ty: SessionType,
+    ) {
+    }
     /// Called when closing protocol
     fn disconnected(&mut self, _control: &mut ServiceContext, _session_id: SessionId) {}
     /// Called when the Service receives the notify task
@@ -440,15 +447,21 @@ where
 
     /// Open the handle corresponding to the protocol
     #[inline]
-    fn protocol_open(&mut self, id: SessionId, proto_id: ProtocolId) {
+    fn protocol_open(
+        &mut self,
+        id: SessionId,
+        proto_id: ProtocolId,
+        address: SocketAddr,
+        ty: SessionType,
+    ) {
         debug!("service session [{}] proto [{}] open", id, proto_id);
 
         // Global proto handle processing flow
         if let Some(handle) = self.proto_handles.get_mut(&proto_id) {
-            handle.connected(&mut self.service_context, id);
+            handle.connected(&mut self.service_context, id, address, ty);
         } else if let Some(mut handle) = self.get_proto_handle(false, proto_id) {
             handle.init(&mut self.service_context);
-            handle.connected(&mut self.service_context, id);
+            handle.connected(&mut self.service_context, id, address, ty);
             self.proto_handles.insert(proto_id, handle);
         }
 
@@ -459,7 +472,7 @@ where
             Some(mut handle) => {
                 debug!("init session [{}] level proto [{}] handle", id, proto_id);
                 handle.init(&mut self.service_context);
-                handle.connected(&mut self.service_context, id);
+                handle.connected(&mut self.service_context, id, address, ty);
                 Some(handle)
             }
             None => None,
@@ -531,7 +544,13 @@ where
             SessionEvent::ProtocolMessage { id, proto_id, data } => {
                 self.protocol_message(id, proto_id, &data)
             }
-            SessionEvent::ProtocolOpen { id, proto_id, .. } => self.protocol_open(id, proto_id),
+            SessionEvent::ProtocolOpen {
+                id,
+                proto_id,
+                remote_address,
+                ty,
+                ..
+            } => self.protocol_open(id, proto_id, remote_address, ty),
             SessionEvent::ProtocolClose { id, proto_id, .. } => self.protocol_close(id, proto_id),
         }
     }
@@ -577,14 +596,13 @@ where
                     self.next_session += 1;
                     let address = socket.peer_addr().unwrap();
                     let (service_event_sender, service_event_receiver) = mpsc::channel(256);
+                    let meta = SessionMeta::new(self.next_session, SessionType::Client, address)
+                        .protocol(self.protocol_configs.clone());
                     let mut session = Session::new(
                         socket,
                         self.session_event_sender.clone(),
                         service_event_receiver,
-                        self.next_session,
-                        self.protocol_configs.clone(),
-                        SessionType::Client,
-                        Config::default(),
+                        meta,
                     );
                     self.protocol_configs
                         .keys()
@@ -638,14 +656,13 @@ where
                     self.next_session += 1;
                     let address = socket.peer_addr().unwrap();
                     let (service_event_sender, service_event_receiver) = mpsc::channel(256);
+                    let meta = SessionMeta::new(self.next_session, SessionType::Server, address)
+                        .protocol(self.protocol_configs.clone());
                     let session = Session::new(
                         socket,
                         self.session_event_sender.clone(),
                         service_event_receiver,
-                        self.next_session,
-                        self.protocol_configs.clone(),
-                        SessionType::Server,
-                        Config::default(),
+                        meta,
                     );
 
                     self.sessions

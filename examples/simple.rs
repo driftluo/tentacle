@@ -7,9 +7,11 @@ use p2p::{
         Message, ProtocolHandle, Service, ServiceContext, ServiceEvent, ServiceHandle, ServiceTask,
     },
     session::{ProtocolId, ProtocolMeta, SessionId},
+    SessionType,
 };
 use std::collections::HashMap;
 use std::{
+    net::SocketAddr,
     str,
     time::{Duration, Instant},
 };
@@ -72,11 +74,17 @@ impl ProtocolHandle for PHandle {
         }
     }
 
-    fn connected(&mut self, control: &mut ServiceContext, session_id: SessionId) {
+    fn connected(
+        &mut self,
+        control: &mut ServiceContext,
+        session_id: SessionId,
+        address: SocketAddr,
+        ty: SessionType,
+    ) {
         self.connected_session_ids.push(session_id);
         info!(
-            "proto id [{}] open on session [{}]",
-            self.proto_id, session_id
+            "proto id [{}] open on session [{}], address: [{}], type: [{:?}]",
+            self.proto_id, session_id, address, ty
         );
         info!("connected sessions are: {:?}", self.connected_session_ids);
 
