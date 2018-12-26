@@ -40,7 +40,7 @@ This library still lacks a lot of stability tests and stress tests, I will try t
 1. Clone
 
 ```bash
-$ git clone https://github.com/driftluo/p2p.git
+$ git clone https://github.com/nervosnetwork/p2p.git
 ```
 
 2. On one terminal:

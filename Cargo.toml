@@ -1,6 +1,8 @@
 [package]
 name = "p2p"
 version = "0.1.0"
+license = "MIT"
+description = "Minimal implementation for a multiplexed p2p network."
 authors = ["Nervos Core Dev <dev@nervos.org>"]
 edition = "2018"
 

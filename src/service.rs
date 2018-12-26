@@ -112,32 +112,41 @@ impl Default for Message {
 #[derive(Clone)]
 pub struct ServiceContext {
     service_task_sender: mpsc::Sender<ServiceTask>,
+    proto_message: Arc<HashMap<ProtocolId, String>>,
 }
 
 impl ServiceContext {
     /// New
-    fn new(service_task_sender: mpsc::Sender<ServiceTask>) -> Self {
+    fn new(
+        service_task_sender: mpsc::Sender<ServiceTask>,
+        proto_message: HashMap<ProtocolId, String>,
+    ) -> Self {
         ServiceContext {
             service_task_sender,
+            proto_message: Arc::new(proto_message),
         }
     }
 
     /// Initiate a connection request to address
+    #[inline]
     pub fn dial(&mut self, address: SocketAddr) {
         self.send(ServiceTask::Dial { address })
     }
 
     /// Disconnect a connection
+    #[inline]
     pub fn disconnect(&mut self, id: SessionId) {
         self.send(ServiceTask::Disconnect { id })
     }
 
     /// Send message
+    #[inline]
     pub fn send_message(&mut self, ids: Option<Vec<SessionId>>, message: Message) {
         self.send(ServiceTask::ProtocolMessage { ids, message })
     }
 
     /// Send a future task
+    #[inline]
     pub fn future_task<T>(&mut self, task: T)
     where
         T: Future<Item = (), Error = ()> + 'static + Send,
@@ -148,8 +157,15 @@ impl ServiceContext {
     }
 
     /// Get the internal channel sender side handle
+    #[inline]
     pub fn sender(&mut self) -> &mut mpsc::Sender<ServiceTask> {
         &mut self.service_task_sender
+    }
+
+    /// Get service protocol message, Map(ID, Name), but can't modify
+    #[inline]
+    pub fn get_protocols(&self) -> &Arc<HashMap<ProtocolId, String>> {
+        &self.proto_message
     }
 
     /// Real send function
@@ -282,6 +298,11 @@ where
     ) -> Self {
         let (session_event_sender, session_event_receiver) = mpsc::channel(256);
         let (service_task_sender, service_task_receiver) = mpsc::channel(256);
+        let protocol_message = protocol_configs
+            .values()
+            .map(|meta| (meta.id(), meta.name()))
+            .collect::<HashMap<ProtocolId, String>>();
+
         Service {
             protocol_configs,
             handle,
@@ -293,7 +314,7 @@ where
             next_session: 0,
             session_event_sender,
             session_event_receiver,
-            service_context: ServiceContext::new(service_task_sender),
+            service_context: ServiceContext::new(service_task_sender, protocol_message),
             service_task_receiver,
         }
     }
