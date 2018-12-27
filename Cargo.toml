@@ -18,4 +18,4 @@ bytes = "0.4"
 env_logger = "0.6.0"
 
 [workspace]
-members = ["yamux"]
+members = ["yamux", "secio"]
