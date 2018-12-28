@@ -10,7 +10,7 @@ const ECDH_P384: &str = "P-384";
 const AES_128: &str = "AES-128";
 const AES_256: &str = "AES-256";
 const TWOFISH_CTR: &str = "TwofishCTR";
-const NULL: &str = "NULL";
+//const NULL: &str = "NULL";
 
 const SHA_256: &str = "SHA256";
 const SHA_512: &str = "SHA512";
@@ -127,6 +127,29 @@ pub fn select_digest(r: Ordering, ours: &str, theirs: &str) -> Result<Digest, Se
             match x {
                 SHA_256 => return Ok(Digest::Sha256),
                 SHA_512 => return Ok(Digest::Sha512),
+                _ => continue,
+            }
+        }
+    }
+    Err(SecioError::NoSupportIntersection)
+}
+
+/// Given two cipher proposition strings try to figure out a match.
+///
+/// The `Ordering` parameter determines which argument is preferred. If `Less` or `Equal` we
+/// try for each of `theirs` every one of `ours`, for `Greater` it's the other way around.
+pub fn select_cipher(r: Ordering, ours: &str, theirs: &str) -> Result<Cipher, SecioError> {
+    let (a, b) = match r {
+        Ordering::Less | Ordering::Equal => (theirs, ours),
+        Ordering::Greater => (ours, theirs),
+    };
+    for x in a.split(',') {
+        if b.split(',').any(|y| x == y) {
+            match x {
+                AES_128 => return Ok(Cipher::Aes128),
+                AES_256 => return Ok(Cipher::Aes256),
+                TWOFISH_CTR => return Ok(Cipher::TwofishCtr),
+                //                NULL => return Ok(Cipher::Null),
                 _ => continue,
             }
         }

@@ -11,6 +11,10 @@ futures = "0.1"
 tokio = "0.1"
 log = "0.4.1"
 
+serde_derive = "1.0.82"
+bincode = "1.0.1"
+serde = "1.0"
+
 secp256k1 = "0.12"
 hmac = "0.7.0"
 sha2 = "0.8.0"

@@ -1,5 +1,5 @@
 pub mod secure_stream;
-mod stream_handle;
+pub mod stream_handle;
 
 use aes_ctr::stream_cipher::StreamCipher as AES_StreamCipher;
 use hmac::{self, Mac};
@@ -41,27 +41,31 @@ impl Hmac {
     /// Signs the data.
     pub fn sign(&mut self, crypted_data: &[u8]) -> Vec<u8> {
         match *self {
-            Hmac::Sha256(ref mut hmac) => {
-                hmac.input(crypted_data);
-                hmac.clone().result().code().to_vec()
+            Hmac::Sha256(ref hmac) => {
+                let mut mac = hmac.clone();
+                mac.input(crypted_data);
+                mac.result().code().to_vec()
             }
-            Hmac::Sha512(ref mut hmac) => {
-                hmac.input(crypted_data);
-                hmac.clone().result().code().to_vec()
+            Hmac::Sha512(ref hmac) => {
+                let mut mac = hmac.clone();
+                mac.input(crypted_data);
+                mac.result().code().to_vec()
             }
         }
     }
 
     /// Verifies that the data matches the expected hash.
-    pub fn verify(&mut self, crypted_data: &[u8], expected_hash: &[u8]) -> Result<(), ()> {
+    pub fn verify(&mut self, crypted_data: &[u8], expected_hash: &[u8]) -> bool {
         match *self {
-            Hmac::Sha256(ref mut hmac) => {
-                hmac.input(crypted_data);
-                hmac.clone().verify(expected_hash).map_err(|_| ())
+            Hmac::Sha256(ref hmac) => {
+                let mut mac = hmac.clone();
+                mac.input(crypted_data);
+                mac.verify(expected_hash).is_ok()
             }
-            Hmac::Sha512(ref mut hmac) => {
-                hmac.input(crypted_data);
-                hmac.clone().verify(expected_hash).map_err(|_| ())
+            Hmac::Sha512(ref hmac) => {
+                let mut mac = hmac.clone();
+                mac.input(crypted_data);
+                mac.verify(expected_hash).is_ok()
             }
         }
     }

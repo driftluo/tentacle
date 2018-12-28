@@ -25,11 +25,11 @@ pub struct SecureStream<T> {
     /// denotes a sequence of bytes which are expected to be
     /// found at the beginning of the stream and are checked for equality
     nonce: Vec<u8>,
-
+    /// Send buffer
     pending: VecDeque<Bytes>,
-
+    /// Read buffer
     read_buf: VecDeque<BytesMut>,
-
+    /// Frame sender, init on call `create_handle`
     frame_sender: Option<Sender<StreamEvent>>,
     // For receive events from sub streams (for clone to stream handle)
     event_sender: Sender<StreamEvent>,
@@ -65,6 +65,7 @@ where
 
     /// Create a unique handle to this stream.
     /// Repeated calls will return Error.
+    #[inline]
     pub fn create_handle(&mut self) -> Result<StreamHandle, ()> {
         if self.frame_sender.is_some() {
             return Err(());
@@ -74,6 +75,7 @@ where
         Ok(StreamHandle::new(frame_receiver, self.event_sender.clone()))
     }
 
+    #[inline]
     fn handle_event(&mut self, event: StreamEvent) -> Result<(), io::Error> {
         match event {
             StreamEvent::Frame(mut frame) => {
@@ -85,18 +87,18 @@ where
                         debug!("can't send");
                         self.pending.push_front(data);
                         break;
-                    } else {
-                        // TODO: not ready???
-                        self.socket.poll_complete()?;
                     }
                 }
+                // TODO: not ready???
+                self.socket.poll_complete()?;
             }
             StreamEvent::Close => {
                 self.dead = true;
                 let _ = self.socket.close();
             }
             StreamEvent::Flush(sender) => {
-                let _ = self.socket.poll_complete();
+                // TODO: not ready???
+                self.socket.poll_complete()?;
                 let _ = sender.send(());
                 debug!("secure stream flushed");
             }
@@ -104,6 +106,7 @@ where
         Ok(())
     }
 
+    #[inline]
     fn recv_frame(&mut self) -> Poll<Option<()>, SecioError> {
         loop {
             match self.socket.poll() {
@@ -146,7 +149,7 @@ where
             let (crypted_data, expected_hash) = frame.split_at(content_length);
             debug_assert_eq!(expected_hash.len(), self.hmac.num_bytes());
 
-            if self.hmac.verify(crypted_data, expected_hash).is_err() {
+            if !self.hmac.verify(crypted_data, expected_hash) {
                 debug!("hmac mismatch when decoding secio frame");
                 return Err(SecioError::HmacNotMatching);
             }
@@ -260,7 +263,7 @@ mod tests {
 
         let (crypted_data, expected_hash) = encode_data.split_at(content_length);
 
-        assert!(decode_hmac.verify(crypted_data, expected_hash).is_ok());
+        assert!(decode_hmac.verify(crypted_data, expected_hash));
 
         let mut decode_data = encode_data.to_vec();
         decode_data.truncate(content_length);
@@ -308,7 +311,6 @@ mod tests {
 
                 tokio::spawn(secure.for_each(|_| Ok(())));
                 tokio::spawn(task);
-                ()
             });
 
         let client = TcpStream::connect(&listener_addr)
@@ -324,7 +326,6 @@ mod tests {
                 let _ = handle.write_all(&data_clone[..]);
 
                 tokio::spawn(secure.for_each(|_| Ok(())));
-                ()
             })
             .map_err(|_| ());
 

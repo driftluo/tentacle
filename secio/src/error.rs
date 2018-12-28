@@ -23,6 +23,18 @@ pub enum SecioError {
 
     /// The hashes of the message didn't match.
     HmacNotMatching,
+
+    /// Connect yourself
+    ConnectSelf,
+
+    /// Failed to parse one of the handshake bincode messages.
+    HandshakeParsingFailure,
+
+    /// The signature of the exchange packet doesn't verify the remote public key.
+    SignatureVerificationFailed,
+
+    /// We received an invalid proposition from remote.
+    InvalidProposition(&'static str),
 }
 
 impl From<io::Error> for SecioError {
