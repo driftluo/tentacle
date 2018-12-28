@@ -87,38 +87,26 @@ impl HandshakeContext<()> {
         proposition.rand = nonce.to_vec();
         proposition.pubkey = public_key.clone();
 
-        if let Some(ref p) = self.config.agreements_proposal {
-            trace!("agreements proposition: {}", p);
-            proposition.exchange = p.clone();
-        } else {
-            trace!(
-                "agreements proposition: {}",
-                support::DEFAULT_AGREEMENTS_PROPOSITION
-            );
-            proposition.exchange = support::DEFAULT_AGREEMENTS_PROPOSITION.into();
-        }
+        proposition.exchange = self
+            .config
+            .agreements_proposal
+            .clone()
+            .unwrap_or_else(|| support::DEFAULT_AGREEMENTS_PROPOSITION.into());
+        trace!("agreements proposition: {}", proposition.exchange);
 
-        if let Some(ref p) = self.config.ciphers_proposal {
-            trace!("ciphers proposition: {}", p);
-            proposition.ciphers = p.clone();
-        } else {
-            trace!(
-                "ciphers proposition: {}",
-                support::DEFAULT_CIPHERS_PROPOSITION
-            );
-            proposition.ciphers = support::DEFAULT_CIPHERS_PROPOSITION.into();
-        }
+        proposition.ciphers = self
+            .config
+            .ciphers_proposal
+            .clone()
+            .unwrap_or_else(|| support::DEFAULT_CIPHERS_PROPOSITION.into());
+        trace!("ciphers proposition: {}", proposition.ciphers);
 
-        if let Some(ref p) = self.config.digests_proposal {
-            trace!("digests proposition: {}", p);
-            proposition.hashes = p.clone();
-        } else {
-            trace!(
-                "digests proposition: {}",
-                support::DEFAULT_DIGESTS_PROPOSITION
-            );
-            proposition.hashes = support::DEFAULT_DIGESTS_PROPOSITION.into();
-        }
+        proposition.hashes = self
+            .config
+            .digests_proposal
+            .clone()
+            .unwrap_or_else(|| support::DEFAULT_DIGESTS_PROPOSITION.into());
+        trace!("digests proposition: {}", proposition.hashes);
 
         let proposition_bytes = serialize(&proposition).unwrap();
 
@@ -147,7 +135,7 @@ impl HandshakeContext<Local> {
             }
         };
 
-        // TODO: Libp2p uses protobuf bytes to calculate order, but here we only use the original pubkey
+        // TODO: Libp2p uses protobuf bytes to calculate order, but here we only use the original pubkey and nonce
         let public_key = propose.pubkey;
         let nonce = propose.rand;
 

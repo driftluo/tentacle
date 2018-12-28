@@ -20,8 +20,11 @@ pub struct SecureStream<T> {
     socket: Framed<T, LengthDelimitedCodec>,
     dead: bool,
 
-    cipher: StreamCipher,
-    hmac: Hmac,
+    decode_cipher: StreamCipher,
+    decode_hmac: Hmac,
+
+    encode_cipher: StreamCipher,
+    encode_hmac: Hmac,
     /// denotes a sequence of bytes which are expected to be
     /// found at the beginning of the stream and are checked for equality
     nonce: Vec<u8>,
@@ -44,16 +47,20 @@ where
     /// New a secure stream
     pub fn new(
         socket: Framed<T, LengthDelimitedCodec>,
-        cipher: StreamCipher,
-        hmac: Hmac,
+        decode_cipher: StreamCipher,
+        decode_hmac: Hmac,
+        encode_cipher: StreamCipher,
+        encode_hmac: Hmac,
         nonce: Vec<u8>,
     ) -> Self {
         let (event_sender, event_receiver) = mpsc::channel(1024);
         SecureStream {
             socket,
             dead: false,
-            cipher,
-            hmac,
+            decode_cipher,
+            decode_hmac,
+            encode_cipher,
+            encode_hmac,
             read_buf: VecDeque::default(),
             nonce,
             pending: VecDeque::default(),
@@ -139,17 +146,17 @@ where
     /// Decoding data
     #[inline]
     fn decode(&mut self, frame: &BytesMut) -> Result<Vec<u8>, SecioError> {
-        if frame.len() < self.hmac.num_bytes() {
+        if frame.len() < self.decode_hmac.num_bytes() {
             debug!("frame too short when decoding secio frame");
             return Err(SecioError::FrameTooShort);
         }
 
-        let content_length = frame.len() - self.hmac.num_bytes();
+        let content_length = frame.len() - self.decode_hmac.num_bytes();
         {
             let (crypted_data, expected_hash) = frame.split_at(content_length);
-            debug_assert_eq!(expected_hash.len(), self.hmac.num_bytes());
+            debug_assert_eq!(expected_hash.len(), self.decode_hmac.num_bytes());
 
-            if !self.hmac.verify(crypted_data, expected_hash) {
+            if !self.decode_hmac.verify(crypted_data, expected_hash) {
                 debug!("hmac mismatch when decoding secio frame");
                 return Err(SecioError::HmacNotMatching);
             }
@@ -157,7 +164,7 @@ where
 
         let mut data_buf = frame.to_vec();
         data_buf.truncate(content_length);
-        self.cipher.decrypt(&mut data_buf);
+        self.decode_cipher.decrypt(&mut data_buf);
 
         if !self.nonce.is_empty() {
             let n = min(data_buf.len(), self.nonce.len());
@@ -173,8 +180,8 @@ where
     /// Encoding data
     #[inline]
     fn encode(&mut self, data: &mut BytesMut) {
-        self.cipher.encrypt(&mut data[..]);
-        let signature = self.hmac.sign(&data[..]);
+        self.encode_cipher.encrypt(&mut data[..]);
+        let signature = self.encode_hmac.sign(&data[..]);
         data.extend_from_slice(signature.as_ref());
     }
 }
@@ -184,7 +191,7 @@ where
     T: AsyncRead + AsyncWrite,
 {
     type Item = ();
-    type Error = ();
+    type Error = io::Error;
 
     fn poll(&mut self) -> Poll<Option<Self::Item>, Self::Error> {
         if self.dead {
@@ -199,8 +206,11 @@ where
                 }
             }
             Err(err) => {
-                // todo: There was a problem during the run, how to do it?
                 warn!("receive frame error: {:?}", err);
+                if let Some(mut sender) = self.frame_sender.take() {
+                    let _ = sender.try_send(StreamEvent::Close);
+                }
+                return Err(err.into());
             }
             _ => (),
         }
@@ -223,6 +233,12 @@ where
         }
 
         Ok(Async::NotReady)
+    }
+}
+
+impl<T> Drop for SecureStream<T> {
+    fn drop(&mut self) {
+        self.event_receiver.close();
     }
 }
 
@@ -298,6 +314,8 @@ mod tests {
                     Framed::new(socket.unwrap(), LengthDelimitedCodec::new()),
                     ctr_int(cipher, &cipher_key_clone[..key_size], &NULL_IV[..]),
                     Hmac::from_key(Digest::Sha256, &hmac_key_clone),
+                    ctr_int(cipher, &cipher_key_clone[..key_size], &NULL_IV[..]),
+                    Hmac::from_key(Digest::Sha256, &hmac_key_clone),
                     nonce2,
                 );
                 let handle = secure.create_handle().unwrap();
@@ -309,7 +327,7 @@ mod tests {
                     })
                     .map_err(|_| ());
 
-                tokio::spawn(secure.for_each(|_| Ok(())));
+                tokio::spawn(secure.for_each(|_| Ok(())).map_err(|_| ()));
                 tokio::spawn(task);
             });
 
@@ -319,13 +337,15 @@ mod tests {
                     Framed::new(stream, LengthDelimitedCodec::new()),
                     ctr_int(cipher, &cipher_key_clone[..key_size], &NULL_IV[..]),
                     Hmac::from_key(Digest::Sha256, &hmac_key_clone),
+                    ctr_int(cipher, &cipher_key_clone[..key_size], &NULL_IV[..]),
+                    Hmac::from_key(Digest::Sha256, &hmac_key_clone),
                     Vec::new(),
                 );
                 let mut handle = secure.create_handle().unwrap();
                 let _ = handle.write_all(&nonce);
                 let _ = handle.write_all(&data_clone[..]);
 
-                tokio::spawn(secure.for_each(|_| Ok(())));
+                tokio::spawn(secure.for_each(|_| Ok(())).map_err(|_| ()));
             })
             .map_err(|_| ());
 

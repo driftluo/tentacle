@@ -43,3 +43,12 @@ impl From<io::Error> for SecioError {
         SecioError::IoError(err)
     }
 }
+
+impl Into<io::Error> for SecioError {
+    fn into(self) -> io::Error {
+        match self {
+            SecioError::IoError(e) => e,
+            _ => io::ErrorKind::BrokenPipe.into(),
+        }
+    }
+}
