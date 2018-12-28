@@ -1,8 +1,10 @@
 [package]
-name = "yamux"
+name = "tokio-yamux"
 version = "0.1.0"
 license = "MIT"
-authors = ["Nervos Core Dev <dev@nervos.org>"]
+repository = "https://github.com/nervosnetwork/p2p"
+description = "Rust implementation of Yamux"
+authors = ["Linfeng Qian <thewawar@gmail.com>", "Nervos Core Dev <dev@nervos.org>"]
 edition = "2018"
 
 [dependencies]

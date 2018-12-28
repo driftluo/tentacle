@@ -7,8 +7,7 @@ authors = ["Nervos Core Dev <dev@nervos.org>"]
 edition = "2018"
 
 [dependencies]
-#yamux = { git = "https://github.com/TheWaWaR/yamux.git" }
-yamux = { path = "yamux" }
+yamux = { path = "yamux", package = "tokio-yamux" }
 futures = "0.1"
 tokio = "0.1"
 log = "0.4"
