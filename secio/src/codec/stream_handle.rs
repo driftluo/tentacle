@@ -1,9 +1,6 @@
 use bytes::BytesMut;
 use futures::prelude::*;
-use futures::sync::{
-    mpsc::{Receiver, Sender},
-    oneshot,
-};
+use futures::sync::mpsc::{Receiver, Sender};
 use tokio::prelude::{AsyncRead, AsyncWrite};
 
 use std::io;
@@ -49,12 +46,11 @@ impl StreamHandle {
                 Ok(Async::Ready(None)) => {
                     return Err(io::ErrorKind::BrokenPipe.into());
                 }
-                Ok(Async::NotReady) => {
-                    return Ok(Async::NotReady);
-                }
+                Ok(Async::NotReady) => break,
                 Err(_) => return Err(io::ErrorKind::BrokenPipe.into()),
             }
         }
+        Ok(Async::NotReady)
     }
 }
 
@@ -95,12 +91,8 @@ impl io::Write for StreamHandle {
     fn flush(&mut self) -> io::Result<()> {
         self.recv_frames()?;
 
-        let (sender, receiver) = oneshot::channel();
-        match self.event_sender.try_send(StreamEvent::Flush(sender)) {
-            Ok(_) => {
-                let _ = receiver.wait();
-                Ok(())
-            }
+        match self.event_sender.try_send(StreamEvent::Flush) {
+            Ok(_) => Ok(()),
             Err(e) => {
                 if e.is_full() {
                     Err(io::ErrorKind::WouldBlock.into())
@@ -131,7 +123,7 @@ impl AsyncWrite for StreamHandle {
 pub(crate) enum StreamEvent {
     Frame(BytesMut),
     Close,
-    Flush(oneshot::Sender<()>),
+    Flush,
 }
 
 impl Drop for StreamHandle {

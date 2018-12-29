@@ -5,8 +5,7 @@ use std::io;
 use bytes::{Bytes, BytesMut};
 use futures::{
     sync::mpsc::{Receiver, Sender},
-    sync::oneshot,
-    Async, Future, Poll, Stream,
+    Async, Poll, Stream,
 };
 use log::debug;
 use tokio::prelude::{AsyncRead, AsyncWrite};
@@ -356,14 +355,10 @@ impl io::Write for StreamHandle {
                 _ => unimplemented!(),
             }
         }
-        let (sender, receiver) = oneshot::channel();
-        let event = StreamEvent::Flush((self.id, sender));
+        let event = StreamEvent::Flush(self.id);
         match self.send_event(event) {
             Err(_) => Err(io::ErrorKind::BrokenPipe.into()),
-            Ok(()) => {
-                let _ = receiver.wait();
-                Ok(())
-            }
+            Ok(()) => Ok(()),
         }
     }
 }
@@ -386,7 +381,7 @@ pub(crate) enum StreamEvent {
     Frame(Frame),
     StateChanged((StreamId, StreamState)),
     // Flush stream's frames to remote stream, with a channel for sync
-    Flush((StreamId, oneshot::Sender<()>)),
+    Flush(StreamId),
 }
 
 /// The stream state

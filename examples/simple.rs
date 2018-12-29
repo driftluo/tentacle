@@ -7,7 +7,7 @@ use p2p::{
         Message, ProtocolHandle, Service, ServiceContext, ServiceEvent, ServiceHandle, ServiceTask,
     },
     session::{ProtocolId, ProtocolMeta, SessionId},
-    SecioKeyPair, SessionType,
+    PublicKey, SecioKeyPair, SessionType,
 };
 use std::collections::HashMap;
 use std::{
@@ -80,6 +80,7 @@ impl ProtocolHandle for PHandle {
         session_id: SessionId,
         address: SocketAddr,
         ty: SessionType,
+        _remote_public_key: &Option<PublicKey>,
     ) {
         self.connected_session_ids.push(session_id);
         info!(

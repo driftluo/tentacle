@@ -61,6 +61,8 @@ pub(crate) enum SessionEvent {
         stream_id: StreamId,
         /// Remote address
         remote_address: ::std::net::SocketAddr,
+        /// Remote public key
+        remote_public_key: Option<PublicKey>,
         /// Session type
         ty: SessionType,
     },
@@ -128,6 +130,7 @@ pub(crate) struct Session<T, U> {
     id: SessionId,
 
     remote_address: ::std::net::SocketAddr,
+    remote_public_key: Option<PublicKey>,
 
     next_stream: StreamId,
     /// Indicates the identity of the current session
@@ -168,6 +171,7 @@ where
             socket,
             protocol_configs: meta.protocol_configs,
             id: meta.id,
+            remote_public_key: meta.remote_public_key,
             remote_address: meta.remote_address,
             ty: meta.ty,
             next_stream: 0,
@@ -283,6 +287,7 @@ where
                     stream_id: self.next_stream,
                     proto_id,
                     remote_address: self.remote_address,
+                    remote_public_key: self.remote_public_key.clone(),
                     ty: self.ty,
                 });
                 self.next_stream += 1;
@@ -380,7 +385,7 @@ where
                 }
                 Ok(Async::NotReady) => break,
                 Err(err) => {
-                    warn!("create sub stream error: {:?}", err);
+                    warn!("sub stream error: {:?}", err);
                     self.close_session();
                     return Err(err);
                 }
@@ -425,6 +430,7 @@ pub(crate) struct SessionMeta<U> {
     protocol_configs: Arc<HashMap<String, Box<dyn ProtocolMeta<U> + Send + Sync>>>,
     ty: SessionType,
     remote_address: ::std::net::SocketAddr,
+    remote_public_key: Option<PublicKey>,
 }
 
 impl<U> SessionMeta<U>
@@ -433,13 +439,19 @@ where
     <U as Decoder>::Error: error::Error + Into<io::Error>,
     <U as Encoder>::Error: error::Error + Into<io::Error>,
 {
-    pub fn new(id: SessionId, ty: SessionType, remote_address: ::std::net::SocketAddr) -> Self {
+    pub fn new(
+        id: SessionId,
+        ty: SessionType,
+        remote_address: ::std::net::SocketAddr,
+        remote_public_key: Option<PublicKey>,
+    ) -> Self {
         SessionMeta {
             config: Config::default(),
             id,
             ty,
             remote_address,
             protocol_configs: Arc::new(HashMap::new()),
+            remote_public_key,
         }
     }
 

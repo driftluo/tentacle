@@ -75,6 +75,7 @@ pub trait ProtocolHandle {
         _session_id: SessionId,
         _address: SocketAddr,
         _ty: SessionType,
+        _remote_public_key: &Option<PublicKey>,
     ) {
     }
     /// Called when closing protocol
@@ -495,7 +496,7 @@ where
     {
         self.next_session += 1;
         let (service_event_sender, service_event_receiver) = mpsc::channel(256);
-        let meta = SessionMeta::new(self.next_session, ty, address)
+        let meta = SessionMeta::new(self.next_session, ty, address, public_key.clone())
             .protocol(self.protocol_configs.clone());
         let mut session = Session::new(
             handle,
@@ -568,15 +569,28 @@ where
         proto_id: ProtocolId,
         address: SocketAddr,
         ty: SessionType,
+        remote_public_key: &Option<PublicKey>,
     ) {
         debug!("service session [{}] proto [{}] open", id, proto_id);
 
         // Global proto handle processing flow
         if let Some(handle) = self.proto_handles.get_mut(&proto_id) {
-            handle.connected(&mut self.service_context, id, address, ty);
+            handle.connected(
+                &mut self.service_context,
+                id,
+                address,
+                ty,
+                &remote_public_key,
+            );
         } else if let Some(mut handle) = self.get_proto_handle(false, proto_id) {
             handle.init(&mut self.service_context);
-            handle.connected(&mut self.service_context, id, address, ty);
+            handle.connected(
+                &mut self.service_context,
+                id,
+                address,
+                ty,
+                &remote_public_key,
+            );
             self.proto_handles.insert(proto_id, handle);
         }
 
@@ -587,7 +601,13 @@ where
             Some(mut handle) => {
                 debug!("init session [{}] level proto [{}] handle", id, proto_id);
                 handle.init(&mut self.service_context);
-                handle.connected(&mut self.service_context, id, address, ty);
+                handle.connected(
+                    &mut self.service_context,
+                    id,
+                    address,
+                    ty,
+                    &remote_public_key,
+                );
                 Some(handle)
             }
             None => None,
@@ -679,9 +699,10 @@ where
                 id,
                 proto_id,
                 remote_address,
+                remote_public_key,
                 ty,
                 ..
-            } => self.protocol_open(id, proto_id, remote_address, ty),
+            } => self.protocol_open(id, proto_id, remote_address, ty, &remote_public_key),
             SessionEvent::ProtocolClose { id, proto_id, .. } => self.protocol_close(id, proto_id),
         }
     }

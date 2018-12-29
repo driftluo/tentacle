@@ -379,10 +379,9 @@ where
                     _ => {}
                 }
             }
-            StreamEvent::Flush((stream_id, responsor)) => {
+            StreamEvent::Flush(stream_id) => {
                 debug!("[{}] session flushing.....", stream_id);
                 self.flush()?;
-                let _ = responsor.send(());
                 debug!("[{}] session flushed", stream_id);
             }
         }

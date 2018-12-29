@@ -109,9 +109,8 @@ where
                 self.dead = true;
                 let _ = self.socket.close();
             }
-            StreamEvent::Flush(sender) => {
+            StreamEvent::Flush => {
                 self.send_frame()?;
-                let _ = sender.send(());
                 debug!("secure stream flushed");
             }
         }
@@ -129,7 +128,9 @@ where
                     self.read_buf.push_back(BytesMut::from(data));
                     if let Some(ref mut sender) = self.frame_sender {
                         while let Some(data) = self.read_buf.pop_front() {
-                            let _ = sender.try_send(StreamEvent::Frame(data));
+                            if let Err(e) = sender.try_send(StreamEvent::Frame(data)) {
+                                debug!("send error: {}", e);
+                            }
                         }
                     }
                 }
@@ -140,7 +141,7 @@ where
                 }
                 Ok(Async::NotReady) => {
                     debug!("receive not ready");
-                    return Ok(Async::NotReady);
+                    break;
                 }
                 Err(err) => {
                     self.dead = true;
@@ -148,6 +149,7 @@ where
                 }
             };
         }
+        Ok(Async::NotReady)
     }
 
     /// Decoding data
@@ -209,8 +211,8 @@ where
             Ok(Async::Ready(None)) => {
                 if let Some(mut sender) = self.frame_sender.take() {
                     let _ = sender.try_send(StreamEvent::Close);
-                    return Ok(Async::Ready(None));
                 }
+                return Ok(Async::Ready(None));
             }
             Err(err) => {
                 warn!("receive frame error: {:?}", err);
@@ -231,7 +233,10 @@ where
                     }
                 }
                 Ok(Async::Ready(None)) => unreachable!(),
-                Ok(Async::NotReady) => break,
+                Ok(Async::NotReady) => {
+                    debug!("event not ready");
+                    break;
+                }
                 Err(err) => {
                     warn!("receive event error: {:?}", err);
                     break;
