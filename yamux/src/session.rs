@@ -469,9 +469,9 @@ where
             if let Some(stream) = self.pending_streams.pop_front() {
                 debug!("[{:?}] A stream is ready", self.ty);
                 return Ok(Async::Ready(Some(stream)));
-            }
-
-            if keep_alive_not_ready || recv_frames_not_ready || recv_events_not_ready {
+            } else if self.is_dead() {
+                return Ok(Async::Ready(None));
+            } else if keep_alive_not_ready || recv_frames_not_ready || recv_events_not_ready {
                 return Ok(Async::NotReady);
             }
         }
