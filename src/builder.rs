@@ -46,7 +46,9 @@ where
         self
     }
 
-    /// Enable encrypted communication mode
+    /// Enable encrypted communication mode.
+    ///
+    /// If you do not need encrypted communication, you do not need to call this method
     pub fn key_pair(mut self, key_pair: SecioKeyPair) -> Self {
         self.key_pair = Some(key_pair);
         self

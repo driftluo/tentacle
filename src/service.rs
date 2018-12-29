@@ -445,6 +445,43 @@ where
         }
     }
 
+    /// Handshake
+    #[inline]
+    fn handshake(&mut self, socket: TcpStream, ty: SessionType) {
+        let address = socket.peer_addr().unwrap();
+        if let Some(ref key_pair) = self.key_pair {
+            let key_pair = key_pair.clone();
+            let mut success_sender = self.session_event_sender.clone();
+            let mut fail_sender = self.session_event_sender.clone();
+
+            let task = Config::new(key_pair)
+                .handshake(socket)
+                .and_then(move |(handle, public_key, _)| {
+                    let _ = success_sender.try_send(SessionEvent::HandshakeSuccess {
+                        handle,
+                        public_key,
+                        address,
+                        ty,
+                    });
+                    Ok(())
+                })
+                .map_err(move |err| {
+                    error!("Handshake with {} failed, error: {:?}", address, err);
+                    let _ = fail_sender.try_send(SessionEvent::HandshakeFail {
+                        ty,
+                        error: err.into(),
+                    });
+                });
+
+            tokio::spawn(task);
+        } else {
+            self.session_open(socket, None, address, ty);
+            if ty == SessionType::Client {
+                self.need_dial -= 1;
+            }
+        }
+    }
+
     /// Session open
     #[inline]
     fn session_open<H>(
@@ -625,16 +662,18 @@ where
     fn handle_session_event(&mut self, event: SessionEvent) {
         match event {
             SessionEvent::SessionClose { id } => self.session_close(id),
-            SessionEvent::SessionOpen {
+            SessionEvent::HandshakeSuccess {
                 handle,
                 public_key,
                 address,
                 ty,
-                error,
             } => {
-                if error.is_none() {
-                    self.session_open(handle.unwrap(), public_key, address.unwrap(), ty)
+                self.session_open(handle, Some(public_key), address, ty);
+                if ty == SessionType::Client {
+                    self.need_dial -= 1;
                 }
+            }
+            SessionEvent::HandshakeFail { ty, .. } => {
                 if ty == SessionType::Client {
                     self.need_dial -= 1;
                 }
@@ -691,39 +730,7 @@ where
         while let Some((address, mut dialer)) = self.dial.pop() {
             match dialer.poll() {
                 Ok(Async::Ready(socket)) => {
-                    let address = socket.peer_addr().unwrap();
-                    if self.key_pair.is_some() {
-                        let key_pair = self.key_pair.clone().unwrap();
-                        let mut success_sender = self.session_event_sender.clone();
-                        let mut fail_sender = self.session_event_sender.clone();
-
-                        let task = Config::new(key_pair)
-                            .handshake(socket)
-                            .and_then(move |(handle, public_key, _)| {
-                                let _ = success_sender.try_send(SessionEvent::SessionOpen {
-                                    handle: Some(handle),
-                                    public_key: Some(public_key),
-                                    address: Some(address),
-                                    ty: SessionType::Client,
-                                    error: None,
-                                });
-                                Ok(())
-                            })
-                            .map_err(move |err| {
-                                error!("Handshake with {} failed, error: {:?}", address, err);
-                                let _ = fail_sender.try_send(SessionEvent::SessionOpen {
-                                    handle: None,
-                                    public_key: None,
-                                    address: None,
-                                    ty: SessionType::Client,
-                                    error: Some(err.into()),
-                                });
-                            });
-
-                        tokio::spawn(task);
-                    } else {
-                        self.session_open(socket, None, address, SessionType::Client);
-                    }
+                    self.handshake(socket, SessionType::Client);
                 }
                 Ok(Async::NotReady) => {
                     trace!("client not ready");
@@ -757,39 +764,7 @@ where
         for (address, mut listen) in self.listens.split_off(0) {
             match listen.poll() {
                 Ok(Async::Ready(Some(socket))) => {
-                    let address = socket.peer_addr().unwrap();
-                    if self.key_pair.is_some() {
-                        let key_pair = self.key_pair.clone().unwrap();
-                        let mut success_sender = self.session_event_sender.clone();
-                        let mut fail_sender = self.session_event_sender.clone();
-
-                        let task = Config::new(key_pair)
-                            .handshake(socket)
-                            .and_then(move |(handle, public_key, _)| {
-                                let _ = success_sender.try_send(SessionEvent::SessionOpen {
-                                    handle: Some(handle),
-                                    public_key: Some(public_key),
-                                    address: Some(address),
-                                    ty: SessionType::Server,
-                                    error: None,
-                                });
-                                Ok(())
-                            })
-                            .map_err(move |err| {
-                                error!("Handshake with {} failed, error: {:?}", address, err);
-                                let _ = fail_sender.try_send(SessionEvent::SessionOpen {
-                                    handle: None,
-                                    public_key: None,
-                                    address: None,
-                                    ty: SessionType::Server,
-                                    error: Some(err.into()),
-                                });
-                            });
-
-                        tokio::spawn(task);
-                    } else {
-                        self.session_open(socket, None, address, SessionType::Server);
-                    }
+                    self.handshake(socket, SessionType::Server);
                     self.listens.push((address, listen));
                 }
                 Ok(Async::Ready(None)) => {
@@ -802,6 +777,7 @@ where
                     self.listens.push((address, listen));
                 }
                 Err(err) => {
+                    // TODO: need push back?
                     self.listens.push((address, listen));
                     self.handle.handle_error(
                         &mut self.service_context,
@@ -874,6 +850,12 @@ where
         if self.listens.is_empty() && self.need_dial == 0 && self.sessions.is_empty() {
             return Ok(Async::Ready(None));
         }
+        debug!(
+            "listens count: {}, need_dial count: {}, sessions count: {}",
+            self.listens.len(),
+            self.need_dial,
+            self.sessions.len()
+        );
 
         Ok(Async::NotReady)
     }

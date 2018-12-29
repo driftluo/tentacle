@@ -26,17 +26,21 @@ pub(crate) enum SessionEvent {
         /// Session id
         id: SessionId,
     },
-    SessionOpen {
+    HandshakeSuccess {
         /// Secure handle
-        handle: Option<SecureHandle>,
+        handle: SecureHandle,
         /// Remote Public key
-        public_key: Option<PublicKey>,
+        public_key: PublicKey,
         /// Remote address
-        address: Option<SocketAddr>,
+        address: SocketAddr,
+        /// Session type
+        ty: SessionType,
+    },
+    HandshakeFail {
         /// Session type
         ty: SessionType,
         /// If fail
-        error: Option<io::Error>,
+        error: io::Error,
     },
     /// Protocol data
     ProtocolMessage {

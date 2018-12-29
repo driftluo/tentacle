@@ -9,17 +9,15 @@ This is a minimal implementation for a multiplexed p2p network based on `yamux` 
 1. Data stream transmission
 
 ```rust
-+----+      +----------------+      +-----------+      +----------+      +----------+      +------+
-|user| <--> | custom streams | <--> |Yamux frame| <--> |AES stream| <--> |TCP stream| <--> |remote|
-+----+      +----------------+      +-----------+      +----------+      +----------+      +------+
++----+      +----------------+      +-----------+      +-------------+      +----------+      +------+
+|user| <--> | custom streams | <--> |Yamux frame| <--> |Secure stream| <--> |TCP stream| <--> |remote|
++----+      +----------------+      +-----------+      +-------------+      +----------+      +------+
 ```
 
 2. Code implementation
 
 All data is passed through the futures channel, `yamux` splits the actual tcp stream into multiple substreams,
 and the service layer wraps the yamux substream into a protocol stream.
-
-Encrypted communication is supported now.
 
 At the same time, support for other protocol(such as websocket) is also planned, but will delay a lot.
 
