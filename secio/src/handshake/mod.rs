@@ -11,6 +11,7 @@ mod handshake_context;
 mod handshake_struct;
 mod procedure;
 
+/// Config for Secio
 #[derive(Debug)]
 pub struct Config {
     pub(crate) key: SecioKeyPair,

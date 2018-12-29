@@ -8,6 +8,7 @@ use tokio::prelude::{AsyncRead, AsyncWrite};
 
 use std::io;
 
+/// Stream handle
 pub struct StreamHandle {
     read_buf: BytesMut,
 

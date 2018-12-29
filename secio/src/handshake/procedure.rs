@@ -1,5 +1,5 @@
 use bincode::{deserialize, serialize};
-use bytes::{Bytes, BytesMut};
+use bytes::Bytes;
 use futures::{future, prelude::*, Future};
 use hmac::digest::{generic_array::ArrayLength, BlockInput, Digest, FixedOutput, Input, Reset};
 use log::{debug, error, trace};
@@ -56,7 +56,7 @@ where
         .and_then(|local_context| {
             trace!("sending proposition to remote");
             socket
-                .send(BytesMut::from(local_context.state.proposition_bytes.clone()).freeze())
+                .send(Bytes::from(local_context.state.proposition_bytes.clone()))
                 .from_err()
                 .map(|socket| (socket, local_context))
         })
@@ -108,8 +108,14 @@ where
                 exchanges.epubkey = tmp_pub_key;
 
                 let data_to_sign = Sha256::digest(&data_to_sign);
-                let message = secp256k1::Message::from_slice(data_to_sign.as_ref())
-                    .expect("digest output length doesn't match secp256k1 input length");
+                let message = match secp256k1::Message::from_slice(data_to_sign.as_ref()) {
+                    Ok(msg) => msg,
+                    Err(_) => {
+                        debug!("message has wrong format");
+                        return Err(SecioError::InvalidMessage);
+                    }
+                };
+
                 let secp256k1_key = secp256k1::Secp256k1::signing_only();
                 let signature = secp256k1_key
                     .sign(&message, &ephemeral_context.config.key.inner)
@@ -119,6 +125,9 @@ where
             };
             let local_exchanges = serialize(&exchanges).unwrap();
 
+            Ok((socket, local_exchanges, ephemeral_context))
+        })
+        .and_then(|(socket, local_exchanges, ephemeral_context)| {
             // Send our local `Exchange`.
             trace!("sending exchange to remote");
             socket
@@ -144,7 +153,7 @@ where
                     let remote_exchanges = match deserialize::<Exchange>(&raw_exchanges) {
                         Ok(e) => e,
                         Err(err) => {
-                            debug!("failed to parse remote's exchange protobuf; {:?}", err);
+                            debug!("failed to parse remote's exchange; {:?}", err);
                             return Err(SecioError::HandshakeParsingFailure);
                         }
                     };
@@ -164,8 +173,15 @@ where
             data_to_verify.extend_from_slice(&remote_exchanges.epubkey);
 
             let data_to_verify = Sha256::digest(&data_to_verify);
-            let message = secp256k1::Message::from_slice(data_to_verify.as_ref())
-                .expect("digest output length doesn't match secp256k1 input length");
+
+            let message = match secp256k1::Message::from_slice(data_to_verify.as_ref()) {
+                Ok(msg) => msg,
+                Err(_) => {
+                    debug!("remote's message has wrong format");
+                    return Err(SecioError::InvalidMessage);
+                }
+            };
+
             let secp256k1 = secp256k1::Secp256k1::verification_only();
             let signature = secp256k1::Signature::from_der(&remote_exchanges.signature);
             let remote_public_key =
@@ -251,8 +267,6 @@ where
             Ok((secure_stream, ephemeral_context))
         })
         .and_then(|(mut secure_stream, ephemeral_context)| {
-            // We send back their nonce to check if the connection works.
-            trace!("checking encryption by sending back remote's nonce");
             let mut handle = secure_stream.create_handle().unwrap();
 
             tokio::spawn(
@@ -261,6 +275,8 @@ where
                     .map_err(|err| error!("Abnormal disconnection: {:?}", err)),
             );
 
+            // We send back their nonce to check if the connection works.
+            trace!("checking encryption by sending back remote's nonce");
             match handle.write_all(&ephemeral_context.state.remote.nonce) {
                 Ok(_) => (),
                 Err(e) => return Err(e.into()),

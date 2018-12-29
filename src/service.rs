@@ -1,5 +1,5 @@
 use futures::{prelude::*, sync::mpsc};
-use log::{debug, trace, warn};
+use log::{debug, error, trace, warn};
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -631,7 +631,11 @@ where
                     self.sessions
                         .insert(self.next_session, service_event_sender);
 
-                    tokio::spawn(session.for_each(|_| Ok(())));
+                    tokio::spawn(
+                        session
+                            .for_each(|_| Ok(()))
+                            .map_err(|err| error!("session error: {}", err)),
+                    );
 
                     self.handle.handle_event(
                         &mut self.service_context,
@@ -689,7 +693,11 @@ where
                     self.sessions
                         .insert(self.next_session, service_event_sender);
 
-                    tokio::spawn(session.for_each(|_| Ok(())));
+                    tokio::spawn(
+                        session
+                            .for_each(|_| Ok(()))
+                            .map_err(|err| error!("session error: {}", err)),
+                    );
 
                     self.handle.handle_event(
                         &mut self.service_context,
