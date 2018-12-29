@@ -381,6 +381,7 @@ where
                 Ok(Async::NotReady) => break,
                 Err(err) => {
                     warn!("create sub stream error: {:?}", err);
+                    self.close_session();
                     return Err(err);
                 }
             }

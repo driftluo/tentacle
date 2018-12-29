@@ -512,13 +512,7 @@ where
         self.sessions
             .insert(self.next_session, service_event_sender);
 
-        let mut fail_sender = self.session_event_sender.clone();
-        let fail_id = self.next_session;
-
-        tokio::spawn(session.for_each(|_| Ok(())).map_err(move |err| {
-            error!("session error: {}", err);
-            let _ = fail_sender.try_send(SessionEvent::SessionClose { id: fail_id });
-        }));
+        tokio::spawn(session.for_each(|_| Ok(())).map_err(|_| ()));
 
         self.handle.handle_event(
             &mut self.service_context,
