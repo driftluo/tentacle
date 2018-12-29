@@ -1,4 +1,6 @@
+/// Encryption and decryption stream
 pub mod secure_stream;
+/// Stream handle
 pub mod stream_handle;
 
 use aes_ctr::stream_cipher::StreamCipher as AES_StreamCipher;
@@ -7,12 +9,16 @@ use sha2::{Sha256, Sha512};
 
 use crate::Digest;
 
+/// Aes encryption and decryption
 pub type StreamCipher = Box<dyn AES_StreamCipher + Send>;
 
+/// Hash-based Message Authentication Code (HMAC).
 #[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone)]
 pub enum Hmac {
+    /// Sha256
     Sha256(hmac::Hmac<Sha256>),
+    /// Sha512
     Sha512(hmac::Hmac<Sha512>),
 }
 

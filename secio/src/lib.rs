@@ -1,15 +1,28 @@
+//! Aes Encrypted communication and handshake process implementation
+
+#![deny(missing_docs)]
+
 use secp256k1::key::SecretKey;
 
+/// Encrypted and decrypted codec implementation, and stream handle
 pub mod codec;
-pub mod error;
-pub mod exchange;
+/// Error type
+mod error;
+/// Exchange information during the handshake
+mod exchange;
+/// Implementation of the handshake process
 pub mod handshake;
-pub mod stream_cipher;
-pub mod support;
+/// Encrypted stream
+mod stream_cipher;
+/// Supported algorithms
+mod support;
 
-type PublicKey = Vec<u8>;
+/// Public key
+pub type PublicKey = Vec<u8>;
+/// Public key generated temporarily during the handshake
 pub type EphemeralPublicKey = Vec<u8>;
 
+/// Key pair of asymmetric encryption algorithm
 #[derive(Clone, Debug)]
 pub struct SecioKeyPair {
     inner: SecretKey,
@@ -36,22 +49,6 @@ impl SecioKeyPair {
         SecioKeyPair { inner: private }
     }
 
-    //    /// Builds a `SecioKeyPair` from a secp256k1 private key in DER format.
-    //    pub fn secp256k1_from_der<K>(key: K) -> Result<SecioKeyPair, Box<Error + Send + Sync>>
-    //        where
-    //            K: AsRef<[u8]>,
-    //    {
-    //        // See ECPrivateKey in https://tools.ietf.org/html/rfc5915
-    //        let obj: Vec<DerObject> =
-    //            FromDerEncoded::with_der_encoded(key.as_ref()).map_err(|err| err.to_string())?;
-    //        let priv_key_obj = obj.into_iter()
-    //            .nth(1)
-    //            .ok_or_else(|| "Not enough elements in DER".to_string())?;
-    //        let private_key: Vec<u8> =
-    //            FromDerObject::from_der_object(priv_key_obj).map_err(|err| err.to_string())?;
-    //        SecioKeyPair::secp256k1_raw_key(&private_key)
-    //    }
-
     /// Returns the public key corresponding to this key pair.
     pub fn to_public_key(&self) -> PublicKey {
         let secp = secp256k1::Secp256k1::signing_only();
@@ -63,7 +60,9 @@ impl SecioKeyPair {
 /// Possible digest algorithms.
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum Digest {
+    /// Sha256 digest
     Sha256,
+    /// Sha512 digest
     Sha512,
 }
 

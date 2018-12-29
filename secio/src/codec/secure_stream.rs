@@ -83,29 +83,34 @@ where
     }
 
     #[inline]
+    fn send_frame(&mut self) -> Result<(), io::Error> {
+        while let Some(frame) = self.pending.pop_front() {
+            if let AsyncSink::NotReady(data) = self.socket.start_send(frame)? {
+                debug!("can't send");
+                self.pending.push_front(data);
+                break;
+            }
+        }
+        // TODO: not ready???
+        self.socket.poll_complete()?;
+        Ok(())
+    }
+
+    #[inline]
     fn handle_event(&mut self, event: StreamEvent) -> Result<(), io::Error> {
         match event {
             StreamEvent::Frame(mut frame) => {
                 debug!("start send data: {:?}", frame);
                 self.encode(&mut frame);
                 self.pending.push_back(frame.freeze());
-                while let Some(frame) = self.pending.pop_front() {
-                    if let AsyncSink::NotReady(data) = self.socket.start_send(frame)? {
-                        debug!("can't send");
-                        self.pending.push_front(data);
-                        break;
-                    }
-                }
-                // TODO: not ready???
-                self.socket.poll_complete()?;
+                self.send_frame()?;
             }
             StreamEvent::Close => {
                 self.dead = true;
                 let _ = self.socket.close();
             }
             StreamEvent::Flush(sender) => {
-                // TODO: not ready???
-                self.socket.poll_complete()?;
+                self.send_frame()?;
                 let _ = sender.send(());
                 debug!("secure stream flushed");
             }
