@@ -10,7 +10,6 @@ const ECDH_P384: &str = "P-384";
 const AES_128: &str = "AES-128";
 const AES_256: &str = "AES-256";
 const TWOFISH_CTR: &str = "TwofishCTR";
-//const NULL: &str = "NULL";
 
 const SHA_256: &str = "SHA256";
 const SHA_512: &str = "SHA512";
@@ -81,10 +80,7 @@ where
             Cipher::TwofishCtr => {
                 s.push_str(TWOFISH_CTR);
                 s.push(',')
-            } //            Cipher::Null => {
-              //                s.push_str(NULL);
-              //                s.push(',')
-              //            }
+            }
         }
     }
     s.pop(); // remove trailing comma if any
@@ -149,7 +145,6 @@ pub fn select_cipher(r: Ordering, ours: &str, theirs: &str) -> Result<Cipher, Se
                 AES_128 => return Ok(Cipher::Aes128),
                 AES_256 => return Ok(Cipher::Aes256),
                 TWOFISH_CTR => return Ok(Cipher::TwofishCtr),
-                //                NULL => return Ok(Cipher::Null),
                 _ => continue,
             }
         }

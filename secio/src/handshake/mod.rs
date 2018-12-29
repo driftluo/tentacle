@@ -12,7 +12,7 @@ mod handshake_struct;
 mod procedure;
 
 /// Config for Secio
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Config {
     pub(crate) key: SecioKeyPair,
     pub(crate) agreements_proposal: Option<String>,

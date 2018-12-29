@@ -239,6 +239,11 @@ where
             }
         }
 
+        // Double check stream state
+        if self.dead {
+            return Ok(Async::Ready(None));
+        }
+
         Ok(Async::NotReady)
     }
 }

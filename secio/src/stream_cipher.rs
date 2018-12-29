@@ -11,7 +11,6 @@ pub enum Cipher {
     Aes128,
     Aes256,
     TwofishCtr,
-    //    Null,
 }
 
 impl Cipher {
@@ -21,7 +20,6 @@ impl Cipher {
             Cipher::Aes128 => 16,
             Cipher::Aes256 => 32,
             Cipher::TwofishCtr => 32,
-            //            Cipher::Null => 0,
         }
     }
 
@@ -30,7 +28,6 @@ impl Cipher {
     pub fn iv_size(self) -> usize {
         match self {
             Cipher::Aes128 | Cipher::Aes256 | Cipher::TwofishCtr => 16,
-            //            Cipher::Null => 0,
         }
     }
 }
@@ -51,6 +48,5 @@ pub fn ctr_int(key_size: Cipher, key: &[u8], iv: &[u8]) -> StreamCipher {
             GenericArray::from_slice(key),
             GenericArray::from_slice(iv),
         )),
-        //        Cipher::Null => Box::new(NullCipher),
     }
 }
