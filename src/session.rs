@@ -1,8 +1,9 @@
 use futures::{prelude::*, sync::mpsc};
 use log::{debug, error, trace, warn};
+use secio::{codec::stream_handle::StreamHandle as SecureHandle, PublicKey};
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::{error, io};
+use std::{error, io, net::SocketAddr};
 use tokio::codec::{Decoder, Encoder, Framed};
 use tokio::prelude::{AsyncRead, AsyncWrite};
 use yamux::{session::SessionType, Config, Session as YamuxSession, StreamHandle};
@@ -19,11 +20,23 @@ pub type SessionId = usize;
 
 /// Event generated/received by the Session
 #[derive(Debug)]
-pub enum SessionEvent {
+pub(crate) enum SessionEvent {
     /// Session close event
     SessionClose {
         /// Session id
         id: SessionId,
+    },
+    SessionOpen {
+        /// Secure handle
+        handle: Option<SecureHandle>,
+        /// Remote Public key
+        public_key: Option<PublicKey>,
+        /// Remote address
+        address: Option<SocketAddr>,
+        /// Session type
+        ty: SessionType,
+        /// If fail
+        error: Option<io::Error>,
     },
     /// Protocol data
     ProtocolMessage {

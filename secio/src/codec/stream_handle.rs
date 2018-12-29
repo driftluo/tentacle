@@ -9,6 +9,7 @@ use tokio::prelude::{AsyncRead, AsyncWrite};
 use std::io;
 
 /// Stream handle
+#[derive(Debug)]
 pub struct StreamHandle {
     read_buf: BytesMut,
 
@@ -126,6 +127,7 @@ impl AsyncWrite for StreamHandle {
     }
 }
 
+#[derive(Debug)]
 pub(crate) enum StreamEvent {
     Frame(BytesMut),
     Close,

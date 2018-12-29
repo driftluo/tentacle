@@ -12,5 +12,7 @@ pub mod service;
 pub mod session;
 /// Each custom protocol in a session corresponds to a sub stream
 pub mod substream;
+/// Re-pub some useful structures in secio
+pub use secio::SecioKeyPair;
 /// Re-pub some useful structures in yamux
 pub use yamux::{session::SessionType, Session};

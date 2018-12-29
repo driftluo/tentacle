@@ -7,7 +7,7 @@ use p2p::{
         Message, ProtocolHandle, Service, ServiceContext, ServiceEvent, ServiceHandle, ServiceTask,
     },
     session::{ProtocolId, ProtocolMeta, SessionId},
-    SessionType,
+    SecioKeyPair, SessionType,
 };
 use std::collections::HashMap;
 use std::{
@@ -198,6 +198,7 @@ fn create_server() -> Service<SHandle, LengthDelimitedCodec> {
     ServiceBuilder::default()
         .insert_protocol(Protocol::new(0))
         .insert_protocol(Protocol::new(1))
+        .key_pair(SecioKeyPair::secp256k1_generated())
         .build(SHandle)
 }
 
@@ -211,6 +212,7 @@ fn create_client() -> Service<SHandle, LengthDelimitedCodec> {
         .insert_protocol(Protocol::new(0))
         .insert_protocol(Protocol::new(1))
         .insert_protocol(Protocol::new(2))
+        .key_pair(SecioKeyPair::secp256k1_generated())
         .build(SHandle)
 }
 

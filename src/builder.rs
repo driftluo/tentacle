@@ -1,3 +1,4 @@
+use secio::SecioKeyPair;
 use std::collections::HashMap;
 use std::marker::PhantomData;
 use std::sync::Arc;
@@ -12,6 +13,7 @@ use crate::{
 /// Builder for Service
 pub struct ServiceBuilder<T, U> {
     inner: HashMap<String, Box<dyn ProtocolMeta<U> + Send + Sync>>,
+    key_pair: Option<SecioKeyPair>,
     phantom: PhantomData<T>,
 }
 
@@ -32,7 +34,7 @@ where
     where
         H: ServiceHandle,
     {
-        Service::new(Arc::new(self.inner), handle)
+        Service::new(Arc::new(self.inner), handle, self.key_pair)
     }
 
     /// Insert a custom protocol
@@ -41,6 +43,12 @@ where
             protocol.name(),
             Box::new(protocol) as Box<dyn ProtocolMeta<_> + Send + Sync>,
         );
+        self
+    }
+
+    /// Enable encrypted communication mode
+    pub fn key_pair(mut self, key_pair: SecioKeyPair) -> Self {
+        self.key_pair = Some(key_pair);
         self
     }
 
@@ -60,6 +68,7 @@ where
     fn default() -> Self {
         ServiceBuilder {
             inner: HashMap::new(),
+            key_pair: None,
             phantom: PhantomData,
         }
     }

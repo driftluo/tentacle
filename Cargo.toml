@@ -8,6 +8,8 @@ edition = "2018"
 
 [dependencies]
 yamux = { path = "yamux", package = "tokio-yamux" }
+secio = { path = "secio" }
+
 futures = "0.1"
 tokio = "0.1"
 log = "0.4"

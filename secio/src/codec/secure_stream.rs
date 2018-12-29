@@ -257,7 +257,7 @@ impl<T> Drop for SecureStream<T> {
 #[cfg(test)]
 mod tests {
     use super::{Hmac, SecureStream};
-    use crate::stream_cipher::{ctr_int, Cipher};
+    use crate::stream_cipher::{ctr_init, Cipher};
     use crate::Digest;
     use bytes::BytesMut;
     use futures::{sync, Future, Stream};
@@ -278,9 +278,9 @@ mod tests {
 
         let mut encode_data = BytesMut::from(data.to_vec());
 
-        let mut encode_cipher = ctr_int(Cipher::Aes256, &cipher_key, &NULL_IV);
+        let mut encode_cipher = ctr_init(Cipher::Aes256, &cipher_key, &NULL_IV);
         let mut encode_hmac = Hmac::from_key(Digest::Sha256, &hmac_key);
-        let mut decode_cipher = ctr_int(Cipher::Aes256, &cipher_key, &NULL_IV);
+        let mut decode_cipher = ctr_init(Cipher::Aes256, &cipher_key, &NULL_IV);
         let mut decode_hmac = encode_hmac.clone();
 
         encode_cipher.encrypt(&mut encode_data[..]);
@@ -324,9 +324,9 @@ mod tests {
                 let nonce2 = nonce2.clone();
                 let mut secure = SecureStream::new(
                     Framed::new(socket.unwrap(), LengthDelimitedCodec::new()),
-                    ctr_int(cipher, &cipher_key_clone[..key_size], &NULL_IV[..]),
+                    ctr_init(cipher, &cipher_key_clone[..key_size], &NULL_IV[..]),
                     Hmac::from_key(Digest::Sha256, &hmac_key_clone),
-                    ctr_int(cipher, &cipher_key_clone[..key_size], &NULL_IV[..]),
+                    ctr_init(cipher, &cipher_key_clone[..key_size], &NULL_IV[..]),
                     Hmac::from_key(Digest::Sha256, &hmac_key_clone),
                     nonce2,
                 );
@@ -347,9 +347,9 @@ mod tests {
             .map(move |stream| {
                 let mut secure = SecureStream::new(
                     Framed::new(stream, LengthDelimitedCodec::new()),
-                    ctr_int(cipher, &cipher_key_clone[..key_size], &NULL_IV[..]),
+                    ctr_init(cipher, &cipher_key_clone[..key_size], &NULL_IV[..]),
                     Hmac::from_key(Digest::Sha256, &hmac_key_clone),
-                    ctr_int(cipher, &cipher_key_clone[..key_size], &NULL_IV[..]),
+                    ctr_init(cipher, &cipher_key_clone[..key_size], &NULL_IV[..]),
                     Hmac::from_key(Digest::Sha256, &hmac_key_clone),
                     Vec::new(),
                 );

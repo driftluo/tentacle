@@ -34,7 +34,7 @@ impl Cipher {
 
 /// Returns your stream cipher depending on `Cipher`.
 #[inline]
-pub fn ctr_int(key_size: Cipher, key: &[u8], iv: &[u8]) -> StreamCipher {
+pub fn ctr_init(key_size: Cipher, key: &[u8], iv: &[u8]) -> StreamCipher {
     match key_size {
         Cipher::Aes128 => Box::new(Aes128Ctr::new(
             GenericArray::from_slice(key),

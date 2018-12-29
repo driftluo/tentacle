@@ -17,7 +17,7 @@ use crate::{
     exchange,
     handshake::Config,
     handshake::{handshake_context::HandshakeContext, handshake_struct::Exchange},
-    stream_cipher::ctr_int,
+    stream_cipher::ctr_init,
     EphemeralPublicKey, PublicKey,
 };
 
@@ -244,7 +244,7 @@ where
                 let (iv, rest) = local_infos.split_at(iv_size);
                 let (cipher_key, mac_key) = rest.split_at(cipher_key_size);
                 let hmac = Hmac::from_key(ephemeral_context.state.remote.chosen_hash, mac_key);
-                let cipher = ctr_int(chosen_cipher, cipher_key, iv);
+                let cipher = ctr_init(chosen_cipher, cipher_key, iv);
                 (cipher, hmac)
             };
 
@@ -252,7 +252,7 @@ where
                 let (iv, rest) = remote_infos.split_at(iv_size);
                 let (cipher_key, mac_key) = rest.split_at(cipher_key_size);
                 let hmac = Hmac::from_key(ephemeral_context.state.remote.chosen_hash, mac_key);
-                let cipher = ctr_int(chosen_cipher, cipher_key, iv);
+                let cipher = ctr_init(chosen_cipher, cipher_key, iv);
                 (cipher, hmac)
             };
 

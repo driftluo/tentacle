@@ -1,13 +1,17 @@
 use futures::{prelude::*, sync::mpsc};
 use log::{debug, error, trace, warn};
+use secio::{handshake::Config, PublicKey, SecioKeyPair};
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::{error, io};
-use tokio::codec::{Decoder, Encoder};
 use tokio::net::{
     tcp::{ConnectFuture, Incoming},
     TcpListener, TcpStream,
+};
+use tokio::{
+    codec::{Decoder, Encoder},
+    prelude::{AsyncRead, AsyncWrite},
 };
 use yamux::session::SessionType;
 
@@ -205,6 +209,8 @@ pub enum ServiceEvent {
         address: SocketAddr,
         /// Outbound or Inbound
         ty: SessionType,
+        /// Remote public key
+        public_key: Option<PublicKey>,
     },
 }
 
@@ -262,8 +268,12 @@ pub struct Service<T, U> {
     listens: Vec<(SocketAddr, Incoming)>,
 
     dial: Vec<(SocketAddr, ConnectFuture)>,
+    /// Calculate the number of connection requests that need to be sent externally
+    need_dial: usize,
 
     next_session: SessionId,
+
+    key_pair: Option<SecioKeyPair>,
 
     /// Can be upgrade to list service level protocols
     handle: T,
@@ -295,6 +305,7 @@ where
     pub fn new(
         protocol_configs: Arc<HashMap<String, Box<dyn ProtocolMeta<U> + Send + Sync>>>,
         handle: T,
+        key_pair: Option<SecioKeyPair>,
     ) -> Self {
         let (session_event_sender, session_event_receiver) = mpsc::channel(256);
         let (service_task_sender, service_task_receiver) = mpsc::channel(256);
@@ -306,11 +317,13 @@ where
         Service {
             protocol_configs,
             handle,
+            key_pair,
             sessions: HashMap::default(),
             proto_handles: HashMap::default(),
             proto_session_handles: HashMap::default(),
             listens: Vec::new(),
             dial: Vec::new(),
+            need_dial: 0,
             next_session: 0,
             session_event_sender,
             session_event_receiver,
@@ -330,6 +343,7 @@ where
     pub fn dial(mut self, address: SocketAddr) -> Self {
         let dial = TcpStream::connect(&address);
         self.dial.push((address, dial));
+        self.need_dial += 1;
         self
     }
 
@@ -429,6 +443,55 @@ where
             trace!("can't find proto [{}] handle", proto_id);
             None
         }
+    }
+
+    /// Session open
+    #[inline]
+    fn session_open<H>(
+        &mut self,
+        handle: H,
+        public_key: Option<PublicKey>,
+        address: SocketAddr,
+        ty: SessionType,
+    ) where
+        H: AsyncRead + AsyncWrite + Send + 'static,
+    {
+        self.next_session += 1;
+        let (service_event_sender, service_event_receiver) = mpsc::channel(256);
+        let meta = SessionMeta::new(self.next_session, ty, address)
+            .protocol(self.protocol_configs.clone());
+        let mut session = Session::new(
+            handle,
+            self.session_event_sender.clone(),
+            service_event_receiver,
+            meta,
+        );
+
+        if ty == SessionType::Client {
+            self.protocol_configs
+                .keys()
+                .for_each(|name| session.open_proto_stream(name.to_owned()));
+        }
+        self.sessions
+            .insert(self.next_session, service_event_sender);
+
+        let mut fail_sender = self.session_event_sender.clone();
+        let fail_id = self.next_session;
+
+        tokio::spawn(session.for_each(|_| Ok(())).map_err(move |err| {
+            error!("session error: {}", err);
+            let _ = fail_sender.try_send(SessionEvent::SessionClose { id: fail_id });
+        }));
+
+        self.handle.handle_event(
+            &mut self.service_context,
+            ServiceEvent::SessionOpen {
+                id: self.next_session,
+                address,
+                ty: SessionType::Server,
+                public_key,
+            },
+        );
     }
 
     /// Close the specified session, clean up the handle
@@ -562,6 +625,20 @@ where
     fn handle_session_event(&mut self, event: SessionEvent) {
         match event {
             SessionEvent::SessionClose { id } => self.session_close(id),
+            SessionEvent::SessionOpen {
+                handle,
+                public_key,
+                address,
+                ty,
+                error,
+            } => {
+                if error.is_none() {
+                    self.session_open(handle.unwrap(), public_key, address.unwrap(), ty)
+                }
+                if ty == SessionType::Client {
+                    self.need_dial -= 1;
+                }
+            }
             SessionEvent::ProtocolMessage { id, proto_id, data } => {
                 self.protocol_message(id, proto_id, &data)
             }
@@ -614,43 +691,46 @@ where
         while let Some((address, mut dialer)) = self.dial.pop() {
             match dialer.poll() {
                 Ok(Async::Ready(socket)) => {
-                    self.next_session += 1;
                     let address = socket.peer_addr().unwrap();
-                    let (service_event_sender, service_event_receiver) = mpsc::channel(256);
-                    let meta = SessionMeta::new(self.next_session, SessionType::Client, address)
-                        .protocol(self.protocol_configs.clone());
-                    let mut session = Session::new(
-                        socket,
-                        self.session_event_sender.clone(),
-                        service_event_receiver,
-                        meta,
-                    );
-                    self.protocol_configs
-                        .keys()
-                        .for_each(|name| session.open_proto_stream(name.to_owned()));
-                    self.sessions
-                        .insert(self.next_session, service_event_sender);
+                    if self.key_pair.is_some() {
+                        let key_pair = self.key_pair.clone().unwrap();
+                        let mut success_sender = self.session_event_sender.clone();
+                        let mut fail_sender = self.session_event_sender.clone();
 
-                    tokio::spawn(
-                        session
-                            .for_each(|_| Ok(()))
-                            .map_err(|err| error!("session error: {}", err)),
-                    );
+                        let task = Config::new(key_pair)
+                            .handshake(socket)
+                            .and_then(move |(handle, public_key, _)| {
+                                let _ = success_sender.try_send(SessionEvent::SessionOpen {
+                                    handle: Some(handle),
+                                    public_key: Some(public_key),
+                                    address: Some(address),
+                                    ty: SessionType::Client,
+                                    error: None,
+                                });
+                                Ok(())
+                            })
+                            .map_err(move |err| {
+                                error!("Handshake with {} failed, error: {:?}", address, err);
+                                let _ = fail_sender.try_send(SessionEvent::SessionOpen {
+                                    handle: None,
+                                    public_key: None,
+                                    address: None,
+                                    ty: SessionType::Client,
+                                    error: Some(err.into()),
+                                });
+                            });
 
-                    self.handle.handle_event(
-                        &mut self.service_context,
-                        ServiceEvent::SessionOpen {
-                            id: self.next_session,
-                            address,
-                            ty: SessionType::Client,
-                        },
-                    );
+                        tokio::spawn(task);
+                    } else {
+                        self.session_open(socket, None, address, SessionType::Client);
+                    }
                 }
                 Ok(Async::NotReady) => {
                     trace!("client not ready");
                     no_ready_client.push((address, dialer));
                 }
                 Err(err) => {
+                    self.need_dial -= 1;
                     self.handle.handle_error(
                         &mut self.service_context,
                         ServiceEvent::DialerError {
@@ -667,70 +747,72 @@ where
     /// Poll listen connections
     #[inline]
     fn listen_poll(&mut self) -> Poll<Option<()>, ()> {
-        if self.listens.is_empty() && self.dial.is_empty() && self.sessions.is_empty() {
+        if self.listens.is_empty() && self.need_dial == 0 && self.sessions.is_empty() {
             return Ok(Async::Ready(None));
         }
 
         let mut listen_len = self.listens.len();
         let mut no_ready_len = listen_len;
-        let mut dead_listen = Vec::new();
 
-        for (index, (address, listen)) in self.listens.iter_mut().enumerate() {
+        for (address, mut listen) in self.listens.split_off(0) {
             match listen.poll() {
                 Ok(Async::Ready(Some(socket))) => {
-                    self.next_session += 1;
                     let address = socket.peer_addr().unwrap();
-                    let (service_event_sender, service_event_receiver) = mpsc::channel(256);
-                    let meta = SessionMeta::new(self.next_session, SessionType::Server, address)
-                        .protocol(self.protocol_configs.clone());
-                    let session = Session::new(
-                        socket,
-                        self.session_event_sender.clone(),
-                        service_event_receiver,
-                        meta,
-                    );
+                    if self.key_pair.is_some() {
+                        let key_pair = self.key_pair.clone().unwrap();
+                        let mut success_sender = self.session_event_sender.clone();
+                        let mut fail_sender = self.session_event_sender.clone();
 
-                    self.sessions
-                        .insert(self.next_session, service_event_sender);
+                        let task = Config::new(key_pair)
+                            .handshake(socket)
+                            .and_then(move |(handle, public_key, _)| {
+                                let _ = success_sender.try_send(SessionEvent::SessionOpen {
+                                    handle: Some(handle),
+                                    public_key: Some(public_key),
+                                    address: Some(address),
+                                    ty: SessionType::Server,
+                                    error: None,
+                                });
+                                Ok(())
+                            })
+                            .map_err(move |err| {
+                                error!("Handshake with {} failed, error: {:?}", address, err);
+                                let _ = fail_sender.try_send(SessionEvent::SessionOpen {
+                                    handle: None,
+                                    public_key: None,
+                                    address: None,
+                                    ty: SessionType::Server,
+                                    error: Some(err.into()),
+                                });
+                            });
 
-                    tokio::spawn(
-                        session
-                            .for_each(|_| Ok(()))
-                            .map_err(|err| error!("session error: {}", err)),
-                    );
-
-                    self.handle.handle_event(
-                        &mut self.service_context,
-                        ServiceEvent::SessionOpen {
-                            id: self.next_session,
-                            address,
-                            ty: SessionType::Server,
-                        },
-                    );
+                        tokio::spawn(task);
+                    } else {
+                        self.session_open(socket, None, address, SessionType::Server);
+                    }
+                    self.listens.push((address, listen));
                 }
                 Ok(Async::Ready(None)) => {
-                    dead_listen.push(index);
-
                     if self.sessions.is_empty() {
                         listen_len -= 1;
                     }
                 }
-                Ok(Async::NotReady) => no_ready_len -= 1,
+                Ok(Async::NotReady) => {
+                    no_ready_len -= 1;
+                    self.listens.push((address, listen));
+                }
                 Err(err) => {
+                    self.listens.push((address, listen));
                     self.handle.handle_error(
                         &mut self.service_context,
                         ServiceEvent::ListenError {
-                            address: *address,
+                            address,
                             error: err,
                         },
                     );
                 }
             }
         }
-
-        dead_listen.into_iter().for_each(|index| {
-            let _ = self.listens.remove(index);
-        });
 
         // If all listens return NotReady, then it is NotReady
         if no_ready_len == 0 {
@@ -789,7 +871,7 @@ where
         }
 
         // Double check service state
-        if self.listens.is_empty() && self.dial.is_empty() && self.sessions.is_empty() {
+        if self.listens.is_empty() && self.need_dial == 0 && self.sessions.is_empty() {
             return Ok(Async::Ready(None));
         }
 
