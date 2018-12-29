@@ -345,7 +345,7 @@ where
     <U as Encoder>::Error: error::Error + Into<io::Error>,
 {
     type Item = ();
-    type Error = ();
+    type Error = io::Error;
 
     fn poll(&mut self) -> Poll<Option<Self::Item>, Self::Error> {
         debug!(
@@ -354,15 +354,18 @@ where
             self.ty,
             self.sub_streams.len()
         );
-        match self.socket.poll() {
-            Ok(Async::Ready(Some(sub_stream))) => self.handle_sub_stream(sub_stream),
-            Ok(Async::Ready(None)) => {
-                self.close_session();
-                return Ok(Async::Ready(None));
-            }
-            Ok(Async::NotReady) => (),
-            Err(err) => {
-                warn!("create sub stream error: {:?}", err);
+        loop {
+            match self.socket.poll() {
+                Ok(Async::Ready(Some(sub_stream))) => self.handle_sub_stream(sub_stream),
+                Ok(Async::Ready(None)) => {
+                    self.close_session();
+                    return Ok(Async::Ready(None));
+                }
+                Ok(Async::NotReady) => break,
+                Err(err) => {
+                    warn!("create sub stream error: {:?}", err);
+                    return Err(err);
+                }
             }
         }
 

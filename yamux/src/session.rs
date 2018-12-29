@@ -141,7 +141,7 @@ where
     // Send all pending frames to remote streams
     fn flush(&mut self) -> Result<(), io::Error> {
         self.recv_events()?;
-        self.framed_stream.poll_complete()?;
+        self.send_all()?;
         Ok(())
     }
 
@@ -214,9 +214,8 @@ where
         stream
     }
 
-    fn send_frame(&mut self, frame: Frame) -> Poll<(), io::Error> {
-        debug!("[{:?}] Session::send_frame({:?})", self.ty, frame);
-        self.pending_frames.push_back(frame);
+    #[inline]
+    fn send_all(&mut self) -> Poll<(), io::Error> {
         while let Some(frame) = self.pending_frames.pop_front() {
             if self.is_dead() {
                 break;
@@ -235,7 +234,17 @@ where
                 }
             }
         }
+        // TODO: not ready???
         self.framed_stream.poll_complete()?;
+        Ok(Async::Ready(()))
+    }
+
+    fn send_frame(&mut self, frame: Frame) -> Poll<(), io::Error> {
+        debug!("[{:?}] Session::send_frame({:?})", self.ty, frame);
+        self.pending_frames.push_back(frame);
+        if let Async::NotReady = self.send_all()? {
+            return Ok(Async::NotReady);
+        }
         debug!("[{:?}] Session::send_frame() finished", self.ty);
         Ok(Async::Ready(()))
     }

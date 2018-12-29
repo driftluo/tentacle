@@ -135,6 +135,7 @@ where
                 }
                 Ok(Async::Ready(None)) => {
                     debug!("shutdown");
+                    self.dead = true;
                     return Ok(Async::Ready(None));
                 }
                 Ok(Async::NotReady) => {
@@ -142,6 +143,7 @@ where
                     return Ok(Async::NotReady);
                 }
                 Err(err) => {
+                    self.dead = true;
                     return Err(err.into());
                 }
             };
