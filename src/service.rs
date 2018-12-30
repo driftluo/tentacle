@@ -118,6 +118,7 @@ impl Default for Message {
 pub struct ServiceContext {
     service_task_sender: mpsc::Sender<ServiceTask>,
     proto_message: Arc<HashMap<ProtocolId, String>>,
+    listens: Vec<SocketAddr>,
 }
 
 impl ServiceContext {
@@ -129,6 +130,7 @@ impl ServiceContext {
         ServiceContext {
             service_task_sender,
             proto_message: Arc::new(proto_message),
+            listens: Vec::new(),
         }
     }
 
@@ -169,14 +171,26 @@ impl ServiceContext {
 
     /// Get service protocol message, Map(ID, Name), but can't modify
     #[inline]
-    pub fn get_protocols(&self) -> &Arc<HashMap<ProtocolId, String>> {
+    pub fn protocols(&self) -> &Arc<HashMap<ProtocolId, String>> {
         &self.proto_message
+    }
+
+    /// Get service listen address list
+    #[inline]
+    pub fn listens(&self) -> &Vec<SocketAddr> {
+        &self.listens
     }
 
     /// Real send function
     #[inline]
     fn send(&mut self, event: ServiceTask) {
         let _ = self.service_task_sender.try_send(event);
+    }
+
+    /// Update listen list
+    #[inline]
+    fn update_listens(&mut self, address_list: Vec<SocketAddr>) {
+        self.listens = address_list;
     }
 }
 
@@ -741,15 +755,14 @@ where
     /// Poll client requests
     #[inline]
     fn client_poll(&mut self) {
-        let mut no_ready_client = Vec::new();
-        while let Some((address, mut dialer)) = self.dial.pop() {
+        for (address, mut dialer) in self.dial.split_off(0) {
             match dialer.poll() {
                 Ok(Async::Ready(socket)) => {
                     self.handshake(socket, SessionType::Client);
                 }
                 Ok(Async::NotReady) => {
                     trace!("client not ready");
-                    no_ready_client.push((address, dialer));
+                    self.dial.push((address, dialer));
                 }
                 Err(err) => {
                     self.need_dial -= 1;
@@ -763,32 +776,19 @@ where
                 }
             }
         }
-        self.dial = no_ready_client;
     }
 
     /// Poll listen connections
     #[inline]
-    fn listen_poll(&mut self) -> Poll<Option<()>, ()> {
-        if self.listens.is_empty() && self.need_dial == 0 && self.sessions.is_empty() {
-            return Ok(Async::Ready(None));
-        }
-
-        let mut listen_len = self.listens.len();
-        let mut no_ready_len = listen_len;
-
+    fn listen_poll(&mut self) {
         for (address, mut listen) in self.listens.split_off(0) {
             match listen.poll() {
                 Ok(Async::Ready(Some(socket))) => {
                     self.handshake(socket, SessionType::Server);
                     self.listens.push((address, listen));
                 }
-                Ok(Async::Ready(None)) => {
-                    if self.sessions.is_empty() {
-                        listen_len -= 1;
-                    }
-                }
+                Ok(Async::Ready(None)) => (),
                 Ok(Async::NotReady) => {
-                    no_ready_len -= 1;
                     self.listens.push((address, listen));
                 }
                 Err(err) => {
@@ -805,18 +805,8 @@ where
             }
         }
 
-        // If all listens return NotReady, then it is NotReady
-        if no_ready_len == 0 {
-            return Ok(Async::NotReady);
-        }
-
-        // If all listens return None and the count of sessions is 0, then it returns None
-        // others will return Some(())
-        if listen_len == 0 {
-            Ok(Async::Ready(None))
-        } else {
-            Ok(Async::Ready(Some(())))
-        }
+        self.service_context
+            .update_listens(self.listens.iter().map(|(address, _)| *address).collect());
     }
 }
 
@@ -831,11 +821,13 @@ where
     type Error = ();
 
     fn poll(&mut self) -> Poll<Option<Self::Item>, Self::Error> {
-        self.client_poll();
-
-        if let Ok(Async::Ready(None)) = self.listen_poll() {
+        if self.listens.is_empty() && self.need_dial == 0 && self.sessions.is_empty() {
             return Ok(Async::Ready(None));
         }
+
+        self.client_poll();
+
+        self.listen_poll();
 
         loop {
             match self.session_event_receiver.poll() {

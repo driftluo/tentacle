@@ -1,14 +1,11 @@
-use std::io::{Read, Write};
-use std::thread;
-use std::time::Duration;
-
 use futures::Future;
 use futures::Stream;
-use log::{debug, error, info, trace, warn};
+use log::{error, info};
+use std::io::Write;
 use tokio::io as tokio_io;
-use tokio::io::{copy, AsyncRead, AsyncWrite};
+use tokio::io::AsyncWrite;
 use tokio::net::TcpListener;
-use yamux::{config::Config, session::Session, stream::StreamHandle};
+use tokio_yamux::{config::Config, session::Session};
 
 fn main() {
     env_logger::init();
