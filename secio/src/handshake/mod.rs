@@ -1,3 +1,4 @@
+/// Most of the code for this module comes from `rust-libp2p`, but modified some logic(struct).
 use crate::{
     codec::stream_handle::StreamHandle, error::SecioError, exchange::KeyAgreement,
     handshake::procedure::handshake, stream_cipher::Cipher, support, Digest, EphemeralPublicKey,

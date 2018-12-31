@@ -1,3 +1,7 @@
+/// Most of the code for this module comes from `rust-libp2p`.
+///
+/// Some panic logic has been removed, some error handling has been removed, and an error has been added.
+///
 use bincode::{deserialize, serialize};
 use bytes::Bytes;
 use futures::{future, prelude::*, Future};

@@ -1,3 +1,4 @@
+/// I borrowed the error type of `rust-libp2p`, deleted some error types, and added an error type.
 use std::{error, fmt, io};
 
 /// Error at the SECIO layer communication.

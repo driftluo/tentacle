@@ -1,3 +1,6 @@
+/// Most of the code for this module comes from `rust-libp2p`
+///
+/// But upgrade library dependencies and follow the latest library requirements
 use crate::codec::StreamCipher;
 use aes_ctr::stream_cipher::generic_array::GenericArray;
 use aes_ctr::stream_cipher::NewStreamCipher;

@@ -1,3 +1,5 @@
+/// Most of the code for this module comes from `rust-libp2p`.
+/// Change return type to Result
 use log::debug;
 use ring::agreement;
 use ring::rand as ring_rand;

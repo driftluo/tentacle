@@ -1,3 +1,4 @@
+/// Most of the code for this module comes from `rust-libp2p` protobuf struct. But not protobuf struct.
 use serde_derive::{Deserialize, Serialize};
 
 #[derive(Serialize, Deserialize, Clone, Default)]

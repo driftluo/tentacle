@@ -1,3 +1,6 @@
+/// Most of the code for this module comes from `rust-libp2p`, but it has been partially modified.
+/// It does not use protobuf. It uses bincode as the basis for serialization and deserialization.
+/// It does not use protobuf bytes when determining the order of the order. But the original public key bytes
 use crate::{
     error::SecioError,
     exchange::KeyAgreement,

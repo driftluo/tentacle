@@ -1,3 +1,6 @@
+/// Most of the code for this module comes from `rust-libp2p`
+///
+/// Delete part of the structure
 use crate::error::SecioError;
 use crate::exchange::KeyAgreement;
 use crate::{stream_cipher::Cipher, Digest};
