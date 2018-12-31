@@ -1,5 +1,7 @@
 # P2P
 
+[![Build Status](https://api.travis-ci.org/driftluo/p2p.svg?branch=master)](https://travis-ci.org/driftluo/p2p)
+
 ## Overview
 
 This is a minimal implementation for a multiplexed p2p network based on `yamux` that supports mounting custom protocols.

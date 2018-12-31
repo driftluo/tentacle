@@ -307,12 +307,12 @@ mod tests {
 
     fn secure_codec_encode_then_decode(cipher: Cipher) {
         let cipher_key: [u8; 32] = rand::random();
-        let cipher_key_clone = cipher_key.clone();
+        let cipher_key_clone = cipher_key;
         let key_size = cipher.key_size();
         let hmac_key: [u8; 16] = rand::random();
-        let hmac_key_clone = hmac_key.clone();
+        let hmac_key_clone = hmac_key;
         let data = b"hello world";
-        let data_clone = data.clone();
+        let data_clone = &*data;
         let nonce = vec![0, 1, 2, 3, 4, 5, 6, 7, 8, 9];
 
         let listener = TcpListener::bind(&"127.0.0.1:0".parse().unwrap()).unwrap();
