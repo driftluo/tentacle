@@ -1,0 +1,22 @@
+[package]
+name = "discovery"
+version = "0.1.0"
+authors = ["Linfeng Qian <thewawar@gmail.com>"]
+edition = "2018"
+
+[dependencies]
+p2p = { path = "..", package = "p2p" }
+bytes = "0.4"
+byteorder = "1.2"
+fnv = "1.0"
+futures = "0.1"
+tokio = "0.1"
+log = "0.4"
+bincode = "1.0"
+serde = "1.0"
+serde_derive = "1.0"
+trust-dns = "0.15"
+rand = "0.6.1"
+
+[dev-dependencies]
+env_logger = "0.6"
