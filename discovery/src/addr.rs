@@ -27,36 +27,6 @@ pub trait AddressManager {
     fn get_random(&mut self, n: usize) -> Vec<SocketAddr>;
 }
 
-#[derive(Default, Clone)]
-pub struct DemoAddressManager {
-    pub addrs: FnvHashMap<RawAddr, i32>,
-}
-
-impl DemoAddressManager {
-}
-
-impl AddressManager for DemoAddressManager {
-    fn add_new(&mut self, addr: SocketAddr) {
-        self.addrs.entry(RawAddr::from(addr)).or_insert(100);
-    }
-
-    fn misbehave(&mut self, addr: SocketAddr, ty: u64) -> i32 {
-        let value = self.addrs
-            .entry(RawAddr::from(addr))
-            .or_insert(100);
-        *value -= 20;
-        *value
-    }
-
-    fn get_random(&mut self, n: usize) -> Vec<SocketAddr> {
-        self.addrs
-            .keys()
-            .take(n)
-            .map(|addr| addr.socket_addr())
-            .collect()
-    }
-}
-
 // bitcoin: bloom.h, bloom.cpp => CRollingBloomFilter
 pub struct AddrKnown {
     max_known: usize,
@@ -109,7 +79,7 @@ impl Default for AddrKnown {
     }
 }
 
-#[derive(Clone, Debug, PartialOrd, Ord, Eq, PartialEq, Hash, Serialize, Deserialize)]
+#[derive(Copy, Clone, Debug, PartialOrd, Ord, Eq, PartialEq, Hash, Serialize, Deserialize)]
 pub struct RawAddr([u8; 18]);
 
 impl From<SocketAddr> for RawAddr {

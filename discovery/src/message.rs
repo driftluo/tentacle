@@ -66,3 +66,17 @@ pub struct Nodes {
 pub struct Node {
     pub(crate) addresses: Vec<RawAddr>,
 }
+
+impl std::fmt::Display for DiscoveryMessage {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> Result<(), std::fmt::Error> {
+        match self {
+            DiscoveryMessage::GetNodes { version, count } => {
+                write!(f, "DiscoveryMessage::GetNodes(version:{}, count:{})", version, count)?;
+            }
+            DiscoveryMessage::Nodes(Nodes{ announce, items }) => {
+                write!(f, "DiscoveryMessage::Nodes(announce:{}, items.length:{})", announce, items.len())?;
+            }
+        }
+        Ok(())
+    }
+}

@@ -7,7 +7,7 @@ use futures::{
     try_ready, Async, AsyncSink, Poll, Sink, Stream,
     sync::mpsc::{Sender, Receiver, TrySendError},
 };
-use log::debug;
+use log::{debug, trace, warn};
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::codec::{Framed};
 use tokio::timer::{self, Interval};
@@ -47,6 +47,7 @@ impl io::Read for StreamHandle {
         for _ in 0..10 {
             match self.receiver.poll() {
                 Ok(Async::Ready(Some(data))) => {
+                    self.data_buf.reserve(data.len());
                     self.data_buf.put(&data);
                 }
                 Ok(Async::Ready(None)) => {
@@ -115,7 +116,7 @@ pub struct SubstreamValue {
     // FIXME: Remote listen address, resolved by id protocol
     pub(crate) remote_addr: SocketAddr,
     pub(crate) announce: bool,
-    pub(crate) announce_addrs: Vec<SocketAddr>,
+    pub(crate) announce_addrs: Vec<RawAddr>,
     timer_future: Interval,
     received_get_nodes: bool,
     received_nodes: bool,
@@ -130,6 +131,7 @@ impl SubstreamValue {
         remote_addr: SocketAddr,
     ) -> SubstreamValue {
         let mut pending_messages = VecDeque::default();
+        debug!("direction: {:?}", direction);
         if direction == Direction::Outbound {
             pending_messages.push_back(DiscoveryMessage::GetNodes {
                 version: VERSION,
@@ -138,7 +140,8 @@ impl SubstreamValue {
         }
         SubstreamValue {
             framed_stream: Framed::new(stream, DiscoveryCodec::default()),
-            timer_future: Interval::new_interval(Duration::from_secs(ANNOUNCE_INTERVAL)),
+            // timer_future: Interval::new_interval(Duration::from_secs(ANNOUNCE_INTERVAL)),
+            timer_future: Interval::new_interval(Duration::from_secs(7)),
             pending_messages,
             addr_known: AddrKnown::new(max_known),
             remote_addr,
@@ -163,6 +166,7 @@ impl SubstreamValue {
 
     pub(crate) fn send_messages(&mut self) -> Result<(), io::Error> {
         while let Some(message) = self.pending_messages.pop_front() {
+            debug!("Discovery sending message: {}", message);
             match self.framed_stream.start_send(message)? {
                 AsyncSink::NotReady(message) => {
                     self.pending_messages.push_front(message);
@@ -186,6 +190,7 @@ impl SubstreamValue {
                     // TODO: misbehavior
                     if addr_mgr.misbehave(self.remote_addr, 111) < 0 {
                         // TODO: more clear error type
+                        warn!("Already received get nodes");
                         return Err(io::ErrorKind::Other.into())
                     }
                 } else {
@@ -213,6 +218,7 @@ impl SubstreamValue {
             DiscoveryMessage::Nodes(nodes) => {
                 if nodes.announce {
                     if nodes.items.len() > ANNOUNCE_THRESHOLD {
+                        warn!("Nodes number more than {}", ANNOUNCE_THRESHOLD);
                         // TODO: misbehavior
                         if addr_mgr.misbehave(self.remote_addr, 222) < 0 {
                             // TODO: more clear error type
@@ -223,12 +229,14 @@ impl SubstreamValue {
                     }
                 } else {
                     if self.received_nodes {
+                        warn!("already received Nodes(announce=false) message");
                         // TODO: misbehavior
                         if addr_mgr.misbehave(self.remote_addr, 333) < 0 {
                             // TODO: more clear error type
                             return Err(io::ErrorKind::Other.into())
                         }
                     } else if nodes.items.len() > MAX_ADDR_TO_SEND {
+                        warn!("Too many addresses(announce=false): the length={}", nodes.items.len());
                         // TODO: misbehavior
                         if addr_mgr.misbehave(self.remote_addr, 444) < 0 {
                             // TODO: more clear error type
@@ -256,6 +264,7 @@ impl SubstreamValue {
         loop {
             match self.framed_stream.poll()? {
                 Async::Ready(Some(message)) => {
+                    trace!("received message {}", message);
                     if let Some(nodes) = self.handle_message(message, addr_mgr)? {
                         // Add to known address list
                         for node in &nodes.items {
@@ -281,9 +290,33 @@ impl SubstreamValue {
 }
 
 pub struct Substream {
-    pub(crate) remote_addr: SocketAddr,
-    pub(crate) direction: Direction,
-    pub(crate) stream: StreamHandle,
+    pub remote_addr: SocketAddr,
+    pub direction: Direction,
+    pub stream: StreamHandle,
+}
+
+impl Substream {
+    pub fn new(
+        remote_addr: SocketAddr,
+        direction: Direction,
+        proto_id: ProtocolId,
+        session_id: SessionId,
+        receiver: Receiver<Vec<u8>>,
+        sender: Sender<ServiceTask>,
+    ) -> Substream {
+        let stream = StreamHandle {
+            data_buf: BytesMut::default(),
+            proto_id,
+            session_id,
+            receiver,
+            sender,
+        };
+        Substream {
+            remote_addr,
+            direction,
+            stream,
+        }
+    }
 }
 
 impl Substream {

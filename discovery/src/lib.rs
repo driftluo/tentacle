@@ -6,7 +6,7 @@ use futures::{
     sync::mpsc::{channel, Receiver, Sender},
     try_ready, Async, AsyncSink, Poll, Sink, Stream,
 };
-use log::debug;
+use log::{debug, trace};
 use rand::seq::SliceRandom;
 
 mod addr;
@@ -14,9 +14,9 @@ mod message;
 mod substream;
 
 pub use crate::{
-    addr::{AddrKnown, RawAddr, AddressManager, DemoAddressManager},
+    addr::{AddrKnown, RawAddr, AddressManager},
     message::{DiscoveryMessage, Nodes, Node},
-    substream::{SubstreamKey, SubstreamValue, Substream},
+    substream::{Direction, SubstreamKey, SubstreamValue, Substream},
 };
 
 use crate::addr::{DEFAULT_MAX_KNOWN};
@@ -42,6 +42,7 @@ pub struct Discovery<M> {
     err_keys: FnvHashSet<SubstreamKey>,
 }
 
+#[derive(Clone)]
 pub struct DiscoveryHandle {
     pub substream_sender: Sender<Substream>,
 }
@@ -83,22 +84,29 @@ impl<M: AddressManager> Stream for Discovery<M> {
     type Error = io::Error;
 
     fn poll(&mut self) -> Poll<Option<Self::Item>, Self::Error> {
-        match self.substream_receiver.poll() {
-            Ok(Async::Ready(Some(substream))) => {
-                let key = substream.key();
-                let value = SubstreamValue::new(
-                    key.direction,
-                    substream.stream,
-                    self.max_known,
-                    substream.remote_addr,
-                );
-                self.substreams.insert(key, value);
-            }
-            Ok(Async::Ready(None)) => unreachable!(),
-            Ok(Async::NotReady) => {}
-            Err(err) => {
-                debug!("receive substream error: {:?}", err);
-                return Err(io::ErrorKind::Other.into());
+        debug!("Discovery.poll()");
+        loop {
+            match self.substream_receiver.poll() {
+                Ok(Async::Ready(Some(substream))) => {
+                    let key = substream.key();
+                    debug!("Received a substream: key={:?}", key);
+                    let value = SubstreamValue::new(
+                        key.direction,
+                        substream.stream,
+                        self.max_known,
+                        substream.remote_addr,
+                    );
+                    self.substreams.insert(key, value);
+                }
+                Ok(Async::Ready(None)) => unreachable!(),
+                Ok(Async::NotReady) => {
+                    debug!("Discovery.substream_receiver Async::NotReady");
+                    break;
+                }
+                Err(err) => {
+                    debug!("receive substream error: {:?}", err);
+                    return Err(io::ErrorKind::Other.into());
+                }
             }
         }
 
@@ -135,7 +143,8 @@ impl<M: AddressManager> Stream for Discovery<M> {
             }
 
             if value.announce {
-                announce_addrs.push(value.remote_addr);
+                announce_addrs.push(RawAddr::from(value.remote_addr));
+                value.announce = false;
             }
         }
 
@@ -150,8 +159,9 @@ impl<M: AddressManager> Stream for Discovery<M> {
             for i in 0..2 {
                 if let Some(key) = remain_keys.get(i) {
                     if let Some(value) = self.substreams.get_mut(key) {
-                        if value.announce_addrs.len() < 10 {
+                        if value.announce_addrs.len() < 10 && !value.addr_known.contains(&announce_addr) {
                             value.announce_addrs.push(announce_addr);
+                            value.addr_known.insert(announce_addr);
                         }
                     }
                 }
@@ -163,12 +173,10 @@ impl<M: AddressManager> Stream for Discovery<M> {
             if !announce_addrs.is_empty() {
                 let items = announce_addrs
                     .into_iter()
-                    .map(|addr| RawAddr::from(addr))
-                    .filter(|addr| !value.addr_known.contains(addr))
                     .map(|addr| Node { addresses: vec![addr] })
                     .collect::<Vec<_>>();
                 let nodes = Nodes {
-                    announce: false,
+                    announce: true,
                     items,
                 };
                 value
