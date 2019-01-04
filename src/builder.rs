@@ -14,6 +14,7 @@ use crate::{
 pub struct ServiceBuilder<T, U> {
     inner: HashMap<String, Box<dyn ProtocolMeta<U> + Send + Sync>>,
     key_pair: Option<SecioKeyPair>,
+    forever: bool,
     phantom: PhantomData<T>,
 }
 
@@ -34,7 +35,7 @@ where
     where
         H: ServiceHandle,
     {
-        Service::new(Arc::new(self.inner), handle, self.key_pair)
+        Service::new(Arc::new(self.inner), handle, self.key_pair, self.forever)
     }
 
     /// Insert a custom protocol
@@ -51,6 +52,13 @@ where
     /// If you do not need encrypted communication, you do not need to call this method
     pub fn key_pair(mut self, key_pair: SecioKeyPair) -> Self {
         self.key_pair = Some(key_pair);
+        self
+    }
+
+    /// When the service has no tasks, it will be turned off by default.
+    /// If you do not want to close service, set it to true.
+    pub fn forever(mut self, forever: bool) -> Self {
+        self.forever = forever;
         self
     }
 
@@ -71,6 +79,7 @@ where
         ServiceBuilder {
             inner: HashMap::new(),
             key_pair: None,
+            forever: false,
             phantom: PhantomData,
         }
     }

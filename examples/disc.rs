@@ -34,6 +34,7 @@ fn main() {
         let protocol = DiscoveryProtocol::new(0, "server", discovery);
         let mut service = ServiceBuilder::default()
             .insert_protocol(protocol)
+            .forever(true)
             .build(SHandle {});
         let _ = service.listen("127.0.0.1:1337".parse().unwrap());
         tokio::run(service.for_each(|_| Ok(())))
@@ -43,6 +44,7 @@ fn main() {
         let protocol = DiscoveryProtocol::new(0, "client", discovery);
         let mut service = ServiceBuilder::default()
             .insert_protocol(protocol)
+            .forever(true)
             .build(SHandle {})
             .dial("127.0.0.1:1337".parse().unwrap());
         let _ = service.listen("127.0.0.1:1337".parse().unwrap());

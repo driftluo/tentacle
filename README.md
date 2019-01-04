@@ -23,9 +23,7 @@ and the service layer wraps the yamux substream into a protocol stream.
 
 At the same time, support for other protocol(such as websocket) is also planned, but will delay a lot.
 
-> Note: It is not currently compatible with `libp2p`, because the description of libp2p is not particularly clear in some places,
-> so I don't know what `libp2p` is doing in some places.
-> For example, when opening a custom protocol stream, how does the two parties decide which protocol to open?
+> Note: It is not compatible with `libp2p`.
 
 ## Status
 

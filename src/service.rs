@@ -283,8 +283,9 @@ pub struct Service<T, U> {
     listens: Vec<(SocketAddr, Incoming)>,
 
     dial: Vec<(SocketAddr, ConnectFuture)>,
-    /// Calculate the number of connection requests that need to be sent externally
-    need_dial: usize,
+    /// Calculate the number of connection requests that need to be sent externally,
+    /// if run forever, it will default to 1, else it default to 0
+    task_count: usize,
 
     next_session: SessionId,
 
@@ -321,6 +322,7 @@ where
         protocol_configs: Arc<HashMap<String, Box<dyn ProtocolMeta<U> + Send + Sync>>>,
         handle: T,
         key_pair: Option<SecioKeyPair>,
+        forever: bool,
     ) -> Self {
         let (session_event_sender, session_event_receiver) = mpsc::channel(256);
         let (service_task_sender, service_task_receiver) = mpsc::channel(256);
@@ -338,7 +340,7 @@ where
             proto_session_handles: HashMap::default(),
             listens: Vec::new(),
             dial: Vec::new(),
-            need_dial: 0,
+            task_count: if forever { 1 } else { 0 },
             next_session: 0,
             session_event_sender,
             session_event_receiver,
@@ -358,7 +360,7 @@ where
     pub fn dial(mut self, address: SocketAddr) -> Self {
         let dial = TcpStream::connect(&address);
         self.dial.push((address, dial));
-        self.need_dial += 1;
+        self.task_count += 1;
         self
     }
 
@@ -492,7 +494,7 @@ where
         } else {
             self.session_open(socket, None, address, ty);
             if ty == SessionType::Client {
-                self.need_dial -= 1;
+                self.task_count -= 1;
             }
         }
     }
@@ -698,12 +700,12 @@ where
             } => {
                 self.session_open(handle, Some(public_key), address, ty);
                 if ty == SessionType::Client {
-                    self.need_dial -= 1;
+                    self.task_count -= 1;
                 }
             }
             SessionEvent::HandshakeFail { ty, .. } => {
                 if ty == SessionType::Client {
-                    self.need_dial -= 1;
+                    self.task_count -= 1;
                 }
             }
             SessionEvent::ProtocolMessage { id, proto_id, data } => {
@@ -765,7 +767,7 @@ where
                     self.dial.push((address, dialer));
                 }
                 Err(err) => {
-                    self.need_dial -= 1;
+                    self.task_count -= 1;
                     self.handle.handle_error(
                         &mut self.service_context,
                         ServiceEvent::DialerError {
@@ -821,7 +823,7 @@ where
     type Error = ();
 
     fn poll(&mut self) -> Poll<Option<Self::Item>, Self::Error> {
-        if self.listens.is_empty() && self.need_dial == 0 && self.sessions.is_empty() {
+        if self.listens.is_empty() && self.task_count == 0 && self.sessions.is_empty() {
             return Ok(Async::Ready(None));
         }
 
@@ -854,13 +856,13 @@ where
         }
 
         // Double check service state
-        if self.listens.is_empty() && self.need_dial == 0 && self.sessions.is_empty() {
+        if self.listens.is_empty() && self.task_count == 0 && self.sessions.is_empty() {
             return Ok(Async::Ready(None));
         }
         debug!(
-            "listens count: {}, need_dial count: {}, sessions count: {}",
+            "listens count: {}, task_count: {}, sessions count: {}",
             self.listens.len(),
-            self.need_dial,
+            self.task_count,
             self.sessions.len()
         );
 
