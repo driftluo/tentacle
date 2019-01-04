@@ -2,7 +2,6 @@
 ///
 /// Some panic logic has been removed, some error handling has been removed, and an error has been added.
 ///
-use bincode::{deserialize, serialize};
 use bytes::Bytes;
 use futures::{future, prelude::*, Future};
 use hmac::digest::{generic_array::ArrayLength, BlockInput, Digest, FixedOutput, Input, Reset};
@@ -20,9 +19,12 @@ use crate::{
     error::SecioError,
     exchange,
     handshake::Config,
-    handshake::{handshake_context::HandshakeContext, handshake_struct::Exchange},
+    handshake::{
+        handshake_context::HandshakeContext,
+        handshake_struct::{Exchange, PublicKey},
+    },
     stream_cipher::ctr_init,
-    EphemeralPublicKey, PublicKey,
+    EphemeralPublicKey, KeyPairInner,
 };
 
 /// Performs a handshake on the given socket.
@@ -121,13 +123,16 @@ where
                 };
 
                 let secp256k1_key = secp256k1::Secp256k1::signing_only();
-                let signature = secp256k1_key
-                    .sign(&message, &ephemeral_context.config.key.inner)
-                    .serialize_der();
+                let signature = match ephemeral_context.config.key.inner {
+                    KeyPairInner::Secp256k1 { ref private } => {
+                        secp256k1_key.sign(&message, private).serialize_der()
+                    }
+                };
+
                 exchanges.signature = signature;
                 exchanges
             };
-            let local_exchanges = serialize(&exchanges).unwrap();
+            let local_exchanges = exchanges.encode();
 
             Ok((socket, local_exchanges, ephemeral_context))
         })
@@ -154,7 +159,7 @@ where
                         }
                     };
 
-                    let remote_exchanges = match deserialize::<Exchange>(&raw_exchanges) {
+                    let remote_exchanges = match Exchange::decode(&raw_exchanges) {
                         Ok(e) => e,
                         Err(err) => {
                             debug!("failed to parse remote's exchange; {:?}", err);
@@ -188,8 +193,10 @@ where
 
             let secp256k1 = secp256k1::Secp256k1::verification_only();
             let signature = secp256k1::Signature::from_der(&remote_exchanges.signature);
-            let remote_public_key =
-                secp256k1::key::PublicKey::from_slice(&ephemeral_context.state.remote.public_key);
+            let remote_public_key = match ephemeral_context.state.remote.public_key {
+                PublicKey::Secp256k1(ref key) => secp256k1::key::PublicKey::from_slice(key),
+            };
+
             if let (Ok(signature), Ok(remote_public_key)) = (signature, remote_public_key) {
                 match secp256k1.verify(&message, &signature, &remote_public_key) {
                     Ok(()) => (),
@@ -210,31 +217,34 @@ where
             // Generate a key from the local ephemeral private key and the remote ephemeral public key,
             // derive from it a cipher key, an iv, and a hmac key, and build the encoder/decoder.
 
-            let (ephemeral_context, local_priv_key) = ephemeral_context.take_private_key();
-            let key_size = ephemeral_context.state.remote.chosen_hash.num_bytes();
+            let (pub_ephemeral_context, local_priv_key) = ephemeral_context.take_private_key();
+            let key_size = pub_ephemeral_context.state.remote.chosen_hash.num_bytes();
             exchange::agree(
-                ephemeral_context.state.remote.chosen_exchange,
+                pub_ephemeral_context.state.remote.chosen_exchange,
                 local_priv_key,
                 &remote_exchanges.epubkey,
                 key_size,
             )
-            .map(move |key_material| (socket, ephemeral_context, key_material))
+            .map(move |key_material| (socket, pub_ephemeral_context, key_material))
         })
-        .and_then(|(socket, ephemeral_context, key_material)| {
+        .and_then(|(socket, pub_ephemeral_context, key_material)| {
             // Generate a key from the local ephemeral private key and the remote ephemeral public key,
             // derive from it a cipher key, an iv, and a hmac key, and build the encoder/decoder.
 
-            let chosen_cipher = ephemeral_context.state.remote.chosen_cipher;
+            let chosen_cipher = pub_ephemeral_context.state.remote.chosen_cipher;
             let cipher_key_size = chosen_cipher.key_size();
             let iv_size = chosen_cipher.iv_size();
 
-            let key = Hmac::from_key(ephemeral_context.state.remote.chosen_hash, &key_material);
+            let key = Hmac::from_key(
+                pub_ephemeral_context.state.remote.chosen_hash,
+                &key_material,
+            );
             let mut longer_key = vec![0u8; 2 * (iv_size + cipher_key_size + 20)];
             stretch_key(key, &mut longer_key);
 
             let (local_infos, remote_infos) = {
                 let (first_half, second_half) = longer_key.split_at(longer_key.len() / 2);
-                match ephemeral_context.state.remote.hashes_ordering {
+                match pub_ephemeral_context.state.remote.hashes_ordering {
                     Ordering::Equal => {
                         let msg = "equal digest of public key and nonce for local and remote";
                         return Err(SecioError::InvalidProposition(msg));
@@ -244,10 +254,16 @@ where
                 }
             };
 
+            trace!(
+                "local info: {:?}, remote_info: {:?}",
+                local_infos,
+                remote_infos
+            );
+
             let (encode_cipher, encode_hmac) = {
                 let (iv, rest) = local_infos.split_at(iv_size);
                 let (cipher_key, mac_key) = rest.split_at(cipher_key_size);
-                let hmac = Hmac::from_key(ephemeral_context.state.remote.chosen_hash, mac_key);
+                let hmac = Hmac::from_key(pub_ephemeral_context.state.remote.chosen_hash, mac_key);
                 let cipher = ctr_init(chosen_cipher, cipher_key, iv);
                 (cipher, hmac)
             };
@@ -255,7 +271,7 @@ where
             let (decode_cipher, decode_hmac) = {
                 let (iv, rest) = remote_infos.split_at(iv_size);
                 let (cipher_key, mac_key) = rest.split_at(cipher_key_size);
-                let hmac = Hmac::from_key(ephemeral_context.state.remote.chosen_hash, mac_key);
+                let hmac = Hmac::from_key(pub_ephemeral_context.state.remote.chosen_hash, mac_key);
                 let cipher = ctr_init(chosen_cipher, cipher_key, iv);
                 (cipher, hmac)
             };
@@ -266,11 +282,11 @@ where
                 decode_hmac,
                 encode_cipher,
                 encode_hmac,
-                ephemeral_context.state.remote.local.nonce.to_vec(),
+                pub_ephemeral_context.state.remote.local.nonce.to_vec(),
             );
-            Ok((secure_stream, ephemeral_context))
+            Ok((secure_stream, pub_ephemeral_context))
         })
-        .and_then(|(mut secure_stream, ephemeral_context)| {
+        .and_then(|(mut secure_stream, pub_ephemeral_context)| {
             let mut handle = secure_stream.create_handle().unwrap();
 
             tokio::spawn(
@@ -281,14 +297,14 @@ where
 
             // We send back their nonce to check if the connection works.
             trace!("checking encryption by sending back remote's nonce");
-            match handle.write_all(&ephemeral_context.state.remote.nonce) {
+            match handle.write_all(&pub_ephemeral_context.state.remote.nonce) {
                 Ok(_) => (),
                 Err(e) => return Err(e.into()),
             }
             Ok((
                 handle,
-                ephemeral_context.state.remote.public_key,
-                ephemeral_context.state.local_tmp_pub_key,
+                pub_ephemeral_context.state.remote.public_key,
+                pub_ephemeral_context.state.local_tmp_pub_key,
             ))
         })
 }

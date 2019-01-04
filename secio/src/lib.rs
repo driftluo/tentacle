@@ -4,6 +4,8 @@
 
 use secp256k1::key::SecretKey;
 
+pub use crate::handshake::handshake_struct::PublicKey;
+
 /// Encrypted and decrypted codec implementation, and stream handle
 pub mod codec;
 /// Error type
@@ -17,15 +19,13 @@ mod stream_cipher;
 /// Supported algorithms
 mod support;
 
-/// Public key
-pub type PublicKey = Vec<u8>;
 /// Public key generated temporarily during the handshake
 pub type EphemeralPublicKey = Vec<u8>;
 
 /// Key pair of asymmetric encryption algorithm
 #[derive(Clone, Debug)]
 pub struct SecioKeyPair {
-    inner: SecretKey,
+    inner: KeyPairInner,
 }
 
 impl SecioKeyPair {
@@ -35,7 +35,9 @@ impl SecioKeyPair {
         let mut random_slice = [0u8; secp256k1::constants::SECRET_KEY_SIZE];
         rand::thread_rng().fill(&mut random_slice[..]);
         let private = SecretKey::from_slice(&random_slice).expect("slice has the right size");
-        SecioKeyPair { inner: private }
+        SecioKeyPair {
+            inner: KeyPairInner::Secp256k1 { private },
+        }
     }
 
     /// Builds a `SecioKeyPair` from a raw secp256k1 32 bytes private key.
@@ -46,15 +48,26 @@ impl SecioKeyPair {
         let private =
             secp256k1::key::SecretKey::from_slice(key.as_ref()).expect("slice has the right size");
 
-        SecioKeyPair { inner: private }
+        SecioKeyPair {
+            inner: KeyPairInner::Secp256k1 { private },
+        }
     }
 
     /// Returns the public key corresponding to this key pair.
     pub fn to_public_key(&self) -> PublicKey {
-        let secp = secp256k1::Secp256k1::signing_only();
-        let pubkey = secp256k1::key::PublicKey::from_secret_key(&secp, &self.inner);
-        pubkey.serialize().to_vec()
+        match self.inner {
+            KeyPairInner::Secp256k1 { ref private } => {
+                let secp = secp256k1::Secp256k1::signing_only();
+                let pubkey = secp256k1::key::PublicKey::from_secret_key(&secp, private);
+                PublicKey::Secp256k1(pubkey.serialize().to_vec())
+            }
+        }
     }
+}
+
+#[derive(Clone, Debug)]
+enum KeyPairInner {
+    Secp256k1 { private: SecretKey },
 }
 
 /// Possible digest algorithms.
