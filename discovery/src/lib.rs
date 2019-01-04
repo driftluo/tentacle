@@ -1,12 +1,12 @@
-use std::collections::{VecDeque};
+use std::collections::VecDeque;
 use std::io;
 
 use fnv::{FnvHashMap, FnvHashSet};
 use futures::{
     sync::mpsc::{channel, Receiver, Sender},
-    try_ready, Async, AsyncSink, Poll, Sink, Stream,
+    Async, Poll, Stream,
 };
-use log::{debug, trace};
+use log::debug;
 use rand::seq::SliceRandom;
 
 mod addr;
@@ -14,12 +14,12 @@ mod message;
 mod substream;
 
 pub use crate::{
-    addr::{AddrKnown, RawAddr, AddressManager},
-    message::{DiscoveryMessage, Nodes, Node},
-    substream::{Direction, SubstreamKey, SubstreamValue, Substream},
+    addr::{AddrKnown, AddressManager, RawAddr},
+    message::{DiscoveryMessage, Node, Nodes},
+    substream::{Direction, Substream, SubstreamKey, SubstreamValue},
 };
 
-use crate::addr::{DEFAULT_MAX_KNOWN};
+use crate::addr::DEFAULT_MAX_KNOWN;
 
 pub struct Discovery<M> {
     // Default: 5000
@@ -71,20 +71,7 @@ impl<M: AddressManager> Discovery<M> {
         }
     }
 
-    // fn bootstrap() {}
-    // fn query_dns() {}
-    // fn get_builtin_addresses() {}
-
-    fn get_nodes(&mut self) {}
-    fn handle_nodes(&mut self) {}
-}
-
-impl<M: AddressManager> Stream for Discovery<M> {
-    type Item = ();
-    type Error = io::Error;
-
-    fn poll(&mut self) -> Poll<Option<Self::Item>, Self::Error> {
-        debug!("Discovery.poll()");
+    fn recv_substreams(&mut self) -> Result<(), io::Error> {
         loop {
             match self.substream_receiver.poll() {
                 Ok(Async::Ready(Some(substream))) => {
@@ -109,6 +96,17 @@ impl<M: AddressManager> Stream for Discovery<M> {
                 }
             }
         }
+        Ok(())
+    }
+}
+
+impl<M: AddressManager> Stream for Discovery<M> {
+    type Item = ();
+    type Error = io::Error;
+
+    fn poll(&mut self) -> Poll<Option<Self::Item>, Self::Error> {
+        debug!("Discovery.poll()");
+        self.recv_substreams()?;
 
         let mut announce_addrs = Vec::new();
         for (key, value) in self.substreams.iter_mut() {
@@ -159,7 +157,9 @@ impl<M: AddressManager> Stream for Discovery<M> {
             for i in 0..2 {
                 if let Some(key) = remain_keys.get(i) {
                     if let Some(value) = self.substreams.get_mut(key) {
-                        if value.announce_addrs.len() < 10 && !value.addr_known.contains(&announce_addr) {
+                        if value.announce_addrs.len() < 10
+                            && !value.addr_known.contains(&announce_addr)
+                        {
                             value.announce_addrs.push(announce_addr);
                             value.addr_known.insert(announce_addr);
                         }
@@ -173,7 +173,9 @@ impl<M: AddressManager> Stream for Discovery<M> {
             if !announce_addrs.is_empty() {
                 let items = announce_addrs
                     .into_iter()
-                    .map(|addr| Node { addresses: vec![addr] })
+                    .map(|addr| Node {
+                        addresses: vec![addr],
+                    })
                     .collect::<Vec<_>>();
                 let nodes = Nodes {
                     announce: true,
@@ -202,9 +204,8 @@ impl<M: AddressManager> Stream for Discovery<M> {
                     }
                 }
                 Ok(Async::Ready(Some(())))
-            },
+            }
             None => Ok(Async::NotReady),
         }
     }
 }
-

@@ -1,13 +1,13 @@
 use env_logger;
-use log::{info, warn};
+use log::{debug, warn};
 
+use fnv::FnvHashMap;
 use std::{
+    collections::HashMap,
     net::{IpAddr, Ipv4Addr, SocketAddr},
     str,
     time::{Duration, Instant},
-    collections::{HashMap},
 };
-use fnv::{FnvHashMap};
 
 use futures::{
     prelude::*,
@@ -18,27 +18,18 @@ use tokio::timer::{Error, Interval};
 
 use p2p::{
     builder::ServiceBuilder,
-    service::{
-        Message, ProtocolHandle, Service, ServiceContext, ServiceEvent, ServiceHandle, ServiceTask,
-    },
+    service::{Message, ProtocolHandle, ServiceContext, ServiceEvent, ServiceHandle, ServiceTask},
     session::{ProtocolId, ProtocolMeta, SessionId},
     SessionType,
 };
 use secio::PublicKey;
 
-use discovery::{
-    RawAddr,
-    Discovery,
-    DiscoveryHandle,
-    AddressManager,
-    Direction,
-    Substream,
-};
+use discovery::{AddressManager, Direction, Discovery, DiscoveryHandle, RawAddr, Substream};
 
 fn main() {
     env_logger::init();
     if std::env::args().nth(1) == Some("server".to_string()) {
-        info!("Starting server ......");
+        debug!("Starting server ......");
         let (discovery, _) = create_discovery(1);
         let protocol = DiscoveryProtocol::new(0, "server", discovery);
         let mut service = ServiceBuilder::default()
@@ -47,7 +38,7 @@ fn main() {
         let _ = service.listen("127.0.0.1:1337".parse().unwrap());
         tokio::run(service.for_each(|_| Ok(())))
     } else {
-        info!("Starting client ......");
+        debug!("Starting client ......");
         let (discovery, _) = create_discovery(5000);
         let protocol = DiscoveryProtocol::new(0, "client", discovery);
         let mut service = ServiceBuilder::default()
@@ -59,29 +50,33 @@ fn main() {
     }
 }
 
-fn create_discovery(start: u16) -> (Discovery<DemoAddressManager>, DiscoveryHandle) {
-    let addrs: FnvHashMap<RawAddr, i32>  = (start..start+3333)
+fn create_discovery(start: u16) -> (Discovery<SimpleAddressManager>, DiscoveryHandle) {
+    let addrs: FnvHashMap<RawAddr, i32> = (start..start + 3333)
         .map(|port| SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), port))
         .map(|addr| (RawAddr::from(addr), 100))
         .collect();
-    let addr_mgr = DemoAddressManager { addrs };
+    let addr_mgr = SimpleAddressManager { addrs };
     let discovery = Discovery::new(addr_mgr);
     let handle = discovery.handle();
     (discovery, handle)
 }
 
-struct DiscoveryProtocol{
+struct DiscoveryProtocol {
     id: usize,
     ty: &'static str,
     notify_counter: u32,
-    discovery: Option<Discovery<DemoAddressManager>>,
+    discovery: Option<Discovery<SimpleAddressManager>>,
     discovery_handle: DiscoveryHandle,
     discovery_senders: FnvHashMap<SessionId, Sender<Vec<u8>>>,
     sessions: HashMap<SessionId, SessionData>,
 }
 
 impl DiscoveryProtocol {
-    fn new(id: usize, ty: &'static str, discovery: Discovery<DemoAddressManager>) -> DiscoveryProtocol {
+    fn new(
+        id: usize,
+        ty: &'static str,
+        discovery: Discovery<SimpleAddressManager>,
+    ) -> DiscoveryProtocol {
         let discovery_handle = discovery.handle();
         DiscoveryProtocol {
             id,
@@ -96,10 +91,15 @@ impl DiscoveryProtocol {
 }
 
 impl ProtocolMeta<LengthDelimitedCodec> for DiscoveryProtocol {
-    fn id(&self) -> ProtocolId { self.id }
-    fn codec(&self) -> LengthDelimitedCodec { LengthDelimitedCodec::new() }
+    fn id(&self) -> ProtocolId {
+        self.id
+    }
+    fn codec(&self) -> LengthDelimitedCodec {
+        LengthDelimitedCodec::new()
+    }
     fn handle(&self) -> Option<Box<dyn ProtocolHandle + Send + 'static>> {
-        let discovery = self.discovery
+        let discovery = self
+            .discovery
             .as_ref()
             .map(|discovery| Discovery::new(discovery.addr_mgr().clone()));
         let discovery_handle = discovery
@@ -121,12 +121,12 @@ impl ProtocolMeta<LengthDelimitedCodec> for DiscoveryProtocol {
 
 impl ProtocolHandle for DiscoveryProtocol {
     fn init(&mut self, control: &mut ServiceContext) {
-        info!("protocol [discovery({})]: init", self.id);
+        debug!("protocol [discovery({})]: init", self.id);
 
         let mut interval_sender = control.sender().clone();
         let proto_id = self.id();
         let interval_seconds = 5;
-        info!("Setup interval {} seconds", interval_seconds);
+        debug!("Setup interval {} seconds", interval_seconds);
         let interval_task = Interval::new(Instant::now(), Duration::from_secs(interval_seconds))
             .for_each(move |_| {
                 interval_sender
@@ -137,13 +137,14 @@ impl ProtocolHandle for DiscoveryProtocol {
                     })
             })
             .map_err(|err| warn!("{}", err));
-        let discovery_task = self.discovery
+        let discovery_task = self
+            .discovery
             .take()
             .map(|discovery| {
-                info!("Start discovery future_task");
+                debug!("Start discovery future_task");
                 discovery
                     .for_each(|()| {
-                        info!("discovery.for_each()");
+                        debug!("discovery.for_each()");
                         Ok(())
                     })
                     .map_err(|err| {
@@ -166,10 +167,12 @@ impl ProtocolHandle for DiscoveryProtocol {
         session_id: SessionId,
         address: SocketAddr,
         ty: SessionType,
-        _: &Option<PublicKey>
+        _: &Option<PublicKey>,
     ) {
-        self.sessions.entry(session_id).or_insert(SessionData::new(address, ty));
-        info!(
+        self.sessions
+            .entry(session_id)
+            .or_insert(SessionData::new(address, ty));
+        debug!(
             "protocol [discovery] open on session [{}], address: [{}], type: [{:?}]",
             session_id, address, ty
         );
@@ -182,12 +185,16 @@ impl ProtocolHandle for DiscoveryProtocol {
         let (sender, receiver) = channel(8);
         self.discovery_senders.insert(session_id, sender);
         let substream = Substream::new(
-            address, direction, self.id, session_id, receiver,
+            address,
+            direction,
+            self.id,
+            session_id,
+            receiver,
             control.sender().clone(),
         );
         match self.discovery_handle.substream_sender.try_send(substream) {
             Ok(_) => {
-                info!("Send substream success");
+                debug!("Send substream success");
             }
             Err(err) => {
                 warn!("Send substream failed : {:?}", err);
@@ -198,12 +205,15 @@ impl ProtocolHandle for DiscoveryProtocol {
     fn disconnected(&mut self, _control: &mut ServiceContext, session_id: SessionId) {
         self.sessions.remove(&session_id);
         self.discovery_senders.remove(&session_id);
-        info!("protocol [discovery] close on session [{}]", session_id);
+        debug!("protocol [discovery] close on session [{}]", session_id);
     }
 
     fn received(&mut self, _env: &mut ServiceContext, data: Message) {
-        info!("[received message]: length={}", data.data.len());
-        self.sessions.get_mut(&data.id).unwrap().push_data(data.data.clone());
+        debug!("[received message]: length={}", data.data.len());
+        self.sessions
+            .get_mut(&data.id)
+            .unwrap()
+            .push_data(data.data.clone());
         if let Some(ref mut sender) = self.discovery_senders.get_mut(&data.id) {
             if let Err(err) = sender.try_send(data.data) {
                 if err.is_full() {
@@ -218,14 +228,8 @@ impl ProtocolHandle for DiscoveryProtocol {
     }
 
     fn notify(&mut self, _control: &mut ServiceContext, token: u64) {
-        info!("protocol [discovery] received notify token: {}", token);
+        debug!("protocol [discovery] received notify token: {}", token);
         self.notify_counter += 1;
-        // let message = Message {
-        //     id: 0,
-        //     proto_id: self.id,
-        //     data: format!("notify counter from {}: {}", self.ty, self.notify_counter).into_bytes(),
-        // };
-        // control.send_message(None, message);
     }
 }
 
@@ -233,11 +237,11 @@ struct SHandle {}
 
 impl ServiceHandle for SHandle {
     fn handle_error(&mut self, _env: &mut ServiceContext, error: ServiceEvent) {
-        info!("service error: {:?}", error);
+        debug!("service error: {:?}", error);
     }
 
-    fn handle_event(&mut self, env: &mut ServiceContext, event: ServiceEvent) {
-        info!("service event: {:?}", event);
+    fn handle_event(&mut self, _env: &mut ServiceContext, event: ServiceEvent) {
+        debug!("service event: {:?}", event);
     }
 }
 
@@ -250,7 +254,11 @@ struct SessionData {
 
 impl SessionData {
     fn new(address: SocketAddr, ty: SessionType) -> Self {
-        SessionData { address, ty, data: Vec::new() }
+        SessionData {
+            address,
+            ty,
+            data: Vec::new(),
+        }
     }
 
     fn push_data(&mut self, data: Vec<u8>) {
@@ -259,22 +267,17 @@ impl SessionData {
 }
 
 #[derive(Default, Clone, Debug)]
-pub struct DemoAddressManager {
+pub struct SimpleAddressManager {
     pub addrs: FnvHashMap<RawAddr, i32>,
 }
 
-impl DemoAddressManager {
-}
-
-impl AddressManager for DemoAddressManager {
+impl AddressManager for SimpleAddressManager {
     fn add_new(&mut self, addr: SocketAddr) {
         self.addrs.entry(RawAddr::from(addr)).or_insert(100);
     }
 
-    fn misbehave(&mut self, addr: SocketAddr, ty: u64) -> i32 {
-        let value = self.addrs
-            .entry(RawAddr::from(addr))
-            .or_insert(100);
+    fn misbehave(&mut self, addr: SocketAddr, _ty: u64) -> i32 {
+        let value = self.addrs.entry(RawAddr::from(addr)).or_insert(100);
         *value -= 20;
         *value
     }

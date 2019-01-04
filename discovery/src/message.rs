@@ -1,13 +1,12 @@
 use std::io;
 
-use bytes::{BufMut, Bytes, BytesMut};
+use bytes::{Bytes, BytesMut};
 use log::debug;
 use serde_derive::{Deserialize, Serialize};
-use tokio::codec::{Decoder, Encoder, Framed};
-use tokio::codec::length_delimited::{LengthDelimitedCodec};
+use tokio::codec::length_delimited::LengthDelimitedCodec;
+use tokio::codec::{Decoder, Encoder};
 
 use crate::addr::RawAddr;
-
 
 pub(crate) struct DiscoveryCodec {
     inner: LengthDelimitedCodec,
@@ -15,7 +14,9 @@ pub(crate) struct DiscoveryCodec {
 
 impl Default for DiscoveryCodec {
     fn default() -> DiscoveryCodec {
-        DiscoveryCodec { inner: LengthDelimitedCodec::new() }
+        DiscoveryCodec {
+            inner: LengthDelimitedCodec::new(),
+        }
     }
 }
 
@@ -27,13 +28,17 @@ impl Decoder for DiscoveryCodec {
         match self.inner.decode(src) {
             Ok(Some(frame)) => {
                 // TODO: more error information
-                bincode::deserialize(&frame)
-                    .map(Some)
-                    .map_err(|err| io::ErrorKind::InvalidData.into())
+                bincode::deserialize(&frame).map(Some).map_err(|err| {
+                    debug!("deserialize error: {:?}", err);
+                    io::ErrorKind::InvalidData.into()
+                })
             }
             Ok(None) => Ok(None),
             // TODO: more error information
-            Err(err) => Err(io::ErrorKind::InvalidData.into()),
+            Err(err) => {
+                debug!("decode error: {:?}", err);
+                Err(io::ErrorKind::InvalidData.into())
+            }
         }
     }
 }
@@ -45,7 +50,10 @@ impl Encoder for DiscoveryCodec {
     fn encode(&mut self, item: Self::Item, dst: &mut BytesMut) -> Result<(), Self::Error> {
         // TODO: more error information
         bincode::serialize(&item)
-            .map_err(|err| io::ErrorKind::InvalidData.into())
+            .map_err(|err| {
+                debug!("serialize error: {:?}", err);
+                io::ErrorKind::InvalidData.into()
+            })
             .and_then(|frame| self.inner.encode(Bytes::from(frame), dst))
     }
 }
@@ -71,10 +79,19 @@ impl std::fmt::Display for DiscoveryMessage {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> Result<(), std::fmt::Error> {
         match self {
             DiscoveryMessage::GetNodes { version, count } => {
-                write!(f, "DiscoveryMessage::GetNodes(version:{}, count:{})", version, count)?;
+                write!(
+                    f,
+                    "DiscoveryMessage::GetNodes(version:{}, count:{})",
+                    version, count
+                )?;
             }
-            DiscoveryMessage::Nodes(Nodes{ announce, items }) => {
-                write!(f, "DiscoveryMessage::Nodes(announce:{}, items.length:{})", announce, items.len())?;
+            DiscoveryMessage::Nodes(Nodes { announce, items }) => {
+                write!(
+                    f,
+                    "DiscoveryMessage::Nodes(announce:{}, items.length:{})",
+                    announce,
+                    items.len()
+                )?;
             }
         }
         Ok(())

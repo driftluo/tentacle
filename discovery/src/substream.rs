@@ -1,30 +1,29 @@
-use std::collections::{VecDeque};
+use std::collections::VecDeque;
 use std::io;
-use std::net::{IpAddr, SocketAddr};
-use std::time::{Duration};
+use std::net::SocketAddr;
+use std::time::Duration;
 
+use bytes::{BufMut, BytesMut};
 use futures::{
-    try_ready, Async, AsyncSink, Poll, Sink, Stream,
-    sync::mpsc::{Sender, Receiver, TrySendError},
+    sync::mpsc::{Receiver, Sender},
+    Async, AsyncSink, Poll, Sink, Stream,
 };
 use log::{debug, trace, warn};
-use tokio::io::{AsyncRead, AsyncWrite};
-use tokio::codec::{Framed};
-use tokio::timer::{self, Interval};
 use p2p::service::{Message, ServiceTask};
-use p2p::session::{SessionId, ProtocolId};
-use bytes::{BytesMut, BufMut};
+use p2p::session::{ProtocolId, SessionId};
+use tokio::codec::Framed;
+use tokio::io::{AsyncRead, AsyncWrite};
+use tokio::timer::Interval;
 
-use crate::message::{DiscoveryCodec, DiscoveryMessage, Nodes, Node};
-use crate::addr::{AddrKnown, RawAddr, AddressManager};
-
+use crate::addr::{AddrKnown, AddressManager, RawAddr};
+use crate::message::{DiscoveryCodec, DiscoveryMessage, Node, Nodes};
 
 // FIXME: should be a more high level version number
 const VERSION: u32 = 0;
 // The maximum number of new addresses to accumulate before announcing.
 const MAX_ADDR_TO_SEND: usize = 1000;
 // Every 24 hours send announce nodes message
-const ANNOUNCE_INTERVAL: u64 = 3600 * 24;
+// const ANNOUNCE_INTERVAL: u64 = 3600 * 24;
 const ANNOUNCE_THRESHOLD: usize = 10;
 
 #[derive(Eq, PartialEq, Hash, Debug, Clone)]
@@ -55,7 +54,7 @@ impl io::Read for StreamHandle {
                 }
                 Ok(Async::NotReady) => {
                     break;
-                },
+                }
                 Err(_err) => {
                     return Err(io::ErrorKind::BrokenPipe.into());
                 }
@@ -81,15 +80,14 @@ impl io::Write for StreamHandle {
                 id: self.session_id,
                 proto_id: self.proto_id,
                 data: buf.to_vec(),
-            }
+            },
         };
-        self.sender.try_send(task)
+        self.sender
+            .try_send(task)
             .map(|()| buf.len())
             .map_err(|err| {
                 if err.is_full() {
                     io::ErrorKind::WouldBlock.into()
-                } else if err.is_disconnected() {
-                    io::ErrorKind::BrokenPipe.into()
                 } else {
                     io::ErrorKind::BrokenPipe.into()
                 }
@@ -106,7 +104,6 @@ impl AsyncWrite for StreamHandle {
         Ok(Async::Ready(()))
     }
 }
-
 
 pub struct SubstreamValue {
     framed_stream: Framed<StreamHandle, DiscoveryCodec>,
@@ -185,13 +182,13 @@ impl SubstreamValue {
         addr_mgr: &mut M,
     ) -> Result<Option<Nodes>, io::Error> {
         match message {
-            DiscoveryMessage::GetNodes { version, count } => {
+            DiscoveryMessage::GetNodes { .. } => {
                 if self.received_get_nodes {
                     // TODO: misbehavior
                     if addr_mgr.misbehave(self.remote_addr, 111) < 0 {
                         // TODO: more clear error type
                         warn!("Already received get nodes");
-                        return Err(io::ErrorKind::Other.into())
+                        return Err(io::ErrorKind::Other.into());
                     }
                 } else {
                     // TODO: magic number
@@ -204,7 +201,9 @@ impl SubstreamValue {
                     }
                     let items = items
                         .into_iter()
-                        .map(|addr| Node { addresses: vec![RawAddr::from(addr)] })
+                        .map(|addr| Node {
+                            addresses: vec![RawAddr::from(addr)],
+                        })
                         .collect::<Vec<_>>();
                     let nodes = Nodes {
                         announce: false,
@@ -222,30 +221,31 @@ impl SubstreamValue {
                         // TODO: misbehavior
                         if addr_mgr.misbehave(self.remote_addr, 222) < 0 {
                             // TODO: more clear error type
-                            return Err(io::ErrorKind::Other.into())
+                            return Err(io::ErrorKind::Other.into());
                         }
                     } else {
                         return Ok(Some(nodes));
+                    }
+                } else if self.received_nodes {
+                    warn!("already received Nodes(announce=false) message");
+                    // TODO: misbehavior
+                    if addr_mgr.misbehave(self.remote_addr, 333) < 0 {
+                        // TODO: more clear error type
+                        return Err(io::ErrorKind::Other.into());
+                    }
+                } else if nodes.items.len() > MAX_ADDR_TO_SEND {
+                    warn!(
+                        "Too many addresses(announce=false): the length={}",
+                        nodes.items.len()
+                    );
+                    // TODO: misbehavior
+                    if addr_mgr.misbehave(self.remote_addr, 444) < 0 {
+                        // TODO: more clear error type
+                        return Err(io::ErrorKind::Other.into());
                     }
                 } else {
-                    if self.received_nodes {
-                        warn!("already received Nodes(announce=false) message");
-                        // TODO: misbehavior
-                        if addr_mgr.misbehave(self.remote_addr, 333) < 0 {
-                            // TODO: more clear error type
-                            return Err(io::ErrorKind::Other.into())
-                        }
-                    } else if nodes.items.len() > MAX_ADDR_TO_SEND {
-                        warn!("Too many addresses(announce=false): the length={}", nodes.items.len());
-                        // TODO: misbehavior
-                        if addr_mgr.misbehave(self.remote_addr, 444) < 0 {
-                            // TODO: more clear error type
-                            return Err(io::ErrorKind::Other.into())
-                        }
-                    } else {
-                        self.received_nodes = true;
-                        return Ok(Some(nodes));
-                    }
+                    self.received_nodes = true;
+                    return Ok(Some(nodes));
                 }
             }
         }
@@ -269,7 +269,7 @@ impl SubstreamValue {
                         // Add to known address list
                         for node in &nodes.items {
                             for addr in &node.addresses {
-                                self.addr_known.insert(RawAddr::from(addr.clone()));
+                                self.addr_known.insert(*addr);
                             }
                         }
                         nodes_list.push(nodes);

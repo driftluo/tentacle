@@ -1,16 +1,9 @@
-use std::collections::{BTreeMap, VecDeque};
-use std::io;
+use std::collections::BTreeMap;
 use std::net::{IpAddr, SocketAddr};
-use std::rc::Rc;
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
-use bincode::{deserialize, serialize};
-use bytes::{BufMut, Bytes, BytesMut};
 use fnv::{FnvHashMap, FnvHashSet};
-use log::debug;
-use rand::seq::SliceRandom;
 use serde_derive::{Deserialize, Serialize};
-
 
 // See: bitcoin/netaddress.cpp pchIPv4[12]
 pub(crate) const PCH_IPV4: [u8; 18] = [
@@ -47,8 +40,8 @@ impl AddrKnown {
 
     pub(crate) fn insert(&mut self, key: RawAddr) {
         let now = Instant::now();
-        self.addrs.insert(key.clone());
-        self.time_addrs.insert(now.clone(), key.clone());
+        self.addrs.insert(key);
+        self.time_addrs.insert(now, key);
         self.addr_times.insert(key, now);
 
         if self.addrs.len() > self.max_known {
@@ -56,7 +49,7 @@ impl AddrKnown {
                 let (first_time, first_key) = self.time_addrs.iter().next().unwrap();
                 self.addrs.remove(&first_key);
                 self.addr_times.remove(&first_key);
-                first_time.clone()
+                *first_time
             };
             self.time_addrs.remove(&first_time);
         }
@@ -64,12 +57,6 @@ impl AddrKnown {
 
     pub(crate) fn contains(&self, addr: &RawAddr) -> bool {
         self.addrs.contains(addr)
-    }
-
-    pub(crate) fn reset(&mut self) {
-        self.addrs.clear();
-        self.time_addrs.clear();
-        self.addr_times.clear();
     }
 }
 
@@ -104,8 +91,8 @@ impl From<SocketAddr> for RawAddr {
 impl RawAddr {
     pub fn socket_addr(&self) -> SocketAddr {
         let mut is_ipv4 = true;
-        for i in 0..12 {
-            if self.0[i] != PCH_IPV4[i] {
+        for (i, value) in PCH_IPV4.iter().enumerate().take(12) {
+            if self.0[i] != *value {
                 is_ipv4 = false;
                 break;
             }
@@ -119,7 +106,7 @@ impl RawAddr {
             buf.copy_from_slice(&self.0[0..16]);
             From::from(buf)
         };
-        let port = 0x100 * self.0[16] as u16 + self.0[17] as u16;
+        let port = 0x100 * u16::from(self.0[16]) + u16::from(self.0[17]);
         SocketAddr::new(ip, port)
     }
 
@@ -152,17 +139,17 @@ impl RawAddr {
                 match scope {
                     Some(true) => true,
                     None => {
-                        !ipv6.is_multicast()
-                            && !ipv6.is_loopback()
-                        // && !ipv6.is_unicast_link_local()
-                            && !((ipv6.segments()[0] & 0xffc0) == 0xfe80)
-                        // && !ipv6.is_unicast_site_local()
-                            && !((ipv6.segments()[0] & 0xffc0) == 0xfec0)
-                        // && !ipv6.is_unique_local()
-                            && !((ipv6.segments()[0] & 0xfe00) == 0xfc00)
-                            && !ipv6.is_unspecified()
-                        // && !ipv6.is_documentation()
-                            && !((ipv6.segments()[0] == 0x2001) && (ipv6.segments()[1] == 0xdb8))
+                        !(ipv6.is_multicast()
+                          || ipv6.is_loopback()
+                          // && !ipv6.is_unicast_link_local()
+                          || ((ipv6.segments()[0] & 0xffc0) == 0xfe80)
+                          // && !ipv6.is_unicast_site_local()
+                          || ((ipv6.segments()[0] & 0xffc0) == 0xfec0)
+                          // && !ipv6.is_unique_local()
+                          || ((ipv6.segments()[0] & 0xfe00) == 0xfc00)
+                          || ipv6.is_unspecified()
+                          // && !ipv6.is_documentation()
+                          || ((ipv6.segments()[0] == 0x2001) && (ipv6.segments()[1] == 0xdb8)))
                     }
                     _ => false,
                 }
