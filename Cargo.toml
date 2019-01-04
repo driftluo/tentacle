@@ -17,6 +17,8 @@ bytes = "0.4"
 
 [dev-dependencies]
 env_logger = "0.6.0"
+fnv = "1.0"
+discovery = { path = "discovery" }
 
 [workspace]
-members = ["yamux", "secio"]
+members = ["yamux", "secio", "discovery"]

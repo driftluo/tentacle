@@ -2,8 +2,8 @@ language: rust
 rust:
   - stable
 before_script:
-  - rustup component add rustfmt-preview
-  - rustup component add clippy-preview
+  - rustup component add rustfmt
+  - rustup component add clippy
 script:
   - RUSTFLAGS='-F warnings' cargo build --all
 stages:
