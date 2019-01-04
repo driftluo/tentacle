@@ -1,0 +1,23 @@
+namespace P2P.Handshake;
+
+enum Type:byte {
+  Secp256k1 = 0,
+}
+
+table PublicKey {
+  key_type: Type;
+  pubkey: [ubyte];
+}
+
+table Propose {
+	rand: [ubyte];
+	pubkey: [ubyte];
+	exchanges: string;
+	ciphers: string;
+	hashes: string;
+}
+
+table Exchange {
+	epubkey: [ubyte];
+	signature: [ubyte];
+}

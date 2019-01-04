@@ -9,7 +9,10 @@ use futures::Future;
 use tokio::prelude::{AsyncRead, AsyncWrite};
 
 mod handshake_context;
-mod handshake_struct;
+#[rustfmt::skip]
+#[allow(clippy::all)]
+mod handshake_generated;
+pub(crate) mod handshake_struct;
 mod procedure;
 
 /// Config for Secio

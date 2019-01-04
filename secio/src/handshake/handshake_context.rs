@@ -1,14 +1,16 @@
 /// Most of the code for this module comes from `rust-libp2p`, but it has been partially modified.
-/// It does not use protobuf. It uses bincode as the basis for serialization and deserialization.
+/// It does not use protobuf. It uses flatbuffers as the basis for serialization and deserialization.
 /// It does not use protobuf bytes when determining the order of the order. But the original public key bytes
 use crate::{
     error::SecioError,
     exchange::KeyAgreement,
-    handshake::{handshake_struct::Propose, Config},
-    stream_cipher, support, Digest, PublicKey,
+    handshake::{
+        handshake_struct::{Propose, PublicKey},
+        Config,
+    },
+    stream_cipher, support, Digest,
 };
 
-use bincode::{deserialize, serialize};
 use bytes::BytesMut;
 use log::{debug, trace};
 use rand;
@@ -28,7 +30,7 @@ pub struct HandshakeContext<T> {
 pub struct Local {
     // Locally-generated random number. The array size can be changed without any repercussion.
     pub(crate) nonce: [u8; 16],
-    // Our local public key protobuf structure encoded in bytes:
+    // Our local public key flatbuffer bytes:
     pub(crate) public_key: Vec<u8>,
     // Our local proposition's raw bytes:
     pub(crate) proposition_bytes: Vec<u8>,
@@ -88,7 +90,7 @@ impl HandshakeContext<()> {
         // Send our proposition with our nonce, public key and supported protocols.
         let mut proposition = Propose::new();
         proposition.rand = nonce.to_vec();
-        proposition.pubkey = public_key.clone();
+        proposition.pubkey = public_key.encode();
 
         proposition.exchange = self
             .config
@@ -111,13 +113,13 @@ impl HandshakeContext<()> {
             .unwrap_or_else(|| support::DEFAULT_DIGESTS_PROPOSITION.into());
         trace!("digests proposition: {}", proposition.hashes);
 
-        let proposition_bytes = serialize(&proposition).unwrap();
+        let proposition_bytes = proposition.encode();
 
         HandshakeContext {
             config: self.config,
             state: Local {
                 nonce,
-                public_key,
+                public_key: public_key.inner_ref().to_owned(),
                 proposition_bytes,
             },
         }
@@ -130,17 +132,24 @@ impl HandshakeContext<Local> {
         self,
         remote_bytes: BytesMut,
     ) -> Result<HandshakeContext<Remote>, SecioError> {
-        let propose = match deserialize::<Propose>(&remote_bytes) {
+        let propose = match Propose::decode(&remote_bytes) {
             Ok(prop) => prop,
             Err(_) => {
-                debug!("failed to parse remote's proposition protobuf message");
+                debug!("failed to parse remote's proposition flatbuffer message");
                 return Err(SecioError::HandshakeParsingFailure);
             }
         };
 
-        // TODO: Libp2p uses protobuf bytes to calculate order, but here we only use the original pubkey and nonce
-        let public_key = propose.pubkey;
+        // NOTE: Libp2p uses protobuf bytes to calculate order, but here we only use the original pubkey and nonce
         let nonce = propose.rand;
+
+        let public_key = match PublicKey::decode(&propose.pubkey) {
+            Ok(pubkey) => pubkey,
+            Err(_) => {
+                debug!("failed to parse remote's public key flatbuffer message");
+                return Err(SecioError::HandshakeParsingFailure);
+            }
+        };
 
         if public_key == self.config.key.to_public_key() {
             return Err(SecioError::ConnectSelf);
@@ -151,7 +160,7 @@ impl HandshakeContext<Local> {
         let hashes_ordering = {
             let oh1 = {
                 let mut ctx = Sha256::new();
-                ctx.input(&public_key);
+                ctx.input(public_key.inner_ref());
                 ctx.input(&self.state.nonce);
                 ctx.result()
             };
