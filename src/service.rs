@@ -76,6 +76,7 @@ pub trait ProtocolHandle {
         _address: SocketAddr,
         _ty: SessionType,
         _remote_public_key: &Option<PublicKey>,
+        _version: &str,
     ) {
     }
     /// Called when closing protocol
@@ -457,7 +458,11 @@ where
         if let Some(Some(handle)) = handle {
             Some(handle)
         } else {
-            trace!("can't find proto [{}] handle", proto_id);
+            trace!(
+                "can't find proto [{}] {} handle",
+                proto_id,
+                if session { "session" } else { "global" }
+            );
             None
         }
     }
@@ -524,7 +529,7 @@ where
         if ty == SessionType::Client {
             self.protocol_configs
                 .keys()
-                .for_each(|name| session.open_proto_stream(name.to_owned()));
+                .for_each(|name| session.open_proto_stream(name));
         }
         self.sessions
             .insert(self.next_session, service_event_sender);
@@ -586,6 +591,7 @@ where
         address: SocketAddr,
         ty: SessionType,
         remote_public_key: &Option<PublicKey>,
+        version: &str,
     ) {
         debug!("service session [{}] proto [{}] open", id, proto_id);
 
@@ -597,6 +603,7 @@ where
                 address,
                 ty,
                 &remote_public_key,
+                &version,
             );
         } else if let Some(mut handle) = self.get_proto_handle(false, proto_id) {
             handle.init(&mut self.service_context);
@@ -606,6 +613,7 @@ where
                 address,
                 ty,
                 &remote_public_key,
+                &version,
             );
             self.proto_handles.insert(proto_id, handle);
         }
@@ -623,6 +631,7 @@ where
                     address,
                     ty,
                     &remote_public_key,
+                    &version,
                 );
                 Some(handle)
             }
@@ -717,8 +726,16 @@ where
                 remote_address,
                 remote_public_key,
                 ty,
+                version,
                 ..
-            } => self.protocol_open(id, proto_id, remote_address, ty, &remote_public_key),
+            } => self.protocol_open(
+                id,
+                proto_id,
+                remote_address,
+                ty,
+                &remote_public_key,
+                &version,
+            ),
             SessionEvent::ProtocolClose { id, proto_id, .. } => self.protocol_close(id, proto_id),
         }
     }

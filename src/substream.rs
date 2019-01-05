@@ -22,9 +22,11 @@ pub enum ProtocolEvent {
     /// The protocol is normally open
     ProtocolOpen {
         /// Protocol name
-        proto_name: Vec<u8>,
+        proto_name: String,
         /// Yamux sub stream handle
         sub_stream: StreamHandle,
+        /// Protocol version
+        version: String,
     },
     /// The protocol close
     ProtocolClose {

@@ -81,11 +81,12 @@ impl ProtocolHandle for PHandle {
         address: SocketAddr,
         ty: SessionType,
         _remote_public_key: &Option<PublicKey>,
+        version: &str,
     ) {
         self.connected_session_ids.push(session_id);
         info!(
-            "proto id [{}] open on session [{}], address: [{}], type: [{:?}]",
-            self.proto_id, session_id, address, ty
+            "proto id [{}] open on session [{}], address: [{}], type: [{:?}], version: {}",
+            self.proto_id, session_id, address, ty, version
         );
         info!("connected sessions are: {:?}", self.connected_session_ids);
 
