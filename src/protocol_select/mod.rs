@@ -176,14 +176,36 @@ pub(crate) fn server_select<T: AsyncWrite + AsyncRead + Send>(
 
 /// Choose the highest version of the two sides
 #[inline]
-fn select_version(local: &[String], remote: &[String]) -> Vec<String> {
-    for i in remote.iter().rev() {
-        for j in local.iter().rev() {
-            if i == j {
-                return vec![i.clone()];
+fn select_version<T: Ord + Clone>(local: &[T], remote: &[T]) -> Vec<T> {
+    let mut remote_index = if remote.is_empty() {
+        return Vec::new();
+    } else {
+        remote.len() - 1
+    };
+    let mut local_index = if local.is_empty() {
+        return Vec::new();
+    } else {
+        local.len() - 1
+    };
+
+    loop {
+        if local[local_index] > remote[remote_index] {
+            if local_index > 0 {
+                local_index -= 1;
+            } else {
+                break;
             }
+        } else if local[local_index] < remote[remote_index] {
+            if remote_index > 0 {
+                remote_index -= 1;
+            } else {
+                break;
+            }
+        } else {
+            return vec![local[local_index].clone()];
         }
     }
+
     Vec::new()
 }
 
@@ -218,10 +240,15 @@ mod tests {
         ];
         let c = vec![];
         let d = vec!["5.0.0".to_string()];
+        let e = vec!["1.0.0".to_string()];
 
         assert_eq!(select_version(&b, &a), vec!["2.0.0".to_string()]);
+        assert_eq!(select_version(&b, &e), vec!["1.0.0".to_string()]);
         assert!(select_version(&b, &c).is_empty());
         assert!(select_version(&b, &d).is_empty());
+        assert!(select_version(&d, &a).is_empty());
+        assert!(select_version(&d, &e).is_empty());
+        assert!(select_version(&e, &d).is_empty());
     }
 
     fn select_protocol(server: Vec<String>, client: Vec<String>, result: &Option<String>) {
