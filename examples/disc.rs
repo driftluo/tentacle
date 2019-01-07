@@ -170,6 +170,7 @@ impl ProtocolHandle for DiscoveryProtocol {
         address: SocketAddr,
         ty: SessionType,
         _: &Option<PublicKey>,
+        _: &str,
     ) {
         self.sessions
             .entry(session_id)

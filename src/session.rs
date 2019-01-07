@@ -8,6 +8,7 @@ use tokio::codec::{Decoder, Encoder, Framed};
 use tokio::prelude::{AsyncRead, AsyncWrite};
 use yamux::{session::SessionType, Config, Session as YamuxSession, StreamHandle};
 
+use crate::protocol_select::{client_select, server_select, ProtocolMessage};
 use crate::service::ProtocolHandle;
 use crate::substream::{ProtocolEvent, SubStream};
 
@@ -65,6 +66,8 @@ pub(crate) enum SessionEvent {
         remote_public_key: Option<PublicKey>,
         /// Session type
         ty: SessionType,
+        /// Protocol version
+        version: String,
     },
     /// Protocol close event
     ProtocolClose {
@@ -91,6 +94,10 @@ where
     }
     /// Protocol id
     fn id(&self) -> ProtocolId;
+    /// Protocol supported version
+    fn support_versions(&self) -> Vec<String> {
+        vec!["1.0.0".to_owned()]
+    }
     /// The codec used by the custom protocol, such as `LengthDelimitedCodec` by tokio
     fn codec(&self) -> U;
     /// A global callback handle for a protocol.
@@ -185,28 +192,42 @@ where
     }
 
     /// After the session is established, the client is requested to open some custom protocol sub stream.
-    pub fn open_proto_stream(&mut self, proto_name: String) {
+    pub fn open_proto_stream(&mut self, proto_name: &str) {
         debug!("try open proto, {}", proto_name);
         let event_sender = self.proto_event_sender.clone();
         let handle = self.socket.open_stream().unwrap();
-        let task = tokio::io::write_all(handle, format!("{}\n", proto_name))
-            .and_then(move |(sub_stream, _)| {
-                let mut send_task = event_sender.send(ProtocolEvent::ProtocolOpen {
-                    sub_stream,
-                    proto_name: proto_name.into_bytes(),
-                });
-                loop {
-                    match send_task.poll() {
-                        Ok(Async::NotReady) => continue,
-                        Ok(Async::Ready(_)) => break,
-                        Err(err) => trace!("stream send back error: {:?}", err),
+        let versions = self
+            .protocol_configs
+            .get(proto_name)
+            .unwrap()
+            .support_versions();
+        let proto_msg = ProtocolMessage::new(&proto_name, versions);
+
+        let task = client_select(handle, proto_msg)
+            .and_then(|(handle, name, version)| {
+                match version {
+                    Some(version) => {
+                        let mut send_task = event_sender.send(ProtocolEvent::ProtocolOpen {
+                            sub_stream: handle,
+                            proto_name: name,
+                            version,
+                        });
+                        loop {
+                            match send_task.poll() {
+                                Ok(Async::NotReady) => continue,
+                                Ok(Async::Ready(_)) => break,
+                                Err(err) => trace!("stream send back error: {:?}", err),
+                            }
+                        }
                     }
+                    None => debug!("Negotiation to open the protocol {} failed", name),
                 }
                 Ok(())
             })
             .map_err(|err| {
-                trace!("stream protocol identify err: {:?}", err);
+                trace!("stream protocol select err: {:?}", err);
             });
+
         tokio::spawn(task);
     }
 
@@ -220,25 +241,45 @@ where
     /// Handling client-initiated open protocol sub stream requests
     fn handle_sub_stream(&mut self, sub_stream: StreamHandle) {
         let event_sender = self.proto_event_sender.clone();
-        let task = tokio::io::read_until(io::BufReader::new(sub_stream), b'\n', Vec::new())
-            .and_then(move |(sub_stream, proto_name)| {
-                debug!("new proto start, proto name: {:?}", proto_name);
-                let mut send_task = event_sender.send(ProtocolEvent::ProtocolOpen {
-                    sub_stream: sub_stream.into_inner(),
-                    proto_name,
-                });
-                loop {
-                    match send_task.poll() {
-                        Ok(Async::NotReady) => continue,
-                        Ok(Async::Ready(_)) => break,
-                        Err(err) => trace!("stream send back error: {:?}", err),
+        let proto_metas = self
+            .protocol_configs
+            .values()
+            .map(|proto_meta| {
+                let name = proto_meta.name();
+                let proto_msg = ProtocolMessage::new(&name, proto_meta.support_versions());
+                (name, proto_msg)
+            })
+            .collect::<HashMap<String, ProtocolMessage>>();
+
+        let task = server_select(sub_stream, proto_metas)
+            .and_then(|(mut handle, name, version)| {
+                match version {
+                    Some(version) => {
+                        let mut send_task = event_sender.send(ProtocolEvent::ProtocolOpen {
+                            sub_stream: handle,
+                            proto_name: name,
+                            version,
+                        });
+                        loop {
+                            match send_task.poll() {
+                                Ok(Async::NotReady) => continue,
+                                Ok(Async::Ready(_)) => break,
+                                Err(err) => trace!("stream send back error: {:?}", err),
+                            }
+                        }
+                    }
+                    None => {
+                        // server close the connect
+                        let _ = handle.shutdown()?;
+                        debug!("negotiation to open the protocol [{}] failed", name);
                     }
                 }
                 Ok(())
             })
             .map_err(|err| {
-                trace!("stream protocol identify err: {:?}", err);
+                trace!("stream protocol select err: {:?}", err);
             });
+
         tokio::spawn(task);
     }
 
@@ -247,25 +288,12 @@ where
         match event {
             ProtocolEvent::ProtocolOpen {
                 proto_name,
-                mut sub_stream,
+                sub_stream,
+                version,
             } => {
-                let name = match String::from_utf8(proto_name) {
-                    Ok(name) => name.trim().to_string(),
-                    Err(err) => {
-                        let _ = sub_stream.shutdown();
-                        warn!("Can't read proto name: {}", err);
-                        return;
-                    }
-                };
-                let proto = match self.protocol_configs.get(&name) {
+                let proto = match self.protocol_configs.get(&proto_name) {
                     Some(proto) => proto,
-                    None => {
-                        if let Err(err) = sub_stream.shutdown() {
-                            error!("shutdown err: {}", err);
-                        };
-                        warn!("Can't support proto name: {}", name);
-                        return;
-                    }
+                    None => unreachable!(),
                 };
 
                 let proto_id = proto.id();
@@ -289,6 +317,7 @@ where
                     remote_address: self.remote_address,
                     remote_public_key: self.remote_public_key.clone(),
                     ty: self.ty,
+                    version,
                 });
                 self.next_stream += 1;
 

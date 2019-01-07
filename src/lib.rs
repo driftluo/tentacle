@@ -16,3 +16,5 @@ pub mod substream;
 pub use secio::{PublicKey, SecioKeyPair};
 /// Re-pub some useful structures in yamux
 pub use yamux::{session::SessionType, Session};
+
+mod protocol_select;

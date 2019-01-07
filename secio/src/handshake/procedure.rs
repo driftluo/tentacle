@@ -33,8 +33,8 @@ use crate::{
 /// will expect that we are identified with `local_key`.Any mismatch somewhere will produce a
 /// `SecioError`.
 ///
-/// On success, returns an object that implements the `Sink` and `Stream` trait whose items are
-/// buffers of data, plus the public key of the remote, plus the ephemeral public key used during
+/// On success, returns an object that implements the `AsyncWrite` and `AsyncRead` trait,
+/// plus the public key of the remote, plus the ephemeral public key used during
 /// negotiation.
 pub(in crate::handshake) fn handshake<T>(
     socket: T,
@@ -73,7 +73,8 @@ where
                     let context = match remote_propose {
                         Some(p) => local_context.with_remote(p)?,
                         None => {
-                            let err = io::Error::new(io::ErrorKind::BrokenPipe, "unexpected eof");
+                            let err =
+                                io::Error::new(io::ErrorKind::UnexpectedEof, "unexpected eof");
                             debug!("unexpected eof while waiting for remote's proposition");
                             return Err(err.into());
                         }

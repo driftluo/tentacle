@@ -1,0 +1,6 @@
+namespace P2P.ProtocolSelect;
+
+table ProtocolMessage {
+    name: string;
+    support_versions: [string];
+}
