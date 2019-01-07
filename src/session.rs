@@ -205,21 +205,22 @@ where
 
         let task = client_select(handle, proto_msg)
             .and_then(|(handle, name, version)| {
-                if version.is_some() {
-                    let mut send_task = event_sender.send(ProtocolEvent::ProtocolOpen {
-                        sub_stream: handle,
-                        proto_name: name,
-                        version: version.unwrap(),
-                    });
-                    loop {
-                        match send_task.poll() {
-                            Ok(Async::NotReady) => continue,
-                            Ok(Async::Ready(_)) => break,
-                            Err(err) => trace!("stream send back error: {:?}", err),
+                match version {
+                    Some(version) => {
+                        let mut send_task = event_sender.send(ProtocolEvent::ProtocolOpen {
+                            sub_stream: handle,
+                            proto_name: name,
+                            version,
+                        });
+                        loop {
+                            match send_task.poll() {
+                                Ok(Async::NotReady) => continue,
+                                Ok(Async::Ready(_)) => break,
+                                Err(err) => trace!("stream send back error: {:?}", err),
+                            }
                         }
                     }
-                } else {
-                    debug!("Negotiation to open the protocol {} failed", name);
+                    None => debug!("Negotiation to open the protocol {} failed", name),
                 }
                 Ok(())
             })
@@ -252,23 +253,26 @@ where
 
         let task = server_select(sub_stream, proto_metas)
             .and_then(|(mut handle, name, version)| {
-                if version.is_some() {
-                    let mut send_task = event_sender.send(ProtocolEvent::ProtocolOpen {
-                        sub_stream: handle,
-                        proto_name: name,
-                        version: version.unwrap(),
-                    });
-                    loop {
-                        match send_task.poll() {
-                            Ok(Async::NotReady) => continue,
-                            Ok(Async::Ready(_)) => break,
-                            Err(err) => trace!("stream send back error: {:?}", err),
+                match version {
+                    Some(version) => {
+                        let mut send_task = event_sender.send(ProtocolEvent::ProtocolOpen {
+                            sub_stream: handle,
+                            proto_name: name,
+                            version,
+                        });
+                        loop {
+                            match send_task.poll() {
+                                Ok(Async::NotReady) => continue,
+                                Ok(Async::Ready(_)) => break,
+                                Err(err) => trace!("stream send back error: {:?}", err),
+                            }
                         }
                     }
-                } else {
-                    // server close the connect
-                    let _ = handle.shutdown()?;
-                    debug!("negotiation to open the protocol [{}] failed", name);
+                    None => {
+                        // server close the connect
+                        let _ = handle.shutdown()?;
+                        debug!("negotiation to open the protocol [{}] failed", name);
+                    }
                 }
                 Ok(())
             })

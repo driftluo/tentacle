@@ -49,20 +49,21 @@ impl ProtocolMessage {
 
     pub fn decode(data: &[u8]) -> Result<Self, ()> {
         let fbs_protocol_message = get_root::<FBSProtocolMessage>(data);
-        if fbs_protocol_message.name().is_none()
-            || fbs_protocol_message.support_versions().is_none()
-        {
-            Err(())
-        } else {
-            let mut versions: Vec<String> = Vec::new();
-            let fbs_versions = fbs_protocol_message.support_versions().unwrap();
-            for i in 0..fbs_versions.len() {
-                versions.push(fbs_versions.get(i).to_owned());
+        match (
+            fbs_protocol_message.name(),
+            fbs_protocol_message.support_versions(),
+        ) {
+            (Some(name), Some(fbs_versions)) => {
+                let mut versions: Vec<String> = Vec::new();
+                for i in 0..fbs_versions.len() {
+                    versions.push(fbs_versions.get(i).to_owned());
+                }
+                Ok(ProtocolMessage {
+                    name: name.to_owned(),
+                    support_versions: versions,
+                })
             }
-            Ok(ProtocolMessage {
-                name: fbs_protocol_message.name().unwrap().to_owned(),
-                support_versions: versions,
-            })
+            _ => Err(()),
         }
     }
 }
@@ -177,15 +178,10 @@ pub(crate) fn server_select<T: AsyncWrite + AsyncRead + Send>(
 /// Choose the highest version of the two sides
 #[inline]
 fn select_version<T: Ord + Clone>(local: &[T], remote: &[T]) -> Vec<T> {
-    let mut remote_index = if remote.is_empty() {
-        return Vec::new();
+    let (mut remote_index, mut local_index) = if !remote.is_empty() && !local.is_empty() {
+        (remote.len() - 1, local.len() - 1)
     } else {
-        remote.len() - 1
-    };
-    let mut local_index = if local.is_empty() {
         return Vec::new();
-    } else {
-        local.len() - 1
     };
 
     loop {
