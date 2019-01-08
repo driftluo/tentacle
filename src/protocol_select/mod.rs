@@ -84,9 +84,9 @@ pub(crate) fn client_select<T: AsyncWrite + AsyncRead + Send>(
 ) -> impl Future<Item = (T, String, Option<String>), Error = io::Error> {
     let socket = Framed::new(handle, LengthDelimitedCodec::new());
     future::ok::<_, io::Error>(proto_info)
-        .and_then(|message| {
+        .and_then(|proto_info| {
             socket
-                .send(Bytes::from(message.encode()))
+                .send(Bytes::from(proto_info.encode()))
                 .from_err()
                 .map(|socket| socket)
         })
@@ -97,10 +97,10 @@ pub(crate) fn client_select<T: AsyncWrite + AsyncRead + Send>(
                     let _ = socket.into_inner().shutdown();
                     e
                 })
-                .and_then(|(raw_remote_message, socket)| {
-                    let message = match raw_remote_message {
-                        Some(msg) => match ProtocolInfo::decode(&msg) {
-                            Ok(msg) => msg,
+                .and_then(|(raw_remote_info, socket)| {
+                    let remote_info = match raw_remote_info {
+                        Some(info) => match ProtocolInfo::decode(&info) {
+                            Ok(info) => info,
                             Err(_) => return Err(io::ErrorKind::InvalidData.into()),
                         },
                         None => {
@@ -112,14 +112,14 @@ pub(crate) fn client_select<T: AsyncWrite + AsyncRead + Send>(
                             return Err(err);
                         }
                     };
-                    Ok((message, socket))
+                    Ok((remote_info, socket))
                 })
         })
-        .and_then(|(mut message, socket)| {
+        .and_then(|(mut remote_info, socket)| {
             Ok((
                 socket.into_inner(),
-                message.name,
-                message.support_versions.pop(),
+                remote_info.name,
+                remote_info.support_versions.pop(),
             ))
         })
 }
@@ -134,17 +134,17 @@ pub(crate) fn server_select<T: AsyncWrite + AsyncRead + Send>(
 ) -> impl Future<Item = (T, String, Option<String>), Error = io::Error> {
     let socket = Framed::new(handle, LengthDelimitedCodec::new());
     future::ok::<_, io::Error>(proto_infos)
-        .and_then(|mut messages| {
+        .and_then(|mut proto_infos| {
             socket
                 .into_future()
                 .map_err(|(e, socket)| {
                     let _ = socket.into_inner().shutdown();
                     e
                 })
-                .and_then(move |(raw_remote_message, socket)| {
-                    let remote_message = match raw_remote_message {
-                        Some(msg) => match ProtocolInfo::decode(&msg) {
-                            Ok(msg) => msg,
+                .and_then(move |(raw_remote_info, socket)| {
+                    let remote_info = match raw_remote_info {
+                        Some(info) => match ProtocolInfo::decode(&info) {
+                            Ok(info) => info,
                             Err(_) => return Err(io::ErrorKind::InvalidData.into()),
                         },
                         None => {
@@ -156,14 +156,14 @@ pub(crate) fn server_select<T: AsyncWrite + AsyncRead + Send>(
                             return Err(err);
                         }
                     };
-                    let version = match messages.remove(&remote_message.name) {
-                        Some(local_message) => select_version(
-                            &local_message.support_versions,
-                            &remote_message.support_versions,
+                    let version = match proto_infos.remove(&remote_info.name) {
+                        Some(local_info) => select_version(
+                            &local_info.support_versions,
+                            &remote_info.support_versions,
                         ),
                         None => Vec::new(),
                     };
-                    Ok((socket, remote_message.name, version))
+                    Ok((socket, remote_info.name, version))
                 })
         })
         .and_then(|(socket, name, version)| {

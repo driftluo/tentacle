@@ -201,9 +201,9 @@ where
             .get(proto_name)
             .unwrap()
             .support_versions();
-        let proto_msg = ProtocolInfo::new(&proto_name, versions);
+        let proto_info = ProtocolInfo::new(&proto_name, versions);
 
-        let task = client_select(handle, proto_msg)
+        let task = client_select(handle, proto_info)
             .and_then(|(handle, name, version)| {
                 match version {
                     Some(version) => {
