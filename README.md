@@ -1,6 +1,7 @@
 # P2P
 
 [![Build Status](https://api.travis-ci.org/driftluo/p2p.svg?branch=master)](https://travis-ci.org/driftluo/p2p)
+![image](https://img.shields.io/badge/rustc-1.31.1-blue.svg)
 
 ## Overview
 
