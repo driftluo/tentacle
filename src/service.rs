@@ -15,6 +15,7 @@ use tokio::{
 };
 use yamux::session::SessionType;
 
+use crate::protocol_select::ProtocolInfo;
 use crate::session::{ProtocolId, ProtocolMeta, Session, SessionEvent, SessionId, SessionMeta};
 
 /// Service handle
@@ -118,7 +119,7 @@ impl Default for Message {
 #[derive(Clone)]
 pub struct ServiceContext {
     service_task_sender: mpsc::Sender<ServiceTask>,
-    proto_message: Arc<HashMap<ProtocolId, String>>,
+    proto_infos: Arc<HashMap<ProtocolId, ProtocolInfo>>,
     listens: Vec<SocketAddr>,
 }
 
@@ -126,11 +127,11 @@ impl ServiceContext {
     /// New
     fn new(
         service_task_sender: mpsc::Sender<ServiceTask>,
-        proto_message: HashMap<ProtocolId, String>,
+        proto_infos: HashMap<ProtocolId, ProtocolInfo>,
     ) -> Self {
         ServiceContext {
             service_task_sender,
-            proto_message: Arc::new(proto_message),
+            proto_infos: Arc::new(proto_infos),
             listens: Vec::new(),
         }
     }
@@ -172,8 +173,8 @@ impl ServiceContext {
 
     /// Get service protocol message, Map(ID, Name), but can't modify
     #[inline]
-    pub fn protocols(&self) -> &Arc<HashMap<ProtocolId, String>> {
-        &self.proto_message
+    pub fn protocols(&self) -> &Arc<HashMap<ProtocolId, ProtocolInfo>> {
+        &self.proto_infos
     }
 
     /// Get service listen address list
@@ -327,10 +328,13 @@ where
     ) -> Self {
         let (session_event_sender, session_event_receiver) = mpsc::channel(256);
         let (service_task_sender, service_task_receiver) = mpsc::channel(256);
-        let protocol_message = protocol_configs
+        let proto_infos = protocol_configs
             .values()
-            .map(|meta| (meta.id(), meta.name()))
-            .collect::<HashMap<ProtocolId, String>>();
+            .map(|meta| {
+                let proto_info = ProtocolInfo::new(&meta.name(), meta.support_versions());
+                (meta.id(), proto_info)
+            })
+            .collect();
 
         Service {
             protocol_configs,
@@ -345,7 +349,7 @@ where
             next_session: 0,
             session_event_sender,
             session_event_receiver,
-            service_context: ServiceContext::new(service_task_sender, protocol_message),
+            service_context: ServiceContext::new(service_task_sender, proto_infos),
             service_task_receiver,
         }
     }

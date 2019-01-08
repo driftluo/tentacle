@@ -20,15 +20,15 @@ pub mod protocol_select {
   extern crate flatbuffers;
   use self::flatbuffers::EndianScalar;
 
-pub enum ProtocolMessageOffset {}
+pub enum ProtocolInfoOffset {}
 #[derive(Copy, Clone, Debug, PartialEq)]
 
-pub struct ProtocolMessage<'a> {
+pub struct ProtocolInfo<'a> {
   pub _tab: flatbuffers::Table<'a>,
 }
 
-impl<'a> flatbuffers::Follow<'a> for ProtocolMessage<'a> {
-    type Inner = ProtocolMessage<'a>;
+impl<'a> flatbuffers::Follow<'a> for ProtocolInfo<'a> {
+    type Inner = ProtocolInfo<'a>;
     #[inline]
     fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
         Self {
@@ -37,18 +37,18 @@ impl<'a> flatbuffers::Follow<'a> for ProtocolMessage<'a> {
     }
 }
 
-impl<'a> ProtocolMessage<'a> {
+impl<'a> ProtocolInfo<'a> {
     #[inline]
     pub fn init_from_table(table: flatbuffers::Table<'a>) -> Self {
-        ProtocolMessage {
+        ProtocolInfo {
             _tab: table,
         }
     }
     #[allow(unused_mut)]
     pub fn create<'bldr: 'args, 'args: 'mut_bldr, 'mut_bldr>(
         _fbb: &'mut_bldr mut flatbuffers::FlatBufferBuilder<'bldr>,
-        args: &'args ProtocolMessageArgs<'args>) -> flatbuffers::WIPOffset<ProtocolMessage<'bldr>> {
-      let mut builder = ProtocolMessageBuilder::new(_fbb);
+        args: &'args ProtocolInfoArgs<'args>) -> flatbuffers::WIPOffset<ProtocolInfo<'bldr>> {
+      let mut builder = ProtocolInfoBuilder::new(_fbb);
       if let Some(x) = args.support_versions { builder.add_support_versions(x); }
       if let Some(x) = args.name { builder.add_name(x); }
       builder.finish()
@@ -59,50 +59,50 @@ impl<'a> ProtocolMessage<'a> {
 
   #[inline]
   pub fn name(&self) -> Option<&'a str> {
-    self._tab.get::<flatbuffers::ForwardsUOffset<&str>>(ProtocolMessage::VT_NAME, None)
+    self._tab.get::<flatbuffers::ForwardsUOffset<&str>>(ProtocolInfo::VT_NAME, None)
   }
   #[inline]
   pub fn support_versions(&self) -> Option<flatbuffers::Vector<flatbuffers::ForwardsUOffset<&'a str>>> {
-    self._tab.get::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<flatbuffers::ForwardsUOffset<&'a str>>>>(ProtocolMessage::VT_SUPPORT_VERSIONS, None)
+    self._tab.get::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<flatbuffers::ForwardsUOffset<&'a str>>>>(ProtocolInfo::VT_SUPPORT_VERSIONS, None)
   }
 }
 
-pub struct ProtocolMessageArgs<'a> {
+pub struct ProtocolInfoArgs<'a> {
     pub name: Option<flatbuffers::WIPOffset<&'a  str>>,
     pub support_versions: Option<flatbuffers::WIPOffset<flatbuffers::Vector<'a , flatbuffers::ForwardsUOffset<&'a  str>>>>,
 }
-impl<'a> Default for ProtocolMessageArgs<'a> {
+impl<'a> Default for ProtocolInfoArgs<'a> {
     #[inline]
     fn default() -> Self {
-        ProtocolMessageArgs {
+        ProtocolInfoArgs {
             name: None,
             support_versions: None,
         }
     }
 }
-pub struct ProtocolMessageBuilder<'a: 'b, 'b> {
+pub struct ProtocolInfoBuilder<'a: 'b, 'b> {
   fbb_: &'b mut flatbuffers::FlatBufferBuilder<'a>,
   start_: flatbuffers::WIPOffset<flatbuffers::TableUnfinishedWIPOffset>,
 }
-impl<'a: 'b, 'b> ProtocolMessageBuilder<'a, 'b> {
+impl<'a: 'b, 'b> ProtocolInfoBuilder<'a, 'b> {
   #[inline]
   pub fn add_name(&mut self, name: flatbuffers::WIPOffset<&'b  str>) {
-    self.fbb_.push_slot_always::<flatbuffers::WIPOffset<_>>(ProtocolMessage::VT_NAME, name);
+    self.fbb_.push_slot_always::<flatbuffers::WIPOffset<_>>(ProtocolInfo::VT_NAME, name);
   }
   #[inline]
   pub fn add_support_versions(&mut self, support_versions: flatbuffers::WIPOffset<flatbuffers::Vector<'b , flatbuffers::ForwardsUOffset<&'b  str>>>) {
-    self.fbb_.push_slot_always::<flatbuffers::WIPOffset<_>>(ProtocolMessage::VT_SUPPORT_VERSIONS, support_versions);
+    self.fbb_.push_slot_always::<flatbuffers::WIPOffset<_>>(ProtocolInfo::VT_SUPPORT_VERSIONS, support_versions);
   }
   #[inline]
-  pub fn new(_fbb: &'b mut flatbuffers::FlatBufferBuilder<'a>) -> ProtocolMessageBuilder<'a, 'b> {
+  pub fn new(_fbb: &'b mut flatbuffers::FlatBufferBuilder<'a>) -> ProtocolInfoBuilder<'a, 'b> {
     let start = _fbb.start_table();
-    ProtocolMessageBuilder {
+    ProtocolInfoBuilder {
       fbb_: _fbb,
       start_: start,
     }
   }
   #[inline]
-  pub fn finish(self) -> flatbuffers::WIPOffset<ProtocolMessage<'a>> {
+  pub fn finish(self) -> flatbuffers::WIPOffset<ProtocolInfo<'a>> {
     let o = self.fbb_.end_table(self.start_);
     flatbuffers::WIPOffset::new(o.value())
   }
