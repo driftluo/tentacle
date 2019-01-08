@@ -6,6 +6,7 @@ before_script:
   - rustup component add clippy
 script:
   - RUSTFLAGS='-F warnings' cargo build --all
+  - cargo build --examples --all
 stages:
   - Check
   - Test
