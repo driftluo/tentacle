@@ -100,7 +100,7 @@ pub struct Message {
     /// This field is used to indicate from
     /// which session the message was received,
     /// but this field is useless when sending a message.
-    pub id: SessionId,
+    pub session_id: SessionId,
     /// Protocol id
     pub proto_id: ProtocolId,
     /// Data
@@ -110,7 +110,7 @@ pub struct Message {
 impl Default for Message {
     fn default() -> Self {
         Message {
-            id: 0,
+            session_id: 0,
             proto_id: 0,
             data: Vec::new(),
         }
@@ -148,14 +148,14 @@ impl ServiceContext {
 
     /// Disconnect a connection
     #[inline]
-    pub fn disconnect(&mut self, id: SessionId) {
-        self.send(ServiceTask::Disconnect { id })
+    pub fn disconnect(&mut self, session_id: SessionId) {
+        self.send(ServiceTask::Disconnect { session_id })
     }
 
     /// Send message
     #[inline]
-    pub fn send_message(&mut self, ids: Option<Vec<SessionId>>, message: Message) {
-        self.send(ServiceTask::ProtocolMessage { ids, message })
+    pub fn send_message(&mut self, session_ids: Option<Vec<SessionId>>, message: Message) {
+        self.send(ServiceTask::ProtocolMessage { session_ids, message })
     }
 
     /// Send a future task
@@ -243,7 +243,7 @@ pub enum ServiceTask {
     ProtocolMessage {
         /// Specify which sessions to send to,
         /// None means broadcast
-        ids: Option<Vec<SessionId>>,
+        session_ids: Option<Vec<SessionId>>,
         /// data
         message: Message,
     },
@@ -257,7 +257,7 @@ pub enum ServiceTask {
     /// Session-level notify task
     ProtocolSessionNotify {
         /// Session id
-        id: SessionId,
+        session_id: SessionId,
         /// Protocol id
         proto_id: ProtocolId,
         /// Notify token
@@ -271,7 +271,7 @@ pub enum ServiceTask {
     /// Disconnect task
     Disconnect {
         /// Session id
-        id: SessionId,
+        session_id: SessionId,
     },
     /// Dial task
     Dial {
@@ -388,9 +388,9 @@ where
     /// Valid after Service starts
     #[inline]
     pub fn send_message(&mut self, message: Message) {
-        if let Some(sender) = self.sessions.get_mut(&message.id) {
+        if let Some(sender) = self.sessions.get_mut(&message.session_id) {
             let _ = sender.try_send(SessionEvent::ProtocolMessage {
-                id: message.id,
+                id: message.session_id,
                 proto_id: message.proto_id,
                 data: message.data.into(),
             });
@@ -679,10 +679,10 @@ where
 
     /// Processing the received data
     #[inline]
-    fn protocol_message(&mut self, id: SessionId, proto_id: ProtocolId, data: &bytes::Bytes) {
+    fn protocol_message(&mut self, session_id: SessionId, proto_id: ProtocolId, data: &bytes::Bytes) {
         debug!(
             "service receive session [{}] proto [{}] data: {:?}",
-            id, proto_id, data
+            session_id, proto_id, data
         );
 
         // Global proto handle processing flow
@@ -690,7 +690,7 @@ where
             handle.received(
                 &mut self.service_context,
                 Message {
-                    id,
+                    session_id,
                     proto_id,
                     data: data.to_vec(),
                 },
@@ -698,12 +698,12 @@ where
         }
 
         // Session proto handle processing flow
-        if let Some(handles) = self.proto_session_handles.get_mut(&id) {
+        if let Some(handles) = self.proto_session_handles.get_mut(&session_id) {
             if let Some(Some(handle)) = handles.get_mut(&proto_id) {
                 handle.received(
                     &mut self.service_context,
                     Message {
-                        id,
+                        session_id,
                         proto_id,
                         data: data.to_vec(),
                     },
@@ -714,18 +714,18 @@ where
 
     /// Protocol stream is closed, clean up data
     #[inline]
-    fn protocol_close(&mut self, id: SessionId, proto_id: ProtocolId) {
-        debug!("service session [{}] proto [{}] close", id, proto_id);
+    fn protocol_close(&mut self, session_id: SessionId, proto_id: ProtocolId) {
+        debug!("service session [{}] proto [{}] close", session_id, proto_id);
 
         // Global proto handle processing flow
         if let Some(handle) = self.proto_handles.get_mut(&proto_id) {
-            handle.disconnected(&mut self.service_context, id);
+            handle.disconnected(&mut self.service_context, session_id);
         }
 
         // Session proto handle processing flow
-        if let Some(handles) = self.proto_session_handles.get_mut(&id) {
+        if let Some(handles) = self.proto_session_handles.get_mut(&session_id) {
             if let Some(Some(mut handle)) = handles.remove(&proto_id) {
-                handle.disconnected(&mut self.service_context, id);
+                handle.disconnected(&mut self.service_context, session_id);
             }
         }
     }
@@ -776,14 +776,14 @@ where
     /// Handling various tasks sent externally
     fn handle_service_task(&mut self, event: ServiceTask) {
         match event {
-            ServiceTask::ProtocolMessage { ids, message } => self.filter_broadcast(ids, message),
+            ServiceTask::ProtocolMessage { session_ids, message } => self.filter_broadcast(session_ids, message),
             ServiceTask::Dial { address } => {
                 if !self.dial.iter().any(|(addr, _)| addr == &address) {
                     let dial = TcpStream::connect(&address);
                     self.dial.push((address, dial));
                 }
             }
-            ServiceTask::Disconnect { id } => self.session_close(id),
+            ServiceTask::Disconnect { session_id } => self.session_close(session_id),
             ServiceTask::FutureTask { task } => {
                 tokio::spawn(task);
             }
@@ -793,11 +793,11 @@ where
                 }
             }
             ServiceTask::ProtocolSessionNotify {
-                id,
+                session_id,
                 proto_id,
                 token,
             } => {
-                if let Some(handles) = self.proto_session_handles.get_mut(&id) {
+                if let Some(handles) = self.proto_session_handles.get_mut(&session_id) {
                     if let Some(Some(handle)) = handles.get_mut(&proto_id) {
                         handle.notify(&mut self.service_context, token);
                     }

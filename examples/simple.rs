@@ -102,9 +102,9 @@ impl ProtocolHandle for PHandle {
         let interval_task = Interval::new(Instant::now(), Duration::from_secs(5))
             .for_each(move |_| {
                 let _ = interval_sender.try_send(ServiceTask::ProtocolMessage {
-                    ids: Some(vec![session_id]),
+                    session_ids: Some(vec![session_id]),
                     message: Message {
-                        id: 0,
+                        session_id: 0,
                         proto_id: 1,
                         data: b"I am a interval message".to_vec(),
                     },
@@ -142,7 +142,7 @@ impl ProtocolHandle for PHandle {
         self.count += 1;
         info!(
             "received from [{}]: proto [{}] data {:?}, message count: {}",
-            data.id,
+            data.session_id,
             data.proto_id,
             str::from_utf8(&data.data).unwrap(),
             self.count
@@ -168,9 +168,9 @@ impl ServiceHandle for SHandle {
             let delay_task = Delay::new(Instant::now() + Duration::from_secs(3))
                 .and_then(move |_| {
                     let _ = delay_sender.try_send(ServiceTask::ProtocolMessage {
-                        ids: None,
+                        session_ids: None,
                         message: Message {
-                            id,
+                            session_id: id,
                             proto_id: 0,
                             data: b"I am a delayed message".to_vec(),
                         },

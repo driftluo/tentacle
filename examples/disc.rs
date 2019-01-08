@@ -215,10 +215,10 @@ impl ProtocolHandle for DiscoveryProtocol {
     fn received(&mut self, _env: &mut ServiceContext, data: Message) {
         debug!("[received message]: length={}", data.data.len());
         self.sessions
-            .get_mut(&data.id)
+            .get_mut(&data.session_id)
             .unwrap()
             .push_data(data.data.clone());
-        if let Some(ref mut sender) = self.discovery_senders.get_mut(&data.id) {
+        if let Some(ref mut sender) = self.discovery_senders.get_mut(&data.session_id) {
             if let Err(err) = sender.try_send(data.data) {
                 if err.is_full() {
                     warn!("channel is full");
