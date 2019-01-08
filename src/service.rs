@@ -13,6 +13,7 @@ use tokio::net::{
     tcp::{ConnectFuture, Incoming},
     TcpListener, TcpStream,
 };
+use tokio::timer::{Error, Interval};
 use tokio::{
     codec::{Decoder, Encoder},
     prelude::{AsyncRead, AsyncWrite, FutureExt},
@@ -155,7 +156,10 @@ impl ServiceContext {
     /// Send message
     #[inline]
     pub fn send_message(&mut self, session_ids: Option<Vec<SessionId>>, message: Message) {
-        self.send(ServiceTask::ProtocolMessage { session_ids, message })
+        self.send(ServiceTask::ProtocolMessage {
+            session_ids,
+            message,
+        })
     }
 
     /// Send a future task
@@ -167,6 +171,22 @@ impl ServiceContext {
         self.send(ServiceTask::FutureTask {
             task: Box::new(task),
         })
+    }
+
+    /// Set a notify token
+    pub fn set_notify(&mut self, proto_id: ProtocolId, interval: Duration, token: u64) {
+        let mut interval_sender = self.sender().clone();
+        let fut = Interval::new(Instant::now(), interval)
+            .for_each(move |_| {
+                interval_sender
+                    .try_send(ServiceTask::ProtocolNotify { proto_id, token })
+                    .map_err(|err| {
+                        debug!("interval error: {:?}", err);
+                        Error::shutdown()
+                    })
+            })
+            .map_err(|err| warn!("{}", err));
+        self.future_task(fut);
     }
 
     /// Get the internal channel sender side handle
@@ -679,7 +699,12 @@ where
 
     /// Processing the received data
     #[inline]
-    fn protocol_message(&mut self, session_id: SessionId, proto_id: ProtocolId, data: &bytes::Bytes) {
+    fn protocol_message(
+        &mut self,
+        session_id: SessionId,
+        proto_id: ProtocolId,
+        data: &bytes::Bytes,
+    ) {
         debug!(
             "service receive session [{}] proto [{}] data: {:?}",
             session_id, proto_id, data
@@ -715,7 +740,10 @@ where
     /// Protocol stream is closed, clean up data
     #[inline]
     fn protocol_close(&mut self, session_id: SessionId, proto_id: ProtocolId) {
-        debug!("service session [{}] proto [{}] close", session_id, proto_id);
+        debug!(
+            "service session [{}] proto [{}] close",
+            session_id, proto_id
+        );
 
         // Global proto handle processing flow
         if let Some(handle) = self.proto_handles.get_mut(&proto_id) {
@@ -776,7 +804,10 @@ where
     /// Handling various tasks sent externally
     fn handle_service_task(&mut self, event: ServiceTask) {
         match event {
-            ServiceTask::ProtocolMessage { session_ids, message } => self.filter_broadcast(session_ids, message),
+            ServiceTask::ProtocolMessage {
+                session_ids,
+                message,
+            } => self.filter_broadcast(session_ids, message),
             ServiceTask::Dial { address } => {
                 if !self.dial.iter().any(|(addr, _)| addr == &address) {
                     let dial = TcpStream::connect(&address);

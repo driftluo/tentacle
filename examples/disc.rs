@@ -6,7 +6,7 @@ use std::{
     collections::HashMap,
     net::{IpAddr, Ipv4Addr, SocketAddr},
     str,
-    time::{Duration, Instant},
+    time::Duration,
 };
 
 use futures::{
@@ -14,11 +14,10 @@ use futures::{
     sync::mpsc::{channel, Sender},
 };
 use tokio::codec::length_delimited::LengthDelimitedCodec;
-use tokio::timer::{Error, Interval};
 
 use p2p::{
     builder::ServiceBuilder,
-    service::{Message, ProtocolHandle, ServiceContext, ServiceEvent, ServiceHandle, ServiceTask},
+    service::{Message, ProtocolHandle, ServiceContext, ServiceEvent, ServiceHandle},
     session::{ProtocolId, ProtocolMeta, SessionId},
     SessionType,
 };
@@ -125,20 +124,9 @@ impl ProtocolHandle for DiscoveryProtocol {
     fn init(&mut self, control: &mut ServiceContext) {
         debug!("protocol [discovery({})]: init", self.id);
 
-        let mut interval_sender = control.sender().clone();
-        let proto_id = self.id();
-        let interval_seconds = 5;
-        debug!("Setup interval {} seconds", interval_seconds);
-        let interval_task = Interval::new(Instant::now(), Duration::from_secs(interval_seconds))
-            .for_each(move |_| {
-                interval_sender
-                    .try_send(ServiceTask::ProtocolNotify { proto_id, token: 3 })
-                    .map_err(|err| {
-                        warn!("interval error: {:?}", err);
-                        Error::shutdown()
-                    })
-            })
-            .map_err(|err| warn!("{}", err));
+        let interval = Duration::from_secs(5);
+        debug!("Setup interval {:?}", interval);
+        control.set_notify(self.id(), interval, 3);
         let discovery_task = self
             .discovery
             .take()
@@ -159,7 +147,6 @@ impl ProtocolHandle for DiscoveryProtocol {
                     })
             })
             .unwrap();
-        control.future_task(interval_task);
         control.future_task(discovery_task);
     }
 
