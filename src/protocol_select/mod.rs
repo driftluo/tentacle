@@ -1,5 +1,5 @@
 use crate::protocol_select::protocol_select_generated::p2p::protocol_select::{
-    ProtocolMessage as FBSProtocolMessage, ProtocolMessageBuilder,
+    ProtocolInfo as FBSProtocolInfo, ProtocolInfoBuilder,
 };
 
 use bytes::Bytes;
@@ -14,20 +14,25 @@ use tokio::prelude::{AsyncRead, AsyncWrite};
 #[allow(clippy::all)]
 mod protocol_select_generated;
 
+/// Protocol Info
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
-pub(crate) struct ProtocolMessage {
+pub struct ProtocolInfo {
+    /// Protocol name
     pub name: String,
+    /// Support version
     pub support_versions: Vec<String>,
 }
 
-impl ProtocolMessage {
+impl ProtocolInfo {
+    /// new
     pub fn new(name: &str, support_versions: Vec<String>) -> Self {
-        ProtocolMessage {
+        ProtocolInfo {
             name: name.to_owned(),
             support_versions,
         }
     }
 
+    /// Encode to flatbuffer
     pub fn encode(&self) -> Vec<u8> {
         let mut fbb = FlatBufferBuilder::new();
         let name = fbb.create_string(&self.name);
@@ -38,7 +43,7 @@ impl ProtocolMessage {
             .collect::<Vec<_>>();
         let versions = fbb.create_vector(versions);
 
-        let mut builder = ProtocolMessageBuilder::new(&mut fbb);
+        let mut builder = ProtocolInfoBuilder::new(&mut fbb);
         builder.add_name(name);
         builder.add_support_versions(versions);
         let data = builder.finish();
@@ -47,18 +52,19 @@ impl ProtocolMessage {
         fbb.finished_data().to_vec()
     }
 
+    /// Decode from flatbuffer
     pub fn decode(data: &[u8]) -> Result<Self, ()> {
-        let fbs_protocol_message = get_root::<FBSProtocolMessage>(data);
+        let fbs_protocol_info = get_root::<FBSProtocolInfo>(data);
         match (
-            fbs_protocol_message.name(),
-            fbs_protocol_message.support_versions(),
+            fbs_protocol_info.name(),
+            fbs_protocol_info.support_versions(),
         ) {
             (Some(name), Some(fbs_versions)) => {
                 let mut versions: Vec<String> = Vec::new();
                 for i in 0..fbs_versions.len() {
                     versions.push(fbs_versions.get(i).to_owned());
                 }
-                Ok(ProtocolMessage {
+                Ok(ProtocolInfo {
                     name: name.to_owned(),
                     support_versions: versions,
                 })
@@ -74,10 +80,10 @@ impl ProtocolMessage {
 /// plus the protocol name, plus the version option.
 pub(crate) fn client_select<T: AsyncWrite + AsyncRead + Send>(
     handle: T,
-    message: ProtocolMessage,
+    proto_info: ProtocolInfo,
 ) -> impl Future<Item = (T, String, Option<String>), Error = io::Error> {
     let socket = Framed::new(handle, LengthDelimitedCodec::new());
-    future::ok::<_, io::Error>(message)
+    future::ok::<_, io::Error>(proto_info)
         .and_then(|message| {
             socket
                 .send(Bytes::from(message.encode()))
@@ -93,7 +99,7 @@ pub(crate) fn client_select<T: AsyncWrite + AsyncRead + Send>(
                 })
                 .and_then(|(raw_remote_message, socket)| {
                     let message = match raw_remote_message {
-                        Some(msg) => match ProtocolMessage::decode(&msg) {
+                        Some(msg) => match ProtocolInfo::decode(&msg) {
                             Ok(msg) => msg,
                             Err(_) => return Err(io::ErrorKind::InvalidData.into()),
                         },
@@ -124,10 +130,10 @@ pub(crate) fn client_select<T: AsyncWrite + AsyncRead + Send>(
 /// plus the protocol name, plus the version option.
 pub(crate) fn server_select<T: AsyncWrite + AsyncRead + Send>(
     handle: T,
-    messages: HashMap<String, ProtocolMessage>,
+    proto_infos: HashMap<String, ProtocolInfo>,
 ) -> impl Future<Item = (T, String, Option<String>), Error = io::Error> {
     let socket = Framed::new(handle, LengthDelimitedCodec::new());
-    future::ok::<_, io::Error>(messages)
+    future::ok::<_, io::Error>(proto_infos)
         .and_then(|mut messages| {
             socket
                 .into_future()
@@ -137,7 +143,7 @@ pub(crate) fn server_select<T: AsyncWrite + AsyncRead + Send>(
                 })
                 .and_then(move |(raw_remote_message, socket)| {
                     let remote_message = match raw_remote_message {
-                        Some(msg) => match ProtocolMessage::decode(&msg) {
+                        Some(msg) => match ProtocolInfo::decode(&msg) {
                             Ok(msg) => msg,
                             Err(_) => return Err(io::ErrorKind::InvalidData.into()),
                         },
@@ -163,7 +169,7 @@ pub(crate) fn server_select<T: AsyncWrite + AsyncRead + Send>(
         .and_then(|(socket, name, version)| {
             socket
                 .send(Bytes::from(
-                    ProtocolMessage {
+                    ProtocolInfo {
                         name: name.clone(),
                         support_versions: version.clone(),
                     }
@@ -207,19 +213,19 @@ fn select_version<T: Ord + Clone>(local: &[T], remote: &[T]) -> Vec<T> {
 
 #[cfg(test)]
 mod tests {
-    use super::{client_select, select_version, server_select, ProtocolMessage};
+    use super::{client_select, select_version, server_select, ProtocolInfo};
     use futures::{prelude::*, sync};
     use std::{collections::HashMap, thread};
     use tokio::net::{TcpListener, TcpStream};
 
     #[test]
     fn protocol_message_decode_encode() {
-        let mut message = ProtocolMessage::default();
+        let mut message = ProtocolInfo::default();
         message.name = "test".to_owned();
         message.support_versions = vec!["1.0.0".to_string(), "1.1.1".to_string()];
 
         let byte = message.encode();
-        assert_eq!(message, ProtocolMessage::decode(&byte).unwrap())
+        assert_eq!(message, ProtocolInfo::decode(&byte).unwrap())
     }
 
     #[test]
@@ -256,7 +262,7 @@ mod tests {
             .incoming()
             .into_future()
             .and_then(move |(connect, _)| {
-                let mut message = ProtocolMessage::default();
+                let mut message = ProtocolInfo::default();
                 message.name = "test".to_owned();
                 message.support_versions = server;
                 let mut messages = HashMap::new();
@@ -275,7 +281,7 @@ mod tests {
         let (sender, receiver_2) = sync::oneshot::channel::<Option<String>>();
         let client = TcpStream::connect(&listener_addr)
             .and_then(move |connect| {
-                let mut message = ProtocolMessage::default();
+                let mut message = ProtocolInfo::default();
                 message.name = "test".to_owned();
                 message.support_versions = client;
                 let task = client_select(connect, message)

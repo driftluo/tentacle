@@ -8,7 +8,7 @@ use tokio::codec::{Decoder, Encoder, Framed};
 use tokio::prelude::{AsyncRead, AsyncWrite};
 use yamux::{session::SessionType, Config, Session as YamuxSession, StreamHandle};
 
-use crate::protocol_select::{client_select, server_select, ProtocolMessage};
+use crate::protocol_select::{client_select, server_select, ProtocolInfo};
 use crate::service::ProtocolHandle;
 use crate::substream::{ProtocolEvent, SubStream};
 
@@ -201,7 +201,7 @@ where
             .get(proto_name)
             .unwrap()
             .support_versions();
-        let proto_msg = ProtocolMessage::new(&proto_name, versions);
+        let proto_msg = ProtocolInfo::new(&proto_name, versions);
 
         let task = client_select(handle, proto_msg)
             .and_then(|(handle, name, version)| {
@@ -246,10 +246,10 @@ where
             .values()
             .map(|proto_meta| {
                 let name = proto_meta.name();
-                let proto_msg = ProtocolMessage::new(&name, proto_meta.support_versions());
-                (name, proto_msg)
+                let proto_info = ProtocolInfo::new(&name, proto_meta.support_versions());
+                (name, proto_info)
             })
-            .collect::<HashMap<String, ProtocolMessage>>();
+            .collect();
 
         let task = server_select(sub_stream, proto_metas)
             .and_then(|(mut handle, name, version)| {
