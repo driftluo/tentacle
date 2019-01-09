@@ -151,12 +151,16 @@ impl SubstreamValue {
     }
 
     pub(crate) fn check_timer(&mut self) -> Result<(), tokio::timer::Error> {
-        match self.timer_future.poll()? {
-            Async::Ready(Some(_announce_at)) => {
-                self.announce = true;
+        loop {
+            match self.timer_future.poll()? {
+                Async::Ready(Some(_announce_at)) => {
+                    self.announce = true;
+                }
+                Async::Ready(None) => unreachable!(),
+                Async::NotReady => {
+                    break;
+                }
             }
-            Async::Ready(None) => unreachable!(),
-            Async::NotReady => {}
         }
         Ok(())
     }
