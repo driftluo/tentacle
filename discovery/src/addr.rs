@@ -90,6 +90,10 @@ impl From<SocketAddr> for RawAddr {
 
 impl RawAddr {
     pub fn socket_addr(&self) -> SocketAddr {
+        SocketAddr::new(self.ip(), self.port())
+    }
+
+    pub fn ip(&self) -> IpAddr {
         let mut is_ipv4 = true;
         for (i, value) in PCH_IPV4.iter().enumerate().take(12) {
             if self.0[i] != *value {
@@ -97,7 +101,7 @@ impl RawAddr {
                 break;
             }
         }
-        let ip: IpAddr = if is_ipv4 {
+        if is_ipv4 {
             let mut buf = [0u8; 4];
             buf.copy_from_slice(&self.0[12..16]);
             From::from(buf)
@@ -105,9 +109,11 @@ impl RawAddr {
             let mut buf = [0u8; 16];
             buf.copy_from_slice(&self.0[0..16]);
             From::from(buf)
-        };
-        let port = 0x100 * u16::from(self.0[16]) + u16::from(self.0[17]);
-        SocketAddr::new(ip, port)
+        }
+    }
+
+    pub fn port(&self) -> u16 {
+        0x100 * u16::from(self.0[16]) + u16::from(self.0[17])
     }
 
     // Copy from std::net::IpAddr::is_global

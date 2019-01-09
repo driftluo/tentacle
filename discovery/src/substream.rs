@@ -135,12 +135,15 @@ impl SubstreamValue {
                 count: MAX_ADDR_TO_SEND as u32,
             });
         }
+        let mut addr_known = AddrKnown::new(max_known);
+        addr_known.insert(RawAddr::from(remote_addr));
+
         SubstreamValue {
             framed_stream: Framed::new(stream, DiscoveryCodec::default()),
             // timer_future: Interval::new_interval(Duration::from_secs(ANNOUNCE_INTERVAL)),
             timer_future: Interval::new_interval(Duration::from_secs(7)),
             pending_messages,
-            addr_known: AddrKnown::new(max_known),
+            addr_known,
             remote_addr,
             announce: false,
             announce_addrs: Vec::new(),
@@ -151,12 +154,16 @@ impl SubstreamValue {
     }
 
     pub(crate) fn check_timer(&mut self) -> Result<(), tokio::timer::Error> {
-        match self.timer_future.poll()? {
-            Async::Ready(Some(_announce_at)) => {
-                self.announce = true;
+        loop {
+            match self.timer_future.poll()? {
+                Async::Ready(Some(_announce_at)) => {
+                    self.announce = true;
+                }
+                Async::Ready(None) => unreachable!(),
+                Async::NotReady => {
+                    break;
+                }
             }
-            Async::Ready(None) => unreachable!(),
-            Async::NotReady => {}
         }
         Ok(())
     }
