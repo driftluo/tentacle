@@ -111,7 +111,7 @@ pub struct SubstreamValue {
     pub(crate) pending_messages: VecDeque<DiscoveryMessage>,
     pub(crate) addr_known: AddrKnown,
     // FIXME: Remote listen address, resolved by id protocol
-    pub(crate) remote_addr: SocketAddr,
+    pub(crate) remote_addr: RemoteAddress,
     pub(crate) announce: bool,
     pub(crate) announce_addrs: Vec<RawAddr>,
     timer_future: Interval,
@@ -126,17 +126,23 @@ impl SubstreamValue {
         stream: StreamHandle,
         max_known: usize,
         remote_addr: SocketAddr,
+        listen_port: Option<u16>,
     ) -> SubstreamValue {
         let mut pending_messages = VecDeque::default();
         debug!("direction: {:?}", direction);
-        if direction == Direction::Outbound {
+        let mut addr_known = AddrKnown::new(max_known);
+        let remote_addr = if direction == Direction::Outbound {
             pending_messages.push_back(DiscoveryMessage::GetNodes {
                 version: VERSION,
                 count: MAX_ADDR_TO_SEND as u32,
+                listen_port,
             });
-        }
-        let mut addr_known = AddrKnown::new(max_known);
-        addr_known.insert(RawAddr::from(remote_addr));
+            addr_known.insert(RawAddr::from(remote_addr));
+
+            RemoteAddress::Listen(remote_addr)
+        } else {
+            RemoteAddress::Init(remote_addr)
+        };
 
         SubstreamValue {
             framed_stream: Framed::new(stream, DiscoveryCodec::default()),
@@ -189,15 +195,22 @@ impl SubstreamValue {
         addr_mgr: &mut M,
     ) -> Result<Option<Nodes>, io::Error> {
         match message {
-            DiscoveryMessage::GetNodes { .. } => {
+            DiscoveryMessage::GetNodes { listen_port, .. } => {
                 if self.received_get_nodes {
                     // TODO: misbehavior
-                    if addr_mgr.misbehave(self.remote_addr, 111) < 0 {
+                    if addr_mgr.misbehave(self.remote_addr.into_inner(), 111) < 0 {
                         // TODO: more clear error type
                         warn!("Already received get nodes");
                         return Err(io::ErrorKind::Other.into());
                     }
                 } else {
+                    /// change client random outbound port to client listen port
+                    debug!("listen port: {:?}", listen_port);
+                    if let Some(port) = listen_port {
+                        self.remote_addr = self.remote_addr.into_listen(port);
+                        self.addr_known.insert(self.remote_addr.into_inner().into());
+                    }
+
                     // TODO: magic number
                     let mut items = addr_mgr.get_random(2500);
                     while items.len() > 1000 {
@@ -226,7 +239,7 @@ impl SubstreamValue {
                     if nodes.items.len() > ANNOUNCE_THRESHOLD {
                         warn!("Nodes number more than {}", ANNOUNCE_THRESHOLD);
                         // TODO: misbehavior
-                        if addr_mgr.misbehave(self.remote_addr, 222) < 0 {
+                        if addr_mgr.misbehave(self.remote_addr.into_inner(), 222) < 0 {
                             // TODO: more clear error type
                             return Err(io::ErrorKind::Other.into());
                         }
@@ -236,7 +249,7 @@ impl SubstreamValue {
                 } else if self.received_nodes {
                     warn!("already received Nodes(announce=false) message");
                     // TODO: misbehavior
-                    if addr_mgr.misbehave(self.remote_addr, 333) < 0 {
+                    if addr_mgr.misbehave(self.remote_addr.into_inner(), 333) < 0 {
                         // TODO: more clear error type
                         return Err(io::ErrorKind::Other.into());
                     }
@@ -246,7 +259,7 @@ impl SubstreamValue {
                         nodes.items.len()
                     );
                     // TODO: misbehavior
-                    if addr_mgr.misbehave(self.remote_addr, 444) < 0 {
+                    if addr_mgr.misbehave(self.remote_addr.into_inner(), 444) < 0 {
                         // TODO: more clear error type
                         return Err(io::ErrorKind::Other.into());
                     }
@@ -276,6 +289,7 @@ impl SubstreamValue {
                         // Add to known address list
                         for node in &nodes.items {
                             for addr in &node.addresses {
+                                trace!("received address: {}", addr.socket_addr());
                                 self.addr_known.insert(*addr);
                             }
                         }
@@ -300,6 +314,7 @@ pub struct Substream {
     pub remote_addr: SocketAddr,
     pub direction: Direction,
     pub stream: StreamHandle,
+    pub listen_port: Option<u16>,
 }
 
 impl Substream {
@@ -310,6 +325,7 @@ impl Substream {
         session_id: SessionId,
         receiver: Receiver<Vec<u8>>,
         sender: Sender<ServiceTask>,
+        listens: &[SocketAddr],
     ) -> Substream {
         let stream = StreamHandle {
             data_buf: BytesMut::default(),
@@ -318,10 +334,27 @@ impl Substream {
             receiver,
             sender,
         };
+        let listen_port = if direction == Direction::Outbound {
+            let local = remote_addr.ip().is_loopback();
+
+            listens
+                .iter()
+                .filter_map(|address| {
+                    if local || RawAddr::from(*address).is_reachable() {
+                        Some(address.port())
+                    } else {
+                        None
+                    }
+                })
+                .nth(0)
+        } else {
+            None
+        };
         Substream {
             remote_addr,
             direction,
             stream,
+            listen_port,
         }
     }
 }
@@ -342,4 +375,29 @@ pub enum Direction {
     Inbound,
     // The connection(session) is open by current peer
     Outbound,
+}
+
+#[derive(Eq, PartialEq, Hash, Debug, Clone, Copy)]
+pub(crate) enum RemoteAddress {
+    /// Inbound init remote address
+    Init(SocketAddr),
+    /// Outbound init remote address or Inbound listen address
+    Listen(SocketAddr),
+}
+
+impl RemoteAddress {
+    pub(crate) fn into_inner(self) -> SocketAddr {
+        match self {
+            RemoteAddress::Init(addr) | RemoteAddress::Listen(addr) => addr,
+        }
+    }
+
+    fn into_listen(self, port: u16) -> Self {
+        if let RemoteAddress::Init(mut addr) = self {
+            addr.set_port(port);
+            RemoteAddress::Listen(addr)
+        } else {
+            self
+        }
+    }
 }

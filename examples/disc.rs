@@ -47,7 +47,7 @@ fn main() {
             .forever(true)
             .build(SHandle {})
             .dial("127.0.0.1:1337".parse().unwrap());
-        let _ = service.listen("127.0.0.1:1337".parse().unwrap());
+        let _ = service.listen("127.0.0.1:1338".parse().unwrap());
         tokio::run(service.for_each(|_| Ok(())))
     }
 }
@@ -194,6 +194,7 @@ impl ProtocolHandle for DiscoveryProtocol {
             session_id,
             receiver,
             control.sender().clone(),
+            control.listens(),
         );
         match self.discovery_handle.substream_sender.try_send(substream) {
             Ok(_) => {

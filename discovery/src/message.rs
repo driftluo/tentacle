@@ -60,7 +60,11 @@ impl Encoder for DiscoveryCodec {
 
 #[derive(Clone, Serialize, Deserialize, PartialEq, Eq, Debug)]
 pub enum DiscoveryMessage {
-    GetNodes { version: u32, count: u32 },
+    GetNodes {
+        version: u32,
+        count: u32,
+        listen_port: Option<u16>,
+    },
     Nodes(Nodes),
 }
 
@@ -78,7 +82,7 @@ pub struct Node {
 impl std::fmt::Display for DiscoveryMessage {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> Result<(), std::fmt::Error> {
         match self {
-            DiscoveryMessage::GetNodes { version, count } => {
+            DiscoveryMessage::GetNodes { version, count, .. } => {
                 write!(
                     f,
                     "DiscoveryMessage::GetNodes(version:{}, count:{})",
