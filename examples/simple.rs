@@ -8,11 +8,10 @@ use p2p::{
         ServiceTask, SessionContext,
     },
     session::{ProtocolHandle, ProtocolId, ProtocolMeta, SessionId},
-    PublicKey, SecioKeyPair, SessionType,
+    SecioKeyPair,
 };
 use std::collections::HashMap;
 use std::{
-    net::SocketAddr,
     str,
     time::{Duration, Instant},
 };
