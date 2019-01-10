@@ -4,14 +4,18 @@ use secio::{handshake::Config, PublicKey, SecioKeyPair};
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::Arc;
-use std::{error, io};
+use std::{
+    error::{self, Error},
+    io,
+    time::Duration,
+};
 use tokio::net::{
     tcp::{ConnectFuture, Incoming},
     TcpListener, TcpStream,
 };
 use tokio::{
     codec::{Decoder, Encoder},
-    prelude::{AsyncRead, AsyncWrite},
+    prelude::{AsyncRead, AsyncWrite, FutureExt},
 };
 use yamux::session::SessionType;
 
@@ -293,6 +297,8 @@ pub struct Service<T, U> {
 
     key_pair: Option<SecioKeyPair>,
 
+    remote_pubkeys: HashMap<SessionId, PublicKey>,
+
     /// Can be upgrade to list service level protocols
     handle: T,
 
@@ -341,6 +347,7 @@ where
             handle,
             key_pair,
             sessions: HashMap::default(),
+            remote_pubkeys: HashMap::new(),
             proto_handles: HashMap::default(),
             proto_session_handles: HashMap::default(),
             listens: Vec::new(),
@@ -491,11 +498,16 @@ where
                     });
                     Ok(())
                 })
+                .timeout(Duration::from_secs(10))
                 .map_err(move |err| {
-                    error!("Handshake with {} failed, error: {:?}", address, err);
+                    error!(
+                        "Handshake with {} failed, error: {:?}",
+                        address,
+                        err.description()
+                    );
                     let _ = fail_sender.try_send(SessionEvent::HandshakeFail {
                         ty,
-                        error: err.into(),
+                        error: io::Error::new(io::ErrorKind::TimedOut, err.description()),
                     });
                 });
 
@@ -512,14 +524,30 @@ where
     #[inline]
     fn session_open<H>(
         &mut self,
-        handle: H,
+        mut handle: H,
         public_key: Option<PublicKey>,
         address: SocketAddr,
         ty: SessionType,
     ) where
         H: AsyncRead + AsyncWrite + Send + 'static,
     {
-        self.next_session += 1;
+        if let Some(ref key) = public_key {
+            // If the public key exists, the connection has been established
+            // and then the useless connection needs to be closed.
+            if self
+                .remote_pubkeys
+                .values()
+                .any(|current_key| current_key == key)
+            {
+                let _ = handle.shutdown();
+            } else {
+                self.next_session += 1;
+                self.remote_pubkeys.insert(self.next_session, key.clone());
+            }
+        } else {
+            self.next_session += 1;
+        }
+
         let (service_event_sender, service_event_receiver) = mpsc::channel(256);
         let meta = SessionMeta::new(self.next_session, ty, address, public_key.clone())
             .protocol(self.protocol_configs.clone());
@@ -555,6 +583,7 @@ where
     #[inline]
     fn session_close(&mut self, id: SessionId) {
         debug!("service session [{}] close", id);
+        self.remote_pubkeys.remove(&id);
         if let Some(mut session_sender) = self.sessions.remove(&id) {
             let _ = session_sender.try_send(SessionEvent::SessionClose { id });
         }
@@ -749,13 +778,7 @@ where
         match event {
             ServiceTask::ProtocolMessage { ids, message } => self.filter_broadcast(ids, message),
             ServiceTask::Dial { address } => {
-                if self
-                    .dial
-                    .iter()
-                    .map(|(address, _)| address)
-                    .find(|addr| addr == &&address)
-                    .is_none()
-                {
+                if !self.dial.iter().any(|(addr, _)| addr == &address) {
                     let dial = TcpStream::connect(&address);
                     self.dial.push((address, dial));
                 }

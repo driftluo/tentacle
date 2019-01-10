@@ -3,9 +3,9 @@ use log::{debug, error, trace, warn};
 use secio::{codec::stream_handle::StreamHandle as SecureHandle, PublicKey};
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::{error, io, net::SocketAddr};
+use std::{error, io, net::SocketAddr, time::Duration};
 use tokio::codec::{Decoder, Encoder, Framed};
-use tokio::prelude::{AsyncRead, AsyncWrite};
+use tokio::prelude::{AsyncRead, AsyncWrite, FutureExt};
 use yamux::{session::SessionType, Config, Session as YamuxSession, StreamHandle};
 
 use crate::protocol_select::{client_select, server_select, ProtocolInfo};
@@ -224,6 +224,7 @@ where
                 }
                 Ok(())
             })
+            .timeout(Duration::from_secs(10))
             .map_err(|err| {
                 trace!("stream protocol select err: {:?}", err);
             });
@@ -276,6 +277,7 @@ where
                 }
                 Ok(())
             })
+            .timeout(Duration::from_secs(10))
             .map_err(|err| {
                 trace!("stream protocol select err: {:?}", err);
             });
