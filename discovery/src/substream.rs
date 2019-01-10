@@ -207,9 +207,8 @@ impl SubstreamValue {
                     /// change client random outbound port to client listen port
                     debug!("listen port: {:?}", listen_port);
                     if let Some(port) = listen_port {
-                        self.remote_addr.as_mut().set_port(port);
+                        self.remote_addr = self.remote_addr.into_listen(port);
                         self.addr_known.insert(self.remote_addr.into_inner().into());
-                        self.remote_addr = self.remote_addr.into_listen();
                     }
 
                     // TODO: magic number
@@ -393,15 +392,12 @@ impl RemoteAddress {
         }
     }
 
-    pub(crate) fn as_mut(&mut self) -> &mut SocketAddr {
-        match self {
-            RemoteAddress::Init(ref mut addr) | RemoteAddress::Listen(ref mut addr) => addr,
-        }
-    }
-
-    fn into_listen(self) -> Self {
-        match self {
-            RemoteAddress::Init(addr) | RemoteAddress::Listen(addr) => RemoteAddress::Listen(addr),
+    fn into_listen(self, port: u16) -> Self {
+        if let RemoteAddress::Init(mut addr) = self {
+            addr.set_port(port);
+            RemoteAddress::Listen(addr)
+        } else {
+            self
         }
     }
 }
