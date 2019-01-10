@@ -19,7 +19,7 @@ pub use crate::{
     substream::{Direction, Substream, SubstreamKey, SubstreamValue},
 };
 
-use crate::addr::DEFAULT_MAX_KNOWN;
+use crate::{addr::DEFAULT_MAX_KNOWN, substream::RemoteAddress};
 
 pub struct Discovery<M> {
     // Default: 5000
@@ -82,6 +82,7 @@ impl<M: AddressManager> Discovery<M> {
                         substream.stream,
                         self.max_known,
                         substream.remote_addr,
+                        substream.listen_port,
                     );
                     self.substreams.insert(key, value);
                 }
@@ -141,7 +142,9 @@ impl<M: AddressManager> Stream for Discovery<M> {
             }
 
             if value.announce {
-                announce_addrs.push(RawAddr::from(value.remote_addr));
+                if let RemoteAddress::Listen(addr) = value.remote_addr {
+                    announce_addrs.push(RawAddr::from(addr));
+                }
                 value.announce = false;
             }
         }

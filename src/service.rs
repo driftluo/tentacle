@@ -749,8 +749,16 @@ where
         match event {
             ServiceTask::ProtocolMessage { ids, message } => self.filter_broadcast(ids, message),
             ServiceTask::Dial { address } => {
-                let dial = TcpStream::connect(&address);
-                self.dial.push((address, dial));
+                if self
+                    .dial
+                    .iter()
+                    .map(|(address, _)| address)
+                    .find(|addr| addr == &&address)
+                    .is_none()
+                {
+                    let dial = TcpStream::connect(&address);
+                    self.dial.push((address, dial));
+                }
             }
             ServiceTask::Disconnect { id } => self.session_close(id),
             ServiceTask::FutureTask { task } => {
