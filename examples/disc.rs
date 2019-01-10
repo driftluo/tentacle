@@ -5,7 +5,6 @@ use fnv::FnvHashMap;
 use std::{
     collections::HashMap,
     net::{IpAddr, Ipv4Addr, SocketAddr},
-    str,
     time::Duration,
 };
 
@@ -17,11 +16,10 @@ use tokio::codec::length_delimited::LengthDelimitedCodec;
 
 use p2p::{
     builder::ServiceBuilder,
-    service::{Message, ProtocolHandle, ServiceContext, ServiceEvent, ServiceHandle},
-    session::{ProtocolId, ProtocolMeta, SessionId},
+    service::{ServiceContext, ServiceEvent, ServiceHandle, ServiceProtocol, SessionContext},
+    session::{ProtocolHandle, ProtocolId, ProtocolMeta, SessionId},
     SessionType,
 };
-use secio::PublicKey;
 
 use discovery::{AddressManager, Direction, Discovery, DiscoveryHandle, RawAddr, Substream};
 
@@ -29,20 +27,18 @@ fn main() {
     env_logger::init();
     if std::env::args().nth(1) == Some("server".to_string()) {
         debug!("Starting server ......");
-        let (discovery, _) = create_discovery(1);
-        let protocol = DiscoveryProtocol::new(0, "server", discovery);
+        let meta = create_meta(1, 0);
         let mut service = ServiceBuilder::default()
-            .insert_protocol(protocol)
+            .insert_protocol(meta)
             .forever(true)
             .build(SHandle {});
         let _ = service.listen("127.0.0.1:1337".parse().unwrap());
         tokio::run(service.for_each(|_| Ok(())))
     } else {
         debug!("Starting client ......");
-        let (discovery, _) = create_discovery(5000);
-        let protocol = DiscoveryProtocol::new(0, "client", discovery);
+        let meta = create_meta(5000, 0);
         let mut service = ServiceBuilder::default()
-            .insert_protocol(protocol)
+            .insert_protocol(meta)
             .forever(true)
             .build(SHandle {})
             .dial("127.0.0.1:1337".parse().unwrap());
@@ -51,20 +47,22 @@ fn main() {
     }
 }
 
-fn create_discovery(start: u16) -> (Discovery<SimpleAddressManager>, DiscoveryHandle) {
+fn create_meta(start: u16, id: usize) -> DiscoveryProtocolMeta {
     let addrs: FnvHashMap<RawAddr, i32> = (start..start + 3333)
         .map(|port| SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), port))
         .map(|addr| (RawAddr::from(addr), 100))
         .collect();
     let addr_mgr = SimpleAddressManager { addrs };
-    let discovery = Discovery::new(addr_mgr);
-    let handle = discovery.handle();
-    (discovery, handle)
+    DiscoveryProtocolMeta { id, addr_mgr }
+}
+
+struct DiscoveryProtocolMeta {
+    id: ProtocolId,
+    addr_mgr: SimpleAddressManager,
 }
 
 struct DiscoveryProtocol {
     id: usize,
-    ty: &'static str,
     notify_counter: u32,
     discovery: Option<Discovery<SimpleAddressManager>>,
     discovery_handle: DiscoveryHandle,
@@ -72,61 +70,38 @@ struct DiscoveryProtocol {
     sessions: HashMap<SessionId, SessionData>,
 }
 
-impl DiscoveryProtocol {
-    fn new(
-        id: usize,
-        ty: &'static str,
-        discovery: Discovery<SimpleAddressManager>,
-    ) -> DiscoveryProtocol {
+impl ProtocolMeta<LengthDelimitedCodec> for DiscoveryProtocolMeta {
+    fn id(&self) -> ProtocolId {
+        self.id
+    }
+
+    fn codec(&self) -> LengthDelimitedCodec {
+        LengthDelimitedCodec::new()
+    }
+
+    fn handle(&self) -> ProtocolHandle {
+        let discovery = Discovery::new(self.addr_mgr.clone());
         let discovery_handle = discovery.handle();
-        DiscoveryProtocol {
-            id,
-            ty,
+        let handle = Box::new(DiscoveryProtocol {
+            id: self.id,
             notify_counter: 0,
             discovery: Some(discovery),
             discovery_handle,
             discovery_senders: FnvHashMap::default(),
             sessions: HashMap::default(),
-        }
+        });
+
+        ProtocolHandle::Service(handle)
     }
 }
 
-impl ProtocolMeta<LengthDelimitedCodec> for DiscoveryProtocol {
-    fn id(&self) -> ProtocolId {
-        self.id
-    }
-    fn codec(&self) -> LengthDelimitedCodec {
-        LengthDelimitedCodec::new()
-    }
-    fn handle(&self) -> Option<Box<dyn ProtocolHandle + Send + 'static>> {
-        let discovery = self
-            .discovery
-            .as_ref()
-            .map(|discovery| Discovery::new(discovery.addr_mgr().clone()));
-        let discovery_handle = discovery
-            .as_ref()
-            .map(|discovery| discovery.handle())
-            .unwrap();
-
-        Some(Box::new(DiscoveryProtocol {
-            id: self.id,
-            ty: self.ty,
-            notify_counter: 0,
-            discovery,
-            discovery_handle,
-            discovery_senders: FnvHashMap::default(),
-            sessions: HashMap::default(),
-        }))
-    }
-}
-
-impl ProtocolHandle for DiscoveryProtocol {
+impl ServiceProtocol for DiscoveryProtocol {
     fn init(&mut self, control: &mut ServiceContext) {
         debug!("protocol [discovery({})]: init", self.id);
 
         let interval = Duration::from_secs(5);
         debug!("Setup interval {:?}", interval);
-        control.set_notify(self.id(), interval, 3);
+        control.set_notify(self.id, interval, 3);
         let discovery_task = self
             .discovery
             .take()
@@ -150,35 +125,27 @@ impl ProtocolHandle for DiscoveryProtocol {
         control.future_task(discovery_task);
     }
 
-    fn connected(
-        &mut self,
-        control: &mut ServiceContext,
-        session_id: SessionId,
-        address: SocketAddr,
-        ty: SessionType,
-        _: &Option<PublicKey>,
-        _: &str,
-    ) {
+    fn connected(&mut self, control: &mut ServiceContext, session: &SessionContext) {
         self.sessions
-            .entry(session_id)
-            .or_insert(SessionData::new(address, ty));
+            .entry(session.id)
+            .or_insert(SessionData::new(session.address, session.ty));
         debug!(
             "protocol [discovery] open on session [{}], address: [{}], type: [{:?}]",
-            session_id, address, ty
+            session.id, session.address, session.ty
         );
 
-        let direction = if ty == SessionType::Server {
+        let direction = if session.ty == SessionType::Server {
             Direction::Inbound
         } else {
             Direction::Outbound
         };
         let (sender, receiver) = channel(8);
-        self.discovery_senders.insert(session_id, sender);
+        self.discovery_senders.insert(session.id, sender);
         let substream = Substream::new(
-            address,
+            session.address,
             direction,
             self.id,
-            session_id,
+            session.id,
             receiver,
             control.sender().clone(),
             control.listens(),
@@ -193,20 +160,20 @@ impl ProtocolHandle for DiscoveryProtocol {
         }
     }
 
-    fn disconnected(&mut self, _control: &mut ServiceContext, session_id: SessionId) {
-        self.sessions.remove(&session_id);
-        self.discovery_senders.remove(&session_id);
-        debug!("protocol [discovery] close on session [{}]", session_id);
+    fn disconnected(&mut self, _control: &mut ServiceContext, session: &SessionContext) {
+        self.sessions.remove(&session.id);
+        self.discovery_senders.remove(&session.id);
+        debug!("protocol [discovery] close on session [{}]", session.id);
     }
 
-    fn received(&mut self, _env: &mut ServiceContext, data: Message) {
-        debug!("[received message]: length={}", data.data.len());
+    fn received(&mut self, _control: &mut ServiceContext, session: &SessionContext, data: Vec<u8>) {
+        debug!("[received message]: length={}", data.len());
         self.sessions
-            .get_mut(&data.session_id)
+            .get_mut(&session.id)
             .unwrap()
-            .push_data(data.data.clone());
-        if let Some(ref mut sender) = self.discovery_senders.get_mut(&data.session_id) {
-            if let Err(err) = sender.try_send(data.data) {
+            .push_data(data.clone());
+        if let Some(ref mut sender) = self.discovery_senders.get_mut(&session.id) {
+            if let Err(err) = sender.try_send(data) {
                 if err.is_full() {
                     warn!("channel is full");
                 } else if err.is_disconnected() {
