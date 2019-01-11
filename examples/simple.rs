@@ -4,14 +4,14 @@ use log::info;
 use p2p::{
     builder::ServiceBuilder,
     service::{
-        Message, ProtocolHandle, Service, ServiceContext, ServiceEvent, ServiceHandle, ServiceTask,
+        Message, ProtocolMeta, Service, ServiceContext, ServiceEvent, ServiceHandle,
+        ServiceProtocol, ServiceTask, SessionContext,
     },
-    session::{ProtocolId, ProtocolMeta, SessionId},
-    PublicKey, SecioKeyPair, SessionType,
+    session::{ProtocolId, SessionId},
+    SecioKeyPair,
 };
 use std::collections::HashMap;
 use std::{
-    net::SocketAddr,
     str,
     time::{Duration, Instant},
 };
@@ -35,15 +35,17 @@ impl ProtocolMeta<LengthDelimitedCodec> for Protocol {
     fn codec(&self) -> LengthDelimitedCodec {
         LengthDelimitedCodec::new()
     }
-    fn handle(&self) -> Option<Box<dyn ProtocolHandle + Send + 'static>> {
+
+    fn service_handle(&self) -> Option<Box<dyn ServiceProtocol + Send + 'static>> {
         // All protocol use the same handle.
         // This is just an example. In the actual environment, this should be a different handle.
-        Some(Box::new(PHandle {
+        let handle = Box::new(PHandle {
             proto_id: self.id,
             count: 0,
             connected_session_ids: Vec::new(),
             clear_handle: HashMap::new(),
-        }))
+        });
+        Some(handle)
     }
 }
 
@@ -55,7 +57,7 @@ struct PHandle {
     clear_handle: HashMap<SessionId, Sender<()>>,
 }
 
-impl ProtocolHandle for PHandle {
+impl ServiceProtocol for PHandle {
     fn init(&mut self, control: &mut ServiceContext) {
         if self.proto_id == 0 {
             let mut interval_sender = control.sender().clone();
@@ -74,19 +76,11 @@ impl ProtocolHandle for PHandle {
         }
     }
 
-    fn connected(
-        &mut self,
-        control: &mut ServiceContext,
-        session_id: SessionId,
-        address: SocketAddr,
-        ty: SessionType,
-        _remote_public_key: &Option<PublicKey>,
-        version: &str,
-    ) {
-        self.connected_session_ids.push(session_id);
+    fn connected(&mut self, control: &mut ServiceContext, session: &SessionContext, version: &str) {
+        self.connected_session_ids.push(session.id);
         info!(
             "proto id [{}] open on session [{}], address: [{}], type: [{:?}], version: {}",
-            self.proto_id, session_id, address, ty, version
+            self.proto_id, session.id, session.address, session.ty, version
         );
         info!("connected sessions are: {:?}", self.connected_session_ids);
 
@@ -97,14 +91,15 @@ impl ProtocolHandle for PHandle {
         // Register a scheduled task to send data to the remote peer.
         // Clear the task via channel when disconnected
         let (sender, mut receiver) = oneshot();
-        self.clear_handle.insert(session_id, sender);
+        self.clear_handle.insert(session.id, sender);
+        let session_id = session.id;
         let mut interval_sender = control.sender().clone();
         let interval_task = Interval::new(Instant::now(), Duration::from_secs(5))
             .for_each(move |_| {
                 let _ = interval_sender.try_send(ServiceTask::ProtocolMessage {
-                    ids: Some(vec![session_id]),
+                    session_ids: Some(vec![session_id]),
                     message: Message {
-                        id: 0,
+                        session_id: 0,
                         proto_id: 1,
                         data: b"I am a interval message".to_vec(),
                     },
@@ -119,32 +114,32 @@ impl ProtocolHandle for PHandle {
         control.future_task(interval_task);
     }
 
-    fn disconnected(&mut self, _control: &mut ServiceContext, session_id: SessionId) {
+    fn disconnected(&mut self, _control: &mut ServiceContext, session: &SessionContext) {
         let new_list = self
             .connected_session_ids
             .iter()
-            .filter(|&id| id != &session_id)
+            .filter(|&id| id != &session.id)
             .cloned()
             .collect();
         self.connected_session_ids = new_list;
 
-        if let Some(handle) = self.clear_handle.remove(&session_id) {
+        if let Some(handle) = self.clear_handle.remove(&session.id) {
             let _ = handle.send(());
         }
 
         info!(
             "proto id [{}] close on session [{}]",
-            self.proto_id, session_id
+            self.proto_id, session.id
         );
     }
 
-    fn received(&mut self, _env: &mut ServiceContext, data: Message) {
+    fn received(&mut self, _env: &mut ServiceContext, session: &SessionContext, data: Vec<u8>) {
         self.count += 1;
         info!(
             "received from [{}]: proto [{}] data {:?}, message count: {}",
-            data.id,
-            data.proto_id,
-            str::from_utf8(&data.data).unwrap(),
+            session.id,
+            self.proto_id,
+            str::from_utf8(&data).unwrap(),
             self.count
         );
     }
@@ -168,9 +163,9 @@ impl ServiceHandle for SHandle {
             let delay_task = Delay::new(Instant::now() + Duration::from_secs(3))
                 .and_then(move |_| {
                     let _ = delay_sender.try_send(ServiceTask::ProtocolMessage {
-                        ids: None,
+                        session_ids: None,
                         message: Message {
-                            id,
+                            session_id: id,
                             proto_id: 0,
                             data: b"I am a delayed message".to_vec(),
                         },

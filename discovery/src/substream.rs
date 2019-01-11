@@ -75,9 +75,9 @@ impl AsyncRead for StreamHandle {}
 impl io::Write for StreamHandle {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
         let task = ServiceTask::ProtocolMessage {
-            ids: Some(vec![self.session_id]),
+            session_ids: Some(vec![self.session_id]),
             message: Message {
-                id: self.session_id,
+                session_id: self.session_id,
                 proto_id: self.proto_id,
                 data: buf.to_vec(),
             },

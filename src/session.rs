@@ -9,7 +9,7 @@ use tokio::prelude::{AsyncRead, AsyncWrite, FutureExt};
 use yamux::{session::SessionType, Config, Session as YamuxSession, StreamHandle};
 
 use crate::protocol_select::{client_select, server_select, ProtocolInfo};
-use crate::service::ProtocolHandle;
+use crate::service::ProtocolMeta;
 use crate::substream::{ProtocolEvent, SubStream};
 
 /// Index of sub/protocol stream
@@ -60,12 +60,6 @@ pub(crate) enum SessionEvent {
         proto_id: ProtocolId,
         /// Stream id
         stream_id: StreamId,
-        /// Remote address
-        remote_address: ::std::net::SocketAddr,
-        /// Remote public key
-        remote_public_key: Option<PublicKey>,
-        /// Session type
-        ty: SessionType,
         /// Protocol version
         version: String,
     },
@@ -80,54 +74,6 @@ pub(crate) enum SessionEvent {
     },
 }
 
-/// Define the minimum data required for a custom protocol
-pub trait ProtocolMeta<U>
-where
-    U: Decoder<Item = bytes::BytesMut> + Encoder<Item = bytes::Bytes> + Send + 'static,
-    <U as Decoder>::Error: error::Error + Into<io::Error>,
-    <U as Encoder>::Error: error::Error + Into<io::Error>,
-{
-    /// Protocol name, default is "/p2p/protocol_id"
-    #[inline]
-    fn name(&self) -> String {
-        format!("/p2p/{}", self.id())
-    }
-    /// Protocol id
-    fn id(&self) -> ProtocolId;
-    /// Protocol supported version
-    fn support_versions(&self) -> Vec<String> {
-        vec!["1.0.0".to_owned()]
-    }
-    /// The codec used by the custom protocol, such as `LengthDelimitedCodec` by tokio
-    fn codec(&self) -> U;
-    /// A global callback handle for a protocol.
-    ///
-    /// ---
-    ///
-    /// #### Behavior
-    ///
-    /// This function is called when the protocol is first opened in the service
-    /// and remains in memory until the entire service is closed.
-    #[inline]
-    fn handle(&self) -> Option<Box<dyn ProtocolHandle + Send + 'static>> {
-        None
-    }
-    /// A session-level callback handle for a protocol
-    ///
-    /// ---
-    ///
-    /// #### Behavior
-    ///
-    /// When a session is opened, whenever the protocol of the session is opened,
-    /// the function will be called again to generate the corresponding exclusive handle.
-    ///
-    /// Correspondingly, whenever the protocol is closed, the corresponding exclusive handle is cleared.
-    #[inline]
-    fn session_handle(&self) -> Option<Box<dyn ProtocolHandle + Send + 'static>> {
-        None
-    }
-}
-
 /// Wrapper for real data streams, such as TCP stream
 pub(crate) struct Session<T, U> {
     socket: YamuxSession<T>,
@@ -136,9 +82,9 @@ pub(crate) struct Session<T, U> {
 
     id: SessionId,
 
-    remote_address: ::std::net::SocketAddr,
-    remote_public_key: Option<PublicKey>,
-
+    // NOTE: Not used yet, may useful later
+    // remote_address: ::std::net::SocketAddr,
+    // remote_public_key: Option<PublicKey>,
     next_stream: StreamId,
     /// Indicates the identity of the current session
     ty: SessionType,
@@ -178,8 +124,6 @@ where
             socket,
             protocol_configs: meta.protocol_configs,
             id: meta.id,
-            remote_public_key: meta.remote_public_key,
-            remote_address: meta.remote_address,
             ty: meta.ty,
             next_stream: 0,
             sub_streams: HashMap::default(),
@@ -316,9 +260,6 @@ where
                     id: self.id,
                     stream_id: self.next_stream,
                     proto_id,
-                    remote_address: self.remote_address,
-                    remote_public_key: self.remote_public_key.clone(),
-                    ty: self.ty,
                     version,
                 });
                 self.next_stream += 1;
@@ -460,8 +401,8 @@ pub(crate) struct SessionMeta<U> {
     id: SessionId,
     protocol_configs: Arc<HashMap<String, Box<dyn ProtocolMeta<U> + Send + Sync>>>,
     ty: SessionType,
-    remote_address: ::std::net::SocketAddr,
-    remote_public_key: Option<PublicKey>,
+    // remote_address: ::std::net::SocketAddr,
+    // remote_public_key: Option<PublicKey>,
 }
 
 impl<U> SessionMeta<U>
@@ -470,19 +411,12 @@ where
     <U as Decoder>::Error: error::Error + Into<io::Error>,
     <U as Encoder>::Error: error::Error + Into<io::Error>,
 {
-    pub fn new(
-        id: SessionId,
-        ty: SessionType,
-        remote_address: ::std::net::SocketAddr,
-        remote_public_key: Option<PublicKey>,
-    ) -> Self {
+    pub fn new(id: SessionId, ty: SessionType) -> Self {
         SessionMeta {
             config: Config::default(),
             id,
             ty,
-            remote_address,
             protocol_configs: Arc::new(HashMap::new()),
-            remote_public_key,
         }
     }
 
