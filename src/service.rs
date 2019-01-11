@@ -21,9 +21,7 @@ use tokio::{
 use yamux::session::SessionType;
 
 use crate::protocol_select::ProtocolInfo;
-use crate::session::{
-    ProtocolHandle, ProtocolId, ProtocolMeta, Session, SessionEvent, SessionId, SessionMeta,
-};
+use crate::session::{ProtocolId, Session, SessionEvent, SessionId, SessionMeta};
 
 /// Service handle
 ///
@@ -98,6 +96,59 @@ pub trait SessionProtocol {
     fn received(&mut self, _service: &mut ServiceContext, _data: Vec<u8>) {}
     /// Called when the session receives the notify task
     fn notify(&mut self, _service: &mut ServiceContext, _token: u64) {}
+}
+
+/// Protocol handle value
+pub enum ProtocolHandle {
+    /// Service level protocol
+    Service(Box<dyn ServiceProtocol + Send + 'static>),
+    /// Session level protocol
+    Session(Box<dyn SessionProtocol + Send + 'static>),
+}
+
+impl ProtocolHandle {
+    /// Check if this is a session level protocol
+    pub fn is_session(&self) -> bool {
+        match self {
+            ProtocolHandle::Session(_) => true,
+            _ => false,
+        }
+    }
+}
+
+/// Define the minimum data required for a custom protocol
+pub trait ProtocolMeta<U>
+where
+    U: Decoder<Item = bytes::BytesMut> + Encoder<Item = bytes::Bytes> + Send + 'static,
+    <U as Decoder>::Error: error::Error + Into<io::Error>,
+    <U as Encoder>::Error: error::Error + Into<io::Error>,
+{
+    /// Protocol id
+    fn id(&self) -> ProtocolId;
+
+    /// Protocol name, default is "/p2p/protocol_id"
+    #[inline]
+    fn name(&self) -> String {
+        format!("/p2p/{}", self.id())
+    }
+
+    /// Protocol supported version
+    fn support_versions(&self) -> Vec<String> {
+        vec!["0.0.1".to_owned()]
+    }
+
+    /// The codec used by the custom protocol, such as `LengthDelimitedCodec` by tokio
+    fn codec(&self) -> U;
+
+    /// A global callback handle for a protocol.
+    ///
+    /// ---
+    ///
+    /// #### Behavior
+    ///
+    /// This function is called when the protocol is first opened in the service
+    /// and remains in memory until the entire service is closed.
+    fn handle(&self) -> ProtocolHandle;
 }
 
 // TODO: maybe remote this struct later?

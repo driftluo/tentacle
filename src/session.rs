@@ -9,7 +9,7 @@ use tokio::prelude::{AsyncRead, AsyncWrite, FutureExt};
 use yamux::{session::SessionType, Config, Session as YamuxSession, StreamHandle};
 
 use crate::protocol_select::{client_select, server_select, ProtocolInfo};
-use crate::service::{ServiceProtocol, SessionProtocol};
+use crate::service::ProtocolMeta;
 use crate::substream::{ProtocolEvent, SubStream};
 
 /// Index of sub/protocol stream
@@ -78,59 +78,6 @@ pub(crate) enum SessionEvent {
         /// Stream id
         stream_id: StreamId,
     },
-}
-
-/// Protocol handle value
-pub enum ProtocolHandle {
-    /// Service level protocol
-    Service(Box<dyn ServiceProtocol + Send + 'static>),
-    /// Session level protocol
-    Session(Box<dyn SessionProtocol + Send + 'static>),
-}
-
-impl ProtocolHandle {
-    /// Check if this is a session level protocol
-    pub fn is_session(&self) -> bool {
-        match self {
-            ProtocolHandle::Session(_) => true,
-            _ => false,
-        }
-    }
-}
-
-/// Define the minimum data required for a custom protocol
-pub trait ProtocolMeta<U>
-where
-    U: Decoder<Item = bytes::BytesMut> + Encoder<Item = bytes::Bytes> + Send + 'static,
-    <U as Decoder>::Error: error::Error + Into<io::Error>,
-    <U as Encoder>::Error: error::Error + Into<io::Error>,
-{
-    /// Protocol id
-    fn id(&self) -> ProtocolId;
-
-    /// Protocol name, default is "/p2p/protocol_id"
-    #[inline]
-    fn name(&self) -> String {
-        format!("/p2p/{}", self.id())
-    }
-
-    /// Protocol supported version
-    fn support_versions(&self) -> Vec<String> {
-        vec!["0.0.1".to_owned()]
-    }
-
-    /// The codec used by the custom protocol, such as `LengthDelimitedCodec` by tokio
-    fn codec(&self) -> U;
-
-    /// A global callback handle for a protocol.
-    ///
-    /// ---
-    ///
-    /// #### Behavior
-    ///
-    /// This function is called when the protocol is first opened in the service
-    /// and remains in memory until the entire service is closed.
-    fn handle(&self) -> ProtocolHandle;
 }
 
 /// Wrapper for real data streams, such as TCP stream
