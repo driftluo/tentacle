@@ -71,7 +71,13 @@ pub trait ServiceProtocol {
     /// The service handle will only be called once
     fn init(&mut self, service: &mut ServiceContext);
     /// Called when opening protocol
-    fn connected(&mut self, _service: &mut ServiceContext, _session: &SessionContext, _version: &str) {}
+    fn connected(
+        &mut self,
+        _service: &mut ServiceContext,
+        _session: &SessionContext,
+        _version: &str,
+    ) {
+    }
     /// Called when closing protocol
     fn disconnected(&mut self, _service: &mut ServiceContext, _session: &SessionContext) {}
     /// Called when the corresponding protocol message is received
@@ -89,7 +95,13 @@ pub trait ServiceProtocol {
 /// Session level protocol handle
 pub trait SessionProtocol {
     /// Called when opening protocol
-    fn connected(&mut self, _service: &mut ServiceContext, _session: &SessionContext, _version: &str) {}
+    fn connected(
+        &mut self,
+        _service: &mut ServiceContext,
+        _session: &SessionContext,
+        _version: &str,
+    ) {
+    }
     /// Called when closing protocol
     fn disconnected(&mut self, _service: &mut ServiceContext) {}
     /// Called when the corresponding protocol message is received
@@ -153,6 +165,15 @@ where
     }
 
     /// A session level callback handle for a protocol.
+    ///
+    /// ---
+    ///
+    /// #### Behavior
+    ///
+    /// When a session is opened, whenever the protocol of the session is opened,
+    /// the function will be called again to generate the corresponding exclusive handle.
+    ///
+    /// Correspondingly, whenever the protocol is closed, the corresponding exclusive handle is cleared.
     fn session_handle(&self) -> Option<Box<dyn SessionProtocol + Send + 'static>> {
         None
     }
