@@ -140,7 +140,7 @@ where
     /// The codec used by the custom protocol, such as `LengthDelimitedCodec` by tokio
     fn codec(&self) -> U;
 
-    /// A global callback handle for a protocol.
+    /// A service level callback handle for a protocol.
     ///
     /// ---
     ///
@@ -148,7 +148,14 @@ where
     ///
     /// This function is called when the protocol is first opened in the service
     /// and remains in memory until the entire service is closed.
-    fn handle(&self) -> ProtocolHandle;
+    fn service_handle(&self) -> Option<Box<dyn ServiceProtocol + Send + 'static>> {
+        None
+    }
+
+    /// A session level callback handle for a protocol.
+    fn session_handle(&self) -> Option<Box<dyn SessionProtocol + Send + 'static>> {
+        None
+    }
 }
 
 // TODO: maybe remote this struct later?
@@ -536,8 +543,15 @@ where
             .protocol_configs
             .values()
             .filter(|proto| proto.id() == proto_id)
-            .map(|proto| proto.handle())
-            .find(|handle| session && handle.is_session() || !session && !handle.is_session());
+            .map(|proto| {
+                if session {
+                    proto.session_handle().map(ProtocolHandle::Session)
+                } else {
+                    proto.service_handle().map(ProtocolHandle::Service)
+                }
+            })
+            .find(Option::is_some)
+            .unwrap_or(None);
 
         if handle.is_none() {
             debug!(

@@ -16,8 +16,10 @@ use tokio::codec::length_delimited::LengthDelimitedCodec;
 
 use p2p::{
     builder::ServiceBuilder,
-    service::{ServiceContext, ServiceEvent, ServiceHandle, ServiceProtocol, SessionContext},
-    session::{ProtocolHandle, ProtocolId, ProtocolMeta, SessionId},
+    service::{
+        ProtocolMeta, ServiceContext, ServiceEvent, ServiceHandle, ServiceProtocol, SessionContext,
+    },
+    session::{ProtocolId, SessionId},
     SessionType,
 };
 
@@ -79,7 +81,7 @@ impl ProtocolMeta<LengthDelimitedCodec> for DiscoveryProtocolMeta {
         LengthDelimitedCodec::new()
     }
 
-    fn handle(&self) -> ProtocolHandle {
+    fn service_handle(&self) -> Option<Box<dyn ServiceProtocol + Send + 'static>> {
         let discovery = Discovery::new(self.addr_mgr.clone());
         let discovery_handle = discovery.handle();
         let handle = Box::new(DiscoveryProtocol {
@@ -90,8 +92,7 @@ impl ProtocolMeta<LengthDelimitedCodec> for DiscoveryProtocolMeta {
             discovery_senders: FnvHashMap::default(),
             sessions: HashMap::default(),
         });
-
-        ProtocolHandle::Service(handle)
+        Some(handle)
     }
 }
 

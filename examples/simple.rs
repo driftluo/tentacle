@@ -4,10 +4,10 @@ use log::info;
 use p2p::{
     builder::ServiceBuilder,
     service::{
-        Message, Service, ServiceContext, ServiceEvent, ServiceHandle, ServiceProtocol,
-        ServiceTask, SessionContext,
+        Message, ProtocolMeta, Service, ServiceContext, ServiceEvent, ServiceHandle,
+        ServiceProtocol, ServiceTask, SessionContext,
     },
-    session::{ProtocolHandle, ProtocolId, ProtocolMeta, SessionId},
+    session::{ProtocolId, SessionId},
     SecioKeyPair,
 };
 use std::collections::HashMap;
@@ -35,7 +35,8 @@ impl ProtocolMeta<LengthDelimitedCodec> for Protocol {
     fn codec(&self) -> LengthDelimitedCodec {
         LengthDelimitedCodec::new()
     }
-    fn handle(&self) -> ProtocolHandle {
+
+    fn service_handle(&self) -> Option<Box<dyn ServiceProtocol + Send + 'static>> {
         // All protocol use the same handle.
         // This is just an example. In the actual environment, this should be a different handle.
         let handle = Box::new(PHandle {
@@ -44,7 +45,7 @@ impl ProtocolMeta<LengthDelimitedCodec> for Protocol {
             connected_session_ids: Vec::new(),
             clear_handle: HashMap::new(),
         });
-        ProtocolHandle::Service(handle)
+        Some(handle)
     }
 }
 
