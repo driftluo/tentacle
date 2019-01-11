@@ -1,7 +1,7 @@
 use futures::{prelude::*, sync::mpsc};
 use log::{debug, error, trace, warn};
 use secio::{handshake::Config, PublicKey, SecioKeyPair};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::{
@@ -392,6 +392,9 @@ pub struct Service<T, U> {
     /// Can be upgrade to list service level protocols
     handle: T,
 
+    // The service protocols open with the session
+    session_service_protos: HashMap<SessionId, HashSet<ProtocolId>>,
+
     session_contexts: HashMap<SessionId, SessionContext>,
 
     service_proto_handles: HashMap<ProtocolId, Box<dyn ServiceProtocol + Send + 'static>>,
@@ -439,6 +442,7 @@ where
             handle,
             key_pair,
             sessions: HashMap::default(),
+            session_service_protos: HashMap::default(),
             session_contexts: HashMap::default(),
             service_proto_handles: HashMap::default(),
             session_proto_handles: HashMap::default(),
@@ -684,14 +688,13 @@ where
             .handle_event(&mut self.service_context, ServiceEvent::SessionClose { id });
 
         // Session proto handle processing flow
-        let mut close_proto_ids = Vec::new();
-        if let Some(handles) = self.session_proto_handles.remove(&id) {
-            for (proto_id, mut handle) in handles {
+        if let Some(mut handles) = self.session_proto_handles.remove(&id) {
+            for handle in handles.values_mut() {
                 handle.disconnected(&mut self.service_context);
-                close_proto_ids.push(proto_id);
             }
         }
 
+        let close_proto_ids = self.session_service_protos.remove(&id).unwrap_or_default();
         debug!("session [{}] close proto [{:?}]", id, close_proto_ids);
         // Service proto handle processing flow
         //
@@ -735,6 +738,10 @@ where
         }
         if let Some(handle) = self.service_proto_handles.get_mut(&proto_id) {
             handle.connected(&mut self.service_context, &session_context);
+            self.session_service_protos
+                .entry(id)
+                .or_default()
+                .insert(proto_id);
         }
 
         // Session proto handle processing flow
