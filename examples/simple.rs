@@ -76,11 +76,11 @@ impl ServiceProtocol for PHandle {
         }
     }
 
-    fn connected(&mut self, control: &mut ServiceContext, session: &SessionContext) {
+    fn connected(&mut self, control: &mut ServiceContext, session: &SessionContext, version: &str) {
         self.connected_session_ids.push(session.id);
         info!(
-            "proto id [{}] open on session [{}], address: [{}], type: [{:?}], version: {:?}",
-            self.proto_id, session.id, session.address, session.ty, session.version
+            "proto id [{}] open on session [{}], address: [{}], type: [{:?}], version: {}",
+            self.proto_id, session.id, session.address, session.ty, version
         );
         info!("connected sessions are: {:?}", self.connected_session_ids);
 

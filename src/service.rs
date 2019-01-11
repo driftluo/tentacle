@@ -71,7 +71,7 @@ pub trait ServiceProtocol {
     /// The service handle will only be called once
     fn init(&mut self, service: &mut ServiceContext);
     /// Called when opening protocol
-    fn connected(&mut self, _service: &mut ServiceContext, _session: &SessionContext) {}
+    fn connected(&mut self, _service: &mut ServiceContext, _session: &SessionContext, _version: &str) {}
     /// Called when closing protocol
     fn disconnected(&mut self, _service: &mut ServiceContext, _session: &SessionContext) {}
     /// Called when the corresponding protocol message is received
@@ -89,7 +89,7 @@ pub trait ServiceProtocol {
 /// Session level protocol handle
 pub trait SessionProtocol {
     /// Called when opening protocol
-    fn connected(&mut self, _service: &mut ServiceContext, _session: &SessionContext) {}
+    fn connected(&mut self, _service: &mut ServiceContext, _session: &SessionContext, _version: &str) {}
     /// Called when closing protocol
     fn disconnected(&mut self, _service: &mut ServiceContext) {}
     /// Called when the corresponding protocol message is received
@@ -175,6 +175,7 @@ pub struct Message {
 }
 
 /// Session context
+#[derive(Clone)]
 pub struct SessionContext {
     /// Session's ID
     pub id: SessionId,
@@ -185,9 +186,6 @@ pub struct SessionContext {
     // TODO: use reference?
     /// Remote public key
     pub remote_pubkey: Option<PublicKey>,
-    // TODO: use reference?
-    /// Selected protocol version
-    pub version: Option<String>,
 }
 
 /// The Service runtime can send some instructions to the inside of the handle.
@@ -640,7 +638,6 @@ where
             address,
             ty,
             remote_pubkey: remote_pubkey.clone(),
-            version: None,
         };
         self.session_contexts
             .insert(session_context.id, session_context);
@@ -714,13 +711,6 @@ where
     #[inline]
     fn protocol_open(&mut self, id: SessionId, proto_id: ProtocolId, version: &str) {
         debug!("service session [{}] proto [{}] open", id, proto_id);
-        {
-            let session_context = self
-                .session_contexts
-                .get_mut(&id)
-                .expect("Protocol open without session open");
-            session_context.version = Some(version.to_string());
-        }
         let session_context = self
             .session_contexts
             .get(&id)
@@ -737,7 +727,7 @@ where
             }
         }
         if let Some(handle) = self.service_proto_handles.get_mut(&proto_id) {
-            handle.connected(&mut self.service_context, &session_context);
+            handle.connected(&mut self.service_context, &session_context, version);
             self.session_service_protos
                 .entry(id)
                 .or_default()
@@ -749,7 +739,7 @@ where
         // you **must record** which protocols are opened for each session.
         if let Some(ProtocolHandle::Session(mut handle)) = self.get_proto_handle(true, proto_id) {
             debug!("init session [{}] level proto [{}] handle", id, proto_id);
-            handle.connected(&mut self.service_context, &session_context);
+            handle.connected(&mut self.service_context, &session_context, version);
             self.session_proto_handles
                 .entry(id)
                 .or_default()

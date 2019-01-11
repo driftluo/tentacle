@@ -126,7 +126,7 @@ impl ServiceProtocol for DiscoveryProtocol {
         control.future_task(discovery_task);
     }
 
-    fn connected(&mut self, control: &mut ServiceContext, session: &SessionContext) {
+    fn connected(&mut self, control: &mut ServiceContext, session: &SessionContext, _: &str) {
         self.sessions
             .entry(session.id)
             .or_insert(SessionData::new(session.address, session.ty));
