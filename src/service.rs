@@ -198,6 +198,7 @@ pub struct Message {
 /// Session context
 #[derive(Clone)]
 pub struct SessionContext {
+    pub(crate) event_sender: mpsc::Sender<SessionEvent>,
     /// Session's ID
     pub id: SessionId,
     /// Remote socket address
@@ -395,7 +396,7 @@ pub enum ServiceTask {
 pub struct Service<T, U> {
     protocol_configs: Arc<HashMap<String, Box<dyn ProtocolMeta<U> + Send + Sync>>>,
 
-    sessions: HashMap<SessionId, mpsc::Sender<SessionEvent>>,
+    sessions: HashMap<SessionId, SessionContext>,
 
     listens: Vec<(SocketAddr, Incoming)>,
 
@@ -413,8 +414,6 @@ pub struct Service<T, U> {
 
     // The service protocols open with the session
     session_service_protos: HashMap<SessionId, HashSet<ProtocolId>>,
-
-    session_contexts: HashMap<SessionId, SessionContext>,
 
     service_proto_handles: HashMap<ProtocolId, Box<dyn ServiceProtocol + Send + 'static>>,
 
@@ -462,7 +461,6 @@ where
             key_pair,
             sessions: HashMap::default(),
             session_service_protos: HashMap::default(),
-            session_contexts: HashMap::default(),
             service_proto_handles: HashMap::default(),
             session_proto_handles: HashMap::default(),
             listens: Vec::new(),
@@ -503,12 +501,14 @@ where
     /// Valid after Service starts
     #[inline]
     pub fn send_message(&mut self, message: Message) {
-        if let Some(sender) = self.sessions.get_mut(&message.session_id) {
-            let _ = sender.try_send(SessionEvent::ProtocolMessage {
-                id: message.session_id,
-                proto_id: message.proto_id,
-                data: message.data.into(),
-            });
+        if let Some(session) = self.sessions.get_mut(&message.session_id) {
+            let _ = session
+                .event_sender
+                .try_send(SessionEvent::ProtocolMessage {
+                    id: message.session_id,
+                    proto_id: message.proto_id,
+                    data: message.data.into(),
+                });
         }
     }
 
@@ -522,13 +522,15 @@ where
             Some(ids) => {
                 let proto_id = message.proto_id;
                 let data: bytes::Bytes = message.data.into();
-                self.sessions.iter_mut().for_each(|(id, send)| {
+                self.sessions.iter_mut().for_each(|(id, session)| {
                     if ids.contains(id) {
-                        let _ = send.try_send(SessionEvent::ProtocolMessage {
-                            id: *id,
-                            proto_id,
-                            data: data.clone(),
-                        });
+                        let _ = session
+                            .event_sender
+                            .try_send(SessionEvent::ProtocolMessage {
+                                id: *id,
+                                proto_id,
+                                data: data.clone(),
+                            });
                     }
                 });
             }
@@ -547,12 +549,14 @@ where
         );
         let proto_id = message.proto_id;
         let data: bytes::Bytes = message.data.into();
-        self.sessions.iter_mut().for_each(|(id, send)| {
-            let _ = send.try_send(SessionEvent::ProtocolMessage {
-                id: *id,
-                proto_id,
-                data: data.clone(),
-            });
+        self.sessions.iter_mut().for_each(|(id, session)| {
+            let _ = session
+                .event_sender
+                .try_send(SessionEvent::ProtocolMessage {
+                    id: *id,
+                    proto_id,
+                    data: data.clone(),
+                });
         });
     }
 
@@ -641,7 +645,7 @@ where
             // If the public key exists, the connection has been established
             // and then the useless connection needs to be closed.
             if self
-                .session_contexts
+                .sessions
                 .values()
                 .any(|context| context.remote_pubkey.as_ref() == Some(key))
             {
@@ -654,16 +658,16 @@ where
             self.next_session += 1;
         }
 
-        let session_context = SessionContext {
+        let (service_event_sender, service_event_receiver) = mpsc::channel(256);
+        let session = SessionContext {
+            event_sender: service_event_sender,
             id: self.next_session,
             address,
             ty,
             remote_pubkey: remote_pubkey.clone(),
         };
-        self.session_contexts
-            .insert(session_context.id, session_context);
+        self.sessions.insert(session.id, session);
 
-        let (service_event_sender, service_event_receiver) = mpsc::channel(256);
         let meta = SessionMeta::new(self.next_session, ty).protocol(self.protocol_configs.clone());
         let mut session = Session::new(
             handle,
@@ -677,8 +681,6 @@ where
                 .keys()
                 .for_each(|name| session.open_proto_stream(name));
         }
-        self.sessions
-            .insert(self.next_session, service_event_sender);
 
         tokio::spawn(session.for_each(|_| Ok(())).map_err(|_| ()));
 
@@ -697,8 +699,10 @@ where
     #[inline]
     fn session_close(&mut self, id: SessionId) {
         debug!("service session [{}] close", id);
-        if let Some(mut session_sender) = self.sessions.remove(&id) {
-            let _ = session_sender.try_send(SessionEvent::SessionClose { id });
+        if let Some(session) = self.sessions.get_mut(&id) {
+            let _ = session
+                .event_sender
+                .try_send(SessionEvent::SessionClose { id });
         }
 
         // Service handle processing flow
@@ -719,13 +723,13 @@ where
         // You must first confirm that the protocol is open in the session,
         // otherwise a false positive will occur.
         close_proto_ids.into_iter().for_each(|proto_id| {
-            let session_context = self.session_contexts.get(&id);
+            let session_context = self.sessions.get(&id);
             let service_handle = self.service_proto_handles.get_mut(&proto_id);
             if let (Some(handle), Some(session_context)) = (service_handle, session_context) {
                 handle.disconnected(&mut self.service_context, session_context);
             }
         });
-        self.session_contexts.remove(&id);
+        self.sessions.remove(&id);
     }
 
     /// Open the handle corresponding to the protocol
@@ -733,7 +737,7 @@ where
     fn protocol_open(&mut self, id: SessionId, proto_id: ProtocolId, version: &str) {
         debug!("service session [{}] proto [{}] open", id, proto_id);
         let session_context = self
-            .session_contexts
+            .sessions
             .get(&id)
             .expect("Protocol open without session open");
 
@@ -783,7 +787,7 @@ where
 
         // Service proto handle processing flow
         let service_handle = self.service_proto_handles.get_mut(&proto_id);
-        let session_context = self.session_contexts.get_mut(&session_id);
+        let session_context = self.sessions.get_mut(&session_id);
         if let (Some(handle), Some(session_context)) = (service_handle, session_context) {
             handle.received(&mut self.service_context, &session_context, data.to_vec());
         }
@@ -806,7 +810,7 @@ where
 
         // Service proto handle processing flow
         let service_handle = self.service_proto_handles.get_mut(&proto_id);
-        let session_context = self.session_contexts.get_mut(&session_id);
+        let session_context = self.sessions.get_mut(&session_id);
         if let (Some(handle), Some(session_context)) = (service_handle, session_context) {
             handle.disconnected(&mut self.service_context, &session_context);
         }
