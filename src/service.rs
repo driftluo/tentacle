@@ -187,7 +187,7 @@ pub struct SessionContext {
     pub remote_pubkey: Option<PublicKey>,
     // TODO: use reference?
     /// Selected protocol version
-    pub version: String,
+    pub version: Option<String>,
 }
 
 /// The Service runtime can send some instructions to the inside of the handle.
@@ -389,8 +389,6 @@ pub struct Service<T, U> {
 
     key_pair: Option<SecioKeyPair>,
 
-    remote_pubkeys: HashMap<SessionId, PublicKey>,
-
     /// Can be upgrade to list service level protocols
     handle: T,
 
@@ -441,7 +439,6 @@ where
             handle,
             key_pair,
             sessions: HashMap::default(),
-            remote_pubkeys: HashMap::new(),
             session_contexts: HashMap::default(),
             service_proto_handles: HashMap::default(),
             session_proto_handles: HashMap::default(),
@@ -611,32 +608,41 @@ where
     fn session_open<H>(
         &mut self,
         mut handle: H,
-        public_key: Option<PublicKey>,
+        remote_pubkey: Option<PublicKey>,
         address: SocketAddr,
         ty: SessionType,
     ) where
         H: AsyncRead + AsyncWrite + Send + 'static,
     {
-        if let Some(ref key) = public_key {
+        if let Some(ref key) = remote_pubkey {
             // If the public key exists, the connection has been established
             // and then the useless connection needs to be closed.
             if self
-                .remote_pubkeys
+                .session_contexts
                 .values()
-                .any(|current_key| current_key == key)
+                .any(|context| context.remote_pubkey.as_ref() == Some(key))
             {
                 let _ = handle.shutdown();
+                return;
             } else {
                 self.next_session += 1;
-                self.remote_pubkeys.insert(self.next_session, key.clone());
             }
         } else {
             self.next_session += 1;
         }
 
+        let session_context = SessionContext {
+            id: self.next_session,
+            address,
+            ty,
+            remote_pubkey: remote_pubkey.clone(),
+            version: None,
+        };
+        self.session_contexts
+            .insert(session_context.id, session_context);
+
         let (service_event_sender, service_event_receiver) = mpsc::channel(256);
-        let meta = SessionMeta::new(self.next_session, ty, address, public_key.clone())
-            .protocol(self.protocol_configs.clone());
+        let meta = SessionMeta::new(self.next_session, ty).protocol(self.protocol_configs.clone());
         let mut session = Session::new(
             handle,
             self.session_event_sender.clone(),
@@ -660,7 +666,7 @@ where
                 id: self.next_session,
                 address,
                 ty: SessionType::Server,
-                public_key,
+                public_key: remote_pubkey,
             },
         );
     }
@@ -669,7 +675,6 @@ where
     #[inline]
     fn session_close(&mut self, id: SessionId) {
         debug!("service session [{}] close", id);
-        self.remote_pubkeys.remove(&id);
         if let Some(mut session_sender) = self.sessions.remove(&id) {
             let _ = session_sender.try_send(SessionEvent::SessionClose { id });
         }
@@ -704,24 +709,19 @@ where
 
     /// Open the handle corresponding to the protocol
     #[inline]
-    fn protocol_open(
-        &mut self,
-        id: SessionId,
-        proto_id: ProtocolId,
-        address: SocketAddr,
-        ty: SessionType,
-        remote_pubkey: &Option<PublicKey>,
-        version: &str,
-    ) {
+    fn protocol_open(&mut self, id: SessionId, proto_id: ProtocolId, version: &str) {
         debug!("service session [{}] proto [{}] open", id, proto_id);
-
-        let session_context = SessionContext {
-            id,
-            address,
-            ty,
-            remote_pubkey: remote_pubkey.clone(),
-            version: version.to_owned(),
-        };
+        {
+            let session_context = self
+                .session_contexts
+                .get_mut(&id)
+                .expect("Protocol open without session open");
+            session_context.version = Some(version.to_string());
+        }
+        let session_context = self
+            .session_contexts
+            .get(&id)
+            .expect("Protocol open without session open");
 
         // Service proto handle processing flow
         if !self.service_proto_handles.contains_key(&proto_id) {
@@ -748,8 +748,6 @@ where
                 .or_default()
                 .insert(proto_id, handle);
         }
-
-        self.session_contexts.insert(id, session_context);
     }
 
     /// Processing the received data
@@ -829,19 +827,9 @@ where
             SessionEvent::ProtocolOpen {
                 id,
                 proto_id,
-                remote_address,
-                remote_public_key,
-                ty,
                 version,
                 ..
-            } => self.protocol_open(
-                id,
-                proto_id,
-                remote_address,
-                ty,
-                &remote_public_key,
-                &version,
-            ),
+            } => self.protocol_open(id, proto_id, &version),
             SessionEvent::ProtocolClose { id, proto_id, .. } => self.protocol_close(id, proto_id),
         }
     }

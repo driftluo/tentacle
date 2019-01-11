@@ -60,12 +60,6 @@ pub(crate) enum SessionEvent {
         proto_id: ProtocolId,
         /// Stream id
         stream_id: StreamId,
-        /// Remote address
-        remote_address: ::std::net::SocketAddr,
-        /// Remote public key
-        remote_public_key: Option<PublicKey>,
-        /// Session type
-        ty: SessionType,
         /// Protocol version
         version: String,
     },
@@ -88,9 +82,9 @@ pub(crate) struct Session<T, U> {
 
     id: SessionId,
 
-    remote_address: ::std::net::SocketAddr,
-    remote_public_key: Option<PublicKey>,
-
+    // NOTE: Not used yet, may useful later
+    // remote_address: ::std::net::SocketAddr,
+    // remote_public_key: Option<PublicKey>,
     next_stream: StreamId,
     /// Indicates the identity of the current session
     ty: SessionType,
@@ -130,8 +124,6 @@ where
             socket,
             protocol_configs: meta.protocol_configs,
             id: meta.id,
-            remote_public_key: meta.remote_public_key,
-            remote_address: meta.remote_address,
             ty: meta.ty,
             next_stream: 0,
             sub_streams: HashMap::default(),
@@ -268,9 +260,6 @@ where
                     id: self.id,
                     stream_id: self.next_stream,
                     proto_id,
-                    remote_address: self.remote_address,
-                    remote_public_key: self.remote_public_key.clone(),
-                    ty: self.ty,
                     version,
                 });
                 self.next_stream += 1;
@@ -412,9 +401,8 @@ pub(crate) struct SessionMeta<U> {
     id: SessionId,
     protocol_configs: Arc<HashMap<String, Box<dyn ProtocolMeta<U> + Send + Sync>>>,
     ty: SessionType,
-
-    remote_address: ::std::net::SocketAddr,
-    remote_public_key: Option<PublicKey>,
+    // remote_address: ::std::net::SocketAddr,
+    // remote_public_key: Option<PublicKey>,
 }
 
 impl<U> SessionMeta<U>
@@ -423,19 +411,12 @@ where
     <U as Decoder>::Error: error::Error + Into<io::Error>,
     <U as Encoder>::Error: error::Error + Into<io::Error>,
 {
-    pub fn new(
-        id: SessionId,
-        ty: SessionType,
-        remote_address: ::std::net::SocketAddr,
-        remote_public_key: Option<PublicKey>,
-    ) -> Self {
+    pub fn new(id: SessionId, ty: SessionType) -> Self {
         SessionMeta {
             config: Config::default(),
             id,
             ty,
-            remote_address,
             protocol_configs: Arc::new(HashMap::new()),
-            remote_public_key,
         }
     }
 
