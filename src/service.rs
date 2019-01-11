@@ -17,6 +17,7 @@ use tokio::timer::{self, Interval};
 use tokio::{
     codec::{Decoder, Encoder},
     prelude::{AsyncRead, AsyncWrite, FutureExt},
+    timer::Timeout,
 };
 use yamux::session::SessionType;
 
@@ -179,7 +180,7 @@ where
     }
 }
 
-// TODO: maybe remote this struct later?
+// TODO: maybe remove this struct later?
 /// Protocol message
 ///
 /// > The structure may be adjusted in the future
@@ -400,7 +401,8 @@ pub struct Service<T, U> {
 
     listens: Vec<(SocketAddr, Incoming)>,
 
-    dial: Vec<(SocketAddr, ConnectFuture)>,
+    dial: Vec<(SocketAddr, Timeout<ConnectFuture>)>,
+    timeout: Duration,
     /// Calculate the number of connection requests that need to be sent externally,
     /// if run forever, it will default to 1, else it default to 0
     task_count: usize,
@@ -444,6 +446,7 @@ where
         handle: T,
         key_pair: Option<SecioKeyPair>,
         forever: bool,
+        timeout: Duration,
     ) -> Self {
         let (session_event_sender, session_event_receiver) = mpsc::channel(256);
         let (service_task_sender, service_task_receiver) = mpsc::channel(256);
@@ -465,6 +468,7 @@ where
             session_proto_handles: HashMap::default(),
             listens: Vec::new(),
             dial: Vec::new(),
+            timeout,
             task_count: if forever { 1 } else { 0 },
             next_session: 0,
             session_event_sender,
@@ -483,10 +487,16 @@ where
 
     /// Dial the given address, doesn't actually make a request, just generate a future
     pub fn dial(mut self, address: SocketAddr) -> Self {
-        let dial = TcpStream::connect(&address);
+        self.dial_inner(address);
+        self
+    }
+
+    /// Use by inner
+    #[inline(always)]
+    fn dial_inner(&mut self, address: SocketAddr) {
+        let dial = TcpStream::connect(&address).timeout(self.timeout);
         self.dial.push((address, dial));
         self.task_count += 1;
-        self
     }
 
     /// Get service current protocol configure
@@ -608,17 +618,21 @@ where
                     });
                     Ok(())
                 })
-                .timeout(Duration::from_secs(10))
+                .timeout(self.timeout)
                 .map_err(move |err| {
-                    error!(
-                        "Handshake with {} failed, error: {:?}",
-                        address,
-                        err.description()
-                    );
-                    let _ = fail_sender.try_send(SessionEvent::HandshakeFail {
-                        ty,
-                        error: io::Error::new(io::ErrorKind::TimedOut, err.description()),
-                    });
+                    let error = if err.is_timer() {
+                        // tokio timer error
+                        io::Error::new(io::ErrorKind::Other, err.description())
+                    } else if err.is_elapsed() {
+                        // time out error
+                        io::Error::new(io::ErrorKind::TimedOut, err.description())
+                    } else {
+                        // dialer error
+                        err.into_inner().unwrap().into()
+                    };
+
+                    error!("Handshake with {} failed, error: {:?}", address, error);
+                    let _ = fail_sender.try_send(SessionEvent::HandshakeFail { ty, error });
                 });
 
             tokio::spawn(task);
@@ -668,7 +682,9 @@ where
         };
         self.sessions.insert(session.id, session);
 
-        let meta = SessionMeta::new(self.next_session, ty).protocol(self.protocol_configs.clone());
+        let meta = SessionMeta::new(self.next_session, ty, self.timeout)
+            .protocol(self.protocol_configs.clone());
+
         let mut session = Session::new(
             handle,
             self.session_event_sender.clone(),
@@ -865,8 +881,7 @@ where
             } => self.filter_broadcast(session_ids, message),
             ServiceTask::Dial { address } => {
                 if !self.dial.iter().any(|(addr, _)| addr == &address) {
-                    let dial = TcpStream::connect(&address);
-                    self.dial.push((address, dial));
+                    self.dial_inner(address);
                 }
             }
             ServiceTask::Disconnect { session_id } => self.session_close(session_id),
@@ -906,12 +921,19 @@ where
                 }
                 Err(err) => {
                     self.task_count -= 1;
+                    let error = if err.is_timer() {
+                        // tokio timer error
+                        io::Error::new(io::ErrorKind::Other, err.description())
+                    } else if err.is_elapsed() {
+                        // time out error
+                        io::Error::new(io::ErrorKind::TimedOut, err.description())
+                    } else {
+                        // dialer error
+                        err.into_inner().unwrap()
+                    };
                     self.handle.handle_error(
                         &mut self.service_context,
-                        ServiceEvent::DialerError {
-                            address,
-                            error: err,
-                        },
+                        ServiceEvent::DialerError { address, error },
                     );
                 }
             }

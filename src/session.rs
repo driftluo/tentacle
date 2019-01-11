@@ -81,6 +81,7 @@ pub(crate) struct Session<T, U> {
     protocol_configs: Arc<HashMap<String, Box<dyn ProtocolMeta<U> + Send + Sync>>>,
 
     id: SessionId,
+    timeout: Duration,
 
     // NOTE: Not used yet, may useful later
     // remote_address: ::std::net::SocketAddr,
@@ -124,6 +125,7 @@ where
             socket,
             protocol_configs: meta.protocol_configs,
             id: meta.id,
+            timeout: meta.timeout,
             ty: meta.ty,
             next_stream: 0,
             sub_streams: HashMap::default(),
@@ -168,7 +170,7 @@ where
                 }
                 Ok(())
             })
-            .timeout(Duration::from_secs(10))
+            .timeout(self.timeout)
             .map_err(|err| {
                 trace!("stream protocol select err: {:?}", err);
             });
@@ -221,7 +223,7 @@ where
                 }
                 Ok(())
             })
-            .timeout(Duration::from_secs(10))
+            .timeout(self.timeout)
             .map_err(|err| {
                 trace!("stream protocol select err: {:?}", err);
             });
@@ -403,6 +405,7 @@ pub(crate) struct SessionMeta<U> {
     ty: SessionType,
     // remote_address: ::std::net::SocketAddr,
     // remote_public_key: Option<PublicKey>,
+    timeout: Duration,
 }
 
 impl<U> SessionMeta<U>
@@ -411,12 +414,13 @@ where
     <U as Decoder>::Error: error::Error + Into<io::Error>,
     <U as Encoder>::Error: error::Error + Into<io::Error>,
 {
-    pub fn new(id: SessionId, ty: SessionType) -> Self {
+    pub fn new(id: SessionId, ty: SessionType, timeout: Duration) -> Self {
         SessionMeta {
             config: Config::default(),
             id,
             ty,
             protocol_configs: Arc::new(HashMap::new()),
+            timeout,
         }
     }
 

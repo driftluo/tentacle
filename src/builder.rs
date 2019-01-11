@@ -2,7 +2,7 @@ use secio::SecioKeyPair;
 use std::collections::HashMap;
 use std::marker::PhantomData;
 use std::sync::Arc;
-use std::{error, io};
+use std::{error, io, time::Duration};
 use tokio::codec::{Decoder, Encoder};
 
 use crate::service::{ProtocolMeta, Service, ServiceHandle};
@@ -12,6 +12,7 @@ pub struct ServiceBuilder<T, U> {
     inner: HashMap<String, Box<dyn ProtocolMeta<U> + Send + Sync>>,
     key_pair: Option<SecioKeyPair>,
     forever: bool,
+    timeout: Duration,
     phantom: PhantomData<T>,
 }
 
@@ -32,7 +33,13 @@ where
     where
         H: ServiceHandle,
     {
-        Service::new(Arc::new(self.inner), handle, self.key_pair, self.forever)
+        Service::new(
+            Arc::new(self.inner),
+            handle,
+            self.key_pair,
+            self.forever,
+            self.timeout,
+        )
     }
 
     /// Insert a custom protocol
@@ -59,6 +66,14 @@ where
         self
     }
 
+    /// Timeout for handshake and connect
+    ///
+    /// Default 10 second
+    pub fn timeout(mut self, timeout: Duration) -> Self {
+        self.timeout = timeout;
+        self
+    }
+
     /// Clear all protocols
     pub fn clear(&mut self) {
         self.inner.clear();
@@ -77,6 +92,7 @@ where
             inner: HashMap::new(),
             key_pair: None,
             forever: false,
+            timeout: Duration::from_secs(10),
             phantom: PhantomData,
         }
     }
