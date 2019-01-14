@@ -220,7 +220,7 @@ pub struct SessionContext {
 pub struct ServiceContext {
     service_task_sender: mpsc::Sender<ServiceTask>,
     // For tell notify finished
-    notify_senders: HashMap<(SessionId, ProtocolId), Vec<oneshot::Sender<()>>>,
+    session_notify_senders: HashMap<(SessionId, ProtocolId), Vec<oneshot::Sender<()>>>,
     proto_infos: Arc<HashMap<ProtocolId, ProtocolInfo>>,
     listens: Vec<SocketAddr>,
 }
@@ -233,7 +233,7 @@ impl ServiceContext {
     ) -> Self {
         ServiceContext {
             service_task_sender,
-            notify_senders: HashMap::default(),
+            session_notify_senders: HashMap::default(),
             proto_infos: Arc::new(proto_infos),
             listens: Vec::new(),
         }
@@ -296,7 +296,7 @@ impl ServiceContext {
         token: u64,
     ) {
         let (sender, mut receiver) = oneshot::channel::<()>();
-        self.notify_senders
+        self.session_notify_senders
             .entry((session_id, proto_id))
             .or_default()
             .push(sender);
@@ -350,6 +350,14 @@ impl ServiceContext {
     #[inline]
     fn update_listens(&mut self, address_list: Vec<SocketAddr>) {
         self.listens = address_list;
+    }
+
+    fn remove_session_notify_senders(&mut self, session_id: SessionId, proto_id: ProtocolId) {
+        if let Some(senders) = self.session_notify_senders.remove(&(session_id, proto_id)) {
+            for sender in senders {
+                let _ = sender.send(());
+            }
+        }
     }
 }
 
@@ -779,9 +787,8 @@ where
         // You must first confirm that the protocol is open in the session,
         // otherwise a false positive will occur.
         close_proto_ids.into_iter().for_each(|proto_id| {
-            if let Some(mut sender) = self.service_context.notify_senders.remove(&(id, proto_id)) {
-                let _ = sender.close();
-            }
+            self.service_context
+                .remove_session_notify_senders(id, proto_id);
             let session_context = self.sessions.get(&id);
             let service_handle = self.service_proto_handles.get_mut(&proto_id);
             if let (Some(handle), Some(session_context)) = (service_handle, session_context) {
@@ -882,13 +889,8 @@ where
         }
 
         // Close notify sender
-        if let Some(mut sender) = self
-            .service_context
-            .notify_senders
-            .remove(&(session_id, proto_id))
-        {
-            let _ = sender.close();
-        }
+        self.service_context
+            .remove_session_notify_senders(session_id, proto_id);
     }
 
     /// Handling various events uploaded by the session
@@ -953,12 +955,9 @@ where
                 if let Some(handles) = self.session_proto_handles.get_mut(&session_id) {
                     if let Some(handle) = handles.get_mut(&proto_id) {
                         handle.notify(&mut self.service_context, token);
-                    } else if let Some(mut sender) = self
-                        .service_context
-                        .notify_senders
-                        .remove(&(session_id, proto_id))
-                    {
-                        let _ = sender.close();
+                    } else {
+                        self.service_context
+                            .remove_session_notify_senders(session_id, proto_id);
                     }
                 }
             }
