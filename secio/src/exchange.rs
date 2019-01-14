@@ -34,9 +34,8 @@ pub fn generate_agreement(
 
     match agreement::EphemeralPrivateKey::generate(algorithm.into(), &rng) {
         Ok(tmp_priv_key) => {
-            let mut tmp_pub_key: Vec<u8> = (0..tmp_priv_key.public_key_len()).map(|_| 0).collect();
-            tmp_priv_key.compute_public_key(&mut tmp_pub_key).unwrap();
-            Ok((tmp_priv_key, tmp_pub_key))
+            let tmp_pub_key = tmp_priv_key.compute_public_key().unwrap();
+            Ok((tmp_priv_key, tmp_pub_key.as_ref().to_vec()))
         }
         Err(_) => {
             debug!("failed to generate ECDH key");
