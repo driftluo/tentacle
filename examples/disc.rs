@@ -102,7 +102,7 @@ impl ServiceProtocol for DiscoveryProtocol {
 
         let interval = Duration::from_secs(5);
         debug!("Setup interval {:?}", interval);
-        control.set_notify(self.id, interval, 3);
+        control.set_service_notify(self.id, interval, 3);
         let discovery_task = self
             .discovery
             .take()
