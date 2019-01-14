@@ -880,6 +880,15 @@ where
                 handle.disconnected(&mut self.service_context);
             }
         }
+
+        // Close notify sender
+        if let Some(mut sender) = self
+            .service_context
+            .notify_senders
+            .remove(&(session_id, proto_id))
+        {
+            let _ = sender.close();
+        }
     }
 
     /// Handling various events uploaded by the session
