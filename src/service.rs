@@ -1,4 +1,7 @@
-use futures::{prelude::*, sync::mpsc};
+use futures::{
+    prelude::*,
+    sync::{mpsc, oneshot},
+};
 use log::{debug, error, trace, warn};
 use secio::{handshake::Config, PublicKey, SecioKeyPair};
 use std::collections::{HashMap, HashSet};
@@ -214,9 +217,10 @@ pub struct SessionContext {
 /// The Service runtime can send some instructions to the inside of the handle.
 /// This is the sending channel.
 // TODO: Need to maintain the network topology map here?
-#[derive(Clone)]
 pub struct ServiceContext {
     service_task_sender: mpsc::Sender<ServiceTask>,
+    // For tell notify finished
+    notify_senders: HashMap<(SessionId, ProtocolId), Vec<oneshot::Sender<()>>>,
     proto_infos: Arc<HashMap<ProtocolId, ProtocolInfo>>,
     listens: Vec<SocketAddr>,
 }
@@ -229,6 +233,7 @@ impl ServiceContext {
     ) -> Self {
         ServiceContext {
             service_task_sender,
+            notify_senders: HashMap::default(),
             proto_infos: Arc::new(proto_infos),
             listens: Vec::new(),
         }
@@ -266,8 +271,8 @@ impl ServiceContext {
         })
     }
 
-    /// Set a notify token
-    pub fn set_notify(&mut self, proto_id: ProtocolId, interval: Duration, token: u64) {
+    /// Set a service notify token
+    pub fn set_service_notify(&mut self, proto_id: ProtocolId, interval: Duration, token: u64) {
         let mut interval_sender = self.sender().clone();
         let fut = Interval::new(Instant::now(), interval)
             .for_each(move |_| {
@@ -277,6 +282,41 @@ impl ServiceContext {
                         debug!("interval error: {:?}", err);
                         timer::Error::shutdown()
                     })
+            })
+            .map_err(|err| warn!("{}", err));
+        self.future_task(fut);
+    }
+
+    /// Set as session notify token
+    pub fn set_session_notify(
+        &mut self,
+        session_id: SessionId,
+        proto_id: ProtocolId,
+        interval: Duration,
+        token: u64,
+    ) {
+        let (sender, mut receiver) = oneshot::channel::<()>();
+        self.notify_senders
+            .entry((session_id, proto_id))
+            .or_default()
+            .push(sender);
+        let mut interval_sender = self.sender().clone();
+        let fut = Interval::new(Instant::now(), interval)
+            .for_each(move |_| {
+                if receiver.poll() == Ok(Async::NotReady) {
+                    interval_sender
+                        .try_send(ServiceTask::ProtocolSessionNotify {
+                            session_id,
+                            proto_id,
+                            token,
+                        })
+                        .map_err(|err| {
+                            debug!("interval error: {:?}", err);
+                            timer::Error::shutdown()
+                        })
+                } else {
+                    Err(timer::Error::shutdown())
+                }
             })
             .map_err(|err| warn!("{}", err));
         self.future_task(fut);
@@ -739,6 +779,9 @@ where
         // You must first confirm that the protocol is open in the session,
         // otherwise a false positive will occur.
         close_proto_ids.into_iter().for_each(|proto_id| {
+            if let Some(mut sender) = self.service_context.notify_senders.remove(&(id, proto_id)) {
+                let _ = sender.close();
+            }
             let session_context = self.sessions.get(&id);
             let service_handle = self.service_proto_handles.get_mut(&proto_id);
             if let (Some(handle), Some(session_context)) = (service_handle, session_context) {
@@ -837,6 +880,15 @@ where
                 handle.disconnected(&mut self.service_context);
             }
         }
+
+        // Close notify sender
+        if let Some(mut sender) = self
+            .service_context
+            .notify_senders
+            .remove(&(session_id, proto_id))
+        {
+            let _ = sender.close();
+        }
     }
 
     /// Handling various events uploaded by the session
@@ -901,6 +953,12 @@ where
                 if let Some(handles) = self.session_proto_handles.get_mut(&session_id) {
                     if let Some(handle) = handles.get_mut(&proto_id) {
                         handle.notify(&mut self.service_context, token);
+                    } else if let Some(mut sender) = self
+                        .service_context
+                        .notify_senders
+                        .remove(&(session_id, proto_id))
+                    {
+                        let _ = sender.close();
                     }
                 }
             }
