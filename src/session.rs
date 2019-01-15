@@ -1,9 +1,10 @@
 use futures::{prelude::*, sync::mpsc};
 use log::{debug, error, trace, warn};
+use multiaddr::Multiaddr;
 use secio::{codec::stream_handle::StreamHandle as SecureHandle, PublicKey};
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::{error, io, net::SocketAddr, time::Duration};
+use std::{error, io, time::Duration};
 use tokio::codec::{Decoder, Encoder, Framed};
 use tokio::prelude::{AsyncRead, AsyncWrite, FutureExt};
 use yamux::{session::SessionType, Config, Session as YamuxSession, StreamHandle};
@@ -33,7 +34,7 @@ pub(crate) enum SessionEvent {
         /// Remote Public key
         public_key: PublicKey,
         /// Remote address
-        address: SocketAddr,
+        address: Multiaddr,
         /// Session type
         ty: SessionType,
     },

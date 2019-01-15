@@ -1,3 +1,4 @@
+use p2p::multiaddr::Multiaddr;
 use std::collections::BTreeMap;
 use std::net::{IpAddr, SocketAddr};
 use std::time::Instant;
@@ -15,9 +16,9 @@ pub(crate) const DEFAULT_MAX_KNOWN: usize = 5000;
 
 // FIXME: Should be peer store?
 pub trait AddressManager {
-    fn add_new(&mut self, addr: SocketAddr);
-    fn misbehave(&mut self, addr: SocketAddr, ty: u64) -> i32;
-    fn get_random(&mut self, n: usize) -> Vec<SocketAddr>;
+    fn add_new(&mut self, addr: Multiaddr);
+    fn misbehave(&mut self, addr: Multiaddr, ty: u64) -> i32;
+    fn get_random(&mut self, n: usize) -> Vec<Multiaddr>;
 }
 
 // bitcoin: bloom.h, bloom.cpp => CRollingBloomFilter

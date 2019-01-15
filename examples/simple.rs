@@ -60,19 +60,7 @@ struct PHandle {
 impl ServiceProtocol for PHandle {
     fn init(&mut self, control: &mut ServiceContext) {
         if self.proto_id == 0 {
-            let mut interval_sender = control.sender().clone();
-            let proto_id = self.proto_id;
-            let interval_task = Interval::new(Instant::now(), Duration::from_secs(5))
-                .for_each(move |_| {
-                    match interval_sender
-                        .try_send(ServiceTask::ProtocolNotify { proto_id, token: 3 })
-                    {
-                        Ok(_) => Ok(()),
-                        Err(_) => Err(Error::shutdown()),
-                    }
-                })
-                .map_err(|err| info!("{}", err));
-            control.future_task(interval_task);
+            control.set_service_notify(0, Duration::from_secs(5), 3);
         }
     }
 
@@ -215,14 +203,14 @@ fn create_client() -> Service<SHandle, LengthDelimitedCodec> {
 
 fn server() {
     let mut service = create_server();
-    let _ = service.listen("127.0.0.1:1337".parse().unwrap());
+    let _ = service.listen("/ip4/127.0.0.1/tcp/1337".parse().unwrap());
 
     tokio::run(service.for_each(|_| Ok(())))
 }
 
 fn client() {
-    let mut service = create_client().dial("127.0.0.1:1337".parse().unwrap());
-    let _ = service.listen("127.0.0.1:1337".parse().unwrap());
+    let mut service = create_client().dial("/ip4/127.0.0.1/tcp/1337".parse().unwrap());
+    let _ = service.listen("/ip4/127.0.0.1/tcp/1337".parse().unwrap());
 
     tokio::run(service.for_each(|_| Ok(())))
 }

@@ -7,6 +7,7 @@ use futures::{
     Async, Poll, Stream,
 };
 use log::debug;
+use p2p::multiaddr::ToMultiaddr;
 use rand::seq::SliceRandom;
 
 mod addr;
@@ -203,7 +204,8 @@ impl<M: AddressManager> Stream for Discovery<M> {
             Some((_key, nodes)) => {
                 for node in nodes.items.into_iter() {
                     for addr in node.addresses.into_iter() {
-                        self.addr_mgr.add_new(addr.socket_addr());
+                        self.addr_mgr
+                            .add_new(addr.socket_addr().to_multiaddr().unwrap());
                     }
                 }
                 Ok(Async::Ready(Some(())))

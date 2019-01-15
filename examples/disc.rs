@@ -16,8 +16,10 @@ use tokio::codec::length_delimited::LengthDelimitedCodec;
 
 use p2p::{
     builder::ServiceBuilder,
+    multiaddr::{Multiaddr, ToMultiaddr},
     service::{
-        ProtocolMeta, ServiceContext, ServiceEvent, ServiceHandle, ServiceProtocol, SessionContext,
+        multiaddr_to_socketaddr, ProtocolMeta, ServiceContext, ServiceEvent, ServiceHandle,
+        ServiceProtocol, SessionContext,
     },
     session::{ProtocolId, SessionId},
     SessionType,
@@ -34,7 +36,7 @@ fn main() {
             .insert_protocol(meta)
             .forever(true)
             .build(SHandle {});
-        let _ = service.listen("127.0.0.1:1337".parse().unwrap());
+        let _ = service.listen("/ip4/127.0.0.1/tcp/1337".parse().unwrap());
         tokio::run(service.for_each(|_| Ok(())))
     } else {
         debug!("Starting client ......");
@@ -43,8 +45,8 @@ fn main() {
             .insert_protocol(meta)
             .forever(true)
             .build(SHandle {})
-            .dial("127.0.0.1:1337".parse().unwrap());
-        let _ = service.listen("127.0.0.1:1338".parse().unwrap());
+            .dial("/ip4/127.0.0.1/tcp/1337".parse().unwrap());
+        let _ = service.listen("/ip4/127.0.0.1/tcp/1338".parse().unwrap());
         tokio::run(service.for_each(|_| Ok(())))
     }
 }
@@ -129,7 +131,7 @@ impl ServiceProtocol for DiscoveryProtocol {
     fn connected(&mut self, control: &mut ServiceContext, session: &SessionContext, _: &str) {
         self.sessions
             .entry(session.id)
-            .or_insert(SessionData::new(session.address, session.ty));
+            .or_insert(SessionData::new(session.address.clone(), session.ty));
         debug!(
             "protocol [discovery] open on session [{}], address: [{}], type: [{:?}]",
             session.id, session.address, session.ty
@@ -143,7 +145,7 @@ impl ServiceProtocol for DiscoveryProtocol {
         let (sender, receiver) = channel(8);
         self.discovery_senders.insert(session.id, sender);
         let substream = Substream::new(
-            session.address,
+            &session.address,
             direction,
             self.id,
             session.id,
@@ -207,12 +209,12 @@ impl ServiceHandle for SHandle {
 #[derive(Clone)]
 struct SessionData {
     ty: SessionType,
-    address: SocketAddr,
+    address: Multiaddr,
     data: Vec<Vec<u8>>,
 }
 
 impl SessionData {
-    fn new(address: SocketAddr, ty: SessionType) -> Self {
+    fn new(address: Multiaddr, ty: SessionType) -> Self {
         SessionData {
             address,
             ty,
@@ -231,21 +233,26 @@ pub struct SimpleAddressManager {
 }
 
 impl AddressManager for SimpleAddressManager {
-    fn add_new(&mut self, addr: SocketAddr) {
-        self.addrs.entry(RawAddr::from(addr)).or_insert(100);
+    fn add_new(&mut self, addr: Multiaddr) {
+        self.addrs
+            .entry(RawAddr::from(multiaddr_to_socketaddr(&addr).unwrap()))
+            .or_insert(100);
     }
 
-    fn misbehave(&mut self, addr: SocketAddr, _ty: u64) -> i32 {
-        let value = self.addrs.entry(RawAddr::from(addr)).or_insert(100);
+    fn misbehave(&mut self, addr: Multiaddr, _ty: u64) -> i32 {
+        let value = self
+            .addrs
+            .entry(RawAddr::from(multiaddr_to_socketaddr(&addr).unwrap()))
+            .or_insert(100);
         *value -= 20;
         *value
     }
 
-    fn get_random(&mut self, n: usize) -> Vec<SocketAddr> {
+    fn get_random(&mut self, n: usize) -> Vec<Multiaddr> {
         self.addrs
             .keys()
             .take(n)
-            .map(|addr| addr.socket_addr())
+            .map(|addr| addr.socket_addr().to_multiaddr().unwrap())
             .collect()
     }
 }
