@@ -18,3 +18,5 @@ pub use secio::{PublicKey, SecioKeyPair};
 pub use yamux::{session::SessionType, Session};
 /// Protocol select
 pub mod protocol_select;
+/// Re-pub multiaddr crate
+pub use multiaddr;

@@ -9,7 +9,8 @@ use futures::{
     Async, AsyncSink, Poll, Sink, Stream,
 };
 use log::{debug, trace, warn};
-use p2p::service::{Message, ServiceTask};
+use p2p::multiaddr::{Multiaddr, ToMultiaddr};
+use p2p::service::{multiaddr_to_socketaddr, Message, ServiceTask};
 use p2p::session::{ProtocolId, SessionId};
 use tokio::codec::Framed;
 use tokio::io::{AsyncRead, AsyncWrite};
@@ -198,7 +199,7 @@ impl SubstreamValue {
             DiscoveryMessage::GetNodes { listen_port, .. } => {
                 if self.received_get_nodes {
                     // TODO: misbehavior
-                    if addr_mgr.misbehave(self.remote_addr.into_inner(), 111) < 0 {
+                    if addr_mgr.misbehave(self.remote_addr.into_multiaddr(), 111) < 0 {
                         // TODO: more clear error type
                         warn!("Already received get nodes");
                         return Err(io::ErrorKind::Other.into());
@@ -222,7 +223,7 @@ impl SubstreamValue {
                     let items = items
                         .into_iter()
                         .map(|addr| Node {
-                            addresses: vec![RawAddr::from(addr)],
+                            addresses: vec![RawAddr::from(multiaddr_to_socketaddr(&addr).unwrap())],
                         })
                         .collect::<Vec<_>>();
                     let nodes = Nodes {
@@ -239,7 +240,7 @@ impl SubstreamValue {
                     if nodes.items.len() > ANNOUNCE_THRESHOLD {
                         warn!("Nodes number more than {}", ANNOUNCE_THRESHOLD);
                         // TODO: misbehavior
-                        if addr_mgr.misbehave(self.remote_addr.into_inner(), 222) < 0 {
+                        if addr_mgr.misbehave(self.remote_addr.into_multiaddr(), 222) < 0 {
                             // TODO: more clear error type
                             return Err(io::ErrorKind::Other.into());
                         }
@@ -249,7 +250,7 @@ impl SubstreamValue {
                 } else if self.received_nodes {
                     warn!("already received Nodes(announce=false) message");
                     // TODO: misbehavior
-                    if addr_mgr.misbehave(self.remote_addr.into_inner(), 333) < 0 {
+                    if addr_mgr.misbehave(self.remote_addr.into_multiaddr(), 333) < 0 {
                         // TODO: more clear error type
                         return Err(io::ErrorKind::Other.into());
                     }
@@ -259,7 +260,7 @@ impl SubstreamValue {
                         nodes.items.len()
                     );
                     // TODO: misbehavior
-                    if addr_mgr.misbehave(self.remote_addr.into_inner(), 444) < 0 {
+                    if addr_mgr.misbehave(self.remote_addr.into_multiaddr(), 444) < 0 {
                         // TODO: more clear error type
                         return Err(io::ErrorKind::Other.into());
                     }
@@ -319,13 +320,13 @@ pub struct Substream {
 
 impl Substream {
     pub fn new(
-        remote_addr: SocketAddr,
+        remote_addr: &Multiaddr,
         direction: Direction,
         proto_id: ProtocolId,
         session_id: SessionId,
         receiver: Receiver<Vec<u8>>,
         sender: Sender<ServiceTask>,
-        listens: &[SocketAddr],
+        listens: &[Multiaddr],
     ) -> Substream {
         let stream = StreamHandle {
             data_buf: BytesMut::default(),
@@ -334,13 +335,15 @@ impl Substream {
             receiver,
             sender,
         };
+        let remote_addr = multiaddr_to_socketaddr(remote_addr).unwrap();
         let listen_port = if direction == Direction::Outbound {
             let local = remote_addr.ip().is_loopback();
 
             listens
                 .iter()
+                .map(|address| multiaddr_to_socketaddr(address).unwrap())
                 .filter_map(|address| {
-                    if local || RawAddr::from(*address).is_reachable() {
+                    if local || RawAddr::from(address).is_reachable() {
                         Some(address.port())
                     } else {
                         None
@@ -386,7 +389,13 @@ pub(crate) enum RemoteAddress {
 }
 
 impl RemoteAddress {
-    pub(crate) fn into_inner(self) -> SocketAddr {
+    pub(crate) fn into_multiaddr(self) -> Multiaddr {
+        match self {
+            RemoteAddress::Init(addr) | RemoteAddress::Listen(addr) => addr.to_multiaddr().unwrap(),
+        }
+    }
+
+    fn into_inner(self) -> SocketAddr {
         match self {
             RemoteAddress::Init(addr) | RemoteAddress::Listen(addr) => addr,
         }

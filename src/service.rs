@@ -3,6 +3,7 @@ use futures::{
     sync::{mpsc, oneshot},
 };
 use log::{debug, error, trace, warn};
+use multiaddr::{Multiaddr, ToMultiaddr};
 use secio::{handshake::Config, PublicKey, SecioKeyPair};
 use std::collections::{HashMap, HashSet};
 use std::net::SocketAddr;
@@ -206,7 +207,7 @@ pub struct SessionContext {
     /// Session's ID
     pub id: SessionId,
     /// Remote socket address
-    pub address: SocketAddr,
+    pub address: Multiaddr,
     /// Session type (server or client)
     pub ty: SessionType,
     // TODO: use reference?
@@ -222,7 +223,7 @@ pub struct ServiceContext {
     // For tell notify finished
     session_notify_senders: HashMap<(SessionId, ProtocolId), Vec<oneshot::Sender<()>>>,
     proto_infos: Arc<HashMap<ProtocolId, ProtocolInfo>>,
-    listens: Vec<SocketAddr>,
+    listens: Vec<Multiaddr>,
 }
 
 impl ServiceContext {
@@ -241,7 +242,7 @@ impl ServiceContext {
 
     /// Initiate a connection request to address
     #[inline]
-    pub fn dial(&mut self, address: SocketAddr) {
+    pub fn dial(&mut self, address: Multiaddr) {
         self.send(ServiceTask::Dial { address })
     }
 
@@ -336,7 +337,7 @@ impl ServiceContext {
 
     /// Get service listen address list
     #[inline]
-    pub fn listens(&self) -> &Vec<SocketAddr> {
+    pub fn listens(&self) -> &Vec<Multiaddr> {
         &self.listens
     }
 
@@ -348,7 +349,7 @@ impl ServiceContext {
 
     /// Update listen list
     #[inline]
-    fn update_listens(&mut self, address_list: Vec<SocketAddr>) {
+    fn update_listens(&mut self, address_list: Vec<Multiaddr>) {
         self.listens = address_list;
     }
 
@@ -367,14 +368,14 @@ pub enum ServiceEvent {
     /// When dial remote error
     DialerError {
         /// Remote address
-        address: SocketAddr,
+        address: Multiaddr,
         /// Io error
         error: io::Error,
     },
     /// When listen error
     ListenError {
         /// Listen address
-        address: SocketAddr,
+        address: Multiaddr,
         /// Io error
         error: io::Error,
     },
@@ -388,7 +389,7 @@ pub enum ServiceEvent {
         /// Session id
         id: SessionId,
         /// Remote address
-        address: SocketAddr,
+        address: Multiaddr,
         /// Outbound or Inbound
         ty: SessionType,
         /// Remote public key
@@ -437,7 +438,7 @@ pub enum ServiceTask {
     /// Dial task
     Dial {
         /// Remote address
-        address: SocketAddr,
+        address: Multiaddr,
     },
 }
 
@@ -447,9 +448,9 @@ pub struct Service<T, U> {
 
     sessions: HashMap<SessionId, SessionContext>,
 
-    listens: Vec<(SocketAddr, Incoming)>,
+    listens: Vec<(Multiaddr, Incoming)>,
 
-    dial: Vec<(SocketAddr, Timeout<ConnectFuture>)>,
+    dial: Vec<(Multiaddr, Timeout<ConnectFuture>)>,
     timeout: Duration,
     /// Calculate the number of connection requests that need to be sent externally,
     /// if run forever, it will default to 1, else it default to 0
@@ -527,22 +528,25 @@ where
     }
 
     /// Listen on the given address.
-    pub fn listen(&mut self, address: SocketAddr) -> Result<(), io::Error> {
-        let tcp = TcpListener::bind(&address)?;
+    pub fn listen(&mut self, address: Multiaddr) -> Result<(), io::Error> {
+        let socket_address =
+            multiaddr_to_socketaddr(&address).map_err(|_| io::ErrorKind::InvalidInput)?;
+        let tcp = TcpListener::bind(&socket_address)?;
         self.listens.push((address, tcp.incoming()));
         Ok(())
     }
 
     /// Dial the given address, doesn't actually make a request, just generate a future
-    pub fn dial(mut self, address: SocketAddr) -> Self {
+    pub fn dial(mut self, address: Multiaddr) -> Self {
         self.dial_inner(address);
         self
     }
 
     /// Use by inner
     #[inline(always)]
-    fn dial_inner(&mut self, address: SocketAddr) {
-        let dial = TcpStream::connect(&address).timeout(self.timeout);
+    fn dial_inner(&mut self, address: Multiaddr) {
+        let socket_address = multiaddr_to_socketaddr(&address).expect("Address input error");
+        let dial = TcpStream::connect(&socket_address).timeout(self.timeout);
         self.dial.push((address, dial));
         self.task_count += 1;
     }
@@ -649,38 +653,42 @@ where
     /// Handshake
     #[inline]
     fn handshake(&mut self, socket: TcpStream, ty: SessionType) {
-        let address = socket.peer_addr().unwrap();
+        let address: Multiaddr = socket.peer_addr().unwrap().to_multiaddr().unwrap();
         if let Some(ref key_pair) = self.key_pair {
             let key_pair = key_pair.clone();
-            let mut success_sender = self.session_event_sender.clone();
-            let mut fail_sender = self.session_event_sender.clone();
+            let mut sender = self.session_event_sender.clone();
 
             let task = Config::new(key_pair)
                 .handshake(socket)
-                .and_then(move |(handle, public_key, _)| {
-                    let _ = success_sender.try_send(SessionEvent::HandshakeSuccess {
-                        handle,
-                        public_key,
-                        address,
-                        ty,
-                    });
-                    Ok(())
-                })
                 .timeout(self.timeout)
-                .map_err(move |err| {
-                    let error = if err.is_timer() {
-                        // tokio timer error
-                        io::Error::new(io::ErrorKind::Other, err.description())
-                    } else if err.is_elapsed() {
-                        // time out error
-                        io::Error::new(io::ErrorKind::TimedOut, err.description())
-                    } else {
-                        // dialer error
-                        err.into_inner().unwrap().into()
-                    };
+                .then(move |result| {
+                    match result {
+                        Ok((handle, public_key, _)) => {
+                            let _ = sender.try_send(SessionEvent::HandshakeSuccess {
+                                handle,
+                                public_key,
+                                address,
+                                ty,
+                            });
+                        }
+                        Err(err) => {
+                            let error = if err.is_timer() {
+                                // tokio timer error
+                                io::Error::new(io::ErrorKind::Other, err.description())
+                            } else if err.is_elapsed() {
+                                // time out error
+                                io::Error::new(io::ErrorKind::TimedOut, err.description())
+                            } else {
+                                // dialer error
+                                err.into_inner().unwrap().into()
+                            };
 
-                    error!("Handshake with {} failed, error: {:?}", address, error);
-                    let _ = fail_sender.try_send(SessionEvent::HandshakeFail { ty, error });
+                            error!("Handshake with {} failed, error: {:?}", address, error);
+                            let _ = sender.try_send(SessionEvent::HandshakeFail { ty, error });
+                        }
+                    }
+
+                    Ok(())
                 });
 
             tokio::spawn(task);
@@ -698,7 +706,7 @@ where
         &mut self,
         mut handle: H,
         remote_pubkey: Option<PublicKey>,
-        address: SocketAddr,
+        address: Multiaddr,
         ty: SessionType,
     ) where
         H: AsyncRead + AsyncWrite + Send + 'static,
@@ -724,7 +732,7 @@ where
         let session = SessionContext {
             event_sender: service_event_sender,
             id: self.next_session,
-            address,
+            address: address.clone(),
             ty,
             remote_pubkey: remote_pubkey.clone(),
         };
@@ -1011,8 +1019,6 @@ where
                     self.listens.push((address, listen));
                 }
                 Err(err) => {
-                    // TODO: need push back?
-                    self.listens.push((address, listen));
                     self.handle.handle_error(
                         &mut self.service_context,
                         ServiceEvent::ListenError {
@@ -1024,8 +1030,12 @@ where
             }
         }
 
-        self.service_context
-            .update_listens(self.listens.iter().map(|(address, _)| *address).collect());
+        self.service_context.update_listens(
+            self.listens
+                .iter()
+                .map(|(address, _)| address.clone())
+                .collect(),
+        );
     }
 }
 
@@ -1084,5 +1094,24 @@ where
         );
 
         Ok(Async::NotReady)
+    }
+}
+
+/// Change multiaddr to socketaddr
+pub fn multiaddr_to_socketaddr(addr: &Multiaddr) -> Result<SocketAddr, ()> {
+    use multiaddr::Protocol;
+
+    let mut iter = addr.iter();
+    let proto1 = iter.next().ok_or(())?;
+    let proto2 = iter.next().ok_or(())?;
+
+    if iter.next().is_some() {
+        return Err(());
+    }
+
+    match (proto1, proto2) {
+        (Protocol::Ip4(ip), Protocol::Tcp(port)) => Ok(SocketAddr::new(ip.into(), port)),
+        (Protocol::Ip6(ip), Protocol::Tcp(port)) => Ok(SocketAddr::new(ip.into(), port)),
+        _ => Err(()),
     }
 }
