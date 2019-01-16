@@ -721,7 +721,20 @@ where
                 .values()
                 .any(|context| context.remote_pubkey.as_ref() == Some(key))
             {
+                trace!("Connected to the connected node");
                 let _ = handle.shutdown();
+                if ty == SessionType::Client {
+                    self.handle.handle_error(
+                        &mut self.service_context,
+                        ServiceEvent::DialerError {
+                            error: io::Error::new(
+                                io::ErrorKind::BrokenPipe,
+                                "Connected to the connected node",
+                            ),
+                            address,
+                        },
+                    );
+                }
                 return;
             } else {
                 self.next_session += 1;
@@ -987,7 +1000,7 @@ where
                     self.handshake(socket, SessionType::Client);
                 }
                 Ok(Async::NotReady) => {
-                    trace!("client not ready");
+                    trace!("client not ready, {}", address);
                     self.dial.push((address, dialer));
                 }
                 Err(err) => {

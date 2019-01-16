@@ -3,31 +3,51 @@ use p2p::{
     builder::ServiceBuilder,
     multiaddr::Multiaddr,
     service::{ProtocolMeta, ServiceContext, ServiceProtocol, SessionContext},
-    service::{Service, ServiceHandle},
+    service::{Service, ServiceEvent, ServiceHandle},
     session::ProtocolId,
     SecioKeyPair, SessionType,
 };
 use std::{thread, time::Duration};
 use tokio::codec::LengthDelimitedCodec;
 
-pub fn create<T: ProtocolMeta<LengthDelimitedCodec> + Send + Sync + 'static>(
-    secio: bool,
-    meta: T,
-) -> Service<SHandle, LengthDelimitedCodec> {
+pub fn create<T, F>(secio: bool, meta: T, shandle: F) -> Service<F, LengthDelimitedCodec>
+where
+    T: ProtocolMeta<LengthDelimitedCodec> + Send + Sync + 'static,
+    F: ServiceHandle,
+{
     let builder = ServiceBuilder::default().insert_protocol(meta);
 
     if secio {
         builder
             .key_pair(SecioKeyPair::secp256k1_generated())
-            .build(SHandle)
+            .build(shandle)
     } else {
-        builder.build(SHandle)
+        builder.build(shandle)
     }
 }
 
-pub struct SHandle;
+#[derive(Clone)]
+pub struct SHandle {
+    sender: crossbeam_channel::Sender<usize>,
+    secio: bool,
+    error_count: usize,
+}
 
-impl ServiceHandle for SHandle {}
+impl ServiceHandle for SHandle {
+    fn handle_error(&mut self, _env: &mut ServiceContext, error: ServiceEvent) {
+        use std::io;
+        self.error_count += 1;
+
+        if let ServiceEvent::DialerError { error, .. } = error {
+            assert_eq!(error.kind(), io::ErrorKind::BrokenPipe)
+        } else {
+            panic!("test fail {:?}", error);
+        }
+        if self.error_count > 8 {
+            let _ = self.sender.try_send(self.error_count);
+        }
+    }
+}
 
 #[derive(Clone)]
 pub struct Protocol {
@@ -109,38 +129,51 @@ fn create_meta(id: ProtocolId) -> (Protocol, crossbeam_channel::Receiver<usize>)
     (Protocol::new(id, sender), receiver)
 }
 
-#[test]
-fn test_repeated_dial() {
+fn create_shandle(secio: bool) -> (SHandle, crossbeam_channel::Receiver<usize>) {
+    let (sender, receiver) = crossbeam_channel::bounded(2);
+
+    (
+        SHandle {
+            sender,
+            secio,
+            error_count: 0,
+        },
+        receiver,
+    )
+}
+
+fn test_repeated_dial(secio: bool) {
     let (meta, receiver) = create_meta(0);
-    let meta_clone = meta.clone();
-    let mut service = create(true, meta);
+    let (shandle, error_receiver) = create_shandle(secio);
+
+    let mut service = create(secio, meta.clone(), shandle.clone());
 
     let listen_addr = service
         .listen(&"/ip4/127.0.0.1/tcp/0".parse().unwrap())
         .unwrap();
     thread::spawn(|| tokio::run(service.for_each(|_| Ok(()))));
 
-    let service = create(true, meta_clone).dial(listen_addr);
+    let service = create(secio, meta, shandle).dial(listen_addr);
     thread::spawn(|| tokio::run(service.for_each(|_| Ok(()))));
 
-    assert_eq!(receiver.recv(), Ok(1));
-    assert_eq!(receiver.recv(), Ok(1));
+    if secio {
+        assert_eq!(receiver.recv(), Ok(1));
+        assert_eq!(receiver.recv(), Ok(1));
+        assert!(error_receiver.recv().unwrap() > 0);
+        assert!(error_receiver.recv().unwrap() > 0);
+    } else {
+        assert_ne!(receiver.recv(), Ok(1));
+        assert_ne!(receiver.recv(), Ok(1));
+        assert!(error_receiver.is_empty());
+    }
 }
 
 #[test]
-fn test_repeated_dial_no_secio() {
-    let (meta, receiver) = create_meta(0);
-    let meta_clone = meta.clone();
-    let mut service = create(false, meta);
+fn test_repeated_dial_with_secio() {
+    test_repeated_dial(true)
+}
 
-    let listen_addr = service
-        .listen(&"/ip4/127.0.0.1/tcp/0".parse().unwrap())
-        .unwrap();
-    thread::spawn(|| tokio::run(service.for_each(|_| Ok(()))));
-
-    let service = create(false, meta_clone).dial(listen_addr);
-    thread::spawn(|| tokio::run(service.for_each(|_| Ok(()))));
-
-    assert_ne!(receiver.recv(), Ok(1));
-    assert_ne!(receiver.recv(), Ok(1));
+#[test]
+fn test_repeated_dial_with_no_secio() {
+    test_repeated_dial(false)
 }
