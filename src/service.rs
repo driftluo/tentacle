@@ -528,12 +528,13 @@ where
     }
 
     /// Listen on the given address.
-    pub fn listen(&mut self, address: Multiaddr) -> Result<(), io::Error> {
+    pub fn listen(&mut self, address: &Multiaddr) -> Result<Multiaddr, io::Error> {
         let socket_address =
             multiaddr_to_socketaddr(&address).map_err(|_| io::ErrorKind::InvalidInput)?;
         let tcp = TcpListener::bind(&socket_address)?;
-        self.listens.push((address, tcp.incoming()));
-        Ok(())
+        let listen_addr = tcp.local_addr()?.to_multiaddr().unwrap();
+        self.listens.push((listen_addr.clone(), tcp.incoming()));
+        Ok(listen_addr)
     }
 
     /// Dial the given address, doesn't actually make a request, just generate a future
@@ -684,7 +685,8 @@ where
                             };
 
                             error!("Handshake with {} failed, error: {:?}", address, error);
-                            let _ = sender.try_send(SessionEvent::HandshakeFail { ty, error });
+                            let _ =
+                                sender.try_send(SessionEvent::HandshakeFail { ty, error, address });
                         }
                     }
 
@@ -916,9 +918,13 @@ where
                     self.task_count -= 1;
                 }
             }
-            SessionEvent::HandshakeFail { ty, .. } => {
+            SessionEvent::HandshakeFail { ty, error, address } => {
                 if ty == SessionType::Client {
                     self.task_count -= 1;
+                    self.handle.handle_error(
+                        &mut self.service_context,
+                        ServiceEvent::DialerError { error, address },
+                    )
                 }
             }
             SessionEvent::ProtocolMessage { id, proto_id, data } => {

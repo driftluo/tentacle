@@ -203,14 +203,14 @@ fn create_client() -> Service<SHandle, LengthDelimitedCodec> {
 
 fn server() {
     let mut service = create_server();
-    let _ = service.listen("/ip4/127.0.0.1/tcp/1337".parse().unwrap());
+    let _ = service.listen(&"/ip4/127.0.0.1/tcp/1337".parse().unwrap());
 
     tokio::run(service.for_each(|_| Ok(())))
 }
 
 fn client() {
     let mut service = create_client().dial("/ip4/127.0.0.1/tcp/1337".parse().unwrap());
-    let _ = service.listen("/ip4/127.0.0.1/tcp/1337".parse().unwrap());
+    let _ = service.listen(&"/ip4/127.0.0.1/tcp/1337".parse().unwrap());
 
     tokio::run(service.for_each(|_| Ok(())))
 }
