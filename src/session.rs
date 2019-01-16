@@ -39,6 +39,8 @@ pub(crate) enum SessionEvent {
         ty: SessionType,
     },
     HandshakeFail {
+        /// remote address
+        address: Multiaddr,
         /// Session type
         ty: SessionType,
         /// If fail
