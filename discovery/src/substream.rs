@@ -4,14 +4,11 @@ use std::net::SocketAddr;
 use std::time::Duration;
 
 use bytes::{BufMut, BytesMut};
-use futures::{
-    sync::mpsc::{Receiver, Sender},
-    Async, AsyncSink, Poll, Sink, Stream,
-};
+use futures::{sync::mpsc::Receiver, Async, AsyncSink, Poll, Sink, Stream};
 use log::{debug, trace, warn};
 use p2p::multiaddr::{Multiaddr, ToMultiaddr};
-use p2p::service::{Message, ServiceTask};
-use p2p::{ProtocolId, SessionId, utils::multiaddr_to_socketaddr};
+use p2p::service::Message;
+use p2p::{context::ServiceControl, utils::multiaddr_to_socketaddr, ProtocolId, SessionId};
 use tokio::codec::Framed;
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::timer::Interval;
@@ -39,7 +36,7 @@ pub struct StreamHandle {
     proto_id: ProtocolId,
     session_id: SessionId,
     pub(crate) receiver: Receiver<Vec<u8>>,
-    pub(crate) sender: Sender<ServiceTask>,
+    pub(crate) sender: ServiceControl,
 }
 
 impl io::Read for StreamHandle {
@@ -75,16 +72,15 @@ impl AsyncRead for StreamHandle {}
 
 impl io::Write for StreamHandle {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-        let task = ServiceTask::ProtocolMessage {
-            session_ids: Some(vec![self.session_id]),
-            message: Message {
-                session_id: self.session_id,
-                proto_id: self.proto_id,
-                data: buf.to_vec(),
-            },
-        };
         self.sender
-            .try_send(task)
+            .send_message(
+                Some(vec![self.session_id]),
+                Message {
+                    session_id: self.session_id,
+                    proto_id: self.proto_id,
+                    data: buf.to_vec(),
+                },
+            )
             .map(|()| buf.len())
             .map_err(|err| {
                 if err.is_full() {
@@ -327,7 +323,7 @@ impl Substream {
         proto_id: ProtocolId,
         session_id: SessionId,
         receiver: Receiver<Vec<u8>>,
-        sender: Sender<ServiceTask>,
+        sender: ServiceControl,
         listens: &[Multiaddr],
     ) -> Substream {
         let stream = StreamHandle {

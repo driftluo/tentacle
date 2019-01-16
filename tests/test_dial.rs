@@ -115,7 +115,9 @@ impl ServiceProtocol for PHandle {
     }
 
     fn notify(&mut self, control: &mut ServiceContext, _token: u64) {
-        control.dial(self.dial_addr.as_ref().unwrap().clone());
+        if let Err(e) = control.dial(self.dial_addr.as_ref().unwrap().clone()) {
+            panic!("dial err: {}", e)
+        }
         self.dial_count += 1;
         if self.dial_count == 10 {
             self.sender.try_send(self.connected_count).unwrap();

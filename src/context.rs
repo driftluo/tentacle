@@ -39,11 +39,10 @@ pub struct SessionContext {
 /// This is the sending channel.
 // TODO: Need to maintain the network topology map here?
 pub struct ServiceContext {
-    service_task_sender: mpsc::Sender<ServiceTask>,
     // For tell notify finished
     session_notify_senders: HashMap<(SessionId, ProtocolId), Vec<oneshot::Sender<()>>>,
-    proto_infos: Arc<HashMap<ProtocolId, ProtocolInfo>>,
     listens: Vec<Multiaddr>,
+    inner: ServiceControl,
 }
 
 impl ServiceContext {
@@ -53,59 +52,60 @@ impl ServiceContext {
         proto_infos: HashMap<ProtocolId, ProtocolInfo>,
     ) -> Self {
         ServiceContext {
-            service_task_sender,
+            inner: ServiceControl::new(service_task_sender, proto_infos),
             session_notify_senders: HashMap::default(),
-            proto_infos: Arc::new(proto_infos),
             listens: Vec::new(),
         }
     }
 
     /// Initiate a connection request to address
     #[inline]
-    pub fn dial(&mut self, address: Multiaddr) {
-        self.send(ServiceTask::Dial { address })
+    pub fn dial(&mut self, address: Multiaddr) -> Result<(), mpsc::TrySendError<ServiceTask>> {
+        self.inner.dial(address)
     }
 
     /// Disconnect a connection
     #[inline]
-    pub fn disconnect(&mut self, session_id: SessionId) {
-        self.send(ServiceTask::Disconnect { session_id })
+    pub fn disconnect(
+        &mut self,
+        session_id: SessionId,
+    ) -> Result<(), mpsc::TrySendError<ServiceTask>> {
+        self.inner.disconnect(session_id)
     }
 
     /// Send message
     #[inline]
-    pub fn send_message(&mut self, session_ids: Option<Vec<SessionId>>, message: Message) {
-        self.send(ServiceTask::ProtocolMessage {
-            session_ids,
-            message,
-        })
+    pub fn send_message(
+        &mut self,
+        session_ids: Option<Vec<SessionId>>,
+        message: Message,
+    ) -> Result<(), mpsc::TrySendError<ServiceTask>> {
+        self.inner.send_message(session_ids, message)
     }
 
     /// Send a future task
     #[inline]
-    pub fn future_task<T>(&mut self, task: T)
+    pub fn future_task<T>(&mut self, task: T) -> Result<(), mpsc::TrySendError<ServiceTask>>
     where
         T: Future<Item = (), Error = ()> + 'static + Send,
     {
-        self.send(ServiceTask::FutureTask {
-            task: Box::new(task),
-        })
+        self.inner.future_task(task)
     }
 
     /// Set a service notify token
     pub fn set_service_notify(&mut self, proto_id: ProtocolId, interval: Duration, token: u64) {
-        let mut interval_sender = self.sender().clone();
+        let mut interval_sender = self.control().clone();
         let fut = Interval::new(Instant::now(), interval)
             .for_each(move |_| {
                 interval_sender
-                    .try_send(ServiceTask::ProtocolNotify { proto_id, token })
+                    .send(ServiceTask::ProtocolNotify { proto_id, token })
                     .map_err(|err| {
                         debug!("interval error: {:?}", err);
                         timer::Error::shutdown()
                     })
             })
             .map_err(|err| warn!("{}", err));
-        self.future_task(fut);
+        let _ = self.future_task(fut);
     }
 
     /// Set as session notify token
@@ -121,12 +121,12 @@ impl ServiceContext {
             .entry((session_id, proto_id))
             .or_default()
             .push(sender);
-        let mut interval_sender = self.sender().clone();
+        let mut interval_sender = self.control().clone();
         let fut = Interval::new(Instant::now(), interval)
             .for_each(move |_| {
                 if receiver.poll() == Ok(Async::NotReady) {
                     interval_sender
-                        .try_send(ServiceTask::ProtocolSessionNotify {
+                        .send(ServiceTask::ProtocolSessionNotify {
                             session_id,
                             proto_id,
                             token,
@@ -140,31 +140,25 @@ impl ServiceContext {
                 }
             })
             .map_err(|err| warn!("{}", err));
-        self.future_task(fut);
+        let _ = self.future_task(fut);
     }
 
     /// Get the internal channel sender side handle
     #[inline]
-    pub fn sender(&mut self) -> &mut mpsc::Sender<ServiceTask> {
-        &mut self.service_task_sender
+    pub fn control(&mut self) -> &mut ServiceControl {
+        &mut self.inner
     }
 
     /// Get service protocol message, Map(ID, Name), but can't modify
     #[inline]
     pub fn protocols(&self) -> &Arc<HashMap<ProtocolId, ProtocolInfo>> {
-        &self.proto_infos
+        &self.inner.proto_infos
     }
 
     /// Get service listen address list
     #[inline]
     pub fn listens(&self) -> &Vec<Multiaddr> {
         &self.listens
-    }
-
-    /// Real send function
-    #[inline]
-    fn send(&mut self, event: ServiceTask) {
-        let _ = self.service_task_sender.try_send(event);
     }
 
     /// Update listen list
@@ -183,5 +177,76 @@ impl ServiceContext {
                 let _ = sender.send(());
             }
         }
+    }
+}
+
+/// Service control
+#[derive(Clone)]
+pub struct ServiceControl {
+    service_task_sender: mpsc::Sender<ServiceTask>,
+    proto_infos: Arc<HashMap<ProtocolId, ProtocolInfo>>,
+}
+
+impl ServiceControl {
+    /// New
+    pub(crate) fn new(
+        service_task_sender: mpsc::Sender<ServiceTask>,
+        proto_infos: HashMap<ProtocolId, ProtocolInfo>,
+    ) -> Self {
+        ServiceControl {
+            service_task_sender,
+            proto_infos: Arc::new(proto_infos),
+        }
+    }
+
+    /// Real send function
+    #[inline]
+    fn send(&mut self, event: ServiceTask) -> Result<(), mpsc::TrySendError<ServiceTask>> {
+        self.service_task_sender.try_send(event)
+    }
+
+    /// Get service protocol message, Map(ID, Name), but can't modify
+    #[inline]
+    pub fn protocols(&self) -> &Arc<HashMap<ProtocolId, ProtocolInfo>> {
+        &self.proto_infos
+    }
+
+    /// Initiate a connection request to address
+    #[inline]
+    pub fn dial(&mut self, address: Multiaddr) -> Result<(), mpsc::TrySendError<ServiceTask>> {
+        self.send(ServiceTask::Dial { address })
+    }
+
+    /// Disconnect a connection
+    #[inline]
+    pub fn disconnect(
+        &mut self,
+        session_id: SessionId,
+    ) -> Result<(), mpsc::TrySendError<ServiceTask>> {
+        self.send(ServiceTask::Disconnect { session_id })
+    }
+
+    /// Send message
+    #[inline]
+    pub fn send_message(
+        &mut self,
+        session_ids: Option<Vec<SessionId>>,
+        message: Message,
+    ) -> Result<(), mpsc::TrySendError<ServiceTask>> {
+        self.send(ServiceTask::ProtocolMessage {
+            session_ids,
+            message,
+        })
+    }
+
+    /// Send a future task
+    #[inline]
+    pub fn future_task<T>(&mut self, task: T) -> Result<(), mpsc::TrySendError<ServiceTask>>
+    where
+        T: Future<Item = (), Error = ()> + 'static + Send,
+    {
+        self.send(ServiceTask::FutureTask {
+            task: Box::new(task),
+        })
     }
 }

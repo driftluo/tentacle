@@ -21,7 +21,7 @@ use tokio::{
 use yamux::session::SessionType;
 
 use crate::{
-    context::{ServiceContext, SessionContext},
+    context::{ServiceContext, ServiceControl, SessionContext},
     protocol_select::ProtocolInfo,
     session::{Session, SessionEvent, SessionMeta},
     traits::{ProtocolMeta, ServiceHandle, ServiceProtocol, SessionProtocol},
@@ -244,10 +244,15 @@ where
     }
 
     /// Get service current protocol configure
-    pub fn get_protocol_configs(
+    pub fn protocol_configs(
         &self,
     ) -> &Arc<HashMap<String, Box<dyn ProtocolMeta<U> + Send + Sync>>> {
         &self.protocol_configs
+    }
+
+    /// Get service control, control can send tasks externally to the runtime inside
+    pub fn control(&mut self) -> &mut ServiceControl {
+        self.service_context.control()
     }
 
     /// Send data to the specified protocol for the specified session.
@@ -600,6 +605,11 @@ where
             if let Some(mut handle) = handles.remove(&proto_id) {
                 handle.disconnected(&mut self.service_context);
             }
+        }
+
+        // Session proto info remove
+        if let Some(infos) = self.session_service_protos.get_mut(&session_id) {
+            infos.remove(&proto_id);
         }
 
         // Close notify sender
