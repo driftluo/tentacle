@@ -1,0 +1,187 @@
+use futures::{
+    prelude::*,
+    sync::{mpsc, oneshot},
+};
+use log::{debug, warn};
+use multiaddr::Multiaddr;
+use secio::PublicKey;
+use std::{
+    collections::HashMap,
+    sync::Arc,
+    time::{Duration, Instant},
+};
+use tokio::timer::{self, Interval};
+use yamux::session::SessionType;
+
+use crate::protocol_select::ProtocolInfo;
+use crate::{
+    service::{Message, ServiceTask},
+    session::SessionEvent,
+    ProtocolId, SessionId,
+};
+
+/// Session context
+#[derive(Clone)]
+pub struct SessionContext {
+    pub(crate) event_sender: mpsc::Sender<SessionEvent>,
+    /// Session's ID
+    pub id: SessionId,
+    /// Remote socket address
+    pub address: Multiaddr,
+    /// Session type (server or client)
+    pub ty: SessionType,
+    // TODO: use reference?
+    /// Remote public key
+    pub remote_pubkey: Option<PublicKey>,
+}
+
+/// The Service runtime can send some instructions to the inside of the handle.
+/// This is the sending channel.
+// TODO: Need to maintain the network topology map here?
+pub struct ServiceContext {
+    service_task_sender: mpsc::Sender<ServiceTask>,
+    // For tell notify finished
+    session_notify_senders: HashMap<(SessionId, ProtocolId), Vec<oneshot::Sender<()>>>,
+    proto_infos: Arc<HashMap<ProtocolId, ProtocolInfo>>,
+    listens: Vec<Multiaddr>,
+}
+
+impl ServiceContext {
+    /// New
+    pub(crate) fn new(
+        service_task_sender: mpsc::Sender<ServiceTask>,
+        proto_infos: HashMap<ProtocolId, ProtocolInfo>,
+    ) -> Self {
+        ServiceContext {
+            service_task_sender,
+            session_notify_senders: HashMap::default(),
+            proto_infos: Arc::new(proto_infos),
+            listens: Vec::new(),
+        }
+    }
+
+    /// Initiate a connection request to address
+    #[inline]
+    pub fn dial(&mut self, address: Multiaddr) {
+        self.send(ServiceTask::Dial { address })
+    }
+
+    /// Disconnect a connection
+    #[inline]
+    pub fn disconnect(&mut self, session_id: SessionId) {
+        self.send(ServiceTask::Disconnect { session_id })
+    }
+
+    /// Send message
+    #[inline]
+    pub fn send_message(&mut self, session_ids: Option<Vec<SessionId>>, message: Message) {
+        self.send(ServiceTask::ProtocolMessage {
+            session_ids,
+            message,
+        })
+    }
+
+    /// Send a future task
+    #[inline]
+    pub fn future_task<T>(&mut self, task: T)
+    where
+        T: Future<Item = (), Error = ()> + 'static + Send,
+    {
+        self.send(ServiceTask::FutureTask {
+            task: Box::new(task),
+        })
+    }
+
+    /// Set a service notify token
+    pub fn set_service_notify(&mut self, proto_id: ProtocolId, interval: Duration, token: u64) {
+        let mut interval_sender = self.sender().clone();
+        let fut = Interval::new(Instant::now(), interval)
+            .for_each(move |_| {
+                interval_sender
+                    .try_send(ServiceTask::ProtocolNotify { proto_id, token })
+                    .map_err(|err| {
+                        debug!("interval error: {:?}", err);
+                        timer::Error::shutdown()
+                    })
+            })
+            .map_err(|err| warn!("{}", err));
+        self.future_task(fut);
+    }
+
+    /// Set as session notify token
+    pub fn set_session_notify(
+        &mut self,
+        session_id: SessionId,
+        proto_id: ProtocolId,
+        interval: Duration,
+        token: u64,
+    ) {
+        let (sender, mut receiver) = oneshot::channel::<()>();
+        self.session_notify_senders
+            .entry((session_id, proto_id))
+            .or_default()
+            .push(sender);
+        let mut interval_sender = self.sender().clone();
+        let fut = Interval::new(Instant::now(), interval)
+            .for_each(move |_| {
+                if receiver.poll() == Ok(Async::NotReady) {
+                    interval_sender
+                        .try_send(ServiceTask::ProtocolSessionNotify {
+                            session_id,
+                            proto_id,
+                            token,
+                        })
+                        .map_err(|err| {
+                            debug!("interval error: {:?}", err);
+                            timer::Error::shutdown()
+                        })
+                } else {
+                    Err(timer::Error::shutdown())
+                }
+            })
+            .map_err(|err| warn!("{}", err));
+        self.future_task(fut);
+    }
+
+    /// Get the internal channel sender side handle
+    #[inline]
+    pub fn sender(&mut self) -> &mut mpsc::Sender<ServiceTask> {
+        &mut self.service_task_sender
+    }
+
+    /// Get service protocol message, Map(ID, Name), but can't modify
+    #[inline]
+    pub fn protocols(&self) -> &Arc<HashMap<ProtocolId, ProtocolInfo>> {
+        &self.proto_infos
+    }
+
+    /// Get service listen address list
+    #[inline]
+    pub fn listens(&self) -> &Vec<Multiaddr> {
+        &self.listens
+    }
+
+    /// Real send function
+    #[inline]
+    fn send(&mut self, event: ServiceTask) {
+        let _ = self.service_task_sender.try_send(event);
+    }
+
+    /// Update listen list
+    #[inline]
+    pub(crate) fn update_listens(&mut self, address_list: Vec<Multiaddr>) {
+        self.listens = address_list;
+    }
+
+    pub(crate) fn remove_session_notify_senders(
+        &mut self,
+        session_id: SessionId,
+        proto_id: ProtocolId,
+    ) {
+        if let Some(senders) = self.session_notify_senders.remove(&(session_id, proto_id)) {
+            for sender in senders {
+                let _ = sender.send(());
+            }
+        }
+    }
+}

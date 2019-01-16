@@ -3,12 +3,10 @@ use futures::{oneshot, prelude::*, sync::oneshot::Sender};
 use log::info;
 use p2p::{
     builder::ServiceBuilder,
-    service::{
-        Message, ProtocolMeta, Service, ServiceContext, ServiceEvent, ServiceHandle,
-        ServiceProtocol, ServiceTask, SessionContext,
-    },
-    session::{ProtocolId, SessionId},
-    SecioKeyPair,
+    context::{ServiceContext, SessionContext},
+    service::{Message, Service, ServiceEvent, ServiceTask},
+    traits::{ProtocolMeta, ServiceHandle, ServiceProtocol},
+    ProtocolId, SecioKeyPair, SessionId,
 };
 use std::collections::HashMap;
 use std::{

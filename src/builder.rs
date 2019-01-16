@@ -5,7 +5,10 @@ use std::sync::Arc;
 use std::{error, io, time::Duration};
 use tokio::codec::{Decoder, Encoder};
 
-use crate::service::{ProtocolMeta, Service, ServiceHandle};
+use crate::{
+    service::Service,
+    traits::{ProtocolMeta, ServiceHandle},
+};
 
 /// Builder for Service
 pub struct ServiceBuilder<T, U> {

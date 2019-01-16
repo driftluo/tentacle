@@ -16,13 +16,11 @@ use tokio::codec::length_delimited::LengthDelimitedCodec;
 
 use p2p::{
     builder::ServiceBuilder,
+    context::{ServiceContext, SessionContext},
     multiaddr::{Multiaddr, ToMultiaddr},
-    service::{
-        multiaddr_to_socketaddr, ProtocolMeta, ServiceContext, ServiceEvent, ServiceHandle,
-        ServiceProtocol, SessionContext,
-    },
-    session::{ProtocolId, SessionId},
-    SessionType,
+    service::{multiaddr_to_socketaddr, ServiceEvent},
+    traits::{ProtocolMeta, ServiceHandle, ServiceProtocol},
+    ProtocolId, SessionId, SessionType,
 };
 
 use discovery::{AddressManager, Direction, Discovery, DiscoveryHandle, RawAddr, Substream};

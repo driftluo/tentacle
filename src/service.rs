@@ -1,23 +1,18 @@
-use futures::{
-    prelude::*,
-    sync::{mpsc, oneshot},
-};
+use futures::{prelude::*, sync::mpsc};
 use log::{debug, error, trace, warn};
 use multiaddr::{Multiaddr, ToMultiaddr};
 use secio::{handshake::Config, PublicKey, SecioKeyPair};
 use std::collections::{HashMap, HashSet};
-use std::net::SocketAddr;
 use std::sync::Arc;
 use std::{
     error::{self, Error},
     io,
-    time::{Duration, Instant},
+    time::Duration,
 };
 use tokio::net::{
     tcp::{ConnectFuture, Incoming},
     TcpListener, TcpStream,
 };
-use tokio::timer::{self, Interval};
 use tokio::{
     codec::{Decoder, Encoder},
     prelude::{AsyncRead, AsyncWrite, FutureExt},
@@ -25,163 +20,21 @@ use tokio::{
 };
 use yamux::session::SessionType;
 
-use crate::protocol_select::ProtocolInfo;
-use crate::session::{ProtocolId, Session, SessionEvent, SessionId, SessionMeta};
-
-/// Service handle
-///
-/// #### Note
-///
-/// All functions on this trait will block the entire server running, do not insert long-time tasks,
-/// you can use the futures task instead.
-///
-/// #### Behavior
-///
-/// The handle that exists when the Service is created.
-///
-/// Mainly handle some Service-level errors thrown at runtime, such as listening errors.
-///
-/// At the same time, the session establishment and disconnection messages will also be perceived here.
-pub trait ServiceHandle {
-    /// Handling runtime errors
-    fn handle_error(&mut self, _control: &mut ServiceContext, _error: ServiceEvent) {}
-    /// Handling session establishment and disconnection events
-    fn handle_event(&mut self, _control: &mut ServiceContext, _event: ServiceEvent) {}
-}
-
-/// Service level protocol handle
-///
-/// #### Note
-///
-/// All functions on this trait will block the entire server running, do not insert long-time tasks,
-/// you can use the futures task instead.
-///
-/// #### Behavior
-///
-/// Define the behavior of each custom protocol in each state.
-///
-/// Depending on whether the user defines a service handle or a session exclusive handle,
-/// the runtime has different performance.
-///
-/// The **important difference** is that some state values are allowed in the service handle,
-/// and the handle exclusive to the session is "stateless", relative to the service handle,
-/// it can only retain the information between a protocol stream on and off.
-///
-/// The opening and closing of the protocol will create and clean up the handle exclusive
-/// to the session, but the service handle will remain in the state until the service is closed.
-///
-pub trait ServiceProtocol {
-    /// This function is called when the protocol is opened.
-    ///
-    /// The service handle will only be called once
-    fn init(&mut self, service: &mut ServiceContext);
-    /// Called when opening protocol
-    fn connected(
-        &mut self,
-        _service: &mut ServiceContext,
-        _session: &SessionContext,
-        _version: &str,
-    ) {
-    }
-    /// Called when closing protocol
-    fn disconnected(&mut self, _service: &mut ServiceContext, _session: &SessionContext) {}
-    /// Called when the corresponding protocol message is received
-    fn received(
-        &mut self,
-        _service: &mut ServiceContext,
-        _session: &SessionContext,
-        _data: Vec<u8>,
-    ) {
-    }
-    /// Called when the Service receives the notify task
-    fn notify(&mut self, _service: &mut ServiceContext, _token: u64) {}
-}
-
-/// Session level protocol handle
-pub trait SessionProtocol {
-    /// Called when opening protocol
-    fn connected(
-        &mut self,
-        _service: &mut ServiceContext,
-        _session: &SessionContext,
-        _version: &str,
-    ) {
-    }
-    /// Called when closing protocol
-    fn disconnected(&mut self, _service: &mut ServiceContext) {}
-    /// Called when the corresponding protocol message is received
-    fn received(&mut self, _service: &mut ServiceContext, _data: Vec<u8>) {}
-    /// Called when the session receives the notify task
-    fn notify(&mut self, _service: &mut ServiceContext, _token: u64) {}
-}
+use crate::{
+    context::{ServiceContext, SessionContext},
+    protocol_select::ProtocolInfo,
+    session::{Session, SessionEvent, SessionMeta},
+    traits::{ProtocolMeta, ServiceHandle, ServiceProtocol, SessionProtocol},
+    utils::multiaddr_to_socketaddr,
+    ProtocolId, SessionId,
+};
 
 /// Protocol handle value
-pub enum ProtocolHandle {
+pub(crate) enum ProtocolHandle {
     /// Service level protocol
     Service(Box<dyn ServiceProtocol + Send + 'static>),
     /// Session level protocol
     Session(Box<dyn SessionProtocol + Send + 'static>),
-}
-
-impl ProtocolHandle {
-    /// Check if this is a session level protocol
-    pub fn is_session(&self) -> bool {
-        match self {
-            ProtocolHandle::Session(_) => true,
-            _ => false,
-        }
-    }
-}
-
-/// Define the minimum data required for a custom protocol
-pub trait ProtocolMeta<U>
-where
-    U: Decoder<Item = bytes::BytesMut> + Encoder<Item = bytes::Bytes> + Send + 'static,
-    <U as Decoder>::Error: error::Error + Into<io::Error>,
-    <U as Encoder>::Error: error::Error + Into<io::Error>,
-{
-    /// Protocol id
-    fn id(&self) -> ProtocolId;
-
-    /// Protocol name, default is "/p2p/protocol_id"
-    #[inline]
-    fn name(&self) -> String {
-        format!("/p2p/{}", self.id())
-    }
-
-    /// Protocol supported version
-    fn support_versions(&self) -> Vec<String> {
-        vec!["0.0.1".to_owned()]
-    }
-
-    /// The codec used by the custom protocol, such as `LengthDelimitedCodec` by tokio
-    fn codec(&self) -> U;
-
-    /// A service level callback handle for a protocol.
-    ///
-    /// ---
-    ///
-    /// #### Behavior
-    ///
-    /// This function is called when the protocol is first opened in the service
-    /// and remains in memory until the entire service is closed.
-    fn service_handle(&self) -> Option<Box<dyn ServiceProtocol + Send + 'static>> {
-        None
-    }
-
-    /// A session level callback handle for a protocol.
-    ///
-    /// ---
-    ///
-    /// #### Behavior
-    ///
-    /// When a session is opened, whenever the protocol of the session is opened,
-    /// the function will be called again to generate the corresponding exclusive handle.
-    ///
-    /// Correspondingly, whenever the protocol is closed, the corresponding exclusive handle is cleared.
-    fn session_handle(&self) -> Option<Box<dyn SessionProtocol + Send + 'static>> {
-        None
-    }
 }
 
 // TODO: maybe remove this struct later?
@@ -198,168 +51,6 @@ pub struct Message {
     pub proto_id: ProtocolId,
     /// Data
     pub data: Vec<u8>,
-}
-
-/// Session context
-#[derive(Clone)]
-pub struct SessionContext {
-    pub(crate) event_sender: mpsc::Sender<SessionEvent>,
-    /// Session's ID
-    pub id: SessionId,
-    /// Remote socket address
-    pub address: Multiaddr,
-    /// Session type (server or client)
-    pub ty: SessionType,
-    // TODO: use reference?
-    /// Remote public key
-    pub remote_pubkey: Option<PublicKey>,
-}
-
-/// The Service runtime can send some instructions to the inside of the handle.
-/// This is the sending channel.
-// TODO: Need to maintain the network topology map here?
-pub struct ServiceContext {
-    service_task_sender: mpsc::Sender<ServiceTask>,
-    // For tell notify finished
-    session_notify_senders: HashMap<(SessionId, ProtocolId), Vec<oneshot::Sender<()>>>,
-    proto_infos: Arc<HashMap<ProtocolId, ProtocolInfo>>,
-    listens: Vec<Multiaddr>,
-}
-
-impl ServiceContext {
-    /// New
-    fn new(
-        service_task_sender: mpsc::Sender<ServiceTask>,
-        proto_infos: HashMap<ProtocolId, ProtocolInfo>,
-    ) -> Self {
-        ServiceContext {
-            service_task_sender,
-            session_notify_senders: HashMap::default(),
-            proto_infos: Arc::new(proto_infos),
-            listens: Vec::new(),
-        }
-    }
-
-    /// Initiate a connection request to address
-    #[inline]
-    pub fn dial(&mut self, address: Multiaddr) {
-        self.send(ServiceTask::Dial { address })
-    }
-
-    /// Disconnect a connection
-    #[inline]
-    pub fn disconnect(&mut self, session_id: SessionId) {
-        self.send(ServiceTask::Disconnect { session_id })
-    }
-
-    /// Send message
-    #[inline]
-    pub fn send_message(&mut self, session_ids: Option<Vec<SessionId>>, message: Message) {
-        self.send(ServiceTask::ProtocolMessage {
-            session_ids,
-            message,
-        })
-    }
-
-    /// Send a future task
-    #[inline]
-    pub fn future_task<T>(&mut self, task: T)
-    where
-        T: Future<Item = (), Error = ()> + 'static + Send,
-    {
-        self.send(ServiceTask::FutureTask {
-            task: Box::new(task),
-        })
-    }
-
-    /// Set a service notify token
-    pub fn set_service_notify(&mut self, proto_id: ProtocolId, interval: Duration, token: u64) {
-        let mut interval_sender = self.sender().clone();
-        let fut = Interval::new(Instant::now(), interval)
-            .for_each(move |_| {
-                interval_sender
-                    .try_send(ServiceTask::ProtocolNotify { proto_id, token })
-                    .map_err(|err| {
-                        debug!("interval error: {:?}", err);
-                        timer::Error::shutdown()
-                    })
-            })
-            .map_err(|err| warn!("{}", err));
-        self.future_task(fut);
-    }
-
-    /// Set as session notify token
-    pub fn set_session_notify(
-        &mut self,
-        session_id: SessionId,
-        proto_id: ProtocolId,
-        interval: Duration,
-        token: u64,
-    ) {
-        let (sender, mut receiver) = oneshot::channel::<()>();
-        self.session_notify_senders
-            .entry((session_id, proto_id))
-            .or_default()
-            .push(sender);
-        let mut interval_sender = self.sender().clone();
-        let fut = Interval::new(Instant::now(), interval)
-            .for_each(move |_| {
-                if receiver.poll() == Ok(Async::NotReady) {
-                    interval_sender
-                        .try_send(ServiceTask::ProtocolSessionNotify {
-                            session_id,
-                            proto_id,
-                            token,
-                        })
-                        .map_err(|err| {
-                            debug!("interval error: {:?}", err);
-                            timer::Error::shutdown()
-                        })
-                } else {
-                    Err(timer::Error::shutdown())
-                }
-            })
-            .map_err(|err| warn!("{}", err));
-        self.future_task(fut);
-    }
-
-    /// Get the internal channel sender side handle
-    #[inline]
-    pub fn sender(&mut self) -> &mut mpsc::Sender<ServiceTask> {
-        &mut self.service_task_sender
-    }
-
-    /// Get service protocol message, Map(ID, Name), but can't modify
-    #[inline]
-    pub fn protocols(&self) -> &Arc<HashMap<ProtocolId, ProtocolInfo>> {
-        &self.proto_infos
-    }
-
-    /// Get service listen address list
-    #[inline]
-    pub fn listens(&self) -> &Vec<Multiaddr> {
-        &self.listens
-    }
-
-    /// Real send function
-    #[inline]
-    fn send(&mut self, event: ServiceTask) {
-        let _ = self.service_task_sender.try_send(event);
-    }
-
-    /// Update listen list
-    #[inline]
-    fn update_listens(&mut self, address_list: Vec<Multiaddr>) {
-        self.listens = address_list;
-    }
-
-    fn remove_session_notify_senders(&mut self, session_id: SessionId, proto_id: ProtocolId) {
-        if let Some(senders) = self.session_notify_senders.remove(&(session_id, proto_id)) {
-            for sender in senders {
-                let _ = sender.send(());
-            }
-        }
-    }
 }
 
 /// Event generated by the Service
@@ -1113,24 +804,5 @@ where
         );
 
         Ok(Async::NotReady)
-    }
-}
-
-/// Change multiaddr to socketaddr
-pub fn multiaddr_to_socketaddr(addr: &Multiaddr) -> Result<SocketAddr, ()> {
-    use multiaddr::Protocol;
-
-    let mut iter = addr.iter();
-    let proto1 = iter.next().ok_or(())?;
-    let proto2 = iter.next().ok_or(())?;
-
-    if iter.next().is_some() {
-        return Err(());
-    }
-
-    match (proto1, proto2) {
-        (Protocol::Ip4(ip), Protocol::Tcp(port)) => Ok(SocketAddr::new(ip.into(), port)),
-        (Protocol::Ip6(ip), Protocol::Tcp(port)) => Ok(SocketAddr::new(ip.into(), port)),
-        _ => Err(()),
     }
 }

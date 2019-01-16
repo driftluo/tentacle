@@ -10,8 +10,8 @@ use futures::{
 };
 use log::{debug, trace, warn};
 use p2p::multiaddr::{Multiaddr, ToMultiaddr};
-use p2p::service::{multiaddr_to_socketaddr, Message, ServiceTask};
-use p2p::session::{ProtocolId, SessionId};
+use p2p::service::{Message, ServiceTask};
+use p2p::{ProtocolId, SessionId, utils::multiaddr_to_socketaddr};
 use tokio::codec::Framed;
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::timer::Interval;
@@ -205,11 +205,13 @@ impl SubstreamValue {
                         return Err(io::ErrorKind::Other.into());
                     }
                 } else {
-                    /// change client random outbound port to client listen port
+                    // change client random outbound port to client listen port
                     debug!("listen port: {:?}", listen_port);
                     if let Some(port) = listen_port {
                         self.remote_addr = self.remote_addr.into_listen(port);
                         self.addr_known.insert(self.remote_addr.into_inner().into());
+                        // add client listen address to manager
+                        addr_mgr.add_new(self.remote_addr.into_multiaddr());
                     }
 
                     // TODO: magic number

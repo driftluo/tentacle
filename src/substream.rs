@@ -11,7 +11,7 @@ use tokio::{
 };
 use yamux::StreamHandle;
 
-use crate::session::{ProtocolId, StreamId};
+use crate::{ProtocolId, StreamId};
 
 /// Event generated/received by the protocol stream,
 /// but at present, the reason for the failure of
