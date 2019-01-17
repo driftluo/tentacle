@@ -15,7 +15,9 @@ where
     T: ProtocolMeta<LengthDelimitedCodec> + Send + Sync + 'static,
     F: ServiceHandle,
 {
-    let builder = ServiceBuilder::default().insert_protocol(meta);
+    let builder = ServiceBuilder::default()
+        .insert_protocol(meta)
+        .forever(true);
 
     if secio {
         builder
@@ -23,6 +25,29 @@ where
             .build(shandle)
     } else {
         builder.build(shandle)
+    }
+}
+
+#[derive(Clone)]
+struct EmptySHandle {
+    sender: crossbeam_channel::Sender<usize>,
+    secio: bool,
+    error_count: usize,
+}
+
+impl ServiceHandle for EmptySHandle {
+    fn handle_error(&mut self, _env: &mut ServiceContext, error: ServiceEvent) {
+        use std::io;
+        self.error_count += 1;
+
+        if let ServiceEvent::DialerError { error, .. } = error {
+            assert_eq!(error.kind(), io::ErrorKind::ConnectionRefused)
+        } else {
+            panic!("test fail {:?}", error);
+        }
+        if self.error_count > 8 {
+            let _ = self.sender.try_send(self.error_count);
+        }
     }
 }
 
@@ -70,14 +95,18 @@ impl ProtocolMeta<LengthDelimitedCodec> for Protocol {
     }
 
     fn service_handle(&self) -> Option<Box<dyn ServiceProtocol + Send + 'static>> {
-        let handle = Box::new(PHandle {
-            proto_id: self.id,
-            connected_count: 0,
-            sender: self.sender.clone(),
-            dial_count: 0,
-            dial_addr: None,
-        });
-        Some(handle)
+        if self.id == 0 {
+            None
+        } else {
+            let handle = Box::new(PHandle {
+                proto_id: self.id,
+                connected_count: 0,
+                sender: self.sender.clone(),
+                dial_count: 0,
+                dial_addr: None,
+            });
+            Some(handle)
+        }
     }
 }
 
@@ -131,29 +160,48 @@ fn create_meta(id: ProtocolId) -> (Protocol, crossbeam_channel::Receiver<usize>)
     (Protocol::new(id, sender), receiver)
 }
 
-fn create_shandle(secio: bool) -> (SHandle, crossbeam_channel::Receiver<usize>) {
+fn create_shandle(
+    secio: bool,
+    empty: bool,
+) -> (
+    Box<dyn ServiceHandle + Send>,
+    crossbeam_channel::Receiver<usize>,
+) {
     let (sender, receiver) = crossbeam_channel::bounded(2);
 
-    (
-        SHandle {
-            sender,
-            secio,
-            error_count: 0,
-        },
-        receiver,
-    )
+    if empty {
+        (
+            Box::new(EmptySHandle {
+                sender,
+                secio,
+                error_count: 0,
+            }),
+            receiver,
+        )
+    } else {
+        (
+            Box::new(SHandle {
+                sender,
+                secio,
+                error_count: 0,
+            }),
+            receiver,
+        )
+    }
 }
 
 fn test_repeated_dial(secio: bool) {
-    let (meta, receiver) = create_meta(0);
-    let (shandle, error_receiver) = create_shandle(secio);
+    let (meta, receiver) = create_meta(1);
+    let (shandle, error_receiver_1) = create_shandle(secio, false);
 
-    let mut service = create(secio, meta.clone(), shandle.clone());
+    let mut service = create(secio, meta.clone(), shandle);
 
     let listen_addr = service
         .listen(&"/ip4/127.0.0.1/tcp/0".parse().unwrap())
         .unwrap();
     thread::spawn(|| tokio::run(service.for_each(|_| Ok(()))));
+
+    let (shandle, error_receiver_2) = create_shandle(secio, false);
 
     let service = create(secio, meta, shandle).dial(listen_addr);
     thread::spawn(|| tokio::run(service.for_each(|_| Ok(()))));
@@ -161,13 +209,27 @@ fn test_repeated_dial(secio: bool) {
     if secio {
         assert_eq!(receiver.recv(), Ok(1));
         assert_eq!(receiver.recv(), Ok(1));
-        assert!(error_receiver.recv().unwrap() > 0);
-        assert!(error_receiver.recv().unwrap() > 0);
+        assert!(error_receiver_1.recv().unwrap() > 8);
+        assert!(error_receiver_2.recv().unwrap() > 8);
     } else {
         assert_ne!(receiver.recv(), Ok(1));
         assert_ne!(receiver.recv(), Ok(1));
-        assert!(error_receiver.is_empty());
+        assert!(error_receiver_1.is_empty());
+        assert!(error_receiver_2.is_empty());
     }
+}
+
+fn test_dial_with_no_notify(secio: bool) {
+    let (meta, _receiver) = create_meta(0);
+    let (shandle, error_receiver) = create_shandle(secio, true);
+    let mut service = create(secio, meta, shandle);
+    let mut control = service.control().clone();
+    thread::spawn(|| tokio::run(service.for_each(|_| Ok(()))));
+    (0..10).for_each(|i| {
+        let addr = format!("/ip4/127.0.0.1/tcp/{}", i).parse().unwrap();
+        control.dial(addr).unwrap();
+    });
+    assert_eq!(error_receiver.recv(), Ok(9));
 }
 
 #[test]
@@ -178,4 +240,14 @@ fn test_repeated_dial_with_secio() {
 #[test]
 fn test_repeated_dial_with_no_secio() {
     test_repeated_dial(false)
+}
+
+#[test]
+fn test_dial_no_notify_with_secio() {
+    test_dial_with_no_notify(true)
+}
+
+#[test]
+fn test_dial_no_notify_with_no_secio() {
+    test_dial_with_no_notify(false)
 }
