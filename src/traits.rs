@@ -144,3 +144,23 @@ where
         None
     }
 }
+
+impl ServiceHandle for Box<dyn ServiceHandle + Send + 'static> {
+    fn handle_error(&mut self, control: &mut ServiceContext, error: ServiceEvent) {
+        (&mut **self).handle_error(control, error)
+    }
+
+    fn handle_event(&mut self, control: &mut ServiceContext, event: ServiceEvent) {
+        (&mut **self).handle_event(control, event)
+    }
+}
+
+impl ServiceHandle for Box<dyn ServiceHandle + Send + Sync + 'static> {
+    fn handle_error(&mut self, control: &mut ServiceContext, error: ServiceEvent) {
+        (&mut **self).handle_error(control, error)
+    }
+
+    fn handle_event(&mut self, control: &mut ServiceContext, event: ServiceEvent) {
+        (&mut **self).handle_event(control, event)
+    }
+}
