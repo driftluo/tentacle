@@ -665,6 +665,9 @@ where
                 if !self.dial.iter().any(|(addr, _)| addr == &address) {
                     self.dial_inner(address);
                 }
+                if !self.dial.is_empty() {
+                    self.client_poll();
+                }
             }
             ServiceTask::Disconnect { session_id } => self.session_close(session_id),
             ServiceTask::FutureTask { task } => {
