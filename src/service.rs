@@ -472,7 +472,7 @@ where
             ServiceEvent::SessionOpen {
                 id: self.next_session,
                 address,
-                ty: SessionType::Server,
+                ty,
                 public_key: remote_pubkey,
             },
         );
