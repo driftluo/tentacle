@@ -3,12 +3,10 @@ use futures::{oneshot, prelude::*, sync::oneshot::Sender};
 use log::info;
 use p2p::{
     builder::ServiceBuilder,
-    service::{
-        Message, ProtocolMeta, Service, ServiceContext, ServiceEvent, ServiceHandle,
-        ServiceProtocol, ServiceTask, SessionContext,
-    },
-    session::{ProtocolId, SessionId},
-    SecioKeyPair,
+    context::{ServiceContext, SessionContext},
+    service::{Message, Service, ServiceEvent},
+    traits::{ProtocolMeta, ServiceHandle, ServiceProtocol},
+    ProtocolId, SecioKeyPair, SessionId,
 };
 use std::collections::HashMap;
 use std::{
@@ -81,17 +79,17 @@ impl ServiceProtocol for PHandle {
         let (sender, mut receiver) = oneshot();
         self.clear_handle.insert(session.id, sender);
         let session_id = session.id;
-        let mut interval_sender = control.sender().clone();
+        let mut interval_sender = control.control().clone();
         let interval_task = Interval::new(Instant::now(), Duration::from_secs(5))
             .for_each(move |_| {
-                let _ = interval_sender.try_send(ServiceTask::ProtocolMessage {
-                    session_ids: Some(vec![session_id]),
-                    message: Message {
+                let _ = interval_sender.send_message(
+                    Some(vec![session_id]),
+                    Message {
                         session_id: 0,
                         proto_id: 1,
                         data: b"I am a interval message".to_vec(),
                     },
-                });
+                );
                 if let Ok(Async::Ready(_)) = receiver.poll() {
                     Err(Error::shutdown())
                 } else {
@@ -99,7 +97,7 @@ impl ServiceProtocol for PHandle {
                 }
             })
             .map_err(|err| info!("{}", err));
-        control.future_task(interval_task);
+        let _ = control.future_task(interval_task);
     }
 
     fn disconnected(&mut self, _control: &mut ServiceContext, session: &SessionContext) {
@@ -146,23 +144,23 @@ impl ServiceHandle for SHandle {
     fn handle_event(&mut self, env: &mut ServiceContext, event: ServiceEvent) {
         info!("service event: {:?}", event);
         if let ServiceEvent::SessionOpen { id, .. } = event {
-            let mut delay_sender = env.sender().clone();
+            let mut delay_sender = env.control().clone();
 
             let delay_task = Delay::new(Instant::now() + Duration::from_secs(3))
                 .and_then(move |_| {
-                    let _ = delay_sender.try_send(ServiceTask::ProtocolMessage {
-                        session_ids: None,
-                        message: Message {
+                    let _ = delay_sender.send_message(
+                        None,
+                        Message {
                             session_id: id,
                             proto_id: 0,
                             data: b"I am a delayed message".to_vec(),
                         },
-                    });
+                    );
                     Ok(())
                 })
                 .map_err(|err| info!("{}", err));
 
-            env.future_task(Box::new(delay_task));
+            let _ = env.future_task(Box::new(delay_task));
         }
     }
 }

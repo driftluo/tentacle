@@ -16,13 +16,12 @@ use tokio::codec::length_delimited::LengthDelimitedCodec;
 
 use p2p::{
     builder::ServiceBuilder,
+    context::{ServiceContext, SessionContext},
     multiaddr::{Multiaddr, ToMultiaddr},
-    service::{
-        multiaddr_to_socketaddr, ProtocolMeta, ServiceContext, ServiceEvent, ServiceHandle,
-        ServiceProtocol, SessionContext,
-    },
-    session::{ProtocolId, SessionId},
-    SessionType,
+    service::ServiceEvent,
+    traits::{ProtocolMeta, ServiceHandle, ServiceProtocol},
+    utils::multiaddr_to_socketaddr,
+    ProtocolId, SessionId, SessionType,
 };
 
 use discovery::{AddressManager, Direction, Discovery, DiscoveryHandle, RawAddr, Substream};
@@ -125,7 +124,7 @@ impl ServiceProtocol for DiscoveryProtocol {
                     })
             })
             .unwrap();
-        control.future_task(discovery_task);
+        let _ = control.future_task(discovery_task);
     }
 
     fn connected(&mut self, control: &mut ServiceContext, session: &SessionContext, _: &str) {
@@ -150,7 +149,7 @@ impl ServiceProtocol for DiscoveryProtocol {
             self.id,
             session.id,
             receiver,
-            control.sender().clone(),
+            control.control().clone(),
             control.listens(),
         );
         match self.discovery_handle.substream_sender.try_send(substream) {

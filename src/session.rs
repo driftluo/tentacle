@@ -9,16 +9,12 @@ use tokio::codec::{Decoder, Encoder, Framed};
 use tokio::prelude::{AsyncRead, AsyncWrite, FutureExt};
 use yamux::{session::SessionType, Config, Session as YamuxSession, StreamHandle};
 
-use crate::protocol_select::{client_select, server_select, ProtocolInfo};
-use crate::service::ProtocolMeta;
-use crate::substream::{ProtocolEvent, SubStream};
-
-/// Index of sub/protocol stream
-pub type StreamId = usize;
-/// Protocol id
-pub type ProtocolId = usize;
-/// Index of session
-pub type SessionId = usize;
+use crate::{
+    protocol_select::{client_select, server_select, ProtocolInfo},
+    substream::{ProtocolEvent, SubStream},
+    traits::ProtocolMeta,
+    ProtocolId, SessionId, StreamId,
+};
 
 /// Event generated/received by the Session
 #[derive(Debug)]

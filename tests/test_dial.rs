@@ -1,11 +1,11 @@
 use futures::prelude::Stream;
 use p2p::{
     builder::ServiceBuilder,
+    context::{ServiceContext, SessionContext},
     multiaddr::Multiaddr,
-    service::{ProtocolMeta, ServiceContext, ServiceProtocol, SessionContext},
-    service::{Service, ServiceEvent, ServiceHandle},
-    session::ProtocolId,
-    SecioKeyPair, SessionType,
+    service::{Service, ServiceEvent},
+    traits::{ProtocolMeta, ServiceHandle, ServiceProtocol},
+    ProtocolId, SecioKeyPair, SessionType,
 };
 use std::{thread, time::Duration};
 use tokio::codec::LengthDelimitedCodec;
@@ -115,7 +115,9 @@ impl ServiceProtocol for PHandle {
     }
 
     fn notify(&mut self, control: &mut ServiceContext, _token: u64) {
-        control.dial(self.dial_addr.as_ref().unwrap().clone());
+        if let Err(e) = control.dial(self.dial_addr.as_ref().unwrap().clone()) {
+            panic!("dial err: {}", e)
+        }
         self.dial_count += 1;
         if self.dial_count == 10 {
             self.sender.try_send(self.connected_count).unwrap();
