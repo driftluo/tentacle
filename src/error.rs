@@ -27,8 +27,7 @@ where
     fn eq(&self, other: &Error<T>) -> bool {
         use self::Error::*;
         match (self, other) {
-            (TaskDisconnect, TaskDisconnect) => true,
-            (ConnectSelf, ConnectSelf) => true,
+            (TaskDisconnect, TaskDisconnect) | (ConnectSelf, ConnectSelf) => true,
             (RepeatedConnection(i), RepeatedConnection(j)) => i == j,
             (HandshakeError(i), HandshakeError(j)) => i == j,
             _ => false,

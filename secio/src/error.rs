@@ -45,9 +45,18 @@ impl PartialEq for SecioError {
     fn eq(&self, other: &SecioError) -> bool {
         use self::SecioError::*;
         match (self, other) {
-            (IoError(_), IoError(_)) => false,
             (InvalidProposition(i), InvalidProposition(j)) => i == j,
-            _ => true,
+            (EphemeralKeyGenerationFailed, EphemeralKeyGenerationFailed)
+            | (SecretGenerationFailed, SecretGenerationFailed)
+            | (NoSupportIntersection, NoSupportIntersection)
+            | (NonceVerificationFailed, NonceVerificationFailed)
+            | (FrameTooShort, FrameTooShort)
+            | (HmacNotMatching, HmacNotMatching)
+            | (ConnectSelf, ConnectSelf)
+            | (HandshakeParsingFailure, HandshakeParsingFailure)
+            | (SignatureVerificationFailed, SignatureVerificationFailed)
+            | (InvalidMessage, InvalidMessage) => true,
+            _ => false,
         }
     }
 }
