@@ -10,6 +10,7 @@ use tokio::prelude::{AsyncRead, AsyncWrite, FutureExt};
 use yamux::{session::SessionType, Config, Session as YamuxSession, StreamHandle};
 
 use crate::{
+    error::Error,
     protocol_select::{client_select, server_select, ProtocolInfo},
     substream::{ProtocolEvent, SubStream},
     traits::ProtocolMeta,
@@ -40,7 +41,7 @@ pub(crate) enum SessionEvent {
         /// Session type
         ty: SessionType,
         /// If fail
-        error: io::Error,
+        error: Error,
     },
     /// Protocol data
     ProtocolMessage {

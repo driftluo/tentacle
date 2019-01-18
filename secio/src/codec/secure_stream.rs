@@ -1,7 +1,6 @@
 use bytes::{Bytes, BytesMut};
 use futures::sync::mpsc::{self, Receiver, Sender};
 use futures::{prelude::*, sink::Sink};
-use hmac;
 use log::{debug, warn};
 use tokio::codec::{length_delimited::LengthDelimitedCodec, Framed};
 use tokio::prelude::{AsyncRead, AsyncWrite};

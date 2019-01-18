@@ -15,6 +15,7 @@ use yamux::session::SessionType;
 
 use crate::protocol_select::ProtocolInfo;
 use crate::{
+    error::Error,
     service::{Message, ServiceTask},
     session::SessionEvent,
     ProtocolId, SessionId,
@@ -60,16 +61,13 @@ impl ServiceContext {
 
     /// Initiate a connection request to address
     #[inline]
-    pub fn dial(&mut self, address: Multiaddr) -> Result<(), mpsc::TrySendError<ServiceTask>> {
+    pub fn dial(&mut self, address: Multiaddr) -> Result<(), Error> {
         self.inner.dial(address)
     }
 
     /// Disconnect a connection
     #[inline]
-    pub fn disconnect(
-        &mut self,
-        session_id: SessionId,
-    ) -> Result<(), mpsc::TrySendError<ServiceTask>> {
+    pub fn disconnect(&mut self, session_id: SessionId) -> Result<(), Error> {
         self.inner.disconnect(session_id)
     }
 
@@ -79,13 +77,13 @@ impl ServiceContext {
         &mut self,
         session_ids: Option<Vec<SessionId>>,
         message: Message,
-    ) -> Result<(), mpsc::TrySendError<ServiceTask>> {
+    ) -> Result<(), Error> {
         self.inner.send_message(session_ids, message)
     }
 
     /// Send a future task
     #[inline]
-    pub fn future_task<T>(&mut self, task: T) -> Result<(), mpsc::TrySendError<ServiceTask>>
+    pub fn future_task<T>(&mut self, task: T) -> Result<(), Error>
     where
         T: Future<Item = (), Error = ()> + 'static + Send,
     {
@@ -201,8 +199,10 @@ impl ServiceControl {
 
     /// Real send function
     #[inline]
-    fn send(&mut self, event: ServiceTask) -> Result<(), mpsc::TrySendError<ServiceTask>> {
-        self.service_task_sender.try_send(event)
+    fn send(&mut self, event: ServiceTask) -> Result<(), Error> {
+        self.service_task_sender
+            .try_send(event)
+            .map_err(|e| e.into())
     }
 
     /// Get service protocol message, Map(ID, Name), but can't modify
@@ -213,16 +213,13 @@ impl ServiceControl {
 
     /// Initiate a connection request to address
     #[inline]
-    pub fn dial(&mut self, address: Multiaddr) -> Result<(), mpsc::TrySendError<ServiceTask>> {
+    pub fn dial(&mut self, address: Multiaddr) -> Result<(), Error> {
         self.send(ServiceTask::Dial { address })
     }
 
     /// Disconnect a connection
     #[inline]
-    pub fn disconnect(
-        &mut self,
-        session_id: SessionId,
-    ) -> Result<(), mpsc::TrySendError<ServiceTask>> {
+    pub fn disconnect(&mut self, session_id: SessionId) -> Result<(), Error> {
         self.send(ServiceTask::Disconnect { session_id })
     }
 
@@ -232,7 +229,7 @@ impl ServiceControl {
         &mut self,
         session_ids: Option<Vec<SessionId>>,
         message: Message,
-    ) -> Result<(), mpsc::TrySendError<ServiceTask>> {
+    ) -> Result<(), Error> {
         self.send(ServiceTask::ProtocolMessage {
             session_ids,
             message,
@@ -241,7 +238,7 @@ impl ServiceControl {
 
     /// Send a future task
     #[inline]
-    pub fn future_task<T>(&mut self, task: T) -> Result<(), mpsc::TrySendError<ServiceTask>>
+    pub fn future_task<T>(&mut self, task: T) -> Result<(), Error>
     where
         T: Future<Item = (), Error = ()> + 'static + Send,
     {

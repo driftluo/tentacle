@@ -41,6 +41,17 @@ pub enum SecioError {
     InvalidProposition(&'static str),
 }
 
+impl PartialEq for SecioError {
+    fn eq(&self, other: &SecioError) -> bool {
+        use self::SecioError::*;
+        match (self, other) {
+            (IoError(_), IoError(_)) => false,
+            (InvalidProposition(i), InvalidProposition(j)) => i == j,
+            _ => true,
+        }
+    }
+}
+
 impl From<io::Error> for SecioError {
     #[inline]
     fn from(err: io::Error) -> SecioError {

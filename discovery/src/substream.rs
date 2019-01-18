@@ -8,7 +8,9 @@ use futures::{sync::mpsc::Receiver, Async, AsyncSink, Poll, Sink, Stream};
 use log::{debug, trace, warn};
 use p2p::multiaddr::{Multiaddr, ToMultiaddr};
 use p2p::service::Message;
-use p2p::{context::ServiceControl, utils::multiaddr_to_socketaddr, ProtocolId, SessionId};
+use p2p::{
+    context::ServiceControl, error::Error, utils::multiaddr_to_socketaddr, ProtocolId, SessionId,
+};
 use tokio::codec::Framed;
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::timer::Interval;
@@ -83,7 +85,7 @@ impl io::Write for StreamHandle {
             )
             .map(|()| buf.len())
             .map_err(|err| {
-                if err.is_full() {
+                if let Error::TaskFull = err {
                     io::ErrorKind::WouldBlock.into()
                 } else {
                     io::ErrorKind::BrokenPipe.into()

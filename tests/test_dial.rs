@@ -2,10 +2,11 @@ use futures::prelude::Stream;
 use p2p::{
     builder::ServiceBuilder,
     context::{ServiceContext, SessionContext},
+    error::Error,
     multiaddr::Multiaddr,
     service::{Service, ServiceEvent},
     traits::{ProtocolMeta, ServiceHandle, ServiceProtocol},
-    ProtocolId, SecioKeyPair, SessionType,
+    ProtocolId, SecioKeyPair, SessionId, SessionType,
 };
 use std::{thread, time::Duration};
 use tokio::codec::LengthDelimitedCodec;
@@ -41,7 +42,10 @@ impl ServiceHandle for EmptySHandle {
         self.error_count += 1;
 
         if let ServiceEvent::DialerError { error, .. } = error {
-            assert_eq!(error.kind(), io::ErrorKind::ConnectionRefused)
+            match error {
+                Error::IoError(e) => assert_eq!(e.kind(), io::ErrorKind::ConnectionRefused),
+                e => panic!("test fail {}", e),
+            }
         } else {
             panic!("test fail {:?}", error);
         }
@@ -56,20 +60,32 @@ pub struct SHandle {
     sender: crossbeam_channel::Sender<usize>,
     secio: bool,
     error_count: usize,
+    session_id: SessionId,
+    kind: SessionType,
 }
 
 impl ServiceHandle for SHandle {
     fn handle_error(&mut self, _env: &mut ServiceContext, error: ServiceEvent) {
-        use std::io;
         self.error_count += 1;
 
         if let ServiceEvent::DialerError { error, .. } = error {
-            assert_eq!(error.kind(), io::ErrorKind::BrokenPipe)
+            if self.kind == SessionType::Server {
+                assert_eq!(error, Error::ConnectSelf)
+            } else {
+                assert_eq!(error, Error::RepeatedConnection(self.session_id))
+            }
         } else {
             panic!("test fail {:?}", error);
         }
         if self.error_count > 8 {
             let _ = self.sender.try_send(self.error_count);
+        }
+    }
+
+    fn handle_event(&mut self, _env: &mut ServiceContext, event: ServiceEvent) {
+        if let ServiceEvent::SessionOpen { id, ty, .. } = event {
+            self.session_id = id;
+            self.kind = ty;
         }
     }
 }
@@ -184,6 +200,8 @@ fn create_shandle(
                 sender,
                 secio,
                 error_count: 0,
+                session_id: 0,
+                kind: SessionType::Server,
             }),
             receiver,
         )
