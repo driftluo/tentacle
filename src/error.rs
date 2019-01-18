@@ -5,11 +5,11 @@ use std::{error, fmt, io};
 
 /// Error from p2p framework
 #[derive(Debug)]
-pub enum Error {
+pub enum Error<T: fmt::Debug> {
     /// IO error
     IoError(io::Error),
     /// Service Task channel full
-    TaskFull,
+    TaskFull(T),
     /// Service Task channel has been dropped
     TaskDisconnect,
     /// Connect self
@@ -20,11 +20,13 @@ pub enum Error {
     HandshakeError(SecioError),
 }
 
-impl PartialEq for Error {
-    fn eq(&self, other: &Error) -> bool {
+impl<T> PartialEq for Error<T>
+where
+    T: fmt::Debug,
+{
+    fn eq(&self, other: &Error<T>) -> bool {
         use self::Error::*;
         match (self, other) {
-            (TaskFull, TaskFull) => true,
             (TaskDisconnect, TaskDisconnect) => true,
             (ConnectSelf, ConnectSelf) => true,
             (RepeatedConnection(i), RepeatedConnection(j)) => i == j,
@@ -34,27 +36,36 @@ impl PartialEq for Error {
     }
 }
 
-impl From<io::Error> for Error {
+impl<T> From<io::Error> for Error<T>
+where
+    T: fmt::Debug,
+{
     #[inline]
-    fn from(err: io::Error) -> Error {
+    fn from(err: io::Error) -> Error<T> {
         Error::IoError(err)
     }
 }
 
-impl<T> From<mpsc::TrySendError<T>> for Error {
+impl<T> From<mpsc::TrySendError<T>> for Error<T>
+where
+    T: fmt::Debug,
+{
     #[inline]
-    fn from(err: mpsc::TrySendError<T>) -> Error {
+    fn from(err: mpsc::TrySendError<T>) -> Error<T> {
         if err.is_full() {
-            Error::TaskFull
+            Error::TaskFull(err.into_inner())
         } else {
             Error::TaskDisconnect
         }
     }
 }
 
-impl From<SecioError> for Error {
+impl<T> From<SecioError> for Error<T>
+where
+    T: fmt::Debug,
+{
     #[inline]
-    fn from(err: SecioError) -> Error {
+    fn from(err: SecioError) -> Error<T> {
         match err {
             SecioError::ConnectSelf => Error::ConnectSelf,
             error => Error::HandshakeError(error),
@@ -62,11 +73,14 @@ impl From<SecioError> for Error {
     }
 }
 
-impl error::Error for Error {
+impl<T> error::Error for Error<T>
+where
+    T: fmt::Debug,
+{
     fn description(&self) -> &str {
         match self {
             Error::IoError(e) => error::Error::description(e),
-            Error::TaskFull => "Service Task channel is full",
+            Error::TaskFull(_) => "Service Task channel is full",
             Error::TaskDisconnect => "Service Task channel has been dropped",
             Error::ConnectSelf => "Connect self",
             Error::RepeatedConnection(_) => "Connected to the connected peer",
@@ -75,11 +89,14 @@ impl error::Error for Error {
     }
 }
 
-impl fmt::Display for Error {
+impl<T> fmt::Display for Error<T>
+where
+    T: fmt::Debug,
+{
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             Error::IoError(e) => fmt::Display::fmt(e, f),
-            Error::TaskFull => write!(f, "Service Task channel is full"),
+            Error::TaskFull(_) => write!(f, "Service Task channel is full"),
             Error::TaskDisconnect => write!(f, "Service Task channel has been dropped"),
             Error::ConnectSelf => write!(f, "Connect self"),
             Error::RepeatedConnection(id) => {

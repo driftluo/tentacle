@@ -6,7 +6,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::{
     error::{self, Error as ErrorTrait},
-    io,
+    fmt, io,
     time::Duration,
 };
 use tokio::net::{
@@ -62,14 +62,14 @@ pub enum ServiceEvent {
         /// Remote address
         address: Multiaddr,
         /// error
-        error: Error,
+        error: Error<ServiceTask>,
     },
     /// When listen error
     ListenError {
         /// Listen address
         address: Multiaddr,
         /// error
-        error: Error,
+        error: Error<ServiceTask>,
     },
     /// A session close
     SessionClose {
@@ -132,6 +132,34 @@ pub enum ServiceTask {
         /// Remote address
         address: Multiaddr,
     },
+}
+
+impl fmt::Debug for ServiceTask {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        use self::ServiceTask::*;
+
+        match self {
+            ProtocolMessage {
+                session_ids,
+                message,
+            } => write!(f, "id: {:?}, message: {:?}", session_ids, message),
+            ProtocolNotify { proto_id, token } => {
+                write!(f, "protocol id: {}, token: {}", proto_id, token)
+            }
+            ProtocolSessionNotify {
+                session_id,
+                proto_id,
+                token,
+            } => write!(
+                f,
+                "session id: {}, protocol id: {}, token: {}",
+                session_id, proto_id, token
+            ),
+            FutureTask { .. } => write!(f, "Future task"),
+            Disconnect { session_id } => write!(f, "Disconnect session [{}]", session_id),
+            Dial { address } => write!(f, "Dial address: {}", address),
+        }
+    }
 }
 
 /// An abstraction of p2p service, currently only supports TCP protocol

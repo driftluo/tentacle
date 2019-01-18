@@ -61,13 +61,13 @@ impl ServiceContext {
 
     /// Initiate a connection request to address
     #[inline]
-    pub fn dial(&mut self, address: Multiaddr) -> Result<(), Error> {
+    pub fn dial(&mut self, address: Multiaddr) -> Result<(), Error<ServiceTask>> {
         self.inner.dial(address)
     }
 
     /// Disconnect a connection
     #[inline]
-    pub fn disconnect(&mut self, session_id: SessionId) -> Result<(), Error> {
+    pub fn disconnect(&mut self, session_id: SessionId) -> Result<(), Error<ServiceTask>> {
         self.inner.disconnect(session_id)
     }
 
@@ -77,13 +77,13 @@ impl ServiceContext {
         &mut self,
         session_ids: Option<Vec<SessionId>>,
         message: Message,
-    ) -> Result<(), Error> {
+    ) -> Result<(), Error<ServiceTask>> {
         self.inner.send_message(session_ids, message)
     }
 
     /// Send a future task
     #[inline]
-    pub fn future_task<T>(&mut self, task: T) -> Result<(), Error>
+    pub fn future_task<T>(&mut self, task: T) -> Result<(), Error<ServiceTask>>
     where
         T: Future<Item = (), Error = ()> + 'static + Send,
     {
@@ -199,7 +199,7 @@ impl ServiceControl {
 
     /// Real send function
     #[inline]
-    fn send(&mut self, event: ServiceTask) -> Result<(), Error> {
+    fn send(&mut self, event: ServiceTask) -> Result<(), Error<ServiceTask>> {
         self.service_task_sender
             .try_send(event)
             .map_err(|e| e.into())
@@ -213,13 +213,13 @@ impl ServiceControl {
 
     /// Initiate a connection request to address
     #[inline]
-    pub fn dial(&mut self, address: Multiaddr) -> Result<(), Error> {
+    pub fn dial(&mut self, address: Multiaddr) -> Result<(), Error<ServiceTask>> {
         self.send(ServiceTask::Dial { address })
     }
 
     /// Disconnect a connection
     #[inline]
-    pub fn disconnect(&mut self, session_id: SessionId) -> Result<(), Error> {
+    pub fn disconnect(&mut self, session_id: SessionId) -> Result<(), Error<ServiceTask>> {
         self.send(ServiceTask::Disconnect { session_id })
     }
 
@@ -229,7 +229,7 @@ impl ServiceControl {
         &mut self,
         session_ids: Option<Vec<SessionId>>,
         message: Message,
-    ) -> Result<(), Error> {
+    ) -> Result<(), Error<ServiceTask>> {
         self.send(ServiceTask::ProtocolMessage {
             session_ids,
             message,
@@ -238,7 +238,7 @@ impl ServiceControl {
 
     /// Send a future task
     #[inline]
-    pub fn future_task<T>(&mut self, task: T) -> Result<(), Error>
+    pub fn future_task<T>(&mut self, task: T) -> Result<(), Error<ServiceTask>>
     where
         T: Future<Item = (), Error = ()> + 'static + Send,
     {

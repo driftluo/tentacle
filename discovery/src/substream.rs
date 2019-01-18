@@ -85,7 +85,7 @@ impl io::Write for StreamHandle {
             )
             .map(|()| buf.len())
             .map_err(|err| {
-                if let Error::TaskFull = err {
+                if let Error::TaskFull(_) = err {
                     io::ErrorKind::WouldBlock.into()
                 } else {
                     io::ErrorKind::BrokenPipe.into()
