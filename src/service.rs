@@ -448,11 +448,21 @@ where
             {
                 Some(context) => {
                     trace!("Connected to the connected node");
+                    // TODO: The behavior of receiving error here is undefined. It may be that the server is received or may be received by the client,
+                    // TODO: depending on who both parties handle it here or both received.
                     let _ = handle.shutdown();
                     if ty == SessionType::Client {
                         self.handle.handle_error(
                             &mut self.service_context,
                             ServiceEvent::DialerError {
+                                error: Error::RepeatedConnection(context.id),
+                                address,
+                            },
+                        );
+                    } else {
+                        self.handle.handle_error(
+                            &mut self.service_context,
+                            ServiceEvent::ListenError {
                                 error: Error::RepeatedConnection(context.id),
                                 address,
                             },

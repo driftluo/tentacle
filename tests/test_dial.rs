@@ -68,15 +68,29 @@ impl ServiceHandle for SHandle {
     fn handle_error(&mut self, _env: &mut ServiceContext, error: ServiceEvent) {
         self.error_count += 1;
 
-        if let ServiceEvent::DialerError { error, .. } = error {
-            if self.kind == SessionType::Server {
-                assert_eq!(error, Error::ConnectSelf)
-            } else {
+        // NOTE: The behavior of receiving error here is undefined. It may be that the server is received or may be received by the client,
+        // depending on who both parties handle it here or both received.
+        match error {
+            ServiceEvent::DialerError { error, .. } => {
+                if self.kind == SessionType::Server {
+                    match error {
+                        Error::ConnectSelf | Error::HandshakeError(_) => (),
+                        _ => panic!("server test fail"),
+                    }
+                } else {
+                    match error {
+                        Error::HandshakeError(_) => (),
+                        Error::RepeatedConnection(id) => assert_eq!(id, self.session_id),
+                        _ => panic!("client test fail"),
+                    }
+                }
+            }
+            ServiceEvent::ListenError { error, .. } => {
                 assert_eq!(error, Error::RepeatedConnection(self.session_id))
             }
-        } else {
-            panic!("test fail {:?}", error);
+            error => panic!("test fail {:?}", error),
         }
+
         if self.error_count > 8 {
             let _ = self.sender.try_send(self.error_count);
         }
