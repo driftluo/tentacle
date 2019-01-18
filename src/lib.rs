@@ -15,6 +15,8 @@ pub use yamux::{session::SessionType, Session};
 pub mod builder;
 /// Context for Session and Service
 pub mod context;
+/// Error
+pub mod error;
 /// Protocol select
 pub mod protocol_select;
 /// An abstraction of p2p service

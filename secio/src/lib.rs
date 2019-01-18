@@ -9,7 +9,7 @@ pub use crate::handshake::handshake_struct::PublicKey;
 /// Encrypted and decrypted codec implementation, and stream handle
 pub mod codec;
 /// Error type
-mod error;
+pub mod error;
 /// Exchange information during the handshake
 mod exchange;
 /// Implementation of the handshake process

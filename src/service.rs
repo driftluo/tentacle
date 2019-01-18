@@ -5,8 +5,8 @@ use secio::{handshake::Config, PublicKey, SecioKeyPair};
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::{
-    error::{self, Error},
-    io,
+    error::{self, Error as ErrorTrait},
+    fmt, io,
     time::Duration,
 };
 use tokio::net::{
@@ -22,6 +22,7 @@ use yamux::session::SessionType;
 
 use crate::{
     context::{ServiceContext, ServiceControl, SessionContext},
+    error::Error,
     protocol_select::ProtocolInfo,
     session::{Session, SessionEvent, SessionMeta},
     traits::{ProtocolMeta, ServiceHandle, ServiceProtocol, SessionProtocol},
@@ -60,15 +61,15 @@ pub enum ServiceEvent {
     DialerError {
         /// Remote address
         address: Multiaddr,
-        /// Io error
-        error: io::Error,
+        /// error
+        error: Error<ServiceTask>,
     },
     /// When listen error
     ListenError {
         /// Listen address
         address: Multiaddr,
-        /// Io error
-        error: io::Error,
+        /// error
+        error: Error<ServiceTask>,
     },
     /// A session close
     SessionClose {
@@ -131,6 +132,34 @@ pub enum ServiceTask {
         /// Remote address
         address: Multiaddr,
     },
+}
+
+impl fmt::Debug for ServiceTask {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        use self::ServiceTask::*;
+
+        match self {
+            ProtocolMessage {
+                session_ids,
+                message,
+            } => write!(f, "id: {:?}, message: {:?}", session_ids, message),
+            ProtocolNotify { proto_id, token } => {
+                write!(f, "protocol id: {}, token: {}", proto_id, token)
+            }
+            ProtocolSessionNotify {
+                session_id,
+                proto_id,
+                token,
+            } => write!(
+                f,
+                "session id: {}, protocol id: {}, token: {}",
+                session_id, proto_id, token
+            ),
+            FutureTask { .. } => write!(f, "Future task"),
+            Disconnect { session_id } => write!(f, "Disconnect session [{}]", session_id),
+            Dial { address } => write!(f, "Dial address: {}", address),
+        }
+    }
 }
 
 /// An abstraction of p2p service, currently only supports TCP protocol
@@ -371,10 +400,10 @@ where
                         Err(err) => {
                             let error = if err.is_timer() {
                                 // tokio timer error
-                                io::Error::new(io::ErrorKind::Other, err.description())
+                                io::Error::new(io::ErrorKind::Other, err.description()).into()
                             } else if err.is_elapsed() {
                                 // time out error
-                                io::Error::new(io::ErrorKind::TimedOut, err.description())
+                                io::Error::new(io::ErrorKind::TimedOut, err.description()).into()
                             } else {
                                 // dialer error
                                 err.into_inner().unwrap().into()
@@ -412,28 +441,36 @@ where
         if let Some(ref key) = remote_pubkey {
             // If the public key exists, the connection has been established
             // and then the useless connection needs to be closed.
-            if self
+            match self
                 .sessions
                 .values()
-                .any(|context| context.remote_pubkey.as_ref() == Some(key))
+                .find(|context| context.remote_pubkey.as_ref() == Some(key))
             {
-                trace!("Connected to the connected node");
-                let _ = handle.shutdown();
-                if ty == SessionType::Client {
-                    self.handle.handle_error(
-                        &mut self.service_context,
-                        ServiceEvent::DialerError {
-                            error: io::Error::new(
-                                io::ErrorKind::BrokenPipe,
-                                "Connected to the connected node",
-                            ),
-                            address,
-                        },
-                    );
+                Some(context) => {
+                    trace!("Connected to the connected node");
+                    // TODO: The behavior of receiving error here is undefined. It may be that the server is received or may be received by the client,
+                    // TODO: depending on who both parties handle it here or both received.
+                    let _ = handle.shutdown();
+                    if ty == SessionType::Client {
+                        self.handle.handle_error(
+                            &mut self.service_context,
+                            ServiceEvent::DialerError {
+                                error: Error::RepeatedConnection(context.id),
+                                address,
+                            },
+                        );
+                    } else {
+                        self.handle.handle_error(
+                            &mut self.service_context,
+                            ServiceEvent::ListenError {
+                                error: Error::RepeatedConnection(context.id),
+                                address,
+                            },
+                        );
+                    }
+                    return;
                 }
-                return;
-            } else {
-                self.next_session += 1;
+                None => self.next_session += 1,
             }
         } else {
             self.next_session += 1;
@@ -721,7 +758,10 @@ where
                     };
                     self.handle.handle_error(
                         &mut self.service_context,
-                        ServiceEvent::DialerError { address, error },
+                        ServiceEvent::DialerError {
+                            address,
+                            error: error.into(),
+                        },
                     );
                 }
             }
@@ -746,7 +786,7 @@ where
                         &mut self.service_context,
                         ServiceEvent::ListenError {
                             address,
-                            error: err,
+                            error: err.into(),
                         },
                     );
                 }
