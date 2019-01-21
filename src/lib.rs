@@ -7,7 +7,7 @@
 /// Re-pub multiaddr crate
 pub use multiaddr;
 /// Re-pub some useful structures in secio
-pub use secio::{PublicKey, SecioKeyPair};
+pub use secio::{error::SecioError, PublicKey, SecioKeyPair};
 /// Re-pub some useful structures in yamux
 pub use yamux::{session::SessionType, Session};
 

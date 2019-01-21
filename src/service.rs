@@ -350,7 +350,7 @@ where
 
     /// Get the callback handle of the specified protocol
     #[inline]
-    fn get_proto_handle(&self, session: bool, proto_id: ProtocolId) -> Option<ProtocolHandle> {
+    fn proto_handle(&self, session: bool, proto_id: ProtocolId) -> Option<ProtocolHandle> {
         let handle = self
             .protocol_configs
             .values()
@@ -565,9 +565,7 @@ where
 
         // Service proto handle processing flow
         if !self.service_proto_handles.contains_key(&proto_id) {
-            if let Some(ProtocolHandle::Service(mut handle)) =
-                self.get_proto_handle(false, proto_id)
-            {
+            if let Some(ProtocolHandle::Service(mut handle)) = self.proto_handle(false, proto_id) {
                 debug!("init service [{}] level proto [{}] handle", id, proto_id);
                 handle.init(&mut self.service_context);
                 self.service_proto_handles.insert(proto_id, handle);
@@ -584,7 +582,7 @@ where
         // Session proto handle processing flow
         // Regardless of the existence of the session level handle,
         // you **must record** which protocols are opened for each session.
-        if let Some(ProtocolHandle::Session(mut handle)) = self.get_proto_handle(true, proto_id) {
+        if let Some(ProtocolHandle::Session(mut handle)) = self.proto_handle(true, proto_id) {
             debug!("init session [{}] level proto [{}] handle", id, proto_id);
             handle.connected(&mut self.service_context, &session_context, version);
             self.session_proto_handles
@@ -771,6 +769,7 @@ where
     /// Poll listen connections
     #[inline]
     fn listen_poll(&mut self) {
+        let mut update = false;
         for (address, mut listen) in self.listens.split_off(0) {
             match listen.poll() {
                 Ok(Async::Ready(Some(socket))) => {
@@ -782,6 +781,7 @@ where
                     self.listens.push((address, listen));
                 }
                 Err(err) => {
+                    update = true;
                     self.handle.handle_error(
                         &mut self.service_context,
                         ServiceEvent::ListenError {
@@ -793,12 +793,14 @@ where
             }
         }
 
-        self.service_context.update_listens(
-            self.listens
-                .iter()
-                .map(|(address, _)| address.clone())
-                .collect(),
-        );
+        if update || self.service_context.listens().is_empty() {
+            self.service_context.update_listens(
+                self.listens
+                    .iter()
+                    .map(|(address, _)| address.clone())
+                    .collect(),
+            );
+        }
     }
 }
 
