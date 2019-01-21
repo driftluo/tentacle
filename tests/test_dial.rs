@@ -257,7 +257,8 @@ fn test_dial_with_no_notify(secio: bool) {
     let mut service = create(secio, meta, shandle);
     let mut control = service.control().clone();
     thread::spawn(|| tokio::run(service.for_each(|_| Ok(()))));
-    (0..10).for_each(|i| {
+    // macOs can't dial 0 port
+    (1..11).for_each(|i| {
         let addr = format!("/ip4/127.0.0.1/tcp/{}", i).parse().unwrap();
         control.dial(addr).unwrap();
     });
