@@ -359,7 +359,7 @@ mod tests {
     use bytes::BytesMut;
     use futures::{prelude::*, sync};
     use std::io::Write;
-    use std::thread;
+    use std::{thread, time};
     use tokio::net::{TcpListener, TcpStream};
 
     fn handshake_with_self_success(config_1: Config, config_2: Config, data: &'static [u8]) {
@@ -377,6 +377,8 @@ mod tests {
                 let task = tokio::io::read_exact(handle, [0u8; 11])
                     .and_then(move |(mut handle, data)| {
                         let _ = handle.write_all(&data);
+                        // wait test finish, don't drop handle
+                        thread::sleep(time::Duration::from_secs(10));
                         Ok(())
                     })
                     .map_err(|_| ());

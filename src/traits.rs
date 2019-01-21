@@ -164,3 +164,5 @@ impl ServiceHandle for Box<dyn ServiceHandle + Send + Sync + 'static> {
         (&mut **self).handle_event(control, event)
     }
 }
+
+impl ServiceHandle for () {}

@@ -267,7 +267,7 @@ mod tests {
     use futures::{sync, Future, Stream};
     use rand;
     use std::io::Write;
-    use std::thread;
+    use std::{thread, time};
     use tokio::codec::{length_delimited::LengthDelimitedCodec, Framed};
     use tokio::net::{TcpListener, TcpStream};
 
@@ -358,10 +358,12 @@ mod tests {
                     Vec::new(),
                 );
                 let mut handle = secure.create_handle().unwrap();
+                tokio::spawn(secure.for_each(|_| Ok(())).map_err(|_| ()));
+
                 let _ = handle.write_all(&nonce);
                 let _ = handle.write_all(&data_clone[..]);
-
-                tokio::spawn(secure.for_each(|_| Ok(())).map_err(|_| ()));
+                // wait test finish, don't drop handle
+                thread::sleep(time::Duration::from_secs(10));
             })
             .map_err(|_| ());
 

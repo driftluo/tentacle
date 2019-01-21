@@ -128,6 +128,8 @@ pub(crate) enum StreamEvent {
 
 impl Drop for StreamHandle {
     fn drop(&mut self) {
+        // when handle drop, shutdown this stream
+        let _ = self.shutdown();
         self.frame_receiver.close();
     }
 }
