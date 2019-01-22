@@ -1,6 +1,5 @@
 use secio::SecioKeyPair;
 use std::collections::HashMap;
-use std::marker::PhantomData;
 use std::sync::Arc;
 use std::{error, io, time::Duration};
 use tokio::codec::{Decoder, Encoder};
@@ -11,17 +10,15 @@ use crate::{
 };
 
 /// Builder for Service
-pub struct ServiceBuilder<T, U> {
+pub struct ServiceBuilder<U> {
     inner: HashMap<String, Box<dyn ProtocolMeta<U> + Send + Sync>>,
     key_pair: Option<SecioKeyPair>,
     forever: bool,
     timeout: Duration,
-    phantom: PhantomData<T>,
 }
 
-impl<T, U> ServiceBuilder<T, U>
+impl<U> ServiceBuilder<U>
 where
-    T: ProtocolMeta<U> + Send + Sync + 'static,
     U: Decoder<Item = bytes::BytesMut> + Encoder<Item = bytes::Bytes> + Send + 'static,
     <U as Decoder>::Error: error::Error + Into<io::Error>,
     <U as Encoder>::Error: error::Error + Into<io::Error>,
@@ -46,7 +43,10 @@ where
     }
 
     /// Insert a custom protocol
-    pub fn insert_protocol(mut self, protocol: T) -> Self {
+    pub fn insert_protocol<T>(mut self, protocol: T) -> Self
+    where
+        T: ProtocolMeta<U> + Send + Sync + 'static,
+    {
         self.inner.insert(
             protocol.name(),
             Box::new(protocol) as Box<dyn ProtocolMeta<_> + Send + Sync>,
@@ -83,9 +83,8 @@ where
     }
 }
 
-impl<T, U> Default for ServiceBuilder<T, U>
+impl<U> Default for ServiceBuilder<U>
 where
-    T: ProtocolMeta<U> + Send + Sync + 'static,
     U: Decoder<Item = bytes::BytesMut> + Encoder<Item = bytes::Bytes> + Send + 'static,
     <U as Decoder>::Error: error::Error + Into<io::Error>,
     <U as Encoder>::Error: error::Error + Into<io::Error>,
@@ -96,7 +95,6 @@ where
             key_pair: None,
             forever: false,
             timeout: Duration::from_secs(10),
-            phantom: PhantomData,
         }
     }
 }
