@@ -56,11 +56,12 @@ where
 #[derive(Clone)]
 pub struct Protocol {
     id: ProtocolId,
+    sender: crossbeam_channel::Sender<()>,
 }
 
 impl Protocol {
-    fn new(id: ProtocolId) -> Self {
-        Protocol { id }
+    fn new(id: ProtocolId, sender: crossbeam_channel::Sender<()>) -> Self {
+        Protocol { id, sender }
     }
 }
 
@@ -79,6 +80,7 @@ impl ProtocolMeta<LengthDelimitedCodec> for Protocol {
             let handle = Box::new(PHandle {
                 proto_id: self.id,
                 connected_count: 0,
+                sender: self.sender.clone(),
             });
             Some(handle)
         }
@@ -88,6 +90,7 @@ impl ProtocolMeta<LengthDelimitedCodec> for Protocol {
 struct PHandle {
     proto_id: ProtocolId,
     connected_count: usize,
+    sender: crossbeam_channel::Sender<()>,
 }
 
 impl ServiceProtocol for PHandle {
@@ -101,10 +104,12 @@ impl ServiceProtocol for PHandle {
     ) {
         self.connected_count += 1;
         assert_eq!(self.proto_id, session.id);
+        assert_eq!(self.sender.send(()), Ok(()));
     }
 
     fn disconnected(&mut self, _control: &mut ServiceContext, _session: &SessionContext) {
         self.connected_count -= 1;
+        assert_eq!(self.sender.send(()), Ok(()));
     }
 
     fn received(&mut self, env: &mut ServiceContext, session: &SessionContext, data: Vec<u8>) {
@@ -119,10 +124,17 @@ impl ServiceProtocol for PHandle {
     }
 }
 
+fn create_meta(id: ProtocolId) -> (Protocol, crossbeam_channel::Receiver<()>) {
+    let (sender, receiver) = crossbeam_channel::bounded(1);
+
+    (Protocol::new(id, sender), receiver)
+}
+
 /// Test just like https://github.com/libp2p/rust-libp2p/issues/648 this issue, kill some peer
 /// and observe if there has a memory leak, cpu takes up too much problem
 fn test_kill(secio: bool) {
-    let mut service = create(secio, Protocol::new(1), ());
+    let (meta, receiver) = create_meta(1);
+    let mut service = create(secio, meta, ());
     let listen_addr = service
         .listen(&"/ip4/127.0.0.1/tcp/0".parse().unwrap())
         .unwrap();
@@ -132,7 +144,8 @@ fn test_kill(secio: bool) {
         Err(e) => panic!("Fork failed, {}", e),
         Ok(ForkResult::Parent { child }) => {
             thread::spawn(|| tokio::run(service.for_each(|_| Ok(()))));
-            thread::sleep(Duration::from_secs(1));
+            // wait connected
+            assert_eq!(receiver.recv(), Ok(()));
 
             let _ = control.send_message(
                 None,
@@ -147,7 +160,7 @@ fn test_kill(secio: bool) {
 
             thread::sleep(Duration::from_secs(10));
             assert_eq!(kill(child, Signal::SIGKILL), Ok(()));
-            thread::sleep(Duration::from_secs(3));
+            assert_eq!(receiver.recv(), Ok(()));
 
             let mem_stop = current_used_memory().unwrap();
             let cpu_stop = current_used_cpu().unwrap();
@@ -155,7 +168,8 @@ fn test_kill(secio: bool) {
             assert!((cpu_stop - cpu_start) / cpu_start < 0.1);
         }
         Ok(ForkResult::Child) => {
-            let service = create(secio, Protocol::new(1), ()).dial(listen_addr);
+            let (meta, _receiver) = create_meta(1);
+            let service = create(secio, meta, ()).dial(listen_addr);
             let handle = thread::spawn(|| tokio::run(service.for_each(|_| Ok(()))));
             handle.join().expect("child process done")
         }
