@@ -1,6 +1,6 @@
 //! The substream, the main interface is AsyncRead/AsyncWrite
 
-use std::io;
+use std::io::{self, Write};
 
 use bytes::{Bytes, BytesMut};
 use futures::{
@@ -24,7 +24,8 @@ pub struct StreamHandle {
     max_recv_window: u32,
     recv_window: u32,
     send_window: u32,
-    data_buf: BytesMut,
+    read_buf: BytesMut,
+    write_buf: BytesMut,
 
     // Send stream event to parent session
     event_sender: Sender<StreamEvent>,
@@ -51,7 +52,8 @@ impl StreamHandle {
             max_recv_window: recv_window_size,
             recv_window: recv_window_size,
             send_window: send_window_size,
-            data_buf: BytesMut::default(),
+            read_buf: BytesMut::default(),
+            write_buf: BytesMut::default(),
             event_sender,
             frame_receiver,
         }
@@ -113,7 +115,7 @@ impl StreamHandle {
 
     // Send a window update
     pub(crate) fn send_window_update(&mut self) -> Result<(), Error> {
-        let buf_len = self.data_buf.len() as u32;
+        let buf_len = self.read_buf.len() as u32;
         let delta = self.max_recv_window - buf_len - self.recv_window;
 
         // Check if we can omit the update
@@ -204,6 +206,12 @@ impl StreamHandle {
     fn handle_window_update(&mut self, frame: &Frame) -> Result<(), Error> {
         self.process_flags(frame.flags())?;
         self.send_window += frame.length();
+        let n = ::std::cmp::min(self.send_window as usize, self.write_buf.len());
+        // Send cached data
+        if n != 0 {
+            let b = self.write_buf.split_to(n);
+            let _ = self.write(&b);
+        }
         Ok(())
     }
 
@@ -216,7 +224,7 @@ impl StreamHandle {
 
         let (_, body) = frame.into_parts();
         if let Some(data) = body {
-            self.data_buf.extend_from_slice(&data);
+            self.read_buf.extend_from_slice(&data);
         }
         self.recv_window -= length;
         Ok(())
@@ -289,17 +297,17 @@ impl io::Read for StreamHandle {
             _ => {}
         }
 
-        let n = ::std::cmp::min(buf.len(), self.data_buf.len());
+        let n = ::std::cmp::min(buf.len(), self.read_buf.len());
         if n == 0 {
             return Err(io::ErrorKind::WouldBlock.into());
         }
-        let b = self.data_buf.split_to(n);
+        let b = self.read_buf.split_to(n);
         debug!(
-            "[{}] StreamHandle.read({}), buf.len()={}, data_buf.len()={}",
+            "[{}] StreamHandle.read({}), buf.len()={}, read_buf.len()={}",
             self.id,
             n,
             buf.len(),
-            self.data_buf.len()
+            self.read_buf.len()
         );
         buf[..n].copy_from_slice(&b);
         if self.send_window_update().is_err() {
@@ -339,7 +347,11 @@ impl io::Write for StreamHandle {
             return Err(io::ErrorKind::BrokenPipe.into());
         }
         self.send_window -= n as u32;
-        Ok(n)
+        // Cache unsent data
+        self.write_buf.extend_from_slice(&buf[n..]);
+        // TODO: Here, it is problematic for the caller to think that
+        // TODO: each write is completely successful, but I don’t know how to deal with it at present.
+        Ok(buf.len())
     }
 
     fn flush(&mut self) -> io::Result<()> {
