@@ -18,7 +18,7 @@ use p2p::{
     builder::ServiceBuilder,
     context::{ServiceContext, SessionContext},
     multiaddr::{Multiaddr, ToMultiaddr},
-    service::ServiceEvent,
+    service::{ServiceError, ServiceEvent},
     traits::{ProtocolMeta, ServiceHandle, ServiceProtocol},
     utils::multiaddr_to_socketaddr,
     ProtocolId, SessionId, SessionType,
@@ -196,7 +196,7 @@ impl ServiceProtocol for DiscoveryProtocol {
 struct SHandle {}
 
 impl ServiceHandle for SHandle {
-    fn handle_error(&mut self, _env: &mut ServiceContext, error: ServiceEvent) {
+    fn handle_error(&mut self, _env: &mut ServiceContext, error: ServiceError) {
         debug!("service error: {:?}", error);
     }
 

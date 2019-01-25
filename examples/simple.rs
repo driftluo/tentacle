@@ -4,7 +4,7 @@ use log::info;
 use p2p::{
     builder::ServiceBuilder,
     context::{ServiceContext, SessionContext},
-    service::{Message, Service, ServiceEvent},
+    service::{Service, ServiceError, ServiceEvent},
     traits::{ProtocolMeta, ServiceHandle, ServiceProtocol},
     ProtocolId, SecioKeyPair, SessionId,
 };
@@ -84,11 +84,8 @@ impl ServiceProtocol for PHandle {
             .for_each(move |_| {
                 let _ = interval_sender.send_message(
                     Some(vec![session_id]),
-                    Message {
-                        session_id: 0,
-                        proto_id: 1,
-                        data: b"I am a interval message".to_vec(),
-                    },
+                    1,
+                    b"I am a interval message".to_vec(),
                 );
                 if let Ok(Async::Ready(_)) = receiver.poll() {
                     Err(Error::shutdown())
@@ -138,24 +135,17 @@ impl ServiceProtocol for PHandle {
 struct SHandle;
 
 impl ServiceHandle for SHandle {
-    fn handle_error(&mut self, _env: &mut ServiceContext, error: ServiceEvent) {
+    fn handle_error(&mut self, _env: &mut ServiceContext, error: ServiceError) {
         info!("service error: {:?}", error);
     }
     fn handle_event(&mut self, env: &mut ServiceContext, event: ServiceEvent) {
         info!("service event: {:?}", event);
-        if let ServiceEvent::SessionOpen { id, .. } = event {
+        if let ServiceEvent::SessionOpen { .. } = event {
             let mut delay_sender = env.control().clone();
 
             let delay_task = Delay::new(Instant::now() + Duration::from_secs(3))
                 .and_then(move |_| {
-                    let _ = delay_sender.send_message(
-                        None,
-                        Message {
-                            session_id: id,
-                            proto_id: 0,
-                            data: b"I am a delayed message".to_vec(),
-                        },
-                    );
+                    let _ = delay_sender.send_message(None, 0, b"I am a delayed message".to_vec());
                     Ok(())
                 })
                 .map_err(|err| info!("{}", err));

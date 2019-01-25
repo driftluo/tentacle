@@ -4,7 +4,7 @@ use p2p::{
     context::{ServiceContext, SessionContext},
     error::Error,
     multiaddr::Multiaddr,
-    service::{Service, ServiceEvent},
+    service::{Service, ServiceError, ServiceEvent},
     traits::{ProtocolMeta, ServiceHandle, ServiceProtocol},
     ProtocolId, SecioKeyPair, SessionId, SessionType,
 };
@@ -37,11 +37,11 @@ struct EmptySHandle {
 }
 
 impl ServiceHandle for EmptySHandle {
-    fn handle_error(&mut self, _env: &mut ServiceContext, error: ServiceEvent) {
+    fn handle_error(&mut self, _env: &mut ServiceContext, error: ServiceError) {
         use std::io;
         self.error_count += 1;
 
-        if let ServiceEvent::DialerError { error, .. } = error {
+        if let ServiceError::DialerError { error, .. } = error {
             match error {
                 Error::IoError(e) => assert_eq!(e.kind(), io::ErrorKind::ConnectionRefused),
                 e => panic!("test fail {}", e),
@@ -65,13 +65,13 @@ pub struct SHandle {
 }
 
 impl ServiceHandle for SHandle {
-    fn handle_error(&mut self, _env: &mut ServiceContext, error: ServiceEvent) {
+    fn handle_error(&mut self, _env: &mut ServiceContext, error: ServiceError) {
         self.error_count += 1;
 
         // NOTE: The behavior of receiving error here is undefined. It may be that the server is received or may be received by the client,
         // depending on who both parties handle it here or both received.
         match error {
-            ServiceEvent::DialerError { error, .. } => {
+            ServiceError::DialerError { error, .. } => {
                 if self.kind == SessionType::Server {
                     match error {
                         Error::ConnectSelf | Error::HandshakeError(_) => (),
@@ -85,10 +85,9 @@ impl ServiceHandle for SHandle {
                     }
                 }
             }
-            ServiceEvent::ListenError { error, .. } => {
+            ServiceError::ListenError { error, .. } => {
                 assert_eq!(error, Error::RepeatedConnection(self.session_id))
             }
-            error => panic!("test fail {:?}", error),
         }
 
         if self.error_count > 8 {
