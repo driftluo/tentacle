@@ -22,6 +22,7 @@ pub struct Config {
     pub(crate) agreements_proposal: Option<String>,
     pub(crate) ciphers_proposal: Option<String>,
     pub(crate) digests_proposal: Option<String>,
+    pub(crate) max_frame_length: usize,
 }
 
 impl Config {
@@ -32,7 +33,14 @@ impl Config {
             agreements_proposal: None,
             ciphers_proposal: None,
             digests_proposal: None,
+            max_frame_length: 1024 * 1024 * 8,
         }
+    }
+
+    /// Max frame length
+    pub fn max_frame_length(mut self, size: usize) -> Self {
+        self.max_frame_length = size;
+        self
     }
 
     /// Override the default set of supported key agreement algorithms.

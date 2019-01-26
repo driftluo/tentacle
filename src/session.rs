@@ -432,4 +432,9 @@ where
         self.protocol_configs = config;
         self
     }
+
+    pub fn config(mut self, config: Config) -> Self {
+        self.config = config;
+        self
+    }
 }

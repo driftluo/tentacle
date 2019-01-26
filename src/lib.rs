@@ -9,7 +9,7 @@ pub use multiaddr;
 /// Re-pub some useful structures in secio
 pub use secio::{error::SecioError, PublicKey, SecioKeyPair};
 /// Re-pub some useful structures in yamux
-pub use yamux::{session::SessionType, Session};
+pub use yamux::{session::SessionType, Config as YamuxConfig, Session};
 
 /// Some gadgets that help create a service
 pub mod builder;

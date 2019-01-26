@@ -3,6 +3,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::{error, io, time::Duration};
 use tokio::codec::{Decoder, Encoder};
+use yamux::Config;
 
 use crate::{
     service::Service,
@@ -15,6 +16,8 @@ pub struct ServiceBuilder<U> {
     key_pair: Option<SecioKeyPair>,
     forever: bool,
     timeout: Duration,
+    yamux_config: Config,
+    max_frame_length: usize,
 }
 
 impl<U> ServiceBuilder<U>
@@ -40,6 +43,8 @@ where
             self.forever,
             self.timeout,
         )
+        .max_frame_length(self.max_frame_length)
+        .yamux_config(self.yamux_config)
     }
 
     /// Insert a custom protocol
@@ -77,6 +82,24 @@ where
         self
     }
 
+    /// Yamux config for service
+    ///
+    /// Panic when max_frame_length < yamux_max_window_size
+    pub fn yamux_config(mut self, config: Config) -> Self {
+        assert!(self.max_frame_length as u32 >= config.max_stream_window_size);
+        self.yamux_config = config;
+        self
+    }
+
+    /// Secio max frame length
+    ///
+    /// Panic when max_frame_length < yamux_max_window_size
+    pub fn max_frame_length(mut self, size: usize) -> Self {
+        assert!(size as u32 >= self.yamux_config.max_stream_window_size);
+        self.max_frame_length = size;
+        self
+    }
+
     /// Clear all protocols
     pub fn clear(&mut self) {
         self.inner.clear();
@@ -95,6 +118,8 @@ where
             key_pair: None,
             forever: false,
             timeout: Duration::from_secs(10),
+            yamux_config: Config::default(),
+            max_frame_length: 1024 * 1024 * 8,
         }
     }
 }

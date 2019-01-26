@@ -15,6 +15,7 @@ pub const DEFAULT_KEEPALIVE_INTERVAL: Duration = Duration::from_secs(6);
 pub const DEFAULT_WRITE_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// Configuration of session and stream
+#[derive(Clone, Copy)]
 pub struct Config {
     /// AcceptBacklog is used to limit how many streams may be
     /// waiting an accept.

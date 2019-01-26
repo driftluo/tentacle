@@ -47,6 +47,7 @@ where
     let socket = Builder::new()
         .big_endian()
         .length_field_length(4)
+        .max_frame_length(config.max_frame_length)
         .new_framed(socket);
 
     future::ok::<_, SecioError>(HandshakeContext::new(config))

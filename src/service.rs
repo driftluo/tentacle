@@ -18,7 +18,7 @@ use tokio::{
     prelude::{AsyncRead, AsyncWrite, FutureExt},
     timer::Timeout,
 };
-use yamux::session::SessionType;
+use yamux::{session::SessionType, Config as YamuxConfig};
 
 use crate::{
     context::{ServiceContext, ServiceControl, SessionContext},
@@ -176,6 +176,10 @@ pub struct Service<T, U> {
 
     key_pair: Option<SecioKeyPair>,
 
+    yamux_config: YamuxConfig,
+
+    max_frame_length: usize,
+
     /// Can be upgrade to list service level protocols
     handle: T,
 
@@ -234,6 +238,8 @@ where
             listens: Vec::new(),
             dial: Vec::new(),
             timeout,
+            yamux_config: YamuxConfig::default(),
+            max_frame_length: 1024 * 1024 * 8,
             task_count: if forever { 1 } else { 0 },
             next_session: 0,
             session_event_sender,
@@ -241,6 +247,24 @@ where
             service_context: ServiceContext::new(service_task_sender, proto_infos),
             service_task_receiver,
         }
+    }
+
+    /// Yamux config for service
+    ///
+    /// Panic when max_frame_length < yamux_max_window_size
+    pub fn yamux_config(mut self, config: YamuxConfig) -> Self {
+        assert!(self.max_frame_length as u32 >= config.max_stream_window_size);
+        self.yamux_config = config;
+        self
+    }
+
+    /// Secio max frame length
+    ///
+    /// Panic when max_frame_length < yamux_max_window_size
+    pub fn max_frame_length(mut self, size: usize) -> Self {
+        assert!(size as u32 >= self.yamux_config.max_stream_window_size);
+        self.max_frame_length = size;
+        self
     }
 
     /// Listen on the given address.
@@ -384,6 +408,7 @@ where
             let mut sender = self.session_event_sender.clone();
 
             let task = Config::new(key_pair)
+                .max_frame_length(self.max_frame_length)
                 .handshake(socket)
                 .timeout(self.timeout)
                 .then(move |result| {
@@ -486,7 +511,8 @@ where
         self.sessions.insert(session.id, session);
 
         let meta = SessionMeta::new(self.next_session, ty, self.timeout)
-            .protocol(self.protocol_configs.clone());
+            .protocol(self.protocol_configs.clone())
+            .config(self.yamux_config);
 
         let mut session = Session::new(
             handle,
