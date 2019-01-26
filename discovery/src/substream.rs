@@ -7,7 +7,6 @@ use bytes::{BufMut, BytesMut};
 use futures::{sync::mpsc::Receiver, Async, AsyncSink, Poll, Sink, Stream};
 use log::{debug, trace, warn};
 use p2p::multiaddr::{Multiaddr, ToMultiaddr};
-use p2p::service::Message;
 use p2p::{
     context::ServiceControl, error::Error, utils::multiaddr_to_socketaddr, ProtocolId, SessionId,
 };
@@ -75,14 +74,7 @@ impl AsyncRead for StreamHandle {}
 impl io::Write for StreamHandle {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
         self.sender
-            .send_message(
-                Some(vec![self.session_id]),
-                Message {
-                    session_id: self.session_id,
-                    proto_id: self.proto_id,
-                    data: buf.to_vec(),
-                },
-            )
+            .send_message(Some(vec![self.session_id]), self.proto_id, buf.to_vec())
             .map(|()| buf.len())
             .map_err(|err| {
                 if let Error::TaskFull(_) = err {

@@ -3,7 +3,7 @@ use tokio::codec::{Decoder, Encoder};
 
 use crate::{
     context::{ServiceContext, SessionContext},
-    service::ServiceEvent,
+    service::{ServiceError, ServiceEvent},
     ProtocolId,
 };
 
@@ -23,7 +23,7 @@ use crate::{
 /// At the same time, the session establishment and disconnection messages will also be perceived here.
 pub trait ServiceHandle {
     /// Handling runtime errors
-    fn handle_error(&mut self, _control: &mut ServiceContext, _error: ServiceEvent) {}
+    fn handle_error(&mut self, _control: &mut ServiceContext, _error: ServiceError) {}
     /// Handling session establishment and disconnection events
     fn handle_event(&mut self, _control: &mut ServiceContext, _event: ServiceEvent) {}
 }
@@ -146,7 +146,7 @@ where
 }
 
 impl ServiceHandle for Box<dyn ServiceHandle + Send + 'static> {
-    fn handle_error(&mut self, control: &mut ServiceContext, error: ServiceEvent) {
+    fn handle_error(&mut self, control: &mut ServiceContext, error: ServiceError) {
         (&mut **self).handle_error(control, error)
     }
 
@@ -156,7 +156,7 @@ impl ServiceHandle for Box<dyn ServiceHandle + Send + 'static> {
 }
 
 impl ServiceHandle for Box<dyn ServiceHandle + Send + Sync + 'static> {
-    fn handle_error(&mut self, control: &mut ServiceContext, error: ServiceEvent) {
+    fn handle_error(&mut self, control: &mut ServiceContext, error: ServiceError) {
         (&mut **self).handle_error(control, error)
     }
 

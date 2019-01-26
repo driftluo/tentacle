@@ -14,12 +14,7 @@ use tokio::timer::{self, Interval};
 use yamux::session::SessionType;
 
 use crate::protocol_select::ProtocolInfo;
-use crate::{
-    error::Error,
-    service::{Message, ServiceTask},
-    session::SessionEvent,
-    ProtocolId, SessionId,
-};
+use crate::{error::Error, service::ServiceTask, session::SessionEvent, ProtocolId, SessionId};
 
 /// Session context
 #[derive(Clone)]
@@ -76,9 +71,10 @@ impl ServiceContext {
     pub fn send_message(
         &mut self,
         session_ids: Option<Vec<SessionId>>,
-        message: Message,
+        proto_id: ProtocolId,
+        data: Vec<u8>,
     ) -> Result<(), Error<ServiceTask>> {
-        self.inner.send_message(session_ids, message)
+        self.inner.send_message(session_ids, proto_id, data)
     }
 
     /// Send a future task
@@ -228,11 +224,13 @@ impl ServiceControl {
     pub fn send_message(
         &mut self,
         session_ids: Option<Vec<SessionId>>,
-        message: Message,
+        proto_id: ProtocolId,
+        data: Vec<u8>,
     ) -> Result<(), Error<ServiceTask>> {
         self.send(ServiceTask::ProtocolMessage {
             session_ids,
-            message,
+            proto_id,
+            data,
         })
     }
 

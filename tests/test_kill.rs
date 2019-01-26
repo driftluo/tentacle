@@ -6,7 +6,7 @@ use nix::{
 use p2p::{
     builder::ServiceBuilder,
     context::{ServiceContext, SessionContext},
-    service::{Message, Service},
+    service::Service,
     traits::{ProtocolMeta, ServiceHandle, ServiceProtocol},
     ProtocolId, SecioKeyPair,
 };
@@ -112,15 +112,8 @@ impl ServiceProtocol for PHandle {
         assert_eq!(self.sender.send(()), Ok(()));
     }
 
-    fn received(&mut self, env: &mut ServiceContext, session: &SessionContext, data: Vec<u8>) {
-        let _ = env.send_message(
-            None,
-            Message {
-                proto_id: self.proto_id,
-                data,
-                session_id: session.id,
-            },
-        );
+    fn received(&mut self, env: &mut ServiceContext, _session: &SessionContext, data: Vec<u8>) {
+        let _ = env.send_message(None, self.proto_id, data);
     }
 }
 
@@ -147,14 +140,7 @@ fn test_kill(secio: bool) {
             // wait connected
             assert_eq!(receiver.recv(), Ok(()));
 
-            let _ = control.send_message(
-                None,
-                Message {
-                    session_id: 1,
-                    proto_id: 1,
-                    data: b"hello world".to_vec(),
-                },
-            );
+            let _ = control.send_message(None, 1, b"hello world".to_vec());
             let mem_start = current_used_memory().unwrap();
             let cpu_start = current_used_cpu().unwrap();
 
