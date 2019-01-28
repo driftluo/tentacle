@@ -1,0 +1,144 @@
+//! A simple bench tool
+//!
+
+#![deny(missing_docs)]
+
+use std::time::{Duration, Instant};
+
+/// A simple bench tool
+pub struct Bench {
+    cycles: u32,
+    start_time: Instant,
+    stop_time: Instant,
+    max_executed: Duration,
+    min_executed: Duration,
+    check_point: u32,
+}
+
+impl Bench {
+    /// Total number of cycles
+    pub fn cycles(mut self, number: u32) -> Self {
+        self.cycles = number;
+        self
+    }
+
+    /// Predict the total time spent on this task on which point(cycles)
+    pub fn estimated_point(mut self, point: u32) -> Self {
+        self.check_point = point;
+        self
+    }
+
+    /// Bench function with a init data
+    pub fn bench_function_with_init<T, F>(&mut self, name: &str, init: &T, mut fun: F)
+    where
+        F: FnMut(&T) + 'static,
+    {
+        self.clean();
+        self.start_time = Instant::now();
+        (0..self.cycles).for_each(|index| {
+            let start = Instant::now();
+            fun(init);
+            let stop = Instant::now();
+            self.update_executed(start, stop);
+            self.check_point(name, index);
+        });
+        self.stop_time = Instant::now();
+        self.output(name)
+    }
+
+    /// Bench function with no init data
+    pub fn bench_function<F>(&mut self, name: &str, mut fun: F)
+    where
+        F: FnMut() + 'static,
+    {
+        self.clean();
+        self.start_time = Instant::now();
+        (0..self.cycles).for_each(|index| {
+            let start = Instant::now();
+            fun();
+            let stop = Instant::now();
+            self.update_executed(start, stop);
+            self.check_point(name, index);
+        });
+        self.stop_time = Instant::now();
+        self.output(name)
+    }
+
+    fn output(&self, name: &str) {
+        let total = self.stop_time - self.start_time;
+        println!(
+            "task name: {}\ncycles: {}\ntotal cost: {:?}\naverage: {:?}\nmax: {:?}\nmin: {:?}\n",
+            name,
+            self.cycles,
+            total,
+            total / self.cycles,
+            self.max_executed,
+            self.min_executed
+        )
+    }
+
+    #[inline]
+    fn update_executed(&mut self, start: Instant, stop: Instant) {
+        let interval = stop - start;
+
+        if self.max_executed == Duration::from_secs(0)
+            && self.min_executed == Duration::from_secs(0)
+        {
+            self.max_executed = interval;
+            self.min_executed = interval;
+            return;
+        }
+
+        if interval > self.max_executed {
+            self.max_executed = interval;
+        } else if interval < self.min_executed {
+            self.min_executed = interval;
+        }
+    }
+
+    #[inline]
+    fn check_point(&self, name: &str, index: u32) {
+        if self.check_point == index {
+            let estimated_total = (self.min_executed + self.max_executed) / 2 * self.cycles;
+
+            println!(
+                "After counting {} cycles, estimated total time spent on task \"{}\" is {:?}",
+                index, name, estimated_total
+            )
+        }
+    }
+
+    #[inline]
+    fn clean(&mut self) {
+        self.stop_time = Instant::now();
+        self.start_time = Instant::now();
+        self.max_executed = Duration::from_secs(0);
+        self.min_executed = Duration::from_secs(0);
+    }
+}
+
+impl Default for Bench {
+    fn default() -> Self {
+        Bench {
+            cycles: 100_000,
+            start_time: Instant::now(),
+            stop_time: Instant::now(),
+            max_executed: Duration::from_secs(0),
+            min_executed: Duration::from_secs(0),
+            check_point: 10,
+        }
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use crate::Bench;
+
+    #[test]
+    fn test_bench() {
+        let mut bench = Bench::default();
+        bench.bench_function("test", || {
+            let _a = 1 + 1;
+        })
+    }
+}

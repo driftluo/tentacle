@@ -1,14 +1,14 @@
-use criterion::{criterion_group, criterion_main, Bencher, Criterion};
+use bench::Bench;
 use futures::prelude::Stream;
 use p2p::{
     builder::ServiceBuilder,
     context::{ServiceContext, ServiceControl, SessionContext},
-    service::{Message, Service},
+    service::Service,
     traits::{ProtocolMeta, ServiceHandle, ServiceProtocol},
     ProtocolId, SecioKeyPair,
 };
 use std::{sync::Once, thread};
-use tokio::codec::LengthDelimitedCodec;
+use tokio::codec::{length_delimited::Builder, LengthDelimitedCodec};
 
 static START_SECIO: Once = Once::new();
 static START_NO_SECIO: Once = Once::new();
@@ -60,7 +60,9 @@ impl ProtocolMeta<LengthDelimitedCodec> for Protocol {
         self.id
     }
     fn codec(&self) -> LengthDelimitedCodec {
-        LengthDelimitedCodec::new()
+        Builder::new()
+            .max_frame_length(1024 * 1024 * 20)
+            .new_codec()
     }
 
     fn service_handle(&self) -> Option<Box<dyn ServiceProtocol + Send + 'static>> {
@@ -112,7 +114,7 @@ fn create_meta(id: ProtocolId) -> (Protocol, crossbeam_channel::Receiver<Notify>
     (Protocol::new(id, sender), receiver)
 }
 
-fn init() {
+pub fn init() {
     // init secio two peers
     START_SECIO.call_once(|| {
         let (meta, _receiver) = create_meta(1);
@@ -137,7 +139,7 @@ fn init() {
     // init no secio two peers
     START_NO_SECIO.call_once(|| {
         let (meta, _receiver) = create_meta(1);
-        let mut service = create(true, meta, ());
+        let mut service = create(false, meta, ());
         let listen_addr = service
             .listen(&"/ip4/127.0.0.1/tcp/0".parse().unwrap())
             .unwrap();
@@ -145,7 +147,7 @@ fn init() {
         thread::spawn(|| tokio::run(service.for_each(|_| Ok(()))));
 
         let (meta, client_receiver) = create_meta(1);
-        let service = create(true, meta, ()).dial(listen_addr);
+        let service = create(false, meta, ()).dial(listen_addr);
         thread::spawn(|| tokio::run(service.for_each(|_| Ok(()))));
 
         assert_eq!(client_receiver.recv(), Ok(Notify::Connected));
@@ -156,64 +158,61 @@ fn init() {
     });
 }
 
-fn secio_and_send_data(bench: &mut Bencher, data: &[u8]) {
-    bench.iter(move || unsafe {
-        SECIO_CONTROL.as_mut().map(|control| {
-            control.send_message(
-                None,
-                Message {
-                    session_id: 1,
-                    proto_id: 1,
-                    data: data.to_vec(),
-                },
-            )
-        });
+fn secio_and_send_data(data: &[u8]) {
+    unsafe {
+        SECIO_CONTROL
+            .as_mut()
+            .map(|control| control.send_message(None, 1, data.to_vec()));
         if let Some(rev) = SECIO_RECV.as_ref() {
             assert_eq!(rev.recv(), Ok(Notify::Message(data.to_vec())))
         }
-    })
+    }
 }
 
-fn no_secio_and_send_data(bench: &mut Bencher, data: &[u8]) {
-    bench.iter(move || unsafe {
-        NO_SECIO_CONTROL.as_mut().map(|control| {
-            control.send_message(
-                None,
-                Message {
-                    session_id: 1,
-                    proto_id: 1,
-                    data: data.to_vec(),
-                },
-            )
-        });
+fn no_secio_and_send_data(data: &[u8]) {
+    unsafe {
+        NO_SECIO_CONTROL
+            .as_mut()
+            .map(|control| control.send_message(None, 1, data.to_vec()));
 
         if let Some(rev) = NO_SECIO_RECV.as_ref() {
             assert_eq!(rev.recv(), Ok(Notify::Message(data.to_vec())))
         }
-    })
+    }
 }
 
-fn hello_criterion_benchmark(bench: &mut Criterion) {
+fn main() {
     init();
 
-    bench.bench_function("secio_and_send_hello", move |b| {
-        secio_and_send_data(b, b"hello world")
+    let cycles = std::env::args()
+        .nth(1)
+        .and_then(|number| number.parse().ok())
+        .unwrap_or(100);
+
+    let check_point = std::env::args()
+        .nth(2)
+        .and_then(|number| number.parse().ok())
+        .unwrap_or(10);
+
+    let mut bench = Bench::default().cycles(cycles).estimated_point(check_point);
+
+    let mb = (0..1024 * 1024 * 10)
+        .map(|_| rand::random::<u8>())
+        .collect::<Vec<_>>();
+    let kb = (0..1024 * 10)
+        .map(|_| rand::random::<u8>())
+        .collect::<Vec<_>>();
+
+    bench.bench_function_with_init("10kb_benchmark_with_secio", &kb, move |data| {
+        secio_and_send_data(&data)
     });
-    bench.bench_function("no_secio_and_send_hello", move |b| {
-        no_secio_and_send_data(b, b"hello world")
+    bench.bench_function_with_init("10kb_benchmark_with_no_secio", &kb, move |data| {
+        no_secio_and_send_data(&data)
+    });
+    bench.bench_function_with_init("10mb_benchmark_with_secio", &mb, move |data| {
+        secio_and_send_data(&data)
+    });
+    bench.bench_function_with_init("10mb_benchmark_with_no_secio", &mb, move |data| {
+        no_secio_and_send_data(&data)
     });
 }
-
-fn kb_criterion_benchmark(bench: &mut Criterion) {
-    let data = (0..1024).map(|_| rand::random::<u8>()).collect::<Vec<_>>();
-    bench.bench_function("secio_and_send_1kb", {
-        let data = data.clone();
-        move |b| secio_and_send_data(b, &data)
-    });
-    bench.bench_function("no_secio_and_send_1kb", move |b| {
-        no_secio_and_send_data(b, &data)
-    });
-}
-
-criterion_group!(benches, hello_criterion_benchmark, kb_criterion_benchmark);
-criterion_main!(benches);

@@ -1,0 +1,20 @@
+[package]
+name = "bench"
+version = "0.1.0"
+authors = ["piaoliu <441594700@qq.com>"]
+edition = "2018"
+
+[lib]
+name = "bench"
+
+[[bin]]
+name = "main"
+path = "./src/main.rs"
+
+[dependencies]
+p2p = { path = "..", package = "p2p" }
+rand = "0.6.1"
+tokio = "0.1.14"
+futures = "0.1.25"
+crossbeam-channel = "0.3.6"
+env_logger = "0.6.0"

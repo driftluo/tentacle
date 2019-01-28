@@ -25,12 +25,6 @@ discovery = { path = "discovery" }
 crossbeam-channel = "0.3.6"
 systemstat = "0.1.3"
 nix = "0.13.0"
-criterion = "0.2"
-rand = "0.6"
-
-[[bench]]
-name = "bench"
-harness = false
 
 [workspace]
-members = ["yamux", "secio", "discovery"]
+members = ["yamux", "secio", "discovery", "bench"]

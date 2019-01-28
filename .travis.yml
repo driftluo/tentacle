@@ -19,8 +19,13 @@ jobs:
     - stage: Check
       name: Clippy
       script:
-        - RUSTFLAGS='-F warnings' cargo clippy --all --tests --benches
+        - RUSTFLAGS='-F warnings' cargo clippy --all --tests
     - stage: Test
       name: Unitest
       script:
         - RUSTFLAGS='-F warnings' cargo test --all
+    - stage: Test
+      name: Bench
+      script:
+        - cd bench
+        - cargo run --release
