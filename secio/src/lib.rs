@@ -15,7 +15,7 @@ mod exchange;
 /// Implementation of the handshake process
 pub mod handshake;
 /// Encrypted stream
-mod stream_cipher;
+pub mod stream_cipher;
 /// Supported algorithms
 mod support;
 

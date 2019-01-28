@@ -273,18 +273,19 @@ mod tests {
 
     const NULL_IV: [u8; 16] = [0; 16];
 
-    #[test]
-    fn test_decode_encode() {
-        let cipher_key: [u8; 32] = rand::random();
+    fn test_decode_encode(cipher: Cipher) {
+        let cipher_key = (0..cipher.key_size())
+            .map(|_| rand::random::<u8>())
+            .collect::<Vec<_>>();
         let hmac_key: [u8; 32] = rand::random();
 
         let data = b"hello world";
 
         let mut encode_data = BytesMut::from(data.to_vec());
 
-        let mut encode_cipher = ctr_init(Cipher::Aes256, &cipher_key, &NULL_IV);
+        let mut encode_cipher = ctr_init(cipher, &cipher_key, &NULL_IV);
         let mut encode_hmac = Hmac::from_key(Digest::Sha256, &hmac_key);
-        let mut decode_cipher = ctr_init(Cipher::Aes256, &cipher_key, &NULL_IV);
+        let mut decode_cipher = ctr_init(cipher, &cipher_key, &NULL_IV);
         let mut decode_hmac = encode_hmac.clone();
 
         encode_cipher.encrypt(&mut encode_data[..]);
@@ -377,6 +378,21 @@ mod tests {
 
         let received = receiver.wait().unwrap();
         assert_eq!(received.to_vec(), data);
+    }
+
+    #[test]
+    fn test_encode_decode_aes128() {
+        test_decode_encode(Cipher::Aes128);
+    }
+
+    #[test]
+    fn test_encode_decode_aes256() {
+        test_decode_encode(Cipher::Aes256);
+    }
+
+    #[test]
+    fn test_encode_decode_twofish() {
+        test_decode_encode(Cipher::TwofishCtr);
     }
 
     #[test]
