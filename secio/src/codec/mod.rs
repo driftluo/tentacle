@@ -49,15 +49,13 @@ impl Hmac {
     /// Signs the data.
     pub fn sign(&mut self, crypted_data: &[u8]) -> Vec<u8> {
         match *self {
-            Hmac::Sha256(ref hmac) => {
-                let mut mac = hmac.clone();
-                mac.input(crypted_data);
-                mac.result().code().to_vec()
+            Hmac::Sha256(ref mut hmac) => {
+                hmac.input(crypted_data);
+                hmac.result_reset().code().to_vec()
             }
-            Hmac::Sha512(ref hmac) => {
-                let mut mac = hmac.clone();
-                mac.input(crypted_data);
-                mac.result().code().to_vec()
+            Hmac::Sha512(ref mut hmac) => {
+                hmac.input(crypted_data);
+                hmac.result_reset().code().to_vec()
             }
         }
     }

@@ -9,10 +9,13 @@ use ctr::Ctr128;
 use twofish::Twofish;
 
 /// Possible encryption ciphers.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Cipher {
+    /// Aes128
     Aes128,
+    /// Aes256
     Aes256,
+    /// Two fish
     TwofishCtr,
 }
 
@@ -28,10 +31,8 @@ impl Cipher {
 
     /// Returns the size of in bytes of the IV expected by the cipher.
     #[inline]
-    pub fn iv_size(self) -> usize {
-        match self {
-            Cipher::Aes128 | Cipher::Aes256 | Cipher::TwofishCtr => 16,
-        }
+    pub const fn iv_size(self) -> usize {
+        16
     }
 }
 

@@ -25,3 +25,8 @@ ctr = "0.3.0"
 
 [dev-dependencies]
 env_logger = "0.6"
+criterion = "0.2"
+
+[[bench]]
+name = "bench"
+harness = false
