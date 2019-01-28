@@ -24,3 +24,8 @@ jobs:
       name: Unitest
       script:
         - RUSTFLAGS='-F warnings' cargo test --all
+    - stage: Test
+      name: Bench
+      script:
+        - cd bench
+        - cargo run --release
