@@ -1,0 +1,18 @@
+namespace P2P.Ping;
+
+union PingPayload {
+    Ping,
+    Pong,
+}
+
+table PingMessage {
+    payload:        PingPayload;
+}
+
+table Ping {
+    nonce: uint32;
+}
+
+table Pong {
+    nonce: uint32;
+}
