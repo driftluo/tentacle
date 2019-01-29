@@ -542,12 +542,15 @@ where
 
     /// Close the specified session, clean up the handle
     #[inline]
-    fn session_close(&mut self, id: SessionId) {
+    fn session_close(&mut self, id: SessionId, source: Source) {
         debug!("service session [{}] close", id);
-        if let Some(session) = self.sessions.get_mut(&id) {
-            let _ = session
-                .event_sender
-                .try_send(SessionEvent::SessionClose { id });
+        if source == Source::External {
+            if let Some(session) = self.sessions.get_mut(&id) {
+                let _ = session
+                    .event_sender
+                    .try_send(SessionEvent::SessionClose { id });
+            }
+            return;
         }
 
         // Service handle processing flow
@@ -591,7 +594,7 @@ where
         // Service proto handle processing flow
         if !self.service_proto_handles.contains_key(&proto_id) {
             if let Some(ProtocolHandle::Service(mut handle)) = self.proto_handle(false, proto_id) {
-                debug!("init service [{}] level proto [{}] handle", id, proto_id);
+                debug!("init service level [{}] proto handle", proto_id);
                 handle.init(&mut self.service_context);
                 self.service_proto_handles.insert(proto_id, handle);
             }
@@ -680,7 +683,7 @@ where
     /// Handling various events uploaded by the session
     fn handle_session_event(&mut self, event: SessionEvent) {
         match event {
-            SessionEvent::SessionClose { id } => self.session_close(id),
+            SessionEvent::SessionClose { id } => self.session_close(id, Source::Internal),
             SessionEvent::HandshakeSuccess {
                 handle,
                 public_key,
@@ -730,7 +733,9 @@ where
                     self.client_poll();
                 }
             }
-            ServiceTask::Disconnect { session_id } => self.session_close(session_id),
+            ServiceTask::Disconnect { session_id } => {
+                self.session_close(session_id, Source::External)
+            }
             ServiceTask::FutureTask { task } => {
                 tokio::spawn(task);
             }
@@ -886,4 +891,12 @@ where
 
         Ok(Async::NotReady)
     }
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+enum Source {
+    /// Event from user
+    External,
+    /// Event from session
+    Internal,
 }
