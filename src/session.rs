@@ -313,11 +313,16 @@ where
                 }
             }
             SessionEvent::SessionClose { .. } => {
-                for (proto_id, sender) in self.sub_streams.iter_mut() {
-                    let _ = sender.try_send(ProtocolEvent::ProtocolClose {
-                        id: self.id,
-                        proto_id: *proto_id,
-                    });
+                if self.sub_streams.is_empty() {
+                    // if no proto open, just close session
+                    self.close_session();
+                } else {
+                    for (proto_id, sender) in self.sub_streams.iter_mut() {
+                        let _ = sender.try_send(ProtocolEvent::ProtocolClose {
+                            id: self.id,
+                            proto_id: *proto_id,
+                        });
+                    }
                 }
             }
             _ => (),
