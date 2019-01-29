@@ -22,17 +22,24 @@ const CHECK_TIMEOUT_TOKEN: u64 = 1;
 // TODO: replace this with real PeerId
 type PeerId = SessionId;
 
+/// Ping protocol events
 #[derive(Debug)]
 pub enum Event {
+    /// Peer send ping to us.
     Ping(PeerId),
+    /// Peer send pong to us.
     Pong(PeerId, Duration),
+    /// Peer is timeout.
     Timeout(PeerId),
+    /// Peer cause a unexpected error.
     UnexpectedError(PeerId),
 }
 
 pub struct PingProtocol {
     id: ProtocolId,
+    /// the interval that we send ping to peers.
     interval: Duration,
+    /// consider peer is timeout if during a timeout we still have not received pong from a peer
     timeout: Duration,
     event_sender: Sender<Event>,
 }
@@ -81,13 +88,17 @@ struct PingHandler {
     event_sender: Sender<Event>,
 }
 
+/// PingStatus of a peer
 #[derive(Copy, Clone, Debug)]
 struct PingStatus {
+    /// Are we currently pinging this peer?
     processing: bool,
+    /// The time we last send ping to this peer.
     last_ping: SystemTime,
 }
 
 impl PingStatus {
+    /// A meaningless value, peer must send a pong has same nonce to respond a ping.
     fn nonce(&self) -> u32 {
         self.last_ping
             .duration_since(UNIX_EPOCH)
@@ -95,6 +106,7 @@ impl PingStatus {
             .unwrap_or(0) as u32
     }
 
+    /// Time duration since we last send ping.
     fn elapsed(&self) -> Duration {
         self.last_ping.elapsed().unwrap_or(Duration::from_secs(0))
     }
@@ -151,6 +163,7 @@ impl ServiceProtocol for PingHandler {
             }
             PingPayload::Pong => {
                 let pong_msg = msg.payload_as_pong().unwrap();
+                // check pong
                 if self
                     .connected_session_ids
                     .get(&session.id)
