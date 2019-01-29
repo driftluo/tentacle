@@ -1,3 +1,4 @@
+mod protocol_builder;
 mod protocol_generated;
 
 use crate::protocol_generated::p2p::ping::*;
@@ -21,6 +22,7 @@ const CHECK_TIMEOUT_TOKEN: u64 = 1;
 // TODO: replace this with real PeerId
 type PeerId = SessionId;
 
+#[derive(Debug)]
 pub enum Event {
     Ping(PeerId),
     Pong(PeerId, Duration),
@@ -36,7 +38,7 @@ pub struct PingProtocol {
 }
 
 impl PingProtocol {
-    fn new(
+    pub fn new(
         id: ProtocolId,
         interval: Duration,
         timeout: Duration,
@@ -138,9 +140,8 @@ impl ServiceProtocol for PingHandler {
             PingPayload::Ping => {
                 let ping_msg = msg.payload_as_ping().unwrap();
                 let mut fbb = FlatBufferBuilder::new();
-                let mut builder = PongBuilder::new(&mut fbb);
-                builder.add_nonce(ping_msg.nonce());
-                builder.finish();
+                let msg = PingMessage::build_pong(&mut fbb, ping_msg.nonce());
+                fbb.finish(msg, None);
                 let _ = control.send_message(
                     Some(vec![session.id]),
                     self.proto_id,
@@ -198,9 +199,8 @@ impl ServiceProtocol for PingHandler {
                     .collect();
                 if !peers.is_empty() {
                     let mut fbb = FlatBufferBuilder::new();
-                    let mut builder = PingBuilder::new(&mut fbb);
-                    builder.add_nonce(peers[0].1);
-                    builder.finish();
+                    let msg = PingMessage::build_ping(&mut fbb, peers[0].1);
+                    fbb.finish(msg, None);
                     let peer_ids: Vec<SessionId> = peers
                         .into_iter()
                         .map(|(session_id, _)| session_id)
@@ -225,13 +225,5 @@ impl ServiceProtocol for PingHandler {
             }
             _ => panic!("unknown token {}", token),
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    #[test]
-    fn it_works() {
-        assert_eq!(2 + 2, 4);
     }
 }
