@@ -279,7 +279,11 @@ where
                     id: self.id,
                     proto_id,
                     stream_id: id,
-                })
+                });
+                if self.sub_streams.is_empty() {
+                    debug!("Session no longer has protocol open, session closed");
+                    self.close_session();
+                }
             }
             ProtocolEvent::ProtocolMessage { data, proto_id, .. } => {
                 debug!("get proto [{}] data: {:?}", proto_id, data);
@@ -309,8 +313,12 @@ where
                 }
             }
             SessionEvent::SessionClose { .. } => {
-                self.close_session();
-                let _ = self.socket.shutdown();
+                for (proto_id, sender) in self.sub_streams.iter_mut() {
+                    let _ = sender.try_send(ProtocolEvent::ProtocolClose {
+                        id: self.id,
+                        proto_id: *proto_id,
+                    });
+                }
             }
             _ => (),
         }
@@ -321,16 +329,11 @@ where
         let _ = self
             .service_sender
             .try_send(SessionEvent::SessionClose { id: self.id });
-
-        for (proto_id, mut sender) in self.sub_streams.drain() {
-            let _ = sender.try_send(ProtocolEvent::ProtocolClose {
-                id: self.id,
-                proto_id,
-            });
-        }
-
+        self.sub_streams.clear();
         self.service_receiver.close();
         self.proto_event_receiver.close();
+
+        let _ = self.socket.shutdown();
     }
 }
 
@@ -370,7 +373,10 @@ where
         loop {
             match self.proto_event_receiver.poll() {
                 Ok(Async::Ready(Some(event))) => self.handle_stream_event(event),
-                Ok(Async::Ready(None)) => unreachable!(),
+                Ok(Async::Ready(None)) => {
+                    // Drop by self
+                    return Ok(Async::Ready(None));
+                }
                 Ok(Async::NotReady) => break,
                 Err(err) => {
                     warn!("receive proto event error: {:?}", err);
