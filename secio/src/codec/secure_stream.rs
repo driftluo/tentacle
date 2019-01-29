@@ -202,7 +202,8 @@ where
     type Error = io::Error;
 
     fn poll(&mut self) -> Poll<Option<Self::Item>, Self::Error> {
-        if self.dead {
+        // Stream must ensure that the handshake is completed
+        if self.dead && self.nonce.is_empty() {
             return Ok(Async::Ready(None));
         }
 
@@ -244,7 +245,7 @@ where
         }
 
         // Double check stream state
-        if self.dead {
+        if self.dead && self.nonce.is_empty() {
             return Ok(Async::Ready(None));
         }
 
