@@ -7,6 +7,7 @@ use std::time::Instant;
 use fnv::{FnvHashMap, FnvHashSet};
 use futures::{
     sync::mpsc::{channel, Receiver, Sender},
+    task::{self, Task},
     try_ready, Async, AsyncSink, Poll, Sink, Stream,
 };
 use log::{debug, warn};
@@ -59,8 +60,10 @@ pub struct Session<T> {
     inflight: FnvHashSet<StreamId>,
     // The StreamHandle not yet been polled
     pending_streams: VecDeque<StreamHandle>,
-
-    pending_frames: VecDeque<Frame>,
+    // The buffer which will send to underlying network
+    write_pending_frames: VecDeque<Frame>,
+    // The buffer which will distribute to sub streams
+    read_pending_frames: VecDeque<Frame>,
 
     // For receive events from sub streams (for clone to new stream)
     event_sender: Sender<StreamEvent>,
@@ -68,6 +71,8 @@ pub struct Session<T> {
     event_receiver: Receiver<StreamEvent>,
 
     keepalive_future: Option<Interval>,
+
+    notify: Option<Task>,
 }
 
 /// Session type, client or server
@@ -111,10 +116,12 @@ where
             streams: FnvHashMap::default(),
             inflight: FnvHashSet::default(),
             pending_streams: VecDeque::default(),
-            pending_frames: VecDeque::default(),
+            write_pending_frames: VecDeque::default(),
+            read_pending_frames: VecDeque::default(),
             event_sender,
             event_receiver,
             keepalive_future,
+            notify: None,
         }
     }
 
@@ -142,6 +149,7 @@ where
     fn flush(&mut self) -> Result<(), io::Error> {
         self.recv_events()?;
         self.send_all()?;
+        self.distribute_to_substream()?;
         Ok(())
     }
 
@@ -216,7 +224,7 @@ where
 
     #[inline]
     fn send_all(&mut self) -> Poll<(), io::Error> {
-        while let Some(frame) = self.pending_frames.pop_front() {
+        while let Some(frame) = self.write_pending_frames.pop_front() {
             if self.is_dead() {
                 break;
             }
@@ -224,7 +232,8 @@ where
             match self.framed_stream.start_send(frame) {
                 Ok(AsyncSink::NotReady(frame)) => {
                     debug!("[{:?}] framed_stream NotReady, frame: {:?}", self.ty, frame);
-                    self.pending_frames.push_front(frame);
+                    self.write_pending_frames.push_front(frame);
+                    self.notify();
                     return Ok(Async::NotReady);
                 }
                 Ok(AsyncSink::Ready) => {}
@@ -241,7 +250,7 @@ where
 
     fn send_frame(&mut self, frame: Frame) -> Poll<(), io::Error> {
         debug!("[{:?}] Session::send_frame({:?})", self.ty, frame);
-        self.pending_frames.push_back(frame);
+        self.write_pending_frames.push_back(frame);
         if let Async::NotReady = self.send_all()? {
             return Ok(Async::NotReady);
         }
@@ -265,45 +274,59 @@ where
         Ok(())
     }
 
+    /// Try send buffer to all sub streams
+    fn distribute_to_substream(&mut self) -> Result<(), io::Error> {
+        for frame in self.read_pending_frames.split_off(0) {
+            let stream_id = frame.stream_id();
+            if frame.flags().contains(Flag::Syn) {
+                if self.local_go_away {
+                    let flags = Flags::from(Flag::Rst);
+                    let frame = Frame::new_window_update(flags, stream_id, 0);
+                    self.send_frame(frame)?;
+                    debug!(
+                        "[{:?}] local go away send Reset to remote stream_id={}",
+                        self.ty, stream_id
+                    );
+                    // TODO: should report error?
+                    return Ok(());
+                }
+                debug!("[{:?}] Accept a stream id={}", self.ty, stream_id);
+                let stream = self.create_stream(Some(stream_id));
+                self.pending_streams.push_back(stream);
+            }
+            let disconnected = {
+                if let Some(frame_sender) = self.streams.get_mut(&stream_id) {
+                    debug!("@> sending frame to stream: {}", stream_id);
+                    match frame_sender.try_send(frame) {
+                        Ok(_) => false,
+                        Err(err) => {
+                            if err.is_full() {
+                                self.read_pending_frames.push_back(err.into_inner());
+                                self.notify();
+                                false
+                            } else {
+                                warn!("send to stream error: {:?}", err);
+                                true
+                            }
+                        }
+                    }
+                } else {
+                    // TODO: stream already closed ?
+                    false
+                }
+            };
+            if disconnected {
+                warn!("[{:?}] !!!!! remove a stream id={}", self.ty, stream_id);
+                self.streams.remove(&stream_id);
+            }
+        }
+        Ok(())
+    }
+
     // Send message to stream (Data/WindowUpdate)
     fn handle_stream_message(&mut self, frame: Frame) -> Result<(), io::Error> {
-        let stream_id = frame.stream_id();
-        if frame.flags().contains(Flag::Syn) {
-            if self.local_go_away {
-                let flags = Flags::from(Flag::Rst);
-                let frame = Frame::new_window_update(flags, stream_id, 0);
-                self.send_frame(frame)?;
-                debug!(
-                    "[{:?}] local go away send Reset to remote stream_id={}",
-                    self.ty, stream_id
-                );
-                // TODO: should report error?
-                return Ok(());
-            }
-            debug!("[{:?}] Accept a stream id={}", self.ty, stream_id);
-            let stream = self.create_stream(Some(stream_id));
-            self.pending_streams.push_back(stream);
-        }
-        let disconnected = {
-            if let Some(frame_sender) = self.streams.get_mut(&stream_id) {
-                // TODO: handle error
-                debug!("@> sending frame to stream: {}", stream_id);
-                match frame_sender.try_send(frame) {
-                    Ok(_) => false,
-                    Err(err) => {
-                        warn!("send to stream error: {:?}", err);
-                        true
-                    }
-                }
-            } else {
-                // TODO: stream already closed ?
-                false
-            }
-        };
-        if disconnected {
-            warn!("[{:?}] !!!!! remove a stream id={}", self.ty, stream_id);
-            self.streams.remove(&stream_id);
-        }
+        self.read_pending_frames.push_back(frame);
+        self.distribute_to_substream()?;
         Ok(())
     }
 
@@ -412,6 +435,13 @@ where
             }
         }
     }
+
+    #[inline]
+    fn notify(&mut self) {
+        if let Some(task) = self.notify.take() {
+            task.notify();
+        }
+    }
 }
 
 impl<T> Stream for Session<T>
@@ -428,6 +458,12 @@ where
 
             if self.is_dead() {
                 return Ok(Async::Ready(None));
+            }
+
+            if !self.read_pending_frames.is_empty() || !self.write_pending_frames.is_empty() {
+                if let Err(e) = self.flush() {
+                    return Err(e);
+                }
             }
 
             let mut keep_alive_not_ready = false;
@@ -480,6 +516,7 @@ where
             } else if self.is_dead() {
                 return Ok(Async::Ready(None));
             } else if keep_alive_not_ready || recv_frames_not_ready || recv_events_not_ready {
+                self.notify = Some(task::current());
                 return Ok(Async::NotReady);
             }
         }
