@@ -6,7 +6,7 @@ mod protocol_generated;
 use crate::protocol_generated::p2p::ping::*;
 use flatbuffers::{get_root, FlatBufferBuilder};
 use fnv::FnvHashMap;
-use futures::sync::mpsc::Sender;
+use generic_channel::Sender;
 use log::debug;
 use p2p::{
     context::{ServiceContext, SessionContext},
@@ -37,22 +37,20 @@ pub enum Event {
     UnexpectedError(PeerId),
 }
 
-pub struct PingProtocol {
+pub struct PingProtocol<S: Sender<Event> + Send + Clone> {
     id: ProtocolId,
     /// the interval that we send ping to peers.
     interval: Duration,
     /// consider peer is timeout if during a timeout we still have not received pong from a peer
     timeout: Duration,
-    event_sender: Sender<Event>,
+    event_sender: S,
 }
 
-impl PingProtocol {
-    pub fn new(
-        id: ProtocolId,
-        interval: Duration,
-        timeout: Duration,
-        event_sender: Sender<Event>,
-    ) -> Self {
+impl<S> PingProtocol<S>
+where
+    S: Sender<Event> + Send + Clone,
+{
+    pub fn new(id: ProtocolId, interval: Duration, timeout: Duration, event_sender: S) -> Self {
         PingProtocol {
             id,
             interval,
@@ -62,7 +60,10 @@ impl PingProtocol {
     }
 }
 
-impl ProtocolMeta<LengthDelimitedCodec> for PingProtocol {
+impl<S> ProtocolMeta<LengthDelimitedCodec> for PingProtocol<S>
+where
+    S: Sender<Event> + Send + Clone + 'static,
+{
     fn id(&self) -> ProtocolId {
         self.id
     }
@@ -82,12 +83,12 @@ impl ProtocolMeta<LengthDelimitedCodec> for PingProtocol {
     }
 }
 
-struct PingHandler {
+struct PingHandler<S: Sender<Event>> {
     proto_id: ProtocolId,
     interval: Duration,
     timeout: Duration,
     connected_session_ids: FnvHashMap<SessionId, PingStatus>,
-    event_sender: Sender<Event>,
+    event_sender: S,
 }
 
 /// PingStatus of a peer
@@ -114,7 +115,10 @@ impl PingStatus {
     }
 }
 
-impl ServiceProtocol for PingHandler {
+impl<S> ServiceProtocol for PingHandler<S>
+where
+    S: Sender<Event>,
+{
     fn init(&mut self, control: &mut ServiceContext) {
         // periodicly send ping to peers
         control.set_service_notify(self.proto_id, self.interval, SEND_PING_TOKEN);
