@@ -1,4 +1,6 @@
 mod protocol_builder;
+#[rustfmt::skip]
+#[allow(clippy::all)]
 mod protocol_generated;
 
 use crate::protocol_generated::p2p::ping::*;
