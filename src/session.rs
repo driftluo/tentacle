@@ -73,6 +73,15 @@ pub(crate) enum SessionEvent {
         /// Stream id
         stream_id: StreamId,
     },
+    /// Codec error
+    ProtocolError {
+        /// Stream id
+        id: StreamId,
+        /// Protocol id
+        proto_id: ProtocolId,
+        /// Codec error
+        error: Error<ServiceTask>,
+    },
 }
 
 /// Wrapper for real data streams, such as TCP stream
@@ -285,12 +294,20 @@ where
                     self.close_session();
                 }
             }
-            ProtocolEvent::ProtocolMessage { data, proto_id, .. } => {
+            ProtocolEvent::ProtocolMessage { data, proto_id, id } => {
                 debug!("get proto [{}] data: {:?}", proto_id, data);
-                self.event_output(SessionEvent::ProtocolMessage {
-                    id: self.id,
+                self.event_output(SessionEvent::ProtocolMessage { id, proto_id, data })
+            }
+            ProtocolEvent::ProtocolError {
+                id,
+                proto_id,
+                error,
+            } => {
+                debug!("Codec error: {:?}", error);
+                self.event_output(SessionEvent::ProtocolError {
+                    id,
                     proto_id,
-                    data,
+                    error,
                 })
             }
         }

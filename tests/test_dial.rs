@@ -85,6 +85,7 @@ impl ServiceHandle for SHandle {
             ServiceError::ListenError { error, .. } => {
                 assert_eq!(error, Error::RepeatedConnection(self.session_id))
             }
+            _ => panic!("test fail"),
         }
 
         if self.error_count > 8 {
