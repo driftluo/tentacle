@@ -294,18 +294,20 @@ where
                     self.close_session();
                 }
             }
-            ProtocolEvent::ProtocolMessage { data, proto_id, id } => {
-                debug!("get proto [{}] data: {:?}", proto_id, data);
-                self.event_output(SessionEvent::ProtocolMessage { id, proto_id, data })
+            ProtocolEvent::ProtocolMessage { data, proto_id, .. } => {
+                debug!("get proto [{}] data {}", proto_id, data.len());
+                self.event_output(SessionEvent::ProtocolMessage {
+                    id: self.id,
+                    proto_id,
+                    data,
+                })
             }
             ProtocolEvent::ProtocolError {
-                id,
-                proto_id,
-                error,
+                proto_id, error, ..
             } => {
                 debug!("Codec error: {:?}", error);
                 self.event_output(SessionEvent::ProtocolError {
-                    id,
+                    id: self.id,
                     proto_id,
                     error,
                 })

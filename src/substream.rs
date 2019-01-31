@@ -1,8 +1,4 @@
-use futures::{
-    prelude::*,
-    sync::mpsc,
-    task::{self, Task},
-};
+use futures::{prelude::*, sync::mpsc};
 use log::{debug, error, warn};
 use std::collections::VecDeque;
 use std::{
@@ -70,8 +66,6 @@ pub struct SubStream<U> {
     event_sender: mpsc::Sender<ProtocolEvent>,
     /// Receive events from session
     event_receiver: mpsc::Receiver<ProtocolEvent>,
-
-    notify: Option<Task>,
 }
 
 impl<U> SubStream<U>
@@ -96,7 +90,6 @@ where
             event_receiver,
             write_buf: VecDeque::new(),
             read_buf: VecDeque::new(),
-            notify: None,
         }
     }
 
@@ -107,7 +100,6 @@ where
                 Ok(AsyncSink::NotReady(frame)) => {
                     debug!("framed_stream NotReady, frame: {:?}", frame);
                     self.write_buf.push_front(frame);
-                    self.notify();
                     return Ok(Async::NotReady);
                 }
                 Ok(AsyncSink::Ready) => {}
@@ -143,6 +135,7 @@ where
     fn handle_proto_event(&mut self, event: ProtocolEvent) -> Poll<Option<()>, ()> {
         match event {
             ProtocolEvent::ProtocolMessage { data, .. } => {
+                debug!("proto [{}] send data: {}", self.proto_id, data.len());
                 self.write_buf.push_back(data);
                 match self.send_data() {
                     Err(_) => {
@@ -174,33 +167,10 @@ where
         if let Err(e) = self.event_sender.try_send(event) {
             if e.is_full() {
                 self.read_buf.push_back(e.into_inner());
-                self.notify();
             } else {
                 error!("proto send to session error: {}", e);
             }
         }
-    }
-
-    #[inline]
-    fn notify(&mut self) {
-        if let Some(task) = self.notify.take() {
-            task.notify();
-        }
-    }
-
-    #[inline]
-    fn flush(&mut self) -> Result<(), ()> {
-        for event in self.read_buf.split_off(0) {
-            self.output_event(event);
-        }
-
-        match self.send_data() {
-            Ok(Async::Ready(_)) => (),
-            Ok(Async::NotReady) => (),
-            Err(_) => return Err(()),
-        }
-
-        Ok(())
     }
 }
 
@@ -214,16 +184,10 @@ where
     type Error = ();
 
     fn poll(&mut self) -> Poll<Option<Self::Item>, Self::Error> {
-        if !self.read_buf.is_empty() || !self.write_buf.is_empty() {
-            if let Err(()) = self.flush() {
-                return Err(());
-            }
-        }
-
         loop {
             match self.sub_stream.poll() {
                 Ok(Async::Ready(Some(data))) => {
-                    debug!("protocol [{}] receive data: {:?}", self.proto_id, data);
+                    debug!("protocol [{}] receive data: {}", self.proto_id, data.len());
                     self.output_event(ProtocolEvent::ProtocolMessage {
                         id: self.id,
                         proto_id: self.proto_id,
@@ -281,7 +245,6 @@ where
             }
         }
 
-        self.notify = Some(task::current());
         Ok(Async::NotReady)
     }
 }

@@ -636,8 +636,10 @@ where
         data: &bytes::Bytes,
     ) {
         debug!(
-            "service receive session [{}] proto [{}] data: {:?}",
-            session_id, proto_id, data
+            "service receive session [{}] proto [{}] data: {}",
+            session_id,
+            proto_id,
+            data.len()
         );
 
         // Service proto handle processing flow
