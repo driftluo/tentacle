@@ -1,8 +1,12 @@
-use futures::{prelude::*, sync::mpsc};
+use futures::{
+    prelude::*,
+    sync::mpsc,
+    task::{self, Task},
+};
 use log::{debug, error, trace, warn};
 use multiaddr::{Multiaddr, ToMultiaddr};
 use secio::{handshake::Config, PublicKey, SecioKeyPair};
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::Arc;
 use std::{
     error::{self, Error as ErrorTrait},
@@ -192,6 +196,8 @@ pub struct Service<T, U> {
     /// Can be upgrade to list service level protocols
     handle: T,
 
+    write_buf: VecDeque<SessionEvent>,
+
     // The service protocols open with the session
     session_service_protos: HashMap<SessionId, HashSet<ProtocolId>>,
 
@@ -209,6 +215,8 @@ pub struct Service<T, U> {
     service_context: ServiceContext,
     /// External event receiver
     service_task_receiver: mpsc::Receiver<ServiceTask>,
+
+    notify: Option<Task>,
 }
 
 impl<T, U> Service<T, U>
@@ -251,10 +259,12 @@ where
             max_frame_length: 1024 * 1024 * 8,
             task_count: if forever { 1 } else { 0 },
             next_session: 0,
+            write_buf: VecDeque::default(),
             session_event_sender,
             session_event_receiver,
             service_context: ServiceContext::new(service_task_sender, proto_infos),
             service_task_receiver,
+            notify: None,
         }
     }
 
@@ -313,20 +323,57 @@ where
         self.service_context.control()
     }
 
+    /// Distribute event to sessions
+    #[inline]
+    fn distribute_to_session(&mut self) {
+        for event in self.write_buf.split_off(0) {
+            match event {
+                SessionEvent::ProtocolMessage { id, proto_id, data } => {
+                    if let Some(session) = self.sessions.get_mut(&id) {
+                        if let Err(e) = session
+                            .event_sender
+                            .try_send(SessionEvent::ProtocolMessage { id, proto_id, data })
+                        {
+                            if e.is_full() {
+                                self.write_buf.push_back(e.into_inner());
+                                self.notify();
+                            } else {
+                                error!("channel shutdown, message can't send")
+                            }
+                        }
+                    }
+                }
+                SessionEvent::SessionClose { id } => {
+                    if let Some(session) = self.sessions.get_mut(&id) {
+                        if let Err(e) = session
+                            .event_sender
+                            .try_send(SessionEvent::SessionClose { id })
+                        {
+                            if e.is_full() {
+                                self.write_buf.push_back(e.into_inner());
+                                self.notify();
+                            } else {
+                                error!("channel shutdown, message can't send")
+                            }
+                        }
+                    }
+                }
+                _ => (),
+            }
+        }
+    }
+
     /// Send data to the specified protocol for the specified session.
     ///
     /// Valid after Service starts
     #[inline]
     pub fn send_message(&mut self, session_id: SessionId, proto_id: ProtocolId, data: &[u8]) {
-        if let Some(session) = self.sessions.get_mut(&session_id) {
-            let _ = session
-                .event_sender
-                .try_send(SessionEvent::ProtocolMessage {
-                    id: session_id,
-                    proto_id,
-                    data: data.into(),
-                });
-        }
+        self.write_buf.push_back(SessionEvent::ProtocolMessage {
+            id: session_id,
+            proto_id,
+            data: data.into(),
+        });
+        self.distribute_to_session();
     }
 
     /// Send data to the specified protocol for the specified sessions.
@@ -343,17 +390,16 @@ where
             None => self.broadcast(proto_id, data),
             Some(ids) => {
                 let data: bytes::Bytes = data.into();
-                self.sessions.iter_mut().for_each(|(id, session)| {
+                for id in self.sessions.keys() {
                     if ids.contains(id) {
-                        let _ = session
-                            .event_sender
-                            .try_send(SessionEvent::ProtocolMessage {
-                                id: *id,
-                                proto_id,
-                                data: data.clone(),
-                            });
+                        self.write_buf.push_back(SessionEvent::ProtocolMessage {
+                            id: *id,
+                            proto_id,
+                            data: data.clone(),
+                        });
                     }
-                });
+                }
+                self.distribute_to_session();
             }
         }
     }
@@ -369,15 +415,14 @@ where
             proto_id
         );
         let data: bytes::Bytes = data.into();
-        self.sessions.iter_mut().for_each(|(id, session)| {
-            let _ = session
-                .event_sender
-                .try_send(SessionEvent::ProtocolMessage {
-                    id: *id,
-                    proto_id,
-                    data: data.clone(),
-                });
-        });
+        for id in self.sessions.keys() {
+            self.write_buf.push_back(SessionEvent::ProtocolMessage {
+                id: *id,
+                proto_id,
+                data: data.clone(),
+            });
+        }
+        self.distribute_to_session();
     }
 
     /// Get the callback handle of the specified protocol
@@ -414,21 +459,21 @@ where
         let address: Multiaddr = socket.peer_addr().unwrap().to_multiaddr().unwrap();
         if let Some(ref key_pair) = self.key_pair {
             let key_pair = key_pair.clone();
-            let mut sender = self.session_event_sender.clone();
+            let sender = self.session_event_sender.clone();
 
             let task = Config::new(key_pair)
                 .max_frame_length(self.max_frame_length)
                 .handshake(socket)
                 .timeout(self.timeout)
                 .then(move |result| {
-                    match result {
+                    let mut send_task = match result {
                         Ok((handle, public_key, _)) => {
-                            let _ = sender.try_send(SessionEvent::HandshakeSuccess {
+                            sender.send(SessionEvent::HandshakeSuccess {
                                 handle,
                                 public_key,
                                 address,
                                 ty,
-                            });
+                            })
                         }
                         Err(err) => {
                             let error = if err.is_timer() {
@@ -443,8 +488,16 @@ where
                             };
 
                             error!("Handshake with {} failed, error: {:?}", address, error);
-                            let _ =
-                                sender.try_send(SessionEvent::HandshakeFail { ty, error, address });
+
+                            sender.send(SessionEvent::HandshakeFail { ty, error, address })
+                        }
+                    };
+
+                    loop {
+                        match send_task.poll() {
+                            Ok(Async::NotReady) => continue,
+                            Ok(Async::Ready(_)) => break,
+                            Err(err) => error!("handshake result send back error: {:?}", err),
                         }
                     }
 
@@ -507,7 +560,7 @@ where
             self.next_session += 1;
         }
 
-        let (service_event_sender, service_event_receiver) = mpsc::channel(256);
+        let (service_event_sender, service_event_receiver) = mpsc::channel(32);
         let session = SessionContext {
             event_sender: service_event_sender,
             id: self.next_session,
@@ -552,11 +605,8 @@ where
     fn session_close(&mut self, id: SessionId, source: Source) {
         debug!("service session [{}] close", id);
         if source == Source::External {
-            if let Some(session) = self.sessions.get_mut(&id) {
-                let _ = session
-                    .event_sender
-                    .try_send(SessionEvent::SessionClose { id });
-            }
+            self.write_buf.push_back(SessionEvent::SessionClose { id });
+            self.distribute_to_session();
             return;
         }
 
@@ -854,6 +904,13 @@ where
             );
         }
     }
+
+    #[inline]
+    fn notify(&mut self) {
+        if let Some(task) = self.notify.take() {
+            task.notify();
+        }
+    }
 }
 
 impl<T, U> Stream for Service<T, U>
@@ -869,6 +926,10 @@ where
     fn poll(&mut self) -> Poll<Option<Self::Item>, Self::Error> {
         if self.listens.is_empty() && self.task_count == 0 && self.sessions.is_empty() {
             return Ok(Async::Ready(None));
+        }
+
+        if !self.write_buf.is_empty() {
+            self.distribute_to_session();
         }
 
         self.client_poll();
@@ -910,6 +971,7 @@ where
             self.sessions.len()
         );
 
+        self.notify = Some(task::current());
         Ok(Async::NotReady)
     }
 }
