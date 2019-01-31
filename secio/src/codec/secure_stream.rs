@@ -117,7 +117,7 @@ where
                 let _ = self.socket.close();
             }
             StreamEvent::Flush => {
-                self.send_frame()?;
+                self.flush()?;
                 debug!("secure stream flushed");
             }
         }

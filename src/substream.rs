@@ -18,6 +18,7 @@ use yamux::StreamHandle;
 use crate::{error::Error, service::ServiceTask, ProtocolId, StreamId};
 
 /// Event generated/received by the protocol stream
+#[derive(Debug)]
 pub enum ProtocolEvent {
     /// The protocol is normally open
     ProtocolOpen {
@@ -233,7 +234,11 @@ where
         loop {
             match self.sub_stream.poll() {
                 Ok(Async::Ready(Some(data))) => {
-                    debug!("protocol [{}] receive data: {}", self.proto_id, data.len());
+                    debug!(
+                        "protocol [{}] receive data len: {}",
+                        self.proto_id,
+                        data.len()
+                    );
                     self.output_event(ProtocolEvent::ProtocolMessage {
                         id: self.id,
                         proto_id: self.proto_id,

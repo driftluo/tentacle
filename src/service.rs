@@ -410,9 +410,10 @@ where
     #[inline]
     pub fn broadcast(&mut self, proto_id: ProtocolId, data: &[u8]) {
         debug!(
-            "broadcast message, peer count: {}, proto_id: {}",
+            "broadcast message, peer count: {}, proto_id: {}, data len: {}",
             self.sessions.len(),
-            proto_id
+            proto_id,
+            data.len()
         );
         let data: bytes::Bytes = data.into();
         for id in self.sessions.keys() {
@@ -686,10 +687,8 @@ where
         data: &bytes::Bytes,
     ) {
         debug!(
-            "service receive session [{}] proto [{}] data: {}",
-            session_id,
-            proto_id,
-            data.len()
+            "service receive session [{}] proto [{}] data len: {:?}",
+            session_id, proto_id, data
         );
 
         // Service proto handle processing flow

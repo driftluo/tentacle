@@ -228,7 +228,7 @@ where
         for event in self.write_buf.split_off(0) {
             match event {
                 ProtocolEvent::ProtocolMessage { id, proto_id, data } => {
-                    if let Some(sender) = self.sub_streams.get_mut(&proto_id) {
+                    if let Some(sender) = self.sub_streams.get_mut(&id) {
                         if let Err(e) =
                             sender.try_send(ProtocolEvent::ProtocolMessage { id, proto_id, data })
                         {
@@ -242,7 +242,7 @@ where
                     };
                 }
                 ProtocolEvent::ProtocolClose { id, proto_id } => {
-                    if let Some(sender) = self.sub_streams.get_mut(&proto_id) {
+                    if let Some(sender) = self.sub_streams.get_mut(&id) {
                         if let Err(e) =
                             sender.try_send(ProtocolEvent::ProtocolClose { id, proto_id })
                         {
@@ -360,7 +360,7 @@ where
                 }
             }
             ProtocolEvent::ProtocolMessage { data, proto_id, .. } => {
-                debug!("get proto [{}] data {}", proto_id, data.len());
+                debug!("get proto [{}] data len: {}", proto_id, data.len());
                 self.event_output(SessionEvent::ProtocolMessage {
                     id: self.id,
                     proto_id,
@@ -399,9 +399,9 @@ where
                     // if no proto open, just close session
                     self.close_session();
                 } else {
-                    for proto_id in self.sub_streams.keys() {
+                    for (proto_id, stream_id) in self.proto_streams.iter() {
                         self.write_buf.push_back(ProtocolEvent::ProtocolClose {
-                            id: self.id,
+                            id: *stream_id,
                             proto_id: *proto_id,
                         });
                     }
