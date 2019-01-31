@@ -10,7 +10,7 @@ use p2p::{
     service::{ServiceError, ServiceEvent},
     traits::ServiceHandle,
 };
-use ping::PingProtocol;
+use ping::{Event, PingProtocol};
 
 fn main() {
     env_logger::init();
@@ -25,7 +25,7 @@ fn main() {
             .build(SimpleHandler {});
         let _ = service.listen(&"/ip4/127.0.0.1/tcp/1337".parse().unwrap());
         tokio::run(lazy(|| {
-            tokio::spawn(receiver.for_each(|event| {
+            tokio::spawn(receiver.for_each(|event: Event| {
                 info!("server receive event: {:?}", event);
                 Ok(())
             }));
