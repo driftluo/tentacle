@@ -467,7 +467,7 @@ where
                 .handshake(socket)
                 .timeout(self.timeout)
                 .then(move |result| {
-                    let mut send_task = match result {
+                    let send_task = match result {
                         Ok((handle, public_key, _)) => {
                             sender.send(SessionEvent::HandshakeSuccess {
                                 handle,
@@ -494,13 +494,9 @@ where
                         }
                     };
 
-                    loop {
-                        match send_task.poll() {
-                            Ok(Async::NotReady) => continue,
-                            Ok(Async::Ready(_)) => break,
-                            Err(err) => error!("handshake result send back error: {:?}", err),
-                        }
-                    }
+                    tokio::spawn(send_task.map(|_| ()).map_err(|err| {
+                        error!("handshake result send back error: {:?}", err);
+                    }));
 
                     Ok(())
                 });

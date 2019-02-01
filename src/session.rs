@@ -176,18 +176,14 @@ where
             .and_then(|(handle, name, version)| {
                 match version {
                     Some(version) => {
-                        let mut send_task = event_sender.send(ProtocolEvent::ProtocolOpen {
+                        let send_task = event_sender.send(ProtocolEvent::ProtocolOpen {
                             sub_stream: handle,
                             proto_name: name,
                             version,
                         });
-                        loop {
-                            match send_task.poll() {
-                                Ok(Async::NotReady) => continue,
-                                Ok(Async::Ready(_)) => break,
-                                Err(err) => error!("stream send back error: {:?}", err),
-                            }
-                        }
+                        tokio::spawn(send_task.map(|_| ()).map_err(|err| {
+                            error!("stream send back error: {:?}", err);
+                        }));
                     }
                     None => debug!("Negotiation to open the protocol {} failed", name),
                 }
@@ -277,18 +273,15 @@ where
             .and_then(|(mut handle, name, version)| {
                 match version {
                     Some(version) => {
-                        let mut send_task = event_sender.send(ProtocolEvent::ProtocolOpen {
+                        let send_task = event_sender.send(ProtocolEvent::ProtocolOpen {
                             sub_stream: handle,
                             proto_name: name,
                             version,
                         });
-                        loop {
-                            match send_task.poll() {
-                                Ok(Async::NotReady) => continue,
-                                Ok(Async::Ready(_)) => break,
-                                Err(err) => error!("stream send back error: {:?}", err),
-                            }
-                        }
+
+                        tokio::spawn(send_task.map(|_| ()).map_err(|err| {
+                            error!("stream send back error: {:?}", err);
+                        }));
                     }
                     None => {
                         // server close the connect
