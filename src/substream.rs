@@ -11,13 +11,9 @@ use tokio::{
 };
 use yamux::StreamHandle;
 
-use crate::{ProtocolId, StreamId};
+use crate::{error::Error, service::ServiceTask, ProtocolId, StreamId};
 
-/// Event generated/received by the protocol stream,
-/// but at present, the reason for the failure of
-/// parsing is not thrown to the upper layer,
-/// but is directly ignored.
-// todo: encode decode error to user?
+/// Event generated/received by the protocol stream
 pub enum ProtocolEvent {
     /// The protocol is normally open
     ProtocolOpen {
@@ -44,6 +40,15 @@ pub enum ProtocolEvent {
         /// Data
         data: bytes::Bytes,
     },
+    /// Codec error
+    ProtocolError {
+        /// Stream id
+        id: StreamId,
+        /// Protocol id
+        proto_id: ProtocolId,
+        /// Codec error
+        error: Error<ServiceTask>,
+    },
 }
 
 /// Each custom protocol in a session corresponds to a sub stream
@@ -52,7 +57,10 @@ pub struct SubStream<U> {
     sub_stream: Framed<StreamHandle, U>,
     id: StreamId,
     proto_id: ProtocolId,
-    data_buf: VecDeque<bytes::Bytes>,
+    // The buffer which will send to underlying network
+    write_buf: VecDeque<bytes::Bytes>,
+    // The buffer which will send to user
+    read_buf: VecDeque<ProtocolEvent>,
 
     /// Send event to session
     event_sender: mpsc::Sender<ProtocolEvent>,
@@ -80,23 +88,23 @@ where
             proto_id,
             event_sender,
             event_receiver,
-            data_buf: VecDeque::new(),
+            write_buf: VecDeque::new(),
+            read_buf: VecDeque::new(),
         }
     }
 
     /// Send data to the lower `yamux` sub stream
-    fn send_data(&mut self, data: bytes::Bytes) -> Poll<(), ()> {
-        self.data_buf.push_back(data);
-        while let Some(frame) = self.data_buf.pop_front() {
+    fn send_data(&mut self) -> Poll<(), ()> {
+        while let Some(frame) = self.write_buf.pop_front() {
             match self.sub_stream.start_send(frame) {
                 Ok(AsyncSink::NotReady(frame)) => {
                     debug!("framed_stream NotReady, frame: {:?}", frame);
-                    self.data_buf.push_front(frame);
+                    self.write_buf.push_front(frame);
                     return Ok(Async::NotReady);
                 }
                 Ok(AsyncSink::Ready) => {}
                 Err(err) => {
-                    debug!("framed_stream send error: {:?}", err);
+                    error!("framed_stream send error: {:?}", err);
                     return Err(());
                 }
             }
@@ -115,7 +123,7 @@ where
 
     /// Close protocol sub stream
     fn close_proto_stream(&mut self) {
-        let _ = self.event_sender.try_send(ProtocolEvent::ProtocolClose {
+        self.output_event(ProtocolEvent::ProtocolClose {
             id: self.id,
             proto_id: self.proto_id,
         });
@@ -127,7 +135,9 @@ where
     fn handle_proto_event(&mut self, event: ProtocolEvent) -> Poll<Option<()>, ()> {
         match event {
             ProtocolEvent::ProtocolMessage { data, .. } => {
-                match self.send_data(data) {
+                debug!("proto [{}] send data: {}", self.proto_id, data.len());
+                self.write_buf.push_back(data);
+                match self.send_data() {
                     Err(_) => {
                         // Whether it is a read send error or a flush error,
                         // the most essential problem is that there is a problem with the external network.
@@ -151,6 +161,17 @@ where
         }
         Ok(Async::Ready(Some(())))
     }
+
+    #[inline]
+    fn output_event(&mut self, event: ProtocolEvent) {
+        if let Err(e) = self.event_sender.try_send(event) {
+            if e.is_full() {
+                self.read_buf.push_back(e.into_inner());
+            } else {
+                error!("proto send to session error: {}", e);
+            }
+        }
+    }
 }
 
 impl<U> Stream for SubStream<U>
@@ -166,14 +187,12 @@ where
         loop {
             match self.sub_stream.poll() {
                 Ok(Async::Ready(Some(data))) => {
-                    debug!("protocol [{}] receive data: {:?}", self.proto_id, data);
-                    if let Err(e) = self.event_sender.try_send(ProtocolEvent::ProtocolMessage {
+                    debug!("protocol [{}] receive data: {}", self.proto_id, data.len());
+                    self.output_event(ProtocolEvent::ProtocolMessage {
                         id: self.id,
                         proto_id: self.proto_id,
                         data: data.into(),
-                    }) {
-                        error!("proto send to session error: {}", e);
-                    }
+                    })
                 }
                 Ok(Async::Ready(None)) => {
                     warn!("protocol [{}] close", self.proto_id);
@@ -182,8 +201,9 @@ where
                 }
                 Ok(Async::NotReady) => break,
                 Err(err) => {
-                    warn!("sub stream error: {:?}", err);
-                    match err.into().kind() {
+                    warn!("sub stream codec error: {:?}", err);
+                    let err = err.into();
+                    match err.kind() {
                         ErrorKind::BrokenPipe
                         | ErrorKind::ConnectionAborted
                         | ErrorKind::ConnectionReset
@@ -192,7 +212,14 @@ where
                             self.close_proto_stream();
                             return Ok(Async::Ready(None));
                         }
-                        _ => break,
+                        _ => {
+                            self.output_event(ProtocolEvent::ProtocolError {
+                                id: self.id,
+                                proto_id: self.proto_id,
+                                error: err.into(),
+                            });
+                            break;
+                        }
                     }
                 }
             }

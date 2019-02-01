@@ -27,7 +27,7 @@ use crate::{
     session::{Session, SessionEvent, SessionMeta},
     traits::{ProtocolMeta, ServiceHandle, ServiceProtocol, SessionProtocol},
     utils::multiaddr_to_socketaddr,
-    ProtocolId, SessionId,
+    ProtocolId, SessionId, StreamId,
 };
 
 /// Protocol handle value
@@ -53,6 +53,15 @@ pub enum ServiceError {
         /// Listen address
         address: Multiaddr,
         /// error
+        error: Error<ServiceTask>,
+    },
+    /// Protocol error during interaction
+    ProtocolError {
+        /// Stream id
+        id: StreamId,
+        /// Protocol id
+        proto_id: ProtocolId,
+        /// Codec error
         error: Error<ServiceTask>,
     },
 }
@@ -627,8 +636,10 @@ where
         data: &bytes::Bytes,
     ) {
         debug!(
-            "service receive session [{}] proto [{}] data: {:?}",
-            session_id, proto_id, data
+            "service receive session [{}] proto [{}] data: {}",
+            session_id,
+            proto_id,
+            data.len()
         );
 
         // Service proto handle processing flow
@@ -712,6 +723,18 @@ where
                 ..
             } => self.protocol_open(id, proto_id, &version),
             SessionEvent::ProtocolClose { id, proto_id, .. } => self.protocol_close(id, proto_id),
+            SessionEvent::ProtocolError {
+                id,
+                proto_id,
+                error,
+            } => self.handle.handle_error(
+                &mut self.service_context,
+                ServiceError::ProtocolError {
+                    id,
+                    proto_id,
+                    error,
+                },
+            ),
         }
     }
 
