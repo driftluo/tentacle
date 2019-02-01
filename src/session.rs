@@ -1,8 +1,12 @@
-use futures::{prelude::*, sync::mpsc};
+use futures::{
+    prelude::*,
+    sync::mpsc,
+    task::{self, Task},
+};
 use log::{debug, error, trace, warn};
 use multiaddr::Multiaddr;
 use secio::{codec::stream_handle::StreamHandle as SecureHandle, PublicKey};
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
 use std::{error, io, time::Duration};
 use tokio::codec::{Decoder, Encoder, Framed};
@@ -103,6 +107,10 @@ pub(crate) struct Session<T, U> {
     /// Sub streams maps a stream id to a sender of sub stream
     sub_streams: HashMap<StreamId, mpsc::Sender<ProtocolEvent>>,
     proto_streams: HashMap<ProtocolId, StreamId>,
+    /// The buffer which will distribute to sub streams
+    write_buf: VecDeque<ProtocolEvent>,
+    /// The buffer which will send to service
+    read_buf: VecDeque<SessionEvent>,
 
     /// Clone to new sub stream
     proto_event_sender: mpsc::Sender<ProtocolEvent>,
@@ -113,6 +121,8 @@ pub(crate) struct Session<T, U> {
     service_sender: mpsc::Sender<SessionEvent>,
     /// Receive event from service
     service_receiver: mpsc::Receiver<SessionEvent>,
+
+    notify: Option<Task>,
 }
 
 impl<T, U> Session<T, U>
@@ -140,10 +150,13 @@ where
             next_stream: 0,
             sub_streams: HashMap::default(),
             proto_streams: HashMap::default(),
+            write_buf: VecDeque::default(),
+            read_buf: VecDeque::default(),
             proto_event_sender,
             proto_event_receiver,
             service_sender,
             service_receiver,
+            notify: None,
         }
     }
 
@@ -163,18 +176,14 @@ where
             .and_then(|(handle, name, version)| {
                 match version {
                     Some(version) => {
-                        let mut send_task = event_sender.send(ProtocolEvent::ProtocolOpen {
+                        let send_task = event_sender.send(ProtocolEvent::ProtocolOpen {
                             sub_stream: handle,
                             proto_name: name,
                             version,
                         });
-                        loop {
-                            match send_task.poll() {
-                                Ok(Async::NotReady) => continue,
-                                Ok(Async::Ready(_)) => break,
-                                Err(err) => trace!("stream send back error: {:?}", err),
-                            }
-                        }
+                        tokio::spawn(send_task.map(|_| ()).map_err(|err| {
+                            error!("stream send back error: {:?}", err);
+                        }));
                     }
                     None => debug!("Negotiation to open the protocol {} failed", name),
                 }
@@ -189,9 +198,61 @@ where
     }
 
     /// Push the generated event to the Service
+    #[inline]
     fn event_output(&mut self, event: SessionEvent) {
-        if let Err(e) = self.service_sender.try_send(event) {
-            error!("session send to service error: {}", e);
+        self.read_buf.push_back(event);
+        self.output();
+    }
+
+    #[inline]
+    fn output(&mut self) {
+        for event in self.read_buf.split_off(0) {
+            if let Err(e) = self.service_sender.try_send(event) {
+                if e.is_full() {
+                    self.read_buf.push_back(e.into_inner());
+                    self.notify();
+                    return;
+                } else {
+                    error!("session send to service error: {}", e);
+                }
+            }
+        }
+    }
+
+    #[inline]
+    fn distribute_to_substream(&mut self) {
+        for event in self.write_buf.split_off(0) {
+            match event {
+                ProtocolEvent::ProtocolMessage { id, proto_id, data } => {
+                    if let Some(sender) = self.sub_streams.get_mut(&id) {
+                        if let Err(e) =
+                            sender.try_send(ProtocolEvent::ProtocolMessage { id, proto_id, data })
+                        {
+                            if e.is_full() {
+                                self.write_buf.push_back(e.into_inner());
+                                self.notify();
+                            } else {
+                                error!("session send to service error: {}", e);
+                            }
+                        }
+                    };
+                }
+                ProtocolEvent::ProtocolClose { id, proto_id } => {
+                    if let Some(sender) = self.sub_streams.get_mut(&id) {
+                        if let Err(e) =
+                            sender.try_send(ProtocolEvent::ProtocolClose { id, proto_id })
+                        {
+                            if e.is_full() {
+                                self.write_buf.push_back(e.into_inner());
+                                self.notify();
+                            } else {
+                                error!("session send to service error: {}", e);
+                            }
+                        }
+                    };
+                }
+                _ => (),
+            }
         }
     }
 
@@ -212,18 +273,15 @@ where
             .and_then(|(mut handle, name, version)| {
                 match version {
                     Some(version) => {
-                        let mut send_task = event_sender.send(ProtocolEvent::ProtocolOpen {
+                        let send_task = event_sender.send(ProtocolEvent::ProtocolOpen {
                             sub_stream: handle,
                             proto_name: name,
                             version,
                         });
-                        loop {
-                            match send_task.poll() {
-                                Ok(Async::NotReady) => continue,
-                                Ok(Async::Ready(_)) => break,
-                                Err(err) => trace!("stream send back error: {:?}", err),
-                            }
-                        }
+
+                        tokio::spawn(send_task.map(|_| ()).map_err(|err| {
+                            error!("stream send back error: {:?}", err);
+                        }));
                     }
                     None => {
                         // server close the connect
@@ -295,7 +353,7 @@ where
                 }
             }
             ProtocolEvent::ProtocolMessage { data, proto_id, .. } => {
-                debug!("get proto [{}] data {}", proto_id, data.len());
+                debug!("get proto [{}] data len: {}", proto_id, data.len());
                 self.event_output(SessionEvent::ProtocolMessage {
                     id: self.id,
                     proto_id,
@@ -320,13 +378,11 @@ where
         match event {
             SessionEvent::ProtocolMessage { proto_id, data, .. } => {
                 if let Some(stream_id) = self.proto_streams.get(&proto_id) {
-                    if let Some(sender) = self.sub_streams.get_mut(stream_id) {
-                        let _ = sender.try_send(ProtocolEvent::ProtocolMessage {
-                            id: *stream_id,
-                            proto_id,
-                            data,
-                        });
-                    };
+                    self.write_buf.push_back(ProtocolEvent::ProtocolMessage {
+                        id: *stream_id,
+                        proto_id,
+                        data,
+                    });
                 } else {
                     trace!("protocol {} not ready", proto_id);
                 }
@@ -336,9 +392,9 @@ where
                     // if no proto open, just close session
                     self.close_session();
                 } else {
-                    for (proto_id, sender) in self.sub_streams.iter_mut() {
-                        let _ = sender.try_send(ProtocolEvent::ProtocolClose {
-                            id: self.id,
+                    for (proto_id, stream_id) in self.proto_streams.iter() {
+                        self.write_buf.push_back(ProtocolEvent::ProtocolClose {
+                            id: *stream_id,
                             proto_id: *proto_id,
                         });
                     }
@@ -346,6 +402,7 @@ where
             }
             _ => (),
         }
+        self.distribute_to_substream();
     }
 
     /// Close session
@@ -358,6 +415,19 @@ where
         self.proto_event_receiver.close();
 
         let _ = self.socket.shutdown();
+    }
+
+    #[inline]
+    fn flush(&mut self) {
+        self.distribute_to_substream();
+        self.output();
+    }
+
+    #[inline]
+    fn notify(&mut self) {
+        if let Some(task) = self.notify.take() {
+            task.notify();
+        }
     }
 }
 
@@ -378,6 +448,11 @@ where
             self.ty,
             self.sub_streams.len()
         );
+
+        if !self.read_buf.is_empty() || !self.write_buf.is_empty() {
+            self.flush();
+        }
+
         loop {
             match self.socket.poll() {
                 Ok(Async::Ready(Some(sub_stream))) => self.handle_sub_stream(sub_stream),
@@ -425,6 +500,7 @@ where
             }
         }
 
+        self.notify = Some(task::current());
         Ok(Async::NotReady)
     }
 }

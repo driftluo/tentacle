@@ -17,6 +17,7 @@ use crate::{
 };
 
 /// The substream
+#[derive(Debug)]
 pub struct StreamHandle {
     id: StreamId,
     state: StreamState,

@@ -1,4 +1,8 @@
-use futures::{prelude::*, sync::mpsc};
+use futures::{
+    prelude::*,
+    sync::mpsc,
+    task::{self, Task},
+};
 use log::{debug, error, warn};
 use std::collections::VecDeque;
 use std::{
@@ -14,6 +18,7 @@ use yamux::StreamHandle;
 use crate::{error::Error, service::ServiceTask, ProtocolId, StreamId};
 
 /// Event generated/received by the protocol stream
+#[derive(Debug)]
 pub enum ProtocolEvent {
     /// The protocol is normally open
     ProtocolOpen {
@@ -66,6 +71,8 @@ pub struct SubStream<U> {
     event_sender: mpsc::Sender<ProtocolEvent>,
     /// Receive events from session
     event_receiver: mpsc::Receiver<ProtocolEvent>,
+
+    notify: Option<Task>,
 }
 
 impl<U> SubStream<U>
@@ -90,6 +97,7 @@ where
             event_receiver,
             write_buf: VecDeque::new(),
             read_buf: VecDeque::new(),
+            notify: None,
         }
     }
 
@@ -100,6 +108,7 @@ where
                 Ok(AsyncSink::NotReady(frame)) => {
                     debug!("framed_stream NotReady, frame: {:?}", frame);
                     self.write_buf.push_front(frame);
+                    self.notify();
                     return Ok(Async::NotReady);
                 }
                 Ok(AsyncSink::Ready) => {}
@@ -164,13 +173,45 @@ where
 
     #[inline]
     fn output_event(&mut self, event: ProtocolEvent) {
-        if let Err(e) = self.event_sender.try_send(event) {
-            if e.is_full() {
-                self.read_buf.push_back(e.into_inner());
-            } else {
-                error!("proto send to session error: {}", e);
+        self.read_buf.push_back(event);
+        let _ = self.output();
+    }
+
+    #[inline]
+    fn output(&mut self) -> Result<(), ()> {
+        while let Some(event) = self.read_buf.pop_front() {
+            if let Err(e) = self.event_sender.try_send(event) {
+                if e.is_full() {
+                    self.read_buf.push_back(e.into_inner());
+                    self.notify();
+                    break;
+                } else {
+                    error!("proto send to session error: {}", e);
+                    return Err(());
+                }
             }
         }
+        Ok(())
+    }
+
+    #[inline]
+    fn notify(&mut self) {
+        if let Some(task) = self.notify.take() {
+            task.notify();
+        }
+    }
+
+    #[inline]
+    fn flush(&mut self) -> Result<(), ()> {
+        self.output()?;
+
+        match self.send_data() {
+            Ok(Async::Ready(_)) => (),
+            Ok(Async::NotReady) => (),
+            Err(_) => return Err(()),
+        }
+
+        Ok(())
     }
 }
 
@@ -184,10 +225,20 @@ where
     type Error = ();
 
     fn poll(&mut self) -> Poll<Option<Self::Item>, Self::Error> {
+        if !self.read_buf.is_empty() || !self.write_buf.is_empty() {
+            if let Err(()) = self.flush() {
+                return Err(());
+            }
+        }
+
         loop {
             match self.sub_stream.poll() {
                 Ok(Async::Ready(Some(data))) => {
-                    debug!("protocol [{}] receive data: {}", self.proto_id, data.len());
+                    debug!(
+                        "protocol [{}] receive data len: {}",
+                        self.proto_id,
+                        data.len()
+                    );
                     self.output_event(ProtocolEvent::ProtocolMessage {
                         id: self.id,
                         proto_id: self.proto_id,
@@ -245,6 +296,7 @@ where
             }
         }
 
+        self.notify = Some(task::current());
         Ok(Async::NotReady)
     }
 }

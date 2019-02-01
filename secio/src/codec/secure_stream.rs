@@ -1,7 +1,11 @@
 use bytes::{Bytes, BytesMut};
 use futures::sync::mpsc::{self, Receiver, Sender};
-use futures::{prelude::*, sink::Sink};
-use log::{debug, warn};
+use futures::{
+    prelude::*,
+    sink::Sink,
+    task::{self, Task},
+};
+use log::{debug, error, trace, warn};
 use tokio::codec::{length_delimited::LengthDelimitedCodec, Framed};
 use tokio::prelude::{AsyncRead, AsyncWrite};
 
@@ -30,13 +34,15 @@ pub struct SecureStream<T> {
     /// Send buffer
     pending: VecDeque<Bytes>,
     /// Read buffer
-    read_buf: VecDeque<BytesMut>,
+    read_buf: VecDeque<StreamEvent>,
     /// Frame sender, init on call `create_handle`
     frame_sender: Option<Sender<StreamEvent>>,
     // For receive events from sub streams (for clone to stream handle)
     event_sender: Sender<StreamEvent>,
     // For receive events from sub streams
     event_receiver: Receiver<StreamEvent>,
+
+    notify: Option<Task>,
 }
 
 impl<T> SecureStream<T>
@@ -52,7 +58,7 @@ where
         encode_hmac: Hmac,
         nonce: Vec<u8>,
     ) -> Self {
-        let (event_sender, event_receiver) = mpsc::channel(1024);
+        let (event_sender, event_receiver) = mpsc::channel(128);
         SecureStream {
             socket,
             dead: false,
@@ -66,6 +72,7 @@ where
             frame_sender: None,
             event_sender,
             event_receiver,
+            notify: None,
         }
     }
 
@@ -76,7 +83,7 @@ where
         if self.frame_sender.is_some() {
             return Err(());
         }
-        let (frame_sender, frame_receiver) = mpsc::channel(1024);
+        let (frame_sender, frame_receiver) = mpsc::channel(128);
         self.frame_sender = Some(frame_sender);
         Ok(StreamHandle::new(frame_receiver, self.event_sender.clone()))
     }
@@ -87,6 +94,7 @@ where
             if let AsyncSink::NotReady(data) = self.socket.start_send(frame)? {
                 debug!("can't send");
                 self.pending.push_front(data);
+                self.notify();
                 break;
             }
         }
@@ -109,7 +117,7 @@ where
                 let _ = self.socket.close();
             }
             StreamEvent::Flush => {
-                self.send_frame()?;
+                self.flush()?;
                 debug!("secure stream flushed");
             }
         }
@@ -121,17 +129,12 @@ where
         loop {
             match self.socket.poll() {
                 Ok(Async::Ready(Some(t))) => {
-                    debug!("receive raw data: {:?}", t);
+                    trace!("receive raw data size: {:?}", t.len());
                     let data = self.decode(&t)?;
-                    debug!("receive data: {:?}", data);
-                    self.read_buf.push_back(BytesMut::from(data));
-                    if let Some(ref mut sender) = self.frame_sender {
-                        while let Some(data) = self.read_buf.pop_front() {
-                            if let Err(e) = sender.try_send(StreamEvent::Frame(data)) {
-                                debug!("send error: {}", e);
-                            }
-                        }
-                    }
+                    debug!("receive data size: {:?}", data.len());
+                    self.read_buf
+                        .push_back(StreamEvent::Frame(BytesMut::from(data)));
+                    self.send_to_handle()?;
                 }
                 Ok(Async::Ready(None)) => {
                     debug!("shutdown");
@@ -149,6 +152,44 @@ where
             };
         }
         Ok(Async::NotReady)
+    }
+
+    #[inline]
+    fn send_to_handle(&mut self) -> Result<(), io::Error> {
+        let mut notify = false;
+        if let Some(ref mut sender) = self.frame_sender {
+            while let Some(event) = self.read_buf.pop_front() {
+                if let Err(e) = sender.try_send(event) {
+                    if e.is_full() {
+                        self.read_buf.push_back(e.into_inner());
+                        notify = true;
+                        break;
+                    } else {
+                        error!("send error: {}", e);
+                        return Err(io::ErrorKind::BrokenPipe.into());
+                    }
+                }
+            }
+        };
+
+        if notify {
+            self.notify();
+        }
+        Ok(())
+    }
+
+    #[inline]
+    fn flush(&mut self) -> Result<(), io::Error> {
+        self.send_frame()?;
+        self.send_to_handle()?;
+        Ok(())
+    }
+
+    #[inline]
+    fn notify(&mut self) {
+        if let Some(task) = self.notify.take() {
+            task.notify();
+        }
     }
 
     /// Decoding data
@@ -207,6 +248,10 @@ where
             return Ok(Async::Ready(None));
         }
 
+        if !self.pending.is_empty() || !self.read_buf.is_empty() {
+            self.flush()?;
+        }
+
         match self.recv_frame() {
             Ok(Async::Ready(None)) => {
                 if let Some(mut sender) = self.frame_sender.take() {
@@ -249,6 +294,7 @@ where
             return Ok(Async::Ready(None));
         }
 
+        self.notify = Some(task::current());
         Ok(Async::NotReady)
     }
 }
