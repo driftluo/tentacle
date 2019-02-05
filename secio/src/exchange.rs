@@ -34,7 +34,9 @@ pub fn generate_agreement(
 
     match agreement::EphemeralPrivateKey::generate(algorithm.into(), &rng) {
         Ok(tmp_priv_key) => {
-            let tmp_pub_key = tmp_priv_key.compute_public_key().unwrap();
+            let tmp_pub_key = tmp_priv_key
+                .compute_public_key()
+                .map_err(|_| SecioError::EphemeralKeyGenerationFailed)?;
             Ok((tmp_priv_key, tmp_pub_key.as_ref().to_vec()))
         }
         Err(_) => {

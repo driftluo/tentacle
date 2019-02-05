@@ -31,26 +31,28 @@ pub struct SecioKeyPair {
 impl SecioKeyPair {
     /// Generates a new random sec256k1 key pair.
     pub fn secp256k1_generated() -> SecioKeyPair {
-        use rand::Rng;
-        let mut random_slice = [0u8; secp256k1::constants::SECRET_KEY_SIZE];
-        rand::thread_rng().fill(&mut random_slice[..]);
-        let private = SecretKey::from_slice(&random_slice).expect("slice has the right size");
-        SecioKeyPair {
-            inner: KeyPairInner::Secp256k1 { private },
+        loop {
+            if let Ok(private) = SecretKey::from_slice(&rand::random::<
+                [u8; secp256k1::constants::SECRET_KEY_SIZE],
+            >()) {
+                return SecioKeyPair {
+                    inner: KeyPairInner::Secp256k1 { private },
+                };
+            }
         }
     }
 
     /// Builds a `SecioKeyPair` from a raw secp256k1 32 bytes private key.
-    pub fn secp256k1_raw_key<K>(key: K) -> SecioKeyPair
+    pub fn secp256k1_raw_key<K>(key: K) -> Result<SecioKeyPair, error::SecioError>
     where
         K: AsRef<[u8]>,
     {
-        let private =
-            secp256k1::key::SecretKey::from_slice(key.as_ref()).expect("slice has the right size");
+        let private = secp256k1::key::SecretKey::from_slice(key.as_ref())
+            .map_err(|_| error::SecioError::SecretGenerationFailed)?;
 
-        SecioKeyPair {
+        Ok(SecioKeyPair {
             inner: KeyPairInner::Secp256k1 { private },
-        }
+        })
     }
 
     /// Returns the public key corresponding to this key pair.
