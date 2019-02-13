@@ -4,7 +4,7 @@
 
 use secp256k1::key::SecretKey;
 
-pub use crate::handshake::handshake_struct::PublicKey;
+pub use crate::{handshake::handshake_struct::PublicKey, peer_id::PeerId};
 
 /// Encrypted and decrypted codec implementation, and stream handle
 pub mod codec;
@@ -14,6 +14,8 @@ pub mod error;
 mod exchange;
 /// Implementation of the handshake process
 pub mod handshake;
+/// Peer id
+pub mod peer_id;
 /// Encrypted stream
 pub mod stream_cipher;
 /// Supported algorithms
@@ -64,6 +66,11 @@ impl SecioKeyPair {
                 PublicKey::Secp256k1(pubkey.serialize().to_vec())
             }
         }
+    }
+
+    /// Generate Peer id
+    pub fn to_peer_id(&self) -> PeerId {
+        self.to_public_key().peer_id()
     }
 }
 

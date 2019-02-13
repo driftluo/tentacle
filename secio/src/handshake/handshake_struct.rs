@@ -2,6 +2,7 @@ use crate::handshake::handshake_generated::p2p::handshake::{
     Exchange as FBSExchange, ExchangeBuilder, Propose as FBSPropose, ProposeBuilder,
     PublicKey as FBSPublicKey, PublicKeyBuilder, Type,
 };
+use crate::peer_id::PeerId;
 
 use flatbuffers::{get_root, FlatBufferBuilder};
 
@@ -143,6 +144,11 @@ impl PublicKey {
             },
             None => Err(()),
         }
+    }
+
+    /// Generate Peer id
+    pub fn peer_id(&self) -> PeerId {
+        PeerId::from_public_key(self)
     }
 }
 
