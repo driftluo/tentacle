@@ -4,7 +4,7 @@ use futures::{
     task::{self, Task},
 };
 use log::{debug, error, trace, warn};
-use multiaddr::{Multiaddr, ToMultiaddr};
+use multiaddr::{multihash::Multihash, Multiaddr, Protocol, ToMultiaddr};
 use secio::{handshake::Config, PublicKey, SecioKeyPair};
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::Arc;
@@ -30,7 +30,7 @@ use crate::{
     protocol_select::ProtocolInfo,
     session::{Session, SessionEvent, SessionMeta},
     traits::{ProtocolMeta, ServiceHandle, ServiceProtocol, SessionProtocol},
-    utils::multiaddr_to_socketaddr,
+    utils::{extract_peer_id, multiaddr_to_socketaddr},
     ProtocolId, SessionId, StreamId,
 };
 
@@ -456,8 +456,7 @@ where
 
     /// Handshake
     #[inline]
-    fn handshake(&mut self, socket: TcpStream, ty: SessionType) {
-        let address: Multiaddr = socket.peer_addr().unwrap().to_multiaddr().unwrap();
+    fn handshake(&mut self, socket: TcpStream, ty: SessionType, remote_address: Multiaddr) {
         if let Some(ref key_pair) = self.key_pair {
             let key_pair = key_pair.clone();
             let sender = self.session_event_sender.clone();
@@ -472,7 +471,7 @@ where
                             sender.send(SessionEvent::HandshakeSuccess {
                                 handle,
                                 public_key,
-                                address,
+                                address: remote_address,
                                 ty,
                             })
                         }
@@ -488,9 +487,16 @@ where
                                 err.into_inner().unwrap().into()
                             };
 
-                            error!("Handshake with {} failed, error: {:?}", address, error);
+                            error!(
+                                "Handshake with {} failed, error: {:?}",
+                                remote_address, error
+                            );
 
-                            sender.send(SessionEvent::HandshakeFail { ty, error, address })
+                            sender.send(SessionEvent::HandshakeFail {
+                                ty,
+                                error,
+                                address: remote_address,
+                            })
                         }
                     };
 
@@ -503,7 +509,7 @@ where
 
             tokio::spawn(task);
         } else {
-            self.session_open(socket, None, address, ty);
+            self.session_open(socket, None, remote_address, ty);
             if ty == SessionType::Client {
                 self.task_count -= 1;
             }
@@ -516,7 +522,7 @@ where
         &mut self,
         mut handle: H,
         remote_pubkey: Option<PublicKey>,
-        address: Multiaddr,
+        mut address: Multiaddr,
         ty: SessionType,
     ) where
         H: AsyncRead + AsyncWrite + Send + 'static,
@@ -551,7 +557,28 @@ where
                     }
                     return;
                 }
-                None => self.next_session += 1,
+                None => {
+                    // if peer id doesn't match return an error
+                    if let Some(peer_id) = extract_peer_id(&address) {
+                        if key.peer_id() != peer_id {
+                            self.handle.handle_error(
+                                &mut self.service_context,
+                                ServiceError::DialerError {
+                                    error: Error::PeerIdNotMatch,
+                                    address,
+                                },
+                            );
+                            return;
+                        }
+                    } else {
+                        address.append(Protocol::P2p(
+                            Multihash::from_bytes(key.peer_id().as_bytes().to_vec())
+                                .expect("Invalid peer id"),
+                        ))
+                    }
+
+                    self.next_session += 1
+                }
             }
         } else {
             self.next_session += 1;
@@ -833,7 +860,7 @@ where
         for (address, mut dialer) in self.dial.split_off(0) {
             match dialer.poll() {
                 Ok(Async::Ready(socket)) => {
-                    self.handshake(socket, SessionType::Client);
+                    self.handshake(socket, SessionType::Client, address);
                 }
                 Ok(Async::NotReady) => {
                     trace!("client not ready, {}", address);
@@ -870,7 +897,9 @@ where
         for (address, mut listen) in self.listens.split_off(0) {
             match listen.poll() {
                 Ok(Async::Ready(Some(socket))) => {
-                    self.handshake(socket, SessionType::Server);
+                    let remote_address: Multiaddr =
+                        socket.peer_addr().unwrap().to_multiaddr().unwrap();
+                    self.handshake(socket, SessionType::Server, remote_address);
                     self.listens.push((address, listen));
                 }
                 Ok(Async::Ready(None)) => (),
