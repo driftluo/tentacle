@@ -14,6 +14,8 @@ pub enum Error<T: fmt::Debug> {
     TaskDisconnect,
     /// Connect self
     ConnectSelf,
+    /// When dial remote, peer id does not match
+    PeerIdNotMatch,
     /// Connected to the connected peer
     RepeatedConnection(SessionId),
     /// Handshake error
@@ -27,7 +29,9 @@ where
     fn eq(&self, other: &Error<T>) -> bool {
         use self::Error::*;
         match (self, other) {
-            (TaskDisconnect, TaskDisconnect) | (ConnectSelf, ConnectSelf) => true,
+            (TaskDisconnect, TaskDisconnect)
+            | (ConnectSelf, ConnectSelf)
+            | (PeerIdNotMatch, PeerIdNotMatch) => true,
             (RepeatedConnection(i), RepeatedConnection(j)) => i == j,
             (HandshakeError(i), HandshakeError(j)) => i == j,
             _ => false,
@@ -83,6 +87,7 @@ where
             Error::TaskDisconnect => "Service Task channel has been dropped",
             Error::ConnectSelf => "Connect self",
             Error::RepeatedConnection(_) => "Connected to the connected peer",
+            Error::PeerIdNotMatch => "When dial remote, peer id does not match",
             Error::HandshakeError(e) => error::Error::description(e),
         }
     }
@@ -101,6 +106,7 @@ where
             Error::RepeatedConnection(id) => {
                 write!(f, "Connected to the connected peer, session id: [{}]", id)
             }
+            Error::PeerIdNotMatch => write!(f, "When dial remote, peer id does not match"),
             Error::HandshakeError(e) => fmt::Display::fmt(e, f),
         }
     }
