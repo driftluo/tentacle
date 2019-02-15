@@ -24,6 +24,8 @@ and the service layer wraps the yamux substream into a protocol stream.
 
 At the same time, support for other protocol(such as websocket) is also planned, but will delay a lot.
 
+Detailed introduction: [中文](./docs/introduction_zh.md)/[English](./docs/introduction_en.md)
+
 > Note: It is not compatible with `libp2p`.
 
 ## Status

@@ -38,7 +38,7 @@
 
 作为 Rust 版本的实现，我们做了两个抽象，一个是 `Session<T>`，一个是 `StreamHandle`：
 
-- `Session`：对应真实连接或者是加密连接，同时，它可以产出任意（`usize`）个子流，每个子流通过 channel 与 session 通信，session 负责发送数据到底层通道和转发数据到对应子流
+- `Session`：对应真实连接或者是加密连接，同时，它可以产出任意个子流，每个子流通过 channel 与 session 通信，session 负责发送数据到底层通道和转发数据到对应子流
 - `StreamHandle`：这个结构就是子流的抽象，它是一个实现了 `Write`、`Read`、`AsyncWrite`、`AsyncRead` 的结构，意味着在 Rust 中对它像文件一样可以进行读写操作
 
 库中其他的部分就是对 `yamux` 协议的实现，比如 `frame` 是如何编码解码、`config` 是一些可以调整的配置项（是否要定时 Ping、动态窗口大小等等）。
