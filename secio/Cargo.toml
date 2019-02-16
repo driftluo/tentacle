@@ -2,7 +2,11 @@
 name = "secio"
 version = "0.1.0"
 license = "MIT"
-authors = ["Nervos Core Dev <dev@nervos.org>"]
+description = "Secio encryption protocol for p2p"
+authors = ["piaoliu <441594700@qq.com>", "Nervos Core Dev <dev@nervos.org>"]
+repository = "https://github.com/nervosnetwork/p2p"
+keywords = ["network", "peer-to-peer"]
+categories = ["network-programming", "asynchronous"]
 edition = "2018"
 
 [dependencies]
