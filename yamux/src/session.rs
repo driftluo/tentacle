@@ -459,9 +459,7 @@ where
         }
 
         if !self.read_pending_frames.is_empty() || !self.write_pending_frames.is_empty() {
-            if let Err(e) = self.flush() {
-                return Err(e);
-            }
+            self.flush()?;
         }
 
         if let Some(ref mut fut) = self.keepalive_future {
@@ -478,24 +476,12 @@ where
             }
         }
 
-        loop {
-            match self.recv_frames()? {
-                Async::Ready(_) => {}
-                Async::NotReady => {
-                    debug!("[{:?}] recv_frames NotReady", self.ty);
-                    break;
-                }
-            }
+        if self.recv_frames()? == Async::NotReady {
+            debug!("[{:?}] recv_frames NotReady", self.ty);
         }
 
-        loop {
-            match self.recv_events()? {
-                Async::Ready(_) => {}
-                Async::NotReady => {
-                    debug!("[{:?}] recv_events NotReady", self.ty);
-                    break;
-                }
-            }
+        if self.recv_events()? == Async::NotReady {
+            debug!("[{:?}] recv_events NotReady", self.ty);
         }
 
         if let Some(stream) = self.pending_streams.pop_front() {
