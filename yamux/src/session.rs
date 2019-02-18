@@ -453,72 +453,45 @@ where
 
     fn poll(&mut self) -> Poll<Option<Self::Item>, Self::Error> {
         debug!(">> [{:?}] Session::poll()", self.ty);
-        loop {
-            // FIXME: Optmize this loop (use futures channel ?)
 
-            if self.is_dead() {
-                return Ok(Async::Ready(None));
-            }
+        if self.is_dead() {
+            return Ok(Async::Ready(None));
+        }
 
-            if !self.read_pending_frames.is_empty() || !self.write_pending_frames.is_empty() {
-                if let Err(e) = self.flush() {
-                    return Err(e);
+        if !self.read_pending_frames.is_empty() || !self.write_pending_frames.is_empty() {
+            self.flush()?;
+        }
+
+        if let Some(ref mut fut) = self.keepalive_future {
+            match fut.poll() {
+                Ok(Async::Ready(Some(ping_at))) => {
+                    // TODO: Handle not ready
+                    let _ = self.keep_alive(ping_at)?;
                 }
-            }
-
-            let mut keep_alive_not_ready = false;
-            let mut recv_frames_not_ready = false;
-            let mut recv_events_not_ready = false;
-
-            let ping_at = if let Some(ref mut fut) = self.keepalive_future {
-                match fut.poll() {
-                    Ok(Async::Ready(Some(ping_at))) => Some(ping_at),
-                    Ok(Async::Ready(None)) => None,
-                    Ok(Async::NotReady) => {
-                        keep_alive_not_ready = true;
-                        None
-                    }
-                    Err(_) => None,
+                Ok(Async::Ready(None)) => {}
+                Ok(Async::NotReady) => {}
+                Err(err) => {
+                    warn!("poll keepalive_future error: {}", err);
                 }
-            } else {
-                None
-            };
-            if let Some(ping_at) = ping_at {
-                // TODO: Handle not ready
-                if self.keep_alive(ping_at)? == Async::NotReady {
-                    keep_alive_not_ready = true;
-                }
-            }
-            debug!(
-                "[{:?}] keep_alive_not_ready = {}",
-                self.ty, keep_alive_not_ready
-            );
-
-            match self.recv_frames()? {
-                Async::Ready(_) => {}
-                Async::NotReady => {
-                    debug!("[{:?}] recv_frames NotReady", self.ty);
-                    recv_frames_not_ready = true;
-                }
-            }
-            // Ignore Async::NotReady from recv_events()
-            match self.recv_events()? {
-                Async::Ready(_) => {}
-                Async::NotReady => {
-                    debug!("[{:?}] recv_events NotReady", self.ty);
-                    recv_events_not_ready = true;
-                }
-            }
-
-            if let Some(stream) = self.pending_streams.pop_front() {
-                debug!("[{:?}] A stream is ready", self.ty);
-                return Ok(Async::Ready(Some(stream)));
-            } else if self.is_dead() {
-                return Ok(Async::Ready(None));
-            } else if keep_alive_not_ready || recv_frames_not_ready || recv_events_not_ready {
-                self.notify = Some(task::current());
-                return Ok(Async::NotReady);
             }
         }
+
+        if self.recv_frames()? == Async::NotReady {
+            debug!("[{:?}] recv_frames NotReady", self.ty);
+        }
+
+        if self.recv_events()? == Async::NotReady {
+            debug!("[{:?}] recv_events NotReady", self.ty);
+        }
+
+        if let Some(stream) = self.pending_streams.pop_front() {
+            debug!("[{:?}] A stream is ready", self.ty);
+            return Ok(Async::Ready(Some(stream)));
+        } else if self.is_dead() {
+            return Ok(Async::Ready(None));
+        }
+
+        self.notify = Some(task::current());
+        Ok(Async::NotReady)
     }
 }
