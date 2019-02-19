@@ -19,9 +19,9 @@ use crate::{error::Error, service::ServiceTask, ProtocolId, StreamId};
 
 /// Event generated/received by the protocol stream
 #[derive(Debug)]
-pub enum ProtocolEvent {
+pub(crate) enum ProtocolEvent {
     /// The protocol is normally open
-    ProtocolOpen {
+    Open {
         /// Protocol name
         proto_name: String,
         /// Yamux sub stream handle
@@ -30,14 +30,14 @@ pub enum ProtocolEvent {
         version: String,
     },
     /// The protocol close
-    ProtocolClose {
+    Close {
         /// Stream id
         id: StreamId,
         /// Protocol id
         proto_id: ProtocolId,
     },
     /// Protocol data outbound and inbound
-    ProtocolMessage {
+    Message {
         /// Stream id
         id: StreamId,
         /// Protocol id
@@ -46,7 +46,7 @@ pub enum ProtocolEvent {
         data: bytes::Bytes,
     },
     /// Codec error
-    ProtocolError {
+    Error {
         /// Stream id
         id: StreamId,
         /// Protocol id
@@ -58,7 +58,7 @@ pub enum ProtocolEvent {
 
 /// Each custom protocol in a session corresponds to a sub stream
 /// Can be seen as the route of each protocol
-pub struct SubStream<U> {
+pub(crate) struct SubStream<U> {
     sub_stream: Framed<StreamHandle, U>,
     id: StreamId,
     proto_id: ProtocolId,
@@ -132,7 +132,7 @@ where
 
     /// Close protocol sub stream
     fn close_proto_stream(&mut self) {
-        self.output_event(ProtocolEvent::ProtocolClose {
+        self.output_event(ProtocolEvent::Close {
             id: self.id,
             proto_id: self.proto_id,
         });
@@ -143,7 +143,7 @@ where
     /// Handling commands send by session
     fn handle_proto_event(&mut self, event: ProtocolEvent) -> Poll<Option<()>, ()> {
         match event {
-            ProtocolEvent::ProtocolMessage { data, .. } => {
+            ProtocolEvent::Message { data, .. } => {
                 debug!("proto [{}] send data: {}", self.proto_id, data.len());
                 self.write_buf.push_back(data);
                 match self.send_data() {
@@ -162,7 +162,7 @@ where
                     Ok(Async::Ready(_)) => (),
                 }
             }
-            ProtocolEvent::ProtocolClose { .. } => {
+            ProtocolEvent::Close { .. } => {
                 self.close_proto_stream();
                 return Ok(Async::Ready(None));
             }
@@ -239,7 +239,7 @@ where
                         self.proto_id,
                         data.len()
                     );
-                    self.output_event(ProtocolEvent::ProtocolMessage {
+                    self.output_event(ProtocolEvent::Message {
                         id: self.id,
                         proto_id: self.proto_id,
                         data: data.into(),
@@ -264,7 +264,7 @@ where
                             return Ok(Async::Ready(None));
                         }
                         _ => {
-                            self.output_event(ProtocolEvent::ProtocolError {
+                            self.output_event(ProtocolEvent::Error {
                                 id: self.id,
                                 proto_id: self.proto_id,
                                 error: err.into(),

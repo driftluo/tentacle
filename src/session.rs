@@ -176,7 +176,7 @@ where
             .and_then(|(handle, name, version)| {
                 match version {
                     Some(version) => {
-                        let send_task = event_sender.send(ProtocolEvent::ProtocolOpen {
+                        let send_task = event_sender.send(ProtocolEvent::Open {
                             sub_stream: handle,
                             proto_name: name,
                             version,
@@ -223,10 +223,10 @@ where
     fn distribute_to_substream(&mut self) {
         for event in self.write_buf.split_off(0) {
             match event {
-                ProtocolEvent::ProtocolMessage { id, proto_id, data } => {
+                ProtocolEvent::Message { id, proto_id, data } => {
                     if let Some(sender) = self.sub_streams.get_mut(&id) {
                         if let Err(e) =
-                            sender.try_send(ProtocolEvent::ProtocolMessage { id, proto_id, data })
+                            sender.try_send(ProtocolEvent::Message { id, proto_id, data })
                         {
                             if e.is_full() {
                                 self.write_buf.push_back(e.into_inner());
@@ -237,11 +237,9 @@ where
                         }
                     };
                 }
-                ProtocolEvent::ProtocolClose { id, proto_id } => {
+                ProtocolEvent::Close { id, proto_id } => {
                     if let Some(sender) = self.sub_streams.get_mut(&id) {
-                        if let Err(e) =
-                            sender.try_send(ProtocolEvent::ProtocolClose { id, proto_id })
-                        {
+                        if let Err(e) = sender.try_send(ProtocolEvent::Close { id, proto_id }) {
                             if e.is_full() {
                                 self.write_buf.push_back(e.into_inner());
                                 self.notify();
@@ -273,7 +271,7 @@ where
             .and_then(|(mut handle, name, version)| {
                 match version {
                     Some(version) => {
-                        let send_task = event_sender.send(ProtocolEvent::ProtocolOpen {
+                        let send_task = event_sender.send(ProtocolEvent::Open {
                             sub_stream: handle,
                             proto_name: name,
                             version,
@@ -302,7 +300,7 @@ where
     /// Handling events uploaded by the protocol stream
     fn handle_stream_event(&mut self, event: ProtocolEvent) {
         match event {
-            ProtocolEvent::ProtocolOpen {
+            ProtocolEvent::Open {
                 proto_name,
                 sub_stream,
                 version,
@@ -338,7 +336,7 @@ where
 
                 tokio::spawn(proto_stream.for_each(|_| Ok(())));
             }
-            ProtocolEvent::ProtocolClose { id, proto_id } => {
+            ProtocolEvent::Close { id, proto_id } => {
                 debug!("session [{}] proto [{}] closed", self.id, proto_id);
                 let _ = self.sub_streams.remove(&id);
                 let _ = self.proto_streams.remove(&proto_id);
@@ -352,7 +350,7 @@ where
                     self.close_session();
                 }
             }
-            ProtocolEvent::ProtocolMessage { data, proto_id, .. } => {
+            ProtocolEvent::Message { data, proto_id, .. } => {
                 debug!("get proto [{}] data len: {}", proto_id, data.len());
                 self.event_output(SessionEvent::ProtocolMessage {
                     id: self.id,
@@ -360,7 +358,7 @@ where
                     data,
                 })
             }
-            ProtocolEvent::ProtocolError {
+            ProtocolEvent::Error {
                 proto_id, error, ..
             } => {
                 debug!("Codec error: {:?}", error);
@@ -378,7 +376,7 @@ where
         match event {
             SessionEvent::ProtocolMessage { proto_id, data, .. } => {
                 if let Some(stream_id) = self.proto_streams.get(&proto_id) {
-                    self.write_buf.push_back(ProtocolEvent::ProtocolMessage {
+                    self.write_buf.push_back(ProtocolEvent::Message {
                         id: *stream_id,
                         proto_id,
                         data,
@@ -393,7 +391,7 @@ where
                     self.close_session();
                 } else {
                     for (proto_id, stream_id) in self.proto_streams.iter() {
-                        self.write_buf.push_back(ProtocolEvent::ProtocolClose {
+                        self.write_buf.push_back(ProtocolEvent::Close {
                             id: *stream_id,
                             proto_id: *proto_id,
                         });
