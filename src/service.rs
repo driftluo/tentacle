@@ -27,6 +27,9 @@ use yamux::{session::SessionType, Config as YamuxConfig};
 use crate::{
     context::{ServiceContext, ServiceControl, SessionContext},
     error::Error,
+    protocol_handle_stream::{
+        ServiceProtocolEvent, ServiceProtocolStream, SessionProtocolEvent, SessionProtocolStream,
+    },
     protocol_select::ProtocolInfo,
     session::{Session, SessionEvent, SessionMeta},
     traits::{ProtocolMeta, ServiceHandle, ServiceProtocol, SessionProtocol},
@@ -196,15 +199,19 @@ pub struct Service<T, U> {
     /// Can be upgrade to list service level protocols
     handle: T,
 
+    /// The buffer which will distribute to sessions
     write_buf: VecDeque<SessionEvent>,
+    /// The buffer which will distribute to service protocol handle
+    read_service_buf: VecDeque<(ProtocolId, ServiceProtocolEvent)>,
+    /// The buffer which will distribute to session protocol handle
+    read_session_buf: VecDeque<(SessionId, ProtocolId, SessionProtocolEvent)>,
 
     // The service protocols open with the session
     session_service_protos: HashMap<SessionId, HashSet<ProtocolId>>,
 
-    service_proto_handles: HashMap<ProtocolId, Box<dyn ServiceProtocol + Send + 'static>>,
+    service_proto_handles: HashMap<ProtocolId, mpsc::Sender<ServiceProtocolEvent>>,
 
-    session_proto_handles:
-        HashMap<SessionId, HashMap<ProtocolId, Box<dyn SessionProtocol + Send + 'static>>>,
+    session_proto_handles: HashMap<(SessionId, ProtocolId), mpsc::Sender<SessionProtocolEvent>>,
 
     /// Send events to service, clone to session
     session_event_sender: mpsc::Sender<SessionEvent>,
@@ -260,6 +267,8 @@ where
             task_count: if forever { 1 } else { 0 },
             next_session: 0,
             write_buf: VecDeque::default(),
+            read_service_buf: VecDeque::default(),
+            read_session_buf: VecDeque::default(),
             session_event_sender,
             session_event_receiver,
             service_context: ServiceContext::new(service_task_sender, proto_infos),
@@ -363,6 +372,43 @@ where
         }
     }
 
+    /// Distribute event to user level
+    #[inline]
+    fn distribute_to_user_level(&mut self) {
+        for (proto_id, event) in self.read_service_buf.split_off(0) {
+            if let Some(sender) = self.service_proto_handles.get_mut(&proto_id) {
+                if let Err(e) = sender.try_send(event) {
+                    if e.is_full() {
+                        self.read_service_buf.push_back((proto_id, e.into_inner()));
+                        self.notify();
+                    } else {
+                        error!(
+                            "channel shutdown, proto [{}] message can't send to user",
+                            proto_id
+                        )
+                    }
+                }
+            }
+        }
+
+        for (session_id, proto_id, event) in self.read_session_buf.split_off(0) {
+            if let Some(sender) = self.session_proto_handles.get_mut(&(session_id, proto_id)) {
+                if let Err(e) = sender.try_send(event) {
+                    if e.is_full() {
+                        self.read_session_buf
+                            .push_back((session_id, proto_id, e.into_inner()));
+                        self.notify();
+                    } else {
+                        error!(
+                            "channel shutdown, proto [{}] session [{}] message can't send to user",
+                            proto_id, session_id
+                        )
+                    }
+                }
+            }
+        }
+    }
+
     /// Send data to the specified protocol for the specified session.
     ///
     /// Valid after Service starts
@@ -441,7 +487,7 @@ where
                 }
             })
             .find(Option::is_some)
-            .unwrap_or(None);
+            .unwrap_or_default();
 
         if handle.is_none() {
             debug!(
@@ -487,7 +533,7 @@ where
                                 err.into_inner().unwrap().into()
                             };
 
-                            error!(
+                            debug!(
                                 "Handshake with {} failed, error: {:?}",
                                 remote_address, error
                             );
@@ -638,34 +684,20 @@ where
         self.handle
             .handle_event(&mut self.service_context, ServiceEvent::SessionClose { id });
 
-        // Session proto handle processing flow
-        if let Some(mut handles) = self.session_proto_handles.remove(&id) {
-            for handle in handles.values_mut() {
-                handle.disconnected(&mut self.service_context);
-            }
-        }
-
+        // Close all open proto
         let close_proto_ids = self.session_service_protos.remove(&id).unwrap_or_default();
         debug!("session [{}] close proto [{:?}]", id, close_proto_ids);
-        // Service proto handle processing flow
-        //
-        // You must first confirm that the protocol is open in the session,
-        // otherwise a false positive will occur.
+
         close_proto_ids.into_iter().for_each(|proto_id| {
-            self.service_context
-                .remove_session_notify_senders(id, proto_id);
-            let session_context = self.sessions.get(&id);
-            let service_handle = self.service_proto_handles.get_mut(&proto_id);
-            if let (Some(handle), Some(session_context)) = (service_handle, session_context) {
-                handle.disconnected(&mut self.service_context, session_context);
-            }
+            self.protocol_close(id, proto_id);
         });
+
         self.sessions.remove(&id);
     }
 
     /// Open the handle corresponding to the protocol
     #[inline]
-    fn protocol_open(&mut self, id: SessionId, proto_id: ProtocolId, version: &str) {
+    fn protocol_open(&mut self, id: SessionId, proto_id: ProtocolId, version: String) {
         debug!("service session [{}] proto [{}] open", id, proto_id);
         let session_context = self
             .sessions
@@ -674,14 +706,33 @@ where
 
         // Service proto handle processing flow
         if !self.service_proto_handles.contains_key(&proto_id) {
-            if let Some(ProtocolHandle::Service(mut handle)) = self.proto_handle(false, proto_id) {
+            if let Some(ProtocolHandle::Service(handle)) = self.proto_handle(false, proto_id) {
                 debug!("init service level [{}] proto handle", proto_id);
-                handle.init(&mut self.service_context);
-                self.service_proto_handles.insert(proto_id, handle);
+                let (sender, receiver) = mpsc::channel(32);
+                let stream = ServiceProtocolStream::new(
+                    handle,
+                    self.service_context.clone(),
+                    receiver,
+                    proto_id,
+                );
+
+                tokio::spawn(stream.for_each(|_| Ok(())).map_err(|_| ()));
+                self.read_service_buf
+                    .push_back((proto_id, ServiceProtocolEvent::Init));
+
+                self.service_proto_handles.insert(proto_id, sender);
             }
         }
-        if let Some(handle) = self.service_proto_handles.get_mut(&proto_id) {
-            handle.connected(&mut self.service_context, &session_context, version);
+
+        if self.service_proto_handles.contains_key(&proto_id) {
+            self.read_service_buf.push_back((
+                proto_id,
+                ServiceProtocolEvent::Connected {
+                    session: session_context.clone(),
+                    version: version.clone(),
+                },
+            ));
+
             self.session_service_protos
                 .entry(id)
                 .or_default()
@@ -691,14 +742,31 @@ where
         // Session proto handle processing flow
         // Regardless of the existence of the session level handle,
         // you **must record** which protocols are opened for each session.
-        if let Some(ProtocolHandle::Session(mut handle)) = self.proto_handle(true, proto_id) {
+        if let Some(ProtocolHandle::Session(handle)) = self.proto_handle(true, proto_id) {
             debug!("init session [{}] level proto [{}] handle", id, proto_id);
-            handle.connected(&mut self.service_context, &session_context, version);
+            let (sender, receiver) = mpsc::channel(32);
+            let stream = SessionProtocolStream::new(
+                handle,
+                self.service_context.clone(),
+                session_context.clone(),
+                receiver,
+                proto_id,
+            );
+
+            tokio::spawn(stream.for_each(|_| Ok(())).map_err(|_| ()));
+
+            self.read_session_buf.push_back((
+                id,
+                proto_id,
+                SessionProtocolEvent::Connected { version },
+            ));
+
             self.session_proto_handles
-                .entry(id)
-                .or_default()
-                .insert(proto_id, handle);
+                .entry((id, proto_id))
+                .or_insert(sender);
         }
+
+        self.distribute_to_user_level();
     }
 
     /// Processing the received data
@@ -707,7 +775,7 @@ where
         &mut self,
         session_id: SessionId,
         proto_id: ProtocolId,
-        data: &bytes::Bytes,
+        data: bytes::Bytes,
     ) {
         debug!(
             "service receive session [{}] proto [{}] data len: {:?}",
@@ -715,18 +783,29 @@ where
         );
 
         // Service proto handle processing flow
-        let service_handle = self.service_proto_handles.get_mut(&proto_id);
-        let session_context = self.sessions.get_mut(&session_id);
-        if let (Some(handle), Some(session_context)) = (service_handle, session_context) {
-            handle.received(&mut self.service_context, &session_context, data.to_vec());
+        if self.service_proto_handles.contains_key(&proto_id) {
+            self.read_service_buf.push_back((
+                proto_id,
+                ServiceProtocolEvent::Received {
+                    id: proto_id,
+                    data: data.clone(),
+                },
+            ));
         }
 
         // Session proto handle processing flow
-        if let Some(handles) = self.session_proto_handles.get_mut(&session_id) {
-            if let Some(handle) = handles.get_mut(&proto_id) {
-                handle.received(&mut self.service_context, data.to_vec());
-            }
+        if self
+            .session_proto_handles
+            .contains_key(&(session_id, proto_id))
+        {
+            self.read_session_buf.push_back((
+                session_id,
+                proto_id,
+                SessionProtocolEvent::Received { data },
+            ));
         }
+
+        self.distribute_to_user_level();
     }
 
     /// Protocol stream is closed, clean up data
@@ -738,17 +817,23 @@ where
         );
 
         // Service proto handle processing flow
-        let service_handle = self.service_proto_handles.get_mut(&proto_id);
-        let session_context = self.sessions.get_mut(&session_id);
-        if let (Some(handle), Some(session_context)) = (service_handle, session_context) {
-            handle.disconnected(&mut self.service_context, &session_context);
+        if self.service_proto_handles.contains_key(&proto_id) {
+            self.read_service_buf.push_back((
+                proto_id,
+                ServiceProtocolEvent::Disconnected { id: session_id },
+            ));
+            self.distribute_to_user_level();
         }
 
         // Session proto handle processing flow
-        if let Some(handles) = self.session_proto_handles.get_mut(&session_id) {
-            if let Some(mut handle) = handles.remove(&proto_id) {
-                handle.disconnected(&mut self.service_context);
-            }
+        if let Some(sender) = self.session_proto_handles.remove(&(session_id, proto_id)) {
+            let send_task = sender.send(SessionProtocolEvent::Disconnected);
+            tokio::spawn(send_task.map(|_| ()).map_err(|err| {
+                error!(
+                    "service session close event send to session handle error: {:?}",
+                    err
+                );
+            }));
         }
 
         // Session proto info remove
@@ -786,14 +871,14 @@ where
                 }
             }
             SessionEvent::ProtocolMessage { id, proto_id, data } => {
-                self.protocol_message(id, proto_id, &data)
+                self.protocol_message(id, proto_id, data)
             }
             SessionEvent::ProtocolOpen {
                 id,
                 proto_id,
                 version,
                 ..
-            } => self.protocol_open(id, proto_id, &version),
+            } => self.protocol_open(id, proto_id, version),
             SessionEvent::ProtocolClose { id, proto_id, .. } => self.protocol_close(id, proto_id),
             SessionEvent::ProtocolError {
                 id,
@@ -833,8 +918,10 @@ where
                 tokio::spawn(task);
             }
             ServiceTask::ProtocolNotify { proto_id, token } => {
-                if let Some(handle) = self.service_proto_handles.get_mut(&proto_id) {
-                    handle.notify(&mut self.service_context, token);
+                if self.service_proto_handles.contains_key(&proto_id) {
+                    self.read_service_buf
+                        .push_back((proto_id, ServiceProtocolEvent::Notify { token }));
+                    self.distribute_to_user_level();
                 }
             }
             ServiceTask::ProtocolSessionNotify {
@@ -842,13 +929,19 @@ where
                 proto_id,
                 token,
             } => {
-                if let Some(handles) = self.session_proto_handles.get_mut(&session_id) {
-                    if let Some(handle) = handles.get_mut(&proto_id) {
-                        handle.notify(&mut self.service_context, token);
-                    } else {
-                        self.service_context
-                            .remove_session_notify_senders(session_id, proto_id);
-                    }
+                if self
+                    .session_proto_handles
+                    .contains_key(&(session_id, proto_id))
+                {
+                    self.read_session_buf.push_back((
+                        session_id,
+                        proto_id,
+                        SessionProtocolEvent::Notify { token },
+                    ));
+                    self.distribute_to_user_level();
+                } else {
+                    self.service_context
+                        .remove_session_notify_senders(session_id, proto_id);
                 }
             }
         }
@@ -920,12 +1013,33 @@ where
         }
 
         if update || self.service_context.listens().is_empty() {
-            self.service_context.update_listens(
-                self.listens
-                    .iter()
-                    .map(|(address, _)| address.clone())
-                    .collect(),
-            );
+            let new_listens = self
+                .listens
+                .iter()
+                .map(|(address, _)| address.clone())
+                .collect::<Vec<Multiaddr>>();
+            self.service_context.update_listens(new_listens.clone());
+
+            for proto_id in self.service_proto_handles.keys() {
+                self.read_service_buf.push_back((
+                    *proto_id,
+                    ServiceProtocolEvent::Update {
+                        listen_addrs: new_listens.clone(),
+                    },
+                ));
+            }
+
+            for (session_id, proto_id) in self.session_proto_handles.keys() {
+                self.read_session_buf.push_back((
+                    *session_id,
+                    *proto_id,
+                    SessionProtocolEvent::Update {
+                        listen_addrs: new_listens.clone(),
+                    },
+                ));
+            }
+
+            self.distribute_to_user_level();
         }
     }
 
@@ -952,8 +1066,12 @@ where
             return Ok(Async::Ready(None));
         }
 
-        if !self.write_buf.is_empty() {
+        if !self.write_buf.is_empty()
+            || !self.read_service_buf.is_empty()
+            || !self.read_session_buf.is_empty()
+        {
             self.distribute_to_session();
+            self.distribute_to_user_level();
         }
 
         self.client_poll();

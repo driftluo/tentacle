@@ -245,3 +245,13 @@ impl ServiceControl {
         })
     }
 }
+
+impl Clone for ServiceContext {
+    fn clone(&self) -> Self {
+        ServiceContext {
+            inner: self.inner.clone(),
+            session_notify_senders: HashMap::default(),
+            listens: self.listens.clone(),
+        }
+    }
+}

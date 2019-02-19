@@ -5,7 +5,7 @@ use futures::{
     sink::Sink,
     task::{self, Task},
 };
-use log::{debug, error, trace, warn};
+use log::{debug, trace, warn};
 use tokio::codec::{length_delimited::LengthDelimitedCodec, Framed};
 use tokio::prelude::{AsyncRead, AsyncWrite};
 
@@ -165,7 +165,7 @@ where
                         notify = true;
                         break;
                     } else {
-                        error!("send error: {}", e);
+                        debug!("send error: {}", e);
                         return Err(io::ErrorKind::BrokenPipe.into());
                     }
                 }
@@ -260,7 +260,7 @@ where
                 return Ok(Async::Ready(None));
             }
             Err(err) => {
-                warn!("receive frame error: {:?}", err);
+                debug!("receive frame error: {:?}", err);
                 if let Some(mut sender) = self.frame_sender.take() {
                     let _ = sender.try_send(StreamEvent::Close);
                 }

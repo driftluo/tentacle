@@ -17,14 +17,16 @@ pub mod builder;
 pub mod context;
 /// Error
 pub mod error;
+/// Protocol handle callback stream
+pub(crate) mod protocol_handle_stream;
 /// Protocol select
 pub mod protocol_select;
 /// An abstraction of p2p service
 pub mod service;
 /// Wrapper for real data streams
-pub mod session;
+pub(crate) mod session;
 /// Each custom protocol in a session corresponds to a sub stream
-pub mod substream;
+pub(crate) mod substream;
 /// Useful traits
 pub mod traits;
 /// Some useful functions
