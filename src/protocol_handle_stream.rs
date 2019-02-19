@@ -30,7 +30,7 @@ pub enum ServiceProtocolEvent {
         token: u64,
     },
     Update {
-        listen_addr: Vec<Multiaddr>,
+        listen_addrs: Vec<Multiaddr>,
     },
 }
 
@@ -86,8 +86,8 @@ impl ServiceProtocolStream {
             Notify { token } => {
                 self.handle.notify(&mut self.service_context, token);
             }
-            Update { listen_addr } => {
-                self.service_context.update_listens(listen_addr);
+            Update { listen_addrs } => {
+                self.service_context.update_listens(listen_addrs);
             }
         }
     }
@@ -138,7 +138,7 @@ pub enum SessionProtocolEvent {
         token: u64,
     },
     Update {
-        listen_addr: Vec<Multiaddr>,
+        listen_addrs: Vec<Multiaddr>,
     },
 }
 
@@ -189,8 +189,8 @@ impl SessionProtocolStream {
             Notify { token } => {
                 self.handle.notify(&mut self.service_context, token);
             }
-            Update { listen_addr } => {
-                self.service_context.update_listens(listen_addr);
+            Update { listen_addrs } => {
+                self.service_context.update_listens(listen_addrs);
             }
         }
     }

@@ -533,7 +533,7 @@ where
                                 err.into_inner().unwrap().into()
                             };
 
-                            error!(
+                            debug!(
                                 "Handshake with {} failed, error: {:?}",
                                 remote_address, error
                             );
@@ -1024,7 +1024,7 @@ where
                 self.read_service_buf.push_back((
                     *proto_id,
                     ServiceProtocolEvent::Update {
-                        listen_addr: new_listens.clone(),
+                        listen_addrs: new_listens.clone(),
                     },
                 ));
             }
@@ -1034,7 +1034,7 @@ where
                     *session_id,
                     *proto_id,
                     SessionProtocolEvent::Update {
-                        listen_addr: new_listens.clone(),
+                        listen_addrs: new_listens.clone(),
                     },
                 ));
             }

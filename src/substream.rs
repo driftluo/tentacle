@@ -113,7 +113,7 @@ where
                 }
                 Ok(AsyncSink::Ready) => {}
                 Err(err) => {
-                    error!("framed_stream send error: {:?}", err);
+                    debug!("framed_stream send error: {:?}", err);
                     return Err(());
                 }
             }

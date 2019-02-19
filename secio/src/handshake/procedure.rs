@@ -5,7 +5,7 @@
 use bytes::Bytes;
 use futures::{future, prelude::*, Future};
 use hmac::digest::{generic_array::ArrayLength, BlockInput, Digest, FixedOutput, Input, Reset};
-use log::{debug, error, trace};
+use log::{debug, trace};
 use sha2::Sha256;
 use std::{
     cmp::Ordering,
@@ -294,7 +294,7 @@ where
             tokio::spawn(
                 secure_stream
                     .for_each(|_| Ok(()))
-                    .map_err(|err| error!("Abnormal disconnection: {:?}", err)),
+                    .map_err(|err| debug!("Abnormal disconnection: {:?}", err)),
             );
 
             // We send back their nonce to check if the connection works.
