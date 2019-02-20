@@ -8,10 +8,7 @@ use std::time::{Duration, Instant};
 /// A simple bench tool
 pub struct Bench {
     cycles: u32,
-    start_time: Instant,
-    stop_time: Instant,
-    max_executed: Duration,
-    min_executed: Duration,
+    executed_time_list: Vec<Duration>,
     check_point: u32,
 }
 
@@ -19,6 +16,8 @@ impl Bench {
     /// Total number of cycles
     pub fn cycles(mut self, number: u32) -> Self {
         self.cycles = number;
+        // Avoid expansion
+        self.executed_time_list = Vec::with_capacity(number as usize + 1);
         self
     }
 
@@ -34,7 +33,6 @@ impl Bench {
         F: FnMut(&T) + 'static,
     {
         self.clean();
-        self.start_time = Instant::now();
         (0..self.cycles).for_each(|index| {
             let start = Instant::now();
             fun(init);
@@ -42,7 +40,6 @@ impl Bench {
             self.update_executed(start, stop);
             self.check_point(name, index);
         });
-        self.stop_time = Instant::now();
         self.output(name)
     }
 
@@ -52,7 +49,6 @@ impl Bench {
         F: FnMut() + 'static,
     {
         self.clean();
-        self.start_time = Instant::now();
         (0..self.cycles).for_each(|index| {
             let start = Instant::now();
             fun();
@@ -60,20 +56,24 @@ impl Bench {
             self.update_executed(start, stop);
             self.check_point(name, index);
         });
-        self.stop_time = Instant::now();
         self.output(name)
     }
 
-    fn output(&self, name: &str) {
-        let total = self.stop_time - self.start_time;
+    fn output(&mut self, name: &str) {
+        self.executed_time_list.sort();
+        let total = self
+            .executed_time_list
+            .iter()
+            .fold(Duration::default(), |start, &x| start + x);
         println!(
-            "task name: {}\ncycles: {}\ntotal cost: {:?}\naverage: {:?}\nmax: {:?}\nmin: {:?}\n",
+            "task name: {}\ncycles: {}\ntotal cost: {:?}\naverage: {:?}\nmedian: {:?}\nmax: {:?}\nmin: {:?}\n",
             name,
             self.cycles,
             total,
             total / self.cycles,
-            self.max_executed,
-            self.min_executed
+            self.executed_time_list[(self.cycles/2) as usize],
+            self.executed_time_list[self.cycles as usize - 1],
+            self.executed_time_list[0]
         )
     }
 
@@ -81,25 +81,14 @@ impl Bench {
     fn update_executed(&mut self, start: Instant, stop: Instant) {
         let interval = stop - start;
 
-        if self.max_executed == Duration::from_secs(0)
-            && self.min_executed == Duration::from_secs(0)
-        {
-            self.max_executed = interval;
-            self.min_executed = interval;
-            return;
-        }
-
-        if interval > self.max_executed {
-            self.max_executed = interval;
-        } else if interval < self.min_executed {
-            self.min_executed = interval;
-        }
+        self.executed_time_list.push(interval);
     }
 
     #[inline]
-    fn check_point(&self, name: &str, index: u32) {
+    fn check_point(&mut self, name: &str, index: u32) {
         if self.check_point == index {
-            let estimated_total = (self.min_executed + self.max_executed) / 2 * self.cycles;
+            self.executed_time_list.sort();
+            let estimated_total = self.executed_time_list[(index / 2) as usize] * self.cycles;
 
             println!(
                 "After counting {} cycles, estimated total time spent on task \"{}\" is {:?}",
@@ -110,10 +99,7 @@ impl Bench {
 
     #[inline]
     fn clean(&mut self) {
-        self.stop_time = Instant::now();
-        self.start_time = Instant::now();
-        self.max_executed = Duration::from_secs(0);
-        self.min_executed = Duration::from_secs(0);
+        self.executed_time_list.clear();
     }
 }
 
@@ -121,10 +107,7 @@ impl Default for Bench {
     fn default() -> Self {
         Bench {
             cycles: 100_000,
-            start_time: Instant::now(),
-            stop_time: Instant::now(),
-            max_executed: Duration::from_secs(0),
-            min_executed: Duration::from_secs(0),
+            executed_time_list: Vec::with_capacity(100_000 + 1),
             check_point: 10,
         }
     }
