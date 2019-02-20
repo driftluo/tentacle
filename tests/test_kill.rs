@@ -132,11 +132,12 @@ fn test_kill(secio: bool) {
         .listen(&"/ip4/127.0.0.1/tcp/0".parse().unwrap())
         .unwrap();
     let mut control = service.control().clone();
+    thread::spawn(|| tokio::run(service.for_each(|_| Ok(()))));
+    thread::sleep(Duration::from_millis(100));
 
     match fork() {
         Err(e) => panic!("Fork failed, {}", e),
         Ok(ForkResult::Parent { child }) => {
-            thread::spawn(|| tokio::run(service.for_each(|_| Ok(()))));
             // wait connected
             assert_eq!(receiver.recv(), Ok(()));
 
