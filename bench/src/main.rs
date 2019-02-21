@@ -126,7 +126,8 @@ pub fn init() {
         thread::spawn(|| tokio::run(service.for_each(|_| Ok(()))));
 
         let (meta, client_receiver) = create_meta(1);
-        let service = create(true, meta, ()).dial(listen_addr);
+        let mut service = create(true, meta, ());
+        service.dial(listen_addr).unwrap();
         thread::spawn(|| tokio::run(service.for_each(|_| Ok(()))));
 
         assert_eq!(client_receiver.recv(), Ok(Notify::Connected));
@@ -147,7 +148,8 @@ pub fn init() {
         thread::spawn(|| tokio::run(service.for_each(|_| Ok(()))));
 
         let (meta, client_receiver) = create_meta(1);
-        let service = create(false, meta, ()).dial(listen_addr);
+        let mut service = create(false, meta, ());
+        service.dial(listen_addr).unwrap();
         thread::spawn(|| tokio::run(service.for_each(|_| Ok(()))));
 
         assert_eq!(client_receiver.recv(), Ok(Notify::Connected));

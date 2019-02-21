@@ -43,8 +43,9 @@ fn main() {
         let mut service = ServiceBuilder::default()
             .insert_protocol(meta)
             .forever(true)
-            .build(SHandle {})
-            .dial("/ip4/127.0.0.1/tcp/1337".parse().unwrap());
+            .build(SHandle {});
+
+        let _ = service.dial("/ip4/127.0.0.1/tcp/1337".parse().unwrap());
         let _ = service.listen(&"/ip4/127.0.0.1/tcp/1338".parse().unwrap());
         tokio::run(service.for_each(|_| Ok(())))
     }
