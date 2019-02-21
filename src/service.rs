@@ -234,7 +234,7 @@ where
     <U as Encoder>::Error: error::Error + Into<io::Error>,
 {
     /// New a Service
-    pub fn new(
+    pub(crate) fn new(
         protocol_configs: Arc<HashMap<String, Box<dyn ProtocolMeta<U> + Send + Sync>>>,
         handle: T,
         key_pair: Option<SecioKeyPair>,
@@ -306,18 +306,20 @@ where
     }
 
     /// Dial the given address, doesn't actually make a request, just generate a future
-    pub fn dial(mut self, address: Multiaddr) -> Self {
-        self.dial_inner(address);
-        self
+    pub fn dial(&mut self, address: Multiaddr) -> Result<&mut Self, io::Error> {
+        self.dial_inner(address)?;
+        Ok(self)
     }
 
     /// Use by inner
     #[inline(always)]
-    fn dial_inner(&mut self, address: Multiaddr) {
-        let socket_address = multiaddr_to_socketaddr(&address).expect("Address input error");
+    fn dial_inner(&mut self, address: Multiaddr) -> Result<(), io::Error> {
+        let socket_address =
+            multiaddr_to_socketaddr(&address).map_err(|_| io::ErrorKind::InvalidInput)?;
         let dial = TcpStream::connect(&socket_address).timeout(self.timeout);
         self.dial.push((address, dial));
         self.task_count += 1;
+        Ok(())
     }
 
     /// Get service current protocol configure
@@ -905,7 +907,15 @@ where
             } => self.filter_broadcast(session_ids, proto_id, &data),
             ServiceTask::Dial { address } => {
                 if !self.dial.iter().any(|(addr, _)| addr == &address) {
-                    self.dial_inner(address);
+                    if let Err(e) = self.dial_inner(address.clone()) {
+                        self.handle.handle_error(
+                            &mut self.service_context,
+                            ServiceError::DialerError {
+                                address,
+                                error: e.into(),
+                            },
+                        );
+                    }
                 }
                 if !self.dial.is_empty() {
                     self.client_poll();

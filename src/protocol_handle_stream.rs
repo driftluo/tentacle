@@ -149,7 +149,6 @@ pub struct SessionProtocolStream {
     context: SessionContext,
     proto_id: ProtocolId,
     receiver: mpsc::Receiver<SessionProtocolEvent>,
-    dead: bool,
 }
 
 impl SessionProtocolStream {
@@ -166,7 +165,6 @@ impl SessionProtocolStream {
             service_context,
             receiver,
             context,
-            dead: false,
         }
     }
 
@@ -200,7 +198,6 @@ impl SessionProtocolStream {
         self.service_context
             .remove_session_notify_senders(self.context.id, self.proto_id);
         self.receiver.close();
-        self.dead = true;
     }
 }
 
@@ -209,10 +206,6 @@ impl Stream for SessionProtocolStream {
     type Error = ();
 
     fn poll(&mut self) -> Poll<Option<Self::Item>, Self::Error> {
-        if self.dead {
-            return Ok(Async::Ready(None));
-        }
-
         loop {
             match self.receiver.poll() {
                 Ok(Async::Ready(Some(event))) => self.handle_event(event),

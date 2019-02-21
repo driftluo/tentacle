@@ -232,7 +232,8 @@ fn test_repeated_dial(secio: bool) {
 
     let (shandle, error_receiver_2) = create_shandle(secio, false);
 
-    let service = create(secio, meta, shandle).dial(listen_addr);
+    let mut service = create(secio, meta, shandle);
+    service.dial(listen_addr).unwrap();
     thread::spawn(|| tokio::run(service.for_each(|_| Ok(()))));
 
     if secio {

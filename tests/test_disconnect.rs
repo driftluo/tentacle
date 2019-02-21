@@ -87,7 +87,8 @@ fn test_disconnect(secio: bool) {
         .unwrap();
     thread::spawn(|| tokio::run(service.for_each(|_| Ok(()))));
 
-    let mut service = create(secio, Protocol::new(1), ()).dial(listen_addr);
+    let mut service = create(secio, Protocol::new(1), ());
+    service.dial(listen_addr).unwrap();
     let mut control = service.control().clone();
     let handle = thread::spawn(|| tokio::run(service.for_each(|_| Ok(()))));
     thread::sleep(Duration::from_secs(5));
