@@ -129,7 +129,7 @@ fn test_kill(secio: bool) {
     let (meta, receiver) = create_meta(1);
     let mut service = create(secio, meta, ());
     let listen_addr = service
-        .listen(&"/ip4/127.0.0.1/tcp/0".parse().unwrap())
+        .listen("/ip4/127.0.0.1/tcp/0".parse().unwrap())
         .unwrap();
     let mut control = service.control().clone();
     thread::spawn(|| tokio::run(service.for_each(|_| Ok(()))));

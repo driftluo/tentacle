@@ -83,7 +83,7 @@ impl ServiceProtocol for PHandle {
 fn test_disconnect(secio: bool) {
     let mut service = create(secio, Protocol::new(1), ());
     let listen_addr = service
-        .listen(&"/ip4/127.0.0.1/tcp/0".parse().unwrap())
+        .listen("/ip4/127.0.0.1/tcp/0".parse().unwrap())
         .unwrap();
     thread::spawn(|| tokio::run(service.for_each(|_| Ok(()))));
 

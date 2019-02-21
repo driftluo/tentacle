@@ -45,7 +45,19 @@ pub(crate) enum SessionEvent {
         address: Multiaddr,
         /// Session type
         ty: SessionType,
-        /// If fail
+        /// error
+        error: Error<ServiceTask>,
+    },
+    DialError {
+        /// remote address
+        address: Multiaddr,
+        /// error
+        error: Error<ServiceTask>,
+    },
+    ListenError {
+        /// listen address
+        address: Multiaddr,
+        /// error
         error: Error<ServiceTask>,
     },
     /// Protocol data
