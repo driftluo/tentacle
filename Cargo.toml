@@ -18,6 +18,7 @@ futures = "0.1"
 tokio = "0.1"
 log = "0.4"
 bytes = "0.4"
+tokio-threadpool = "0.1"
 
 flatbuffers = "0.5.0"
 multiaddr = { package = "parity-multiaddr", version = "0.2.0" }

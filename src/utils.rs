@@ -2,6 +2,9 @@ use multiaddr::{Multiaddr, Protocol};
 use secio::PeerId;
 use std::net::SocketAddr;
 
+/// This module create a `DNSResolver` future task to DNS resolver
+pub mod dns;
+
 /// Change multiaddr to socketaddr
 pub fn multiaddr_to_socketaddr(addr: &Multiaddr) -> Result<SocketAddr, ()> {
     let mut iter = addr.iter().peekable();

@@ -20,6 +20,8 @@ pub enum Error<T: fmt::Debug> {
     RepeatedConnection(SessionId),
     /// Handshake error
     HandshakeError(SecioError),
+    /// DNS resolver error
+    DNSResolverError(io::Error),
 }
 
 impl<T> PartialEq for Error<T>
@@ -89,6 +91,7 @@ where
             Error::RepeatedConnection(_) => "Connected to the connected peer",
             Error::PeerIdNotMatch => "When dial remote, peer id does not match",
             Error::HandshakeError(e) => error::Error::description(e),
+            Error::DNSResolverError(_) => "DNS resolver error",
         }
     }
 }
@@ -108,6 +111,7 @@ where
             }
             Error::PeerIdNotMatch => write!(f, "When dial remote, peer id does not match"),
             Error::HandshakeError(e) => fmt::Display::fmt(e, f),
+            Error::DNSResolverError(e) => write!(f, "DNs resolver error: {:?}", e),
         }
     }
 }

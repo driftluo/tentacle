@@ -33,7 +33,7 @@ use crate::{
     protocol_select::ProtocolInfo,
     session::{Session, SessionEvent, SessionMeta},
     traits::{ProtocolMeta, ServiceHandle, ServiceProtocol, SessionProtocol},
-    utils::{extract_peer_id, multiaddr_to_socketaddr},
+    utils::{dns::DNSResolver, extract_peer_id, multiaddr_to_socketaddr},
     ProtocolId, SessionId, StreamId,
 };
 
@@ -139,6 +139,11 @@ pub enum ServiceTask {
         /// Remote address
         address: Multiaddr,
     },
+    /// Listen task
+    Listen {
+        /// Listen address
+        address: Multiaddr,
+    },
 }
 
 impl fmt::Debug for ServiceTask {
@@ -170,6 +175,7 @@ impl fmt::Debug for ServiceTask {
             FutureTask { .. } => write!(f, "Future task"),
             Disconnect { session_id } => write!(f, "Disconnect session [{}]", session_id),
             Dial { address } => write!(f, "Dial address: {}", address),
+            Listen { address } => write!(f, "Listen address: {}", address),
         }
     }
 }
@@ -205,6 +211,8 @@ pub struct Service<T, U> {
     read_service_buf: VecDeque<(ProtocolId, ServiceProtocolEvent)>,
     /// The buffer which will distribute to session protocol handle
     read_session_buf: VecDeque<(SessionId, ProtocolId, SessionProtocolEvent)>,
+
+    pending_task: Vec<ServiceTask>,
 
     // The service protocols open with the session
     session_service_protos: HashMap<SessionId, HashSet<ProtocolId>>,
@@ -269,6 +277,7 @@ where
             write_buf: VecDeque::default(),
             read_service_buf: VecDeque::default(),
             read_session_buf: VecDeque::default(),
+            pending_task: Vec::default(),
             session_event_sender,
             session_event_receiver,
             service_context: ServiceContext::new(service_task_sender, proto_infos),
@@ -296,12 +305,49 @@ where
     }
 
     /// Listen on the given address.
-    pub fn listen(&mut self, address: &Multiaddr) -> Result<Multiaddr, io::Error> {
-        let socket_address =
-            multiaddr_to_socketaddr(&address).map_err(|_| io::ErrorKind::InvalidInput)?;
-        let tcp = TcpListener::bind(&socket_address)?;
-        let listen_addr = tcp.local_addr()?.to_multiaddr().unwrap();
-        self.listens.push((listen_addr.clone(), tcp.incoming()));
+    ///
+    /// Return really listen multiaddr, but if use `/dns4/localhost/tcp/80`,
+    /// it will return original value, and create a future task to DNS resolver later.
+    pub fn listen(&mut self, address: Multiaddr) -> Result<Multiaddr, io::Error> {
+        let listen_addr = if let Ok(socket_address) = multiaddr_to_socketaddr(&address) {
+            let tcp = TcpListener::bind(&socket_address)?;
+            let listen_addr = tcp.local_addr()?.to_multiaddr().unwrap();
+            self.listens.push((listen_addr.clone(), tcp.incoming()));
+            listen_addr
+        } else {
+            match DNSResolver::new(address.clone()) {
+                Ok(dns) => {
+                    let sender = self.session_event_sender.clone();
+                    let future_task = dns.then(move |result| match result {
+                        Ok(address) => tokio::spawn(
+                            sender
+                                .send(SessionEvent::DNSResolverSuccess {
+                                    ty: SessionType::Server,
+                                    address,
+                                })
+                                .map(|_| ())
+                                .map_err(|err| {
+                                    error!("Listen address success send back error: {:?}", err);
+                                }),
+                        ),
+                        Err((address, error)) => tokio::spawn(
+                            sender
+                                .send(SessionEvent::ListenError { address, error })
+                                .map(|_| ())
+                                .map_err(|err| {
+                                    error!("Listen address fail send back error: {:?}", err);
+                                }),
+                        ),
+                    });
+                    self.pending_task.push(ServiceTask::FutureTask {
+                        task: Box::new(future_task),
+                    });
+                    self.task_count += 1;
+                }
+                Err(_) => return Err(io::ErrorKind::InvalidInput.into()),
+            }
+            address
+        };
         Ok(listen_addr)
     }
 
@@ -314,11 +360,44 @@ where
     /// Use by inner
     #[inline(always)]
     fn dial_inner(&mut self, address: Multiaddr) -> Result<(), io::Error> {
-        let socket_address =
-            multiaddr_to_socketaddr(&address).map_err(|_| io::ErrorKind::InvalidInput)?;
-        let dial = TcpStream::connect(&socket_address).timeout(self.timeout);
-        self.dial.push((address, dial));
-        self.task_count += 1;
+        if let Ok(socket_address) = multiaddr_to_socketaddr(&address) {
+            let dial = TcpStream::connect(&socket_address).timeout(self.timeout);
+            self.dial.push((address, dial));
+            self.task_count += 1;
+        } else {
+            match DNSResolver::new(address) {
+                Ok(dns) => {
+                    let sender = self.session_event_sender.clone();
+                    let future_task = dns.then(move |result| match result {
+                        Ok(address) => tokio::spawn(
+                            sender
+                                .send(SessionEvent::DNSResolverSuccess {
+                                    ty: SessionType::Client,
+                                    address,
+                                })
+                                .map(|_| ())
+                                .map_err(|err| {
+                                    error!("dial address success send back error: {:?}", err);
+                                }),
+                        ),
+                        Err((address, error)) => tokio::spawn(
+                            sender
+                                .send(SessionEvent::DialError { address, error })
+                                .map(|_| ())
+                                .map_err(|err| {
+                                    error!("dial address fail send back error: {:?}", err);
+                                }),
+                        ),
+                    });
+                    self.pending_task.push(ServiceTask::FutureTask {
+                        task: Box::new(future_task),
+                    });
+                    self.task_count += 1;
+                }
+                Err(_) => return Err(io::ErrorKind::InvalidInput.into()),
+            }
+        }
+
         Ok(())
     }
 
@@ -352,6 +431,8 @@ where
                                 error!("channel shutdown, message can't send")
                             }
                         }
+                    } else {
+                        debug!("Can't find session {}, proto {} to send data", id, proto_id);
                     }
                 }
                 SessionEvent::SessionClose { id } => {
@@ -367,6 +448,8 @@ where
                                 error!("channel shutdown, message can't send")
                             }
                         }
+                    } else {
+                        debug!("Can't find session {} to close", id);
                     }
                 }
                 _ => (),
@@ -848,6 +931,44 @@ where
             .remove_session_notify_senders(session_id, proto_id);
     }
 
+    fn send_pending_task(&mut self) {
+        for task in self.pending_task.split_off(0) {
+            self.handle_service_task(task);
+        }
+    }
+
+    /// When listen update, call here
+    #[inline]
+    fn update_listens(&mut self) {
+        let new_listens = self
+            .listens
+            .iter()
+            .map(|(address, _)| address.clone())
+            .collect::<Vec<Multiaddr>>();
+        self.service_context.update_listens(new_listens.clone());
+
+        for proto_id in self.service_proto_handles.keys() {
+            self.read_service_buf.push_back((
+                *proto_id,
+                ServiceProtocolEvent::Update {
+                    listen_addrs: new_listens.clone(),
+                },
+            ));
+        }
+
+        for (session_id, proto_id) in self.session_proto_handles.keys() {
+            self.read_session_buf.push_back((
+                *session_id,
+                *proto_id,
+                SessionProtocolEvent::Update {
+                    listen_addrs: new_listens.clone(),
+                },
+            ));
+        }
+
+        self.distribute_to_user_level();
+    }
+
     /// Handling various events uploaded by the session
     fn handle_session_event(&mut self, event: SessionEvent) {
         match event {
@@ -894,6 +1015,23 @@ where
                     error,
                 },
             ),
+            SessionEvent::DialError { address, error } => self.handle.handle_error(
+                &mut self.service_context,
+                ServiceError::DialerError { address, error },
+            ),
+            SessionEvent::ListenError { address, error } => self.handle.handle_error(
+                &mut self.service_context,
+                ServiceError::ListenError { address, error },
+            ),
+            SessionEvent::DNSResolverSuccess { ty, address } => {
+                self.task_count -= 1;
+                match ty {
+                    SessionType::Server => {
+                        self.handle_service_task(ServiceTask::Listen { address })
+                    }
+                    SessionType::Client => self.handle_service_task(ServiceTask::Dial { address }),
+                }
+            }
         }
     }
 
@@ -919,6 +1057,25 @@ where
                 }
                 if !self.dial.is_empty() {
                     self.client_poll();
+                }
+            }
+            ServiceTask::Listen { address } => {
+                if !self.listens.iter().any(|(addr, _)| addr == &address) {
+                    match self.listen(address.clone()) {
+                        Ok(_) => {
+                            self.update_listens();
+                            self.listen_poll();
+                        }
+                        Err(e) => {
+                            self.handle.handle_error(
+                                &mut self.service_context,
+                                ServiceError::ListenError {
+                                    address,
+                                    error: e.into(),
+                                },
+                            );
+                        }
+                    }
                 }
             }
             ServiceTask::Disconnect { session_id } => {
@@ -1023,33 +1180,7 @@ where
         }
 
         if update || self.service_context.listens().is_empty() {
-            let new_listens = self
-                .listens
-                .iter()
-                .map(|(address, _)| address.clone())
-                .collect::<Vec<Multiaddr>>();
-            self.service_context.update_listens(new_listens.clone());
-
-            for proto_id in self.service_proto_handles.keys() {
-                self.read_service_buf.push_back((
-                    *proto_id,
-                    ServiceProtocolEvent::Update {
-                        listen_addrs: new_listens.clone(),
-                    },
-                ));
-            }
-
-            for (session_id, proto_id) in self.session_proto_handles.keys() {
-                self.read_session_buf.push_back((
-                    *session_id,
-                    *proto_id,
-                    SessionProtocolEvent::Update {
-                        listen_addrs: new_listens.clone(),
-                    },
-                ));
-            }
-
-            self.distribute_to_user_level();
+            self.update_listens()
         }
     }
 
@@ -1072,8 +1203,16 @@ where
     type Error = ();
 
     fn poll(&mut self) -> Poll<Option<Self::Item>, Self::Error> {
-        if self.listens.is_empty() && self.task_count == 0 && self.sessions.is_empty() {
+        if self.listens.is_empty()
+            && self.task_count == 0
+            && self.sessions.is_empty()
+            && self.pending_task.is_empty()
+        {
             return Ok(Async::Ready(None));
+        }
+
+        if !self.pending_task.is_empty() {
+            self.send_pending_task();
         }
 
         if !self.write_buf.is_empty()
@@ -1113,14 +1252,19 @@ where
         }
 
         // Double check service state
-        if self.listens.is_empty() && self.task_count == 0 && self.sessions.is_empty() {
+        if self.listens.is_empty()
+            && self.task_count == 0
+            && self.sessions.is_empty()
+            && self.pending_task.is_empty()
+        {
             return Ok(Async::Ready(None));
         }
         debug!(
-            "listens count: {}, task_count: {}, sessions count: {}",
+            "listens count: {}, task_count: {}, sessions count: {}, pending task: {}",
             self.listens.len(),
             self.task_count,
-            self.sessions.len()
+            self.sessions.len(),
+            &&self.pending_task.len(),
         );
 
         self.notify = Some(task::current());

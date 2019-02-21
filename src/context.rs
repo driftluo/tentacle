@@ -54,6 +54,12 @@ impl ServiceContext {
         }
     }
 
+    /// Create a new listener
+    #[inline]
+    pub fn listen(&mut self, address: Multiaddr) -> Result<(), Error<ServiceTask>> {
+        self.inner.listen(address)
+    }
+
     /// Initiate a connection request to address
     #[inline]
     pub fn dial(&mut self, address: Multiaddr) -> Result<(), Error<ServiceTask>> {
@@ -155,6 +161,12 @@ impl ServiceContext {
         &self.listens
     }
 
+    /// Send raw event
+    #[inline]
+    pub fn send(&mut self, event: ServiceTask) -> Result<(), Error<ServiceTask>> {
+        self.inner.send(event)
+    }
+
     /// Update listen list
     #[inline]
     pub(crate) fn update_listens(&mut self, address_list: Vec<Multiaddr>) {
@@ -177,7 +189,7 @@ impl ServiceContext {
 /// Service control
 #[derive(Clone)]
 pub struct ServiceControl {
-    service_task_sender: mpsc::Sender<ServiceTask>,
+    pub(crate) service_task_sender: mpsc::Sender<ServiceTask>,
     proto_infos: Arc<HashMap<ProtocolId, ProtocolInfo>>,
 }
 
@@ -193,9 +205,9 @@ impl ServiceControl {
         }
     }
 
-    /// Real send function
+    /// Send raw event
     #[inline]
-    fn send(&mut self, event: ServiceTask) -> Result<(), Error<ServiceTask>> {
+    pub fn send(&mut self, event: ServiceTask) -> Result<(), Error<ServiceTask>> {
         self.service_task_sender
             .try_send(event)
             .map_err(|e| e.into())
@@ -205,6 +217,12 @@ impl ServiceControl {
     #[inline]
     pub fn protocols(&self) -> &Arc<HashMap<ProtocolId, ProtocolInfo>> {
         &self.proto_infos
+    }
+
+    /// Create a new listener
+    #[inline]
+    pub fn listen(&mut self, address: Multiaddr) -> Result<(), Error<ServiceTask>> {
+        self.send(ServiceTask::Listen { address })
     }
 
     /// Initiate a connection request to address

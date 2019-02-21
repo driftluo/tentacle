@@ -103,7 +103,7 @@ fn test_peer_id(fail: bool) {
     let mut service = create(key.clone(), meta.clone(), ());
 
     let mut listen_addr = service
-        .listen(&"/ip4/127.0.0.1/tcp/0".parse().unwrap())
+        .listen("/ip4/127.0.0.1/tcp/0".parse().unwrap())
         .unwrap();
     thread::spawn(|| tokio::run(service.for_each(|_| Ok(()))));
 

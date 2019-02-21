@@ -120,7 +120,7 @@ pub fn init() {
         let (meta, _receiver) = create_meta(1);
         let mut service = create(true, meta, ());
         let listen_addr = service
-            .listen(&"/ip4/127.0.0.1/tcp/0".parse().unwrap())
+            .listen("/ip4/127.0.0.1/tcp/0".parse().unwrap())
             .unwrap();
         let control = service.control().clone();
         thread::spawn(|| tokio::run(service.for_each(|_| Ok(()))));
@@ -142,7 +142,7 @@ pub fn init() {
         let (meta, _receiver) = create_meta(1);
         let mut service = create(false, meta, ());
         let listen_addr = service
-            .listen(&"/ip4/127.0.0.1/tcp/0".parse().unwrap())
+            .listen("/ip4/127.0.0.1/tcp/0".parse().unwrap())
             .unwrap();
         let control = service.control().clone();
         thread::spawn(|| tokio::run(service.for_each(|_| Ok(()))));

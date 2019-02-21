@@ -226,7 +226,7 @@ fn test_repeated_dial(secio: bool) {
     let mut service = create(secio, meta.clone(), shandle);
 
     let listen_addr = service
-        .listen(&"/ip4/127.0.0.1/tcp/0".parse().unwrap())
+        .listen("/ip4/127.0.0.1/tcp/0".parse().unwrap())
         .unwrap();
     thread::spawn(|| tokio::run(service.for_each(|_| Ok(()))));
 
