@@ -212,6 +212,8 @@ pub struct Service<T, U> {
     /// The buffer which will distribute to session protocol handle
     read_session_buf: VecDeque<(SessionId, ProtocolId, SessionProtocolEvent)>,
 
+    pending_task: Vec<ServiceTask>,
+
     // The service protocols open with the session
     session_service_protos: HashMap<SessionId, HashSet<ProtocolId>>,
 
@@ -275,6 +277,7 @@ where
             write_buf: VecDeque::default(),
             read_service_buf: VecDeque::default(),
             read_session_buf: VecDeque::default(),
+            pending_task: Vec::default(),
             session_event_sender,
             session_event_receiver,
             service_context: ServiceContext::new(service_task_sender, proto_infos),
@@ -315,8 +318,7 @@ where
             match DNSResolver::new(address.clone()) {
                 Ok(dns) => {
                     let fail_sender = self.session_event_sender.clone();
-                    let control = self.control();
-                    let success_sender = control.service_task_sender.clone();
+                    let success_sender = self.control().service_task_sender.clone();
                     let future_task = dns.then(move |result| match result {
                         Ok(address) => tokio::spawn(
                             success_sender
@@ -335,7 +337,12 @@ where
                                 }),
                         ),
                     });
-                    let _ = control.future_task(future_task);
+                    if let Err(error) = self.service_context.future_task(future_task) {
+                        match error {
+                            Error::TaskFull(task) => self.pending_task.push(task),
+                            _ => return Err(io::ErrorKind::InvalidInput.into()),
+                        }
+                    }
                 }
                 Err(_) => return Err(io::ErrorKind::InvalidInput.into()),
             }
@@ -361,8 +368,7 @@ where
             match DNSResolver::new(address) {
                 Ok(dns) => {
                     let fail_sender = self.session_event_sender.clone();
-                    let control = self.control();
-                    let success_sender = control.service_task_sender.clone();
+                    let success_sender = self.control().service_task_sender.clone();
                     let future_task = dns.then(move |result| match result {
                         Ok(address) => tokio::spawn(
                             success_sender
@@ -381,7 +387,12 @@ where
                                 }),
                         ),
                     });
-                    let _ = control.future_task(future_task);
+                    if let Err(error) = self.service_context.future_task(future_task) {
+                        match error {
+                            Error::TaskFull(task) => self.pending_task.push(task),
+                            _ => return Err(io::ErrorKind::InvalidInput.into()),
+                        }
+                    }
                 }
                 Err(_) => return Err(io::ErrorKind::InvalidInput.into()),
             }
@@ -916,6 +927,12 @@ where
             .remove_session_notify_senders(session_id, proto_id);
     }
 
+    fn send_pending_task(&mut self) {
+        for task in self.pending_task.split_off(0) {
+            self.handle_service_task(task);
+        }
+    }
+
     /// When listen update, call here
     #[inline]
     fn update_listens(&mut self) {
@@ -1175,6 +1192,10 @@ where
     fn poll(&mut self) -> Poll<Option<Self::Item>, Self::Error> {
         if self.listens.is_empty() && self.task_count == 0 && self.sessions.is_empty() {
             return Ok(Async::Ready(None));
+        }
+
+        if !self.pending_task.is_empty() {
+            self.send_pending_task();
         }
 
         if !self.write_buf.is_empty()
