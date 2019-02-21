@@ -317,19 +317,21 @@ where
         } else {
             match DNSResolver::new(address.clone()) {
                 Ok(dns) => {
-                    let fail_sender = self.session_event_sender.clone();
-                    let success_sender = self.control().service_task_sender.clone();
+                    let sender = self.session_event_sender.clone();
                     let future_task = dns.then(move |result| match result {
                         Ok(address) => tokio::spawn(
-                            success_sender
-                                .send(ServiceTask::Listen { address })
+                            sender
+                                .send(SessionEvent::DNSResolverSuccess {
+                                    ty: SessionType::Server,
+                                    address,
+                                })
                                 .map(|_| ())
                                 .map_err(|err| {
                                     error!("Listen address success send back error: {:?}", err);
                                 }),
                         ),
                         Err((address, error)) => tokio::spawn(
-                            fail_sender
+                            sender
                                 .send(SessionEvent::ListenError { address, error })
                                 .map(|_| ())
                                 .map_err(|err| {
@@ -337,12 +339,10 @@ where
                                 }),
                         ),
                     });
-                    if let Err(error) = self.service_context.future_task(future_task) {
-                        match error {
-                            Error::TaskFull(task) => self.pending_task.push(task),
-                            _ => return Err(io::ErrorKind::InvalidInput.into()),
-                        }
-                    }
+                    self.pending_task.push(ServiceTask::FutureTask {
+                        task: Box::new(future_task),
+                    });
+                    self.task_count += 1;
                 }
                 Err(_) => return Err(io::ErrorKind::InvalidInput.into()),
             }
@@ -367,19 +367,21 @@ where
         } else {
             match DNSResolver::new(address) {
                 Ok(dns) => {
-                    let fail_sender = self.session_event_sender.clone();
-                    let success_sender = self.control().service_task_sender.clone();
+                    let sender = self.session_event_sender.clone();
                     let future_task = dns.then(move |result| match result {
                         Ok(address) => tokio::spawn(
-                            success_sender
-                                .send(ServiceTask::Dial { address })
+                            sender
+                                .send(SessionEvent::DNSResolverSuccess {
+                                    ty: SessionType::Client,
+                                    address,
+                                })
                                 .map(|_| ())
                                 .map_err(|err| {
                                     error!("dial address success send back error: {:?}", err);
                                 }),
                         ),
                         Err((address, error)) => tokio::spawn(
-                            fail_sender
+                            sender
                                 .send(SessionEvent::DialError { address, error })
                                 .map(|_| ())
                                 .map_err(|err| {
@@ -387,12 +389,10 @@ where
                                 }),
                         ),
                     });
-                    if let Err(error) = self.service_context.future_task(future_task) {
-                        match error {
-                            Error::TaskFull(task) => self.pending_task.push(task),
-                            _ => return Err(io::ErrorKind::InvalidInput.into()),
-                        }
-                    }
+                    self.pending_task.push(ServiceTask::FutureTask {
+                        task: Box::new(future_task),
+                    });
+                    self.task_count += 1;
                 }
                 Err(_) => return Err(io::ErrorKind::InvalidInput.into()),
             }
@@ -431,6 +431,8 @@ where
                                 error!("channel shutdown, message can't send")
                             }
                         }
+                    } else {
+                        debug!("Can't find session {}, proto {} to send data", id, proto_id);
                     }
                 }
                 SessionEvent::SessionClose { id } => {
@@ -446,6 +448,8 @@ where
                                 error!("channel shutdown, message can't send")
                             }
                         }
+                    } else {
+                        debug!("Can't find session {} to close", id);
                     }
                 }
                 _ => (),
@@ -1019,6 +1023,15 @@ where
                 &mut self.service_context,
                 ServiceError::ListenError { address, error },
             ),
+            SessionEvent::DNSResolverSuccess { ty, address } => {
+                self.task_count -= 1;
+                match ty {
+                    SessionType::Server => {
+                        self.handle_service_task(ServiceTask::Listen { address })
+                    }
+                    SessionType::Client => self.handle_service_task(ServiceTask::Dial { address }),
+                }
+            }
         }
     }
 
@@ -1190,7 +1203,11 @@ where
     type Error = ();
 
     fn poll(&mut self) -> Poll<Option<Self::Item>, Self::Error> {
-        if self.listens.is_empty() && self.task_count == 0 && self.sessions.is_empty() {
+        if self.listens.is_empty()
+            && self.task_count == 0
+            && self.sessions.is_empty()
+            && self.pending_task.is_empty()
+        {
             return Ok(Async::Ready(None));
         }
 
@@ -1235,14 +1252,19 @@ where
         }
 
         // Double check service state
-        if self.listens.is_empty() && self.task_count == 0 && self.sessions.is_empty() {
+        if self.listens.is_empty()
+            && self.task_count == 0
+            && self.sessions.is_empty()
+            && self.pending_task.is_empty()
+        {
             return Ok(Async::Ready(None));
         }
         debug!(
-            "listens count: {}, task_count: {}, sessions count: {}",
+            "listens count: {}, task_count: {}, sessions count: {}, pending task: {}",
             self.listens.len(),
             self.task_count,
-            self.sessions.len()
+            self.sessions.len(),
+            &&self.pending_task.len(),
         );
 
         self.notify = Some(task::current());

@@ -30,6 +30,12 @@ pub(crate) enum SessionEvent {
         /// Session id
         id: SessionId,
     },
+    DNSResolverSuccess {
+        /// DNS type
+        ty: SessionType,
+        /// address
+        address: Multiaddr,
+    },
     HandshakeSuccess {
         /// Secure handle
         handle: SecureHandle,
