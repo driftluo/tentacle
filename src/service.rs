@@ -234,7 +234,7 @@ where
     <U as Encoder>::Error: error::Error + Into<io::Error>,
 {
     /// New a Service
-    pub fn new(
+    pub(crate) fn new(
         protocol_configs: Arc<HashMap<String, Box<dyn ProtocolMeta<U> + Send + Sync>>>,
         handle: T,
         key_pair: Option<SecioKeyPair>,

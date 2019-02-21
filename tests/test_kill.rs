@@ -157,7 +157,7 @@ fn test_kill(secio: bool) {
         Ok(ForkResult::Child) => {
             let (meta, _receiver) = create_meta(1);
             let mut service = create(secio, meta, ());
-            service.dial(listen_addr);
+            service.dial(listen_addr).unwrap();
             let handle = thread::spawn(|| tokio::run(service.for_each(|_| Ok(()))));
             handle.join().expect("child process done")
         }
