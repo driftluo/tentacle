@@ -9,7 +9,7 @@ use secio::{codec::stream_handle::StreamHandle as SecureHandle, PublicKey};
 use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
 use std::{error, io, time::Duration};
-use tokio::codec::{Decoder, Encoder, Framed};
+use tokio::codec::{Decoder, Encoder, Framed, FramedParts};
 use tokio::prelude::{AsyncRead, AsyncWrite, FutureExt};
 use yamux::{session::SessionType, Config, Session as YamuxSession, StreamHandle};
 
@@ -195,7 +195,7 @@ where
                 match version {
                     Some(version) => {
                         let send_task = event_sender.send(ProtocolEvent::Open {
-                            sub_stream: handle,
+                            sub_stream: Box::new(handle),
                             proto_name: name,
                             version,
                         });
@@ -286,11 +286,11 @@ where
             .collect();
 
         let task = server_select(sub_stream, proto_metas)
-            .and_then(|(mut handle, name, version)| {
+            .and_then(|(handle, name, version)| {
                 match version {
                     Some(version) => {
                         let send_task = event_sender.send(ProtocolEvent::Open {
-                            sub_stream: handle,
+                            sub_stream: Box::new(handle),
                             proto_name: name,
                             version,
                         });
@@ -301,7 +301,7 @@ where
                     }
                     None => {
                         // server close the connect
-                        let _ = handle.shutdown()?;
+                        let _ = handle.into_inner().shutdown();
                         debug!("negotiation to open the protocol [{}] failed", name);
                     }
                 }
@@ -329,7 +329,12 @@ where
                 };
 
                 let proto_id = proto.id();
-                let frame = Framed::new(sub_stream, proto.codec());
+                let raw_part = sub_stream.into_parts();
+                let mut part = FramedParts::new(raw_part.io, proto.codec());
+                // Replace buffered data
+                part.read_buf = raw_part.read_buf;
+                part.write_buf = raw_part.write_buf;
+                let frame = Framed::from_parts(part);
                 let (session_to_proto_sender, session_to_proto_receiver) = mpsc::channel(32);
                 let proto_stream = SubStream::new(
                     frame,
