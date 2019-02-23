@@ -425,6 +425,7 @@ where
                             .try_send(SessionEvent::ProtocolMessage { id, proto_id, data })
                         {
                             if e.is_full() {
+                                debug!("session [{}] is full", id);
                                 self.write_buf.push_back(e.into_inner());
                                 self.notify();
                             } else {
@@ -442,6 +443,7 @@ where
                             .try_send(SessionEvent::SessionClose { id })
                         {
                             if e.is_full() {
+                                debug!("session [{}] is full", id);
                                 self.write_buf.push_back(e.into_inner());
                                 self.notify();
                             } else {
@@ -464,6 +466,7 @@ where
             if let Some(sender) = self.service_proto_handles.get_mut(&proto_id) {
                 if let Err(e) = sender.try_send(event) {
                     if e.is_full() {
+                        debug!("service proto [{}] handle is full", proto_id);
                         self.read_service_buf.push_back((proto_id, e.into_inner()));
                         self.notify();
                     } else {
@@ -480,6 +483,10 @@ where
             if let Some(sender) = self.session_proto_handles.get_mut(&(session_id, proto_id)) {
                 if let Err(e) = sender.try_send(event) {
                     if e.is_full() {
+                        debug!(
+                            "session [{}] proto [{}] handle is full",
+                            session_id, proto_id
+                        );
                         self.read_session_buf
                             .push_back((session_id, proto_id, e.into_inner()));
                         self.notify();
@@ -523,6 +530,12 @@ where
                 let data: bytes::Bytes = data.into();
                 for id in self.sessions.keys() {
                     if ids.contains(id) {
+                        debug!(
+                            "send message to session [{}], proto [{}], data len: {}",
+                            id,
+                            proto_id,
+                            data.len()
+                        );
                         self.write_buf.push_back(SessionEvent::ProtocolMessage {
                             id: *id,
                             proto_id,
@@ -664,7 +677,7 @@ where
             match self
                 .sessions
                 .values()
-                .find(|context| context.remote_pubkey.as_ref() == Some(key))
+                .find(|&context| context.remote_pubkey.as_ref() == Some(key))
             {
                 Some(context) => {
                     trace!("Connected to the connected node");
@@ -692,6 +705,7 @@ where
                     // if peer id doesn't match return an error
                     if let Some(peer_id) = extract_peer_id(&address) {
                         if key.peer_id() != peer_id {
+                            trace!("Peer id not match");
                             self.handle.handle_error(
                                 &mut self.service_context,
                                 ServiceError::DialerError {
@@ -758,12 +772,14 @@ where
     /// Close the specified session, clean up the handle
     #[inline]
     fn session_close(&mut self, id: SessionId, source: Source) {
-        debug!("service session [{}] close", id);
         if source == Source::External {
+            debug!("try close service session [{}] ", id);
             self.write_buf.push_back(SessionEvent::SessionClose { id });
             self.distribute_to_session();
             return;
         }
+
+        debug!("close service session [{}]", id);
 
         // Service handle processing flow
         self.handle
@@ -789,6 +805,13 @@ where
             .get(&id)
             .expect("Protocol open without session open");
 
+        // Regardless of the existence of the session level handle,
+        // you **must record** which protocols are opened for each session.
+        self.session_service_protos
+            .entry(id)
+            .or_default()
+            .insert(proto_id);
+
         // Service proto handle processing flow
         if !self.service_proto_handles.contains_key(&proto_id) {
             if let Some(ProtocolHandle::Service(handle)) = self.proto_handle(false, proto_id) {
@@ -801,11 +824,12 @@ where
                     proto_id,
                 );
 
+                self.service_proto_handles.insert(proto_id, sender);
+
                 tokio::spawn(stream.for_each(|_| Ok(())).map_err(|_| ()));
+
                 self.read_service_buf
                     .push_back((proto_id, ServiceProtocolEvent::Init));
-
-                self.service_proto_handles.insert(proto_id, sender);
             }
         }
 
@@ -817,16 +841,9 @@ where
                     version: version.clone(),
                 },
             ));
-
-            self.session_service_protos
-                .entry(id)
-                .or_default()
-                .insert(proto_id);
         }
 
         // Session proto handle processing flow
-        // Regardless of the existence of the session level handle,
-        // you **must record** which protocols are opened for each session.
         if let Some(ProtocolHandle::Session(handle)) = self.proto_handle(true, proto_id) {
             debug!("init session [{}] level proto [{}] handle", id, proto_id);
             let (sender, receiver) = mpsc::channel(32);
@@ -840,15 +857,15 @@ where
 
             tokio::spawn(stream.for_each(|_| Ok(())).map_err(|_| ()));
 
+            self.session_proto_handles
+                .entry((id, proto_id))
+                .or_insert(sender);
+
             self.read_session_buf.push_back((
                 id,
                 proto_id,
                 SessionProtocolEvent::Connected { version },
             ));
-
-            self.session_proto_handles
-                .entry((id, proto_id))
-                .or_insert(sender);
         }
 
         self.distribute_to_user_level();
@@ -863,8 +880,10 @@ where
         data: bytes::Bytes,
     ) {
         debug!(
-            "service receive session [{}] proto [{}] data len: {:?}",
-            session_id, proto_id, data
+            "service receive session [{}] proto [{}] data len: {}",
+            session_id,
+            proto_id,
+            data.len()
         );
 
         // Service proto handle processing flow
@@ -872,7 +891,7 @@ where
             self.read_service_buf.push_back((
                 proto_id,
                 ServiceProtocolEvent::Received {
-                    id: proto_id,
+                    id: session_id,
                     data: data.clone(),
                 },
             ));

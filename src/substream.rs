@@ -3,14 +3,14 @@ use futures::{
     sync::mpsc,
     task::{self, Task},
 };
-use log::{debug, error, warn};
+use log::{debug, warn};
 use std::collections::VecDeque;
 use std::{
     error,
     io::{self, ErrorKind},
 };
 use tokio::{
-    codec::{Decoder, Encoder, Framed},
+    codec::{length_delimited::LengthDelimitedCodec, Decoder, Encoder, Framed},
     prelude::AsyncWrite,
 };
 use yamux::StreamHandle;
@@ -24,8 +24,8 @@ pub(crate) enum ProtocolEvent {
     Open {
         /// Protocol name
         proto_name: String,
-        /// Yamux sub stream handle
-        sub_stream: StreamHandle,
+        /// Yamux sub stream handle handshake framed
+        sub_stream: Box<Framed<StreamHandle, LengthDelimitedCodec>>,
         /// Protocol version
         version: String,
     },
@@ -186,7 +186,7 @@ where
                     self.notify();
                     break;
                 } else {
-                    error!("proto send to session error: {}", e);
+                    warn!("proto send to session error: {}, may be kill by remote", e);
                     return Err(());
                 }
             }

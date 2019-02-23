@@ -81,7 +81,8 @@ impl ProtocolInfo {
 pub(crate) fn client_select<T: AsyncWrite + AsyncRead + Send>(
     handle: T,
     proto_info: ProtocolInfo,
-) -> impl Future<Item = (T, String, Option<String>), Error = io::Error> {
+) -> impl Future<Item = (Framed<T, LengthDelimitedCodec>, String, Option<String>), Error = io::Error>
+{
     let socket = Framed::new(handle, LengthDelimitedCodec::new());
     future::ok::<_, io::Error>(proto_info)
         .and_then(|proto_info| {
@@ -117,7 +118,8 @@ pub(crate) fn client_select<T: AsyncWrite + AsyncRead + Send>(
         })
         .and_then(|(mut remote_info, socket)| {
             Ok((
-                socket.into_inner(),
+                // Due to possible business data in the buffer, it cannot be directly discarded.
+                socket,
                 remote_info.name,
                 remote_info.support_versions.pop(),
             ))
@@ -131,7 +133,8 @@ pub(crate) fn client_select<T: AsyncWrite + AsyncRead + Send>(
 pub(crate) fn server_select<T: AsyncWrite + AsyncRead + Send>(
     handle: T,
     proto_infos: HashMap<String, ProtocolInfo>,
-) -> impl Future<Item = (T, String, Option<String>), Error = io::Error> {
+) -> impl Future<Item = (Framed<T, LengthDelimitedCodec>, String, Option<String>), Error = io::Error>
+{
     let socket = Framed::new(handle, LengthDelimitedCodec::new());
     future::ok::<_, io::Error>(proto_infos)
         .and_then(|mut proto_infos| {
@@ -178,7 +181,7 @@ pub(crate) fn server_select<T: AsyncWrite + AsyncRead + Send>(
                 .from_err()
                 .map(|socket| (socket, name, version))
         })
-        .and_then(|(socket, name, mut version)| Ok((socket.into_inner(), name, version.pop())))
+        .and_then(|(socket, name, mut version)| Ok((socket, name, version.pop())))
 }
 
 /// Choose the highest version of the two sides
