@@ -57,13 +57,8 @@ impl StreamHandle {
 impl io::Read for StreamHandle {
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
         if let Err(e) = self.recv_frames() {
-            match e.kind() {
-                io::ErrorKind::WouldBlock => return Err(e),
-                _ => {
-                    if self.read_buf.is_empty() {
-                        return Err(e);
-                    }
-                }
+            if self.read_buf.is_empty() {
+                return Err(e);
             }
         }
 

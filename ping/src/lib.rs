@@ -161,7 +161,7 @@ where
                 let msg = PingMessage::build_pong(&mut fbb, ping_msg.nonce());
                 fbb.finish(msg, None);
                 let _ = control.send_message(
-                    Some(vec![session.id]),
+                    session.id,
                     self.proto_id,
                     fbb.finished_data().to_vec(),
                 );
@@ -224,7 +224,7 @@ where
                         .into_iter()
                         .map(|(session_id, _)| session_id)
                         .collect();
-                    let _ = control.send_message(
+                    let _ = control.filter_broadcast(
                         Some(peer_ids),
                         self.proto_id,
                         fbb.finished_data().to_vec(),
