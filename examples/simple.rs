@@ -83,7 +83,7 @@ impl ServiceProtocol for PHandle {
         let interval_task = Interval::new(Instant::now(), Duration::from_secs(5))
             .for_each(move |_| {
                 let _ = interval_sender.send_message(
-                    Some(vec![session_id]),
+                    session_id,
                     1,
                     b"I am a interval message".to_vec(),
                 );
@@ -145,7 +145,8 @@ impl ServiceHandle for SHandle {
 
             let delay_task = Delay::new(Instant::now() + Duration::from_secs(3))
                 .and_then(move |_| {
-                    let _ = delay_sender.send_message(None, 0, b"I am a delayed message".to_vec());
+                    let _ =
+                        delay_sender.filter_broadcast(None, 0, b"I am a delayed message".to_vec());
                     Ok(())
                 })
                 .map_err(|err| info!("{}", err));

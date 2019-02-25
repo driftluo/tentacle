@@ -76,11 +76,22 @@ impl ServiceContext {
     #[inline]
     pub fn send_message(
         &mut self,
+        session_id: SessionId,
+        proto_id: ProtocolId,
+        data: Vec<u8>,
+    ) -> Result<(), Error<ServiceTask>> {
+        self.inner.send_message(session_id, proto_id, data)
+    }
+
+    /// Send data to the specified protocol for the specified sessions.
+    #[inline]
+    pub fn filter_broadcast(
+        &mut self,
         session_ids: Option<Vec<SessionId>>,
         proto_id: ProtocolId,
         data: Vec<u8>,
     ) -> Result<(), Error<ServiceTask>> {
-        self.inner.send_message(session_ids, proto_id, data)
+        self.inner.filter_broadcast(session_ids, proto_id, data)
     }
 
     /// Send a future task
@@ -240,6 +251,17 @@ impl ServiceControl {
     /// Send message
     #[inline]
     pub fn send_message(
+        &mut self,
+        session_id: SessionId,
+        proto_id: ProtocolId,
+        data: Vec<u8>,
+    ) -> Result<(), Error<ServiceTask>> {
+        self.filter_broadcast(Some(vec![session_id]), proto_id, data)
+    }
+
+    /// Send data to the specified protocol for the specified sessions.
+    #[inline]
+    pub fn filter_broadcast(
         &mut self,
         session_ids: Option<Vec<SessionId>>,
         proto_id: ProtocolId,

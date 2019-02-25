@@ -113,7 +113,7 @@ impl ServiceProtocol for PHandle {
     }
 
     fn received(&mut self, env: &mut ServiceContext, _session: &SessionContext, data: Vec<u8>) {
-        let _ = env.send_message(None, self.proto_id, data);
+        let _ = env.filter_broadcast(None, self.proto_id, data);
     }
 }
 
@@ -141,7 +141,7 @@ fn test_kill(secio: bool) {
             // wait connected
             assert_eq!(receiver.recv(), Ok(()));
 
-            let _ = control.send_message(None, 1, b"hello world".to_vec());
+            let _ = control.filter_broadcast(None, 1, b"hello world".to_vec());
             let mem_start = current_used_memory().unwrap();
             let cpu_start = current_used_cpu().unwrap();
 
