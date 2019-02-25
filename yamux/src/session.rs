@@ -31,9 +31,6 @@ pub struct Session<T> {
     // Got EOF from low level raw stream
     eof: bool,
 
-    // shutdown is used to safely close a session
-    shutdown: bool,
-
     // remoteGoAway indicates the remote side does
     // not want futher connections. Must be first for alignment.
     remote_go_away: bool,
@@ -105,7 +102,6 @@ where
         Session {
             framed_stream,
             eof: false,
-            shutdown: false,
             remote_go_away: false,
             local_go_away: false,
             next_stream_id,
@@ -138,11 +134,14 @@ where
     /// shutdown is used to close the session and all streams.
     /// Attempts to send a GoAway before closing the connection.
     pub fn shutdown(&mut self) -> Poll<(), io::Error> {
-        if self.shutdown {
+        if self.is_dead() {
             return Ok(Async::Ready(()));
         }
-        self.shutdown = true;
-        self.send_go_away()
+        if !self.write_pending_frames.is_empty() {
+            self.send_all()?;
+        }
+        self.send_go_away()?;
+        Ok(Async::Ready(()))
     }
 
     // Send all pending frames to remote streams
@@ -154,7 +153,7 @@ where
     }
 
     fn is_dead(&self) -> bool {
-        self.shutdown || self.eof
+        self.remote_go_away && self.local_go_away || self.eof
     }
 
     fn send_ping(&mut self, ping_id: Option<u32>) -> Poll<u32, io::Error> {
@@ -268,7 +267,7 @@ where
                 self.handle_ping(&frame)?;
             }
             Type::GoAway => {
-                self.handle_go_away(&frame);
+                self.handle_go_away(&frame)?;
             }
         }
         Ok(())
@@ -343,16 +342,24 @@ where
         Ok(())
     }
 
-    fn handle_go_away(&mut self, frame: &Frame) {
-        match GoAwayCode::from(frame.length()) {
-            GoAwayCode::Normal => {
-                self.remote_go_away = true;
+    fn handle_go_away(&mut self, frame: &Frame) -> Result<(), io::Error> {
+        let mut close = || -> Result<(), io::Error> {
+            self.remote_go_away = true;
+            self.write_pending_frames.clear();
+            if !self.local_go_away {
+                self.send_go_away()?;
             }
+            Ok(())
+        };
+        match GoAwayCode::from(frame.length()) {
+            GoAwayCode::Normal => close(),
             GoAwayCode::ProtocolError => {
                 // TODO: report error
+                close()
             }
             GoAwayCode::InternalError => {
                 // TODO: report error
+                close()
             }
         }
     }

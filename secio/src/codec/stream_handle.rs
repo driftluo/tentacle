@@ -31,7 +31,7 @@ impl StreamHandle {
         match event {
             StreamEvent::Frame(frame) => self.read_buf.extend_from_slice(&frame),
             StreamEvent::Close => {
-                let _ = self.shutdown()?;
+                self.shutdown()?;
             }
             _ => (),
         }
@@ -56,7 +56,16 @@ impl StreamHandle {
 
 impl io::Read for StreamHandle {
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
-        self.recv_frames()?;
+        if let Err(e) = self.recv_frames() {
+            match e.kind() {
+                io::ErrorKind::WouldBlock => return Err(e),
+                _ => {
+                    if self.read_buf.is_empty() {
+                        return Err(e);
+                    }
+                }
+            }
+        }
 
         let n = ::std::cmp::min(buf.len(), self.read_buf.len());
 

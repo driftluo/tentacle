@@ -161,7 +161,7 @@ where
             while let Some(event) = self.read_buf.pop_front() {
                 if let Err(e) = sender.try_send(event) {
                     if e.is_full() {
-                        self.read_buf.push_back(e.into_inner());
+                        self.read_buf.push_front(e.into_inner());
                         notify = true;
                         break;
                     } else {

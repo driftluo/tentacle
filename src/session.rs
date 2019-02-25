@@ -115,6 +115,8 @@ pub(crate) struct Session<T, U> {
     id: SessionId,
     timeout: Duration,
 
+    dead: bool,
+
     // NOTE: Not used yet, may useful later
     // remote_address: ::std::net::SocketAddr,
     // remote_public_key: Option<PublicKey>,
@@ -175,6 +177,7 @@ where
             service_sender,
             service_receiver,
             notify: None,
+            dead: false,
         }
     }
 
@@ -224,10 +227,10 @@ where
 
     #[inline]
     fn output(&mut self) {
-        for event in self.read_buf.split_off(0) {
+        while let Some(event) = self.read_buf.pop_front() {
             if let Err(e) = self.service_sender.try_send(event) {
                 if e.is_full() {
-                    self.read_buf.push_back(e.into_inner());
+                    self.read_buf.push_front(e.into_inner());
                     self.notify();
                     return;
                 } else {
@@ -250,7 +253,7 @@ where
                                 self.write_buf.push_back(e.into_inner());
                                 self.notify();
                             } else {
-                                error!("session send to service error: {}", e);
+                                error!("session send to sub stream error: {}", e);
                             }
                         }
                     };
@@ -262,7 +265,7 @@ where
                                 self.write_buf.push_back(e.into_inner());
                                 self.notify();
                             } else {
-                                error!("session send to service error: {}", e);
+                                error!("session send to sub stream error: {}", e);
                             }
                         }
                     };
@@ -370,7 +373,7 @@ where
                 });
                 if self.sub_streams.is_empty() {
                     debug!("Session no longer has protocol open, session closed");
-                    self.close_session();
+                    self.dead = true;
                 }
             }
             ProtocolEvent::Message { data, proto_id, .. } => {
@@ -478,14 +481,14 @@ where
             match self.socket.poll() {
                 Ok(Async::Ready(Some(sub_stream))) => self.handle_sub_stream(sub_stream),
                 Ok(Async::Ready(None)) => {
-                    self.close_session();
-                    return Ok(Async::Ready(None));
+                    self.dead = true;
+                    break;
                 }
                 Ok(Async::NotReady) => break,
                 Err(err) => {
-                    warn!("sub stream error: {:?}", err);
-                    self.close_session();
-                    return Err(err);
+                    warn!("session poll error: {:?}", err);
+                    self.dead = true;
+                    break;
                 }
             }
         }
@@ -510,8 +513,8 @@ where
                 Ok(Async::Ready(Some(event))) => self.handle_session_event(event),
                 Ok(Async::Ready(None)) => {
                     // Must drop by service
-                    self.close_session();
-                    return Ok(Async::Ready(None));
+                    self.dead = true;
+                    break;
                 }
                 Ok(Async::NotReady) => break,
                 Err(err) => {
@@ -519,6 +522,11 @@ where
                     break;
                 }
             }
+        }
+
+        if self.dead {
+            self.close_session();
+            return Ok(Async::Ready(None));
         }
 
         self.notify = Some(task::current());
