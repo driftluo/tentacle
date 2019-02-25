@@ -227,7 +227,7 @@ where
 
     #[inline]
     fn output(&mut self) {
-        for event in self.read_buf.split_off(0) {
+        while let Some(event) = self.read_buf.pop_front() {
             if let Err(e) = self.service_sender.try_send(event) {
                 if e.is_full() {
                     self.read_buf.push_front(e.into_inner());
