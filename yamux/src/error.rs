@@ -1,7 +1,7 @@
 //! The error types
 
 /// The error types
-#[derive(Debug)]
+#[derive(Debug, Eq, PartialEq)]
 pub enum Error {
     /// InvalidVersion means we received a frame with an
     /// invalid version
@@ -51,4 +51,7 @@ pub enum Error {
 
     /// Remote sub stream is closed, but local can still send data to remote
     SubStreamRemoteClosing,
+
+    /// Sub stream send event channel full, block to complete
+    WouldBlock,
 }

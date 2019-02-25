@@ -66,6 +66,7 @@ pub(crate) struct SubStream<U> {
     write_buf: VecDeque<bytes::Bytes>,
     // The buffer which will send to user
     read_buf: VecDeque<ProtocolEvent>,
+    dead: bool,
 
     /// Send event to session
     event_sender: mpsc::Sender<ProtocolEvent>,
@@ -98,6 +99,7 @@ where
             write_buf: VecDeque::new(),
             read_buf: VecDeque::new(),
             notify: None,
+            dead: false,
         }
     }
 
@@ -132,16 +134,16 @@ where
 
     /// Close protocol sub stream
     fn close_proto_stream(&mut self) {
+        self.event_receiver.close();
+        let _ = self.sub_stream.get_mut().shutdown();
         self.output_event(ProtocolEvent::Close {
             id: self.id,
             proto_id: self.proto_id,
         });
-        self.event_receiver.close();
-        let _ = self.sub_stream.get_mut().shutdown();
     }
 
     /// Handling commands send by session
-    fn handle_proto_event(&mut self, event: ProtocolEvent) -> Poll<Option<()>, ()> {
+    fn handle_proto_event(&mut self, event: ProtocolEvent) {
         match event {
             ProtocolEvent::Message { data, .. } => {
                 debug!("proto [{}] send data: {}", self.proto_id, data.len());
@@ -155,20 +157,18 @@ where
                             "protocol [{}] close because of extern network",
                             self.proto_id
                         );
-                        self.close_proto_stream();
-                        return Ok(Async::Ready(None));
+                        self.dead = true;
                     }
                     Ok(Async::NotReady) => (),
                     Ok(Async::Ready(_)) => (),
                 }
             }
             ProtocolEvent::Close { .. } => {
-                self.close_proto_stream();
-                return Ok(Async::Ready(None));
+                self.write_buf.clear();
+                self.dead = true;
             }
             _ => (),
         }
-        Ok(Async::Ready(Some(())))
     }
 
     #[inline]
@@ -182,7 +182,7 @@ where
         while let Some(event) = self.read_buf.pop_front() {
             if let Err(e) = self.event_sender.try_send(event) {
                 if e.is_full() {
-                    self.read_buf.push_back(e.into_inner());
+                    self.read_buf.push_front(e.into_inner());
                     self.notify();
                     break;
                 } else {
@@ -247,8 +247,8 @@ where
                 }
                 Ok(Async::Ready(None)) => {
                     warn!("protocol [{}] close", self.proto_id);
-                    self.close_proto_stream();
-                    return Ok(Async::Ready(None));
+                    self.dead = true;
+                    break;
                 }
                 Ok(Async::NotReady) => break,
                 Err(err) => {
@@ -259,34 +259,27 @@ where
                         | ErrorKind::ConnectionAborted
                         | ErrorKind::ConnectionReset
                         | ErrorKind::NotConnected
-                        | ErrorKind::UnexpectedEof => {
-                            self.close_proto_stream();
-                            return Ok(Async::Ready(None));
-                        }
+                        | ErrorKind::UnexpectedEof => self.dead = true,
                         _ => {
                             self.output_event(ProtocolEvent::Error {
                                 id: self.id,
                                 proto_id: self.proto_id,
                                 error: err.into(),
                             });
-                            break;
                         }
                     }
+                    break;
                 }
             }
         }
 
         loop {
             match self.event_receiver.poll() {
-                Ok(Async::Ready(Some(event))) => match self.handle_proto_event(event) {
-                    Ok(Async::NotReady) => break,
-                    Ok(Async::Ready(None)) => return Ok(Async::Ready(None)),
-                    _ => (),
-                },
+                Ok(Async::Ready(Some(event))) => self.handle_proto_event(event),
                 Ok(Async::Ready(None)) => {
                     // Must be session close
-                    self.close_proto_stream();
-                    return Ok(Async::Ready(None));
+                    self.dead = true;
+                    break;
                 }
                 Ok(Async::NotReady) => break,
                 Err(err) => {
@@ -294,6 +287,11 @@ where
                     break;
                 }
             }
+        }
+
+        if self.dead {
+            self.close_proto_stream();
+            return Ok(Async::Ready(None));
         }
 
         self.notify = Some(task::current());

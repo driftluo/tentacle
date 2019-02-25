@@ -56,7 +56,9 @@ impl StreamHandle {
 
 impl io::Read for StreamHandle {
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
-        self.recv_frames()?;
+        if self.recv_frames().is_err() && self.read_buf.is_empty() {
+            return Err(io::ErrorKind::BrokenPipe.into());
+        }
 
         let n = ::std::cmp::min(buf.len(), self.read_buf.len());
 

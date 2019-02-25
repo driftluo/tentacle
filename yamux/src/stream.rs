@@ -1,6 +1,9 @@
 //! The substream, the main interface is AsyncRead/AsyncWrite
 
-use std::io::{self, Write};
+use std::{
+    collections::VecDeque,
+    io::{self, Write},
+};
 
 use bytes::{Bytes, BytesMut};
 use futures::{
@@ -27,6 +30,7 @@ pub struct StreamHandle {
     send_window: u32,
     read_buf: BytesMut,
     write_buf: BytesMut,
+    window_update_frame_buf: VecDeque<(Flags, u32)>,
 
     // Send stream event to parent session
     event_sender: Sender<StreamEvent>,
@@ -55,6 +59,7 @@ impl StreamHandle {
             send_window: send_window_size,
             read_buf: BytesMut::default(),
             write_buf: BytesMut::default(),
+            window_update_frame_buf: VecDeque::default(),
             event_sender,
             frame_receiver,
         }
@@ -102,10 +107,27 @@ impl StreamHandle {
     #[inline]
     fn send_event(&mut self, event: StreamEvent) -> Result<(), Error> {
         debug!("[{}] StreamHandle.send_event({:?})", self.id, event);
-        // TODO: should handle send error
-        self.event_sender
-            .try_send(event)
-            .map_err(|_| Error::SessionShutdown)
+        while let Some((flag, delta)) = self.window_update_frame_buf.pop_front() {
+            let event = StreamEvent::Frame(Frame::new_window_update(flag, self.id, delta));
+            if let Err(e) = self.event_sender.try_send(event) {
+                if e.is_full() {
+                    self.window_update_frame_buf.push_front((flag, delta));
+                    return Err(Error::WouldBlock);
+                } else {
+                    return Err(Error::SessionShutdown);
+                }
+            }
+        }
+
+        if let Err(e) = self.event_sender.try_send(event) {
+            if e.is_full() {
+                return Err(Error::WouldBlock);
+            } else {
+                return Err(Error::SessionShutdown);
+            }
+        }
+
+        Ok(())
     }
 
     #[inline]
@@ -127,7 +149,14 @@ impl StreamHandle {
         // Update our window
         self.recv_window += delta;
         let frame = Frame::new_window_update(flags, self.id, delta);
-        self.send_frame(frame)
+        match self.send_frame(frame) {
+            Err(ref e) if e == &Error::WouldBlock => {
+                self.window_update_frame_buf.push_back((flags, delta))
+            }
+            Err(e) => return Err(e),
+            _ => (),
+        }
+        Ok(())
     }
 
     fn send_data(&mut self, data: &[u8]) -> Result<(), Error> {
@@ -258,25 +287,32 @@ impl StreamHandle {
             }
         }
     }
+
+    fn check_self_state(&mut self) -> Result<(), io::Error> {
+        // if read buf is empty and state is close, return close error
+        if self.read_buf.is_empty() {
+            match self.state {
+                StreamState::RemoteClosing | StreamState::Closed => {
+                    debug!("closed(EOF)");
+                    self.shutdown()?;
+                    Err(io::ErrorKind::UnexpectedEof.into())
+                }
+                StreamState::Reset => {
+                    debug!("connection reset");
+                    self.shutdown()?;
+                    Err(io::ErrorKind::ConnectionReset.into())
+                }
+                _ => Ok(()),
+            }
+        } else {
+            Ok(())
+        }
+    }
 }
 
 impl io::Read for StreamHandle {
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
-        // TODO: error handling
-        // TODO: check stream state
-        match self.state {
-            StreamState::RemoteClosing | StreamState::Closed => {
-                debug!("closed(EOF)");
-                let _ = self.close();
-                return Err(io::ErrorKind::UnexpectedEof.into());
-            }
-            StreamState::Reset => {
-                debug!("connection reset");
-                let _ = self.close();
-                return Err(io::ErrorKind::ConnectionReset.into());
-            }
-            _ => {}
-        }
+        self.check_self_state()?;
 
         let rv = self.recv_frames();
         debug!(
@@ -284,19 +320,7 @@ impl io::Read for StreamHandle {
             self.id, rv, self.state
         );
 
-        match self.state {
-            StreamState::RemoteClosing | StreamState::Closed => {
-                debug!("closed(EOF)");
-                let _ = self.close();
-                return Err(io::ErrorKind::UnexpectedEof.into());
-            }
-            StreamState::Reset => {
-                debug!("connection reset");
-                let _ = self.close();
-                return Err(io::ErrorKind::ConnectionReset.into());
-            }
-            _ => {}
-        }
+        self.check_self_state()?;
 
         let n = ::std::cmp::min(buf.len(), self.read_buf.len());
         if n == 0 {
@@ -311,9 +335,15 @@ impl io::Read for StreamHandle {
             self.read_buf.len()
         );
         buf[..n].copy_from_slice(&b);
-        if self.send_window_update().is_err() {
-            return Err(io::ErrorKind::BrokenPipe.into());
+        match self.state {
+            StreamState::RemoteClosing | StreamState::Closed | StreamState::Reset => (),
+            _ => {
+                if self.send_window_update().is_err() {
+                    return Err(io::ErrorKind::BrokenPipe.into());
+                }
+            }
         }
+
         Ok(n)
     }
 }
@@ -329,6 +359,7 @@ impl io::Write for StreamHandle {
                     return Err(io::ErrorKind::InvalidData.into());
                 }
                 Error::SubStreamRemoteClosing => (),
+                Error::WouldBlock => return Err(io::ErrorKind::WouldBlock.into()),
                 _ => unimplemented!(),
             }
         }
@@ -344,15 +375,17 @@ impl io::Write for StreamHandle {
         // Allow n = 0, send an empty frame to remote
         let n = ::std::cmp::min(self.send_window as usize, buf.len());
         let data = &buf[0..n];
-        if self.send_data(data).is_err() {
-            return Err(io::ErrorKind::BrokenPipe.into());
+        match self.send_data(data) {
+            Ok(_) => {
+                self.send_window -= n as u32;
+                // Cache unsent data
+                self.write_buf.extend_from_slice(&buf[n..]);
+
+                Ok(buf.len())
+            }
+            Err(ref e) if e == &Error::WouldBlock => Err(io::ErrorKind::WouldBlock.into()),
+            _ => Err(io::ErrorKind::BrokenPipe.into()),
         }
-        self.send_window -= n as u32;
-        // Cache unsent data
-        self.write_buf.extend_from_slice(&buf[n..]);
-        // TODO: Here, it is problematic for the caller to think that
-        // TODO: each write is completely successful, but I don’t know how to deal with it at present.
-        Ok(buf.len())
     }
 
     fn flush(&mut self) -> io::Result<()> {
@@ -365,11 +398,13 @@ impl io::Write for StreamHandle {
                     return Err(io::ErrorKind::InvalidData.into());
                 }
                 Error::SubStreamRemoteClosing => (),
+                Error::WouldBlock => return Err(io::ErrorKind::WouldBlock.into()),
                 _ => unimplemented!(),
             }
         }
         let event = StreamEvent::Flush(self.id);
         match self.send_event(event) {
+            Err(ref e) if e == &Error::WouldBlock => Err(io::ErrorKind::WouldBlock.into()),
             Err(_) => Err(io::ErrorKind::BrokenPipe.into()),
             Ok(()) => Ok(()),
         }
@@ -381,10 +416,11 @@ impl AsyncRead for StreamHandle {}
 impl AsyncWrite for StreamHandle {
     fn shutdown(&mut self) -> Poll<(), io::Error> {
         debug!("[{}] StreamHandle.shutdown()", self.id);
-        if self.close().is_err() {
-            return Err(io::ErrorKind::BrokenPipe.into());
+        match self.close() {
+            Err(ref e) if e == &Error::WouldBlock => Err(io::ErrorKind::WouldBlock.into()),
+            Err(_) => Err(io::ErrorKind::BrokenPipe.into()),
+            Ok(()) => Ok(Async::Ready(())),
         }
-        Ok(Async::Ready(()))
     }
 }
 

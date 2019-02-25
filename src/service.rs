@@ -781,10 +781,6 @@ where
 
         debug!("close service session [{}]", id);
 
-        // Service handle processing flow
-        self.handle
-            .handle_event(&mut self.service_context, ServiceEvent::SessionClose { id });
-
         // Close all open proto
         let close_proto_ids = self.session_service_protos.remove(&id).unwrap_or_default();
         debug!("session [{}] close proto [{:?}]", id, close_proto_ids);
@@ -794,6 +790,10 @@ where
         });
 
         self.sessions.remove(&id);
+
+        // Service handle processing flow
+        self.handle
+            .handle_event(&mut self.service_context, ServiceEvent::SessionClose { id });
     }
 
     /// Open the handle corresponding to the protocol
