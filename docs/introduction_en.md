@@ -1,14 +1,14 @@
 ## P2P Introduction
 
 - [Objective](#Objective)
-- [The Idea](#The Idea)
-- [The Primary Approach](#The Primary Approach)
-- [Introduction of library Implementation](#Introduction of library Implementation)
+- [The Idea](#The-Idea)
+- [The Primary Approach](#The-Primary-Approach)
+- [Introduction of library Implementation](#Introduction-of-library-Implementation)
   - [yamux](#yamux)
   - [secio](#secio)
   - [P2P](#P2P)
-- [Overall Data Flow](#Overall Data Flow)
-- [Not Compatible with libp2p](#Not Compatible with libp2p)
+- [Overall Data Flow](#Overall-Data-Flow)
+- [Not Compatible with libp2p](#Not-Compatible-with-libp2p)
 
 ### Objective
 
