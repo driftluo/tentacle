@@ -100,7 +100,8 @@ As you can see, for all connections, the data stream works in the form of aggreg
 
 The process of each protocol's opening is a handshake process as well, and the communication format is `flatbuffer`. The structure is:
 
-```table ProtocolInfo {
+```
+table ProtocolInfo {
     name: string;
     support_versions: [string];
 }
