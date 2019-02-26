@@ -309,43 +309,40 @@ where
     /// Return really listen multiaddr, but if use `/dns4/localhost/tcp/80`,
     /// it will return original value, and create a future task to DNS resolver later.
     pub fn listen(&mut self, address: Multiaddr) -> Result<Multiaddr, io::Error> {
-        let listen_addr = if let Ok(socket_address) = multiaddr_to_socketaddr(&address) {
+        let listen_addr = if let Some(socket_address) = multiaddr_to_socketaddr(&address) {
             let tcp = TcpListener::bind(&socket_address)?;
             let listen_addr = tcp.local_addr()?.to_multiaddr().unwrap();
             self.listens.push((listen_addr.clone(), tcp.incoming()));
             listen_addr
         } else {
-            match DNSResolver::new(address.clone()) {
-                Ok(dns) => {
-                    let sender = self.session_event_sender.clone();
-                    let future_task = dns.then(move |result| match result {
-                        Ok(address) => tokio::spawn(
-                            sender
-                                .send(SessionEvent::DNSResolverSuccess {
-                                    ty: SessionType::Server,
-                                    address,
-                                })
-                                .map(|_| ())
-                                .map_err(|err| {
-                                    error!("Listen address success send back error: {:?}", err);
-                                }),
-                        ),
-                        Err((address, error)) => tokio::spawn(
-                            sender
-                                .send(SessionEvent::ListenError { address, error })
-                                .map(|_| ())
-                                .map_err(|err| {
-                                    error!("Listen address fail send back error: {:?}", err);
-                                }),
-                        ),
-                    });
-                    self.pending_task.push(ServiceTask::FutureTask {
-                        task: Box::new(future_task),
-                    });
-                    self.task_count += 1;
-                }
-                Err(_) => return Err(io::ErrorKind::InvalidInput.into()),
-            }
+            let dns = DNSResolver::new(address.clone())
+                .ok_or_else::<io::Error, _>(|| io::ErrorKind::InvalidInput.into())?;
+            let sender = self.session_event_sender.clone();
+            let future_task = dns.then(move |result| match result {
+                Ok(address) => tokio::spawn(
+                    sender
+                        .send(SessionEvent::DNSResolverSuccess {
+                            ty: SessionType::Server,
+                            address,
+                        })
+                        .map(|_| ())
+                        .map_err(|err| {
+                            error!("Listen address success send back error: {:?}", err);
+                        }),
+                ),
+                Err((address, error)) => tokio::spawn(
+                    sender
+                        .send(SessionEvent::ListenError { address, error })
+                        .map(|_| ())
+                        .map_err(|err| {
+                            error!("Listen address fail send back error: {:?}", err);
+                        }),
+                ),
+            });
+            self.pending_task.push(ServiceTask::FutureTask {
+                task: Box::new(future_task),
+            });
+            self.task_count += 1;
             address
         };
         Ok(listen_addr)
@@ -360,42 +357,39 @@ where
     /// Use by inner
     #[inline(always)]
     fn dial_inner(&mut self, address: Multiaddr) -> Result<(), io::Error> {
-        if let Ok(socket_address) = multiaddr_to_socketaddr(&address) {
+        if let Some(socket_address) = multiaddr_to_socketaddr(&address) {
             let dial = TcpStream::connect(&socket_address).timeout(self.timeout);
             self.dial.push((address, dial));
             self.task_count += 1;
         } else {
-            match DNSResolver::new(address) {
-                Ok(dns) => {
-                    let sender = self.session_event_sender.clone();
-                    let future_task = dns.then(move |result| match result {
-                        Ok(address) => tokio::spawn(
-                            sender
-                                .send(SessionEvent::DNSResolverSuccess {
-                                    ty: SessionType::Client,
-                                    address,
-                                })
-                                .map(|_| ())
-                                .map_err(|err| {
-                                    error!("dial address success send back error: {:?}", err);
-                                }),
-                        ),
-                        Err((address, error)) => tokio::spawn(
-                            sender
-                                .send(SessionEvent::DialError { address, error })
-                                .map(|_| ())
-                                .map_err(|err| {
-                                    error!("dial address fail send back error: {:?}", err);
-                                }),
-                        ),
-                    });
-                    self.pending_task.push(ServiceTask::FutureTask {
-                        task: Box::new(future_task),
-                    });
-                    self.task_count += 1;
-                }
-                Err(_) => return Err(io::ErrorKind::InvalidInput.into()),
-            }
+            let dns = DNSResolver::new(address)
+                .ok_or_else::<io::Error, _>(|| io::ErrorKind::InvalidInput.into())?;
+            let sender = self.session_event_sender.clone();
+            let future_task = dns.then(move |result| match result {
+                Ok(address) => tokio::spawn(
+                    sender
+                        .send(SessionEvent::DNSResolverSuccess {
+                            ty: SessionType::Client,
+                            address,
+                        })
+                        .map(|_| ())
+                        .map_err(|err| {
+                            error!("dial address success send back error: {:?}", err);
+                        }),
+                ),
+                Err((address, error)) => tokio::spawn(
+                    sender
+                        .send(SessionEvent::DialError { address, error })
+                        .map(|_| ())
+                        .map_err(|err| {
+                            error!("dial address fail send back error: {:?}", err);
+                        }),
+                ),
+            });
+            self.pending_task.push(ServiceTask::FutureTask {
+                task: Box::new(future_task),
+            });
+            self.task_count += 1;
         }
 
         Ok(())

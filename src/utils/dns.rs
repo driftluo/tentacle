@@ -17,7 +17,7 @@ pub struct DNSResolver<T> {
 impl<T> DNSResolver<T> {
     /// If address like `/dns4/localhost/tcp/80` or `"/dns6/localhost/tcp/80"`,
     /// it will be return Ok, else Error
-    pub fn new(source_address: Multiaddr) -> Result<Self, ()> {
+    pub fn new(source_address: Multiaddr) -> Option<Self> {
         let mut iter = source_address.iter().peekable();
 
         let (domain, port) = loop {
@@ -32,8 +32,8 @@ impl<T> DNSResolver<T> {
                 }
             }
 
-            let proto1 = iter.next().ok_or(())?;
-            let proto2 = iter.next().ok_or(())?;
+            let proto1 = iter.next()?;
+            let proto2 = iter.next()?;
 
             match (proto1, proto2) {
                 (Protocol::Dns4(domain), Protocol::Tcp(port)) => break (Some(domain), Some(port)),
@@ -43,14 +43,14 @@ impl<T> DNSResolver<T> {
         };
 
         match (domain, port) {
-            (Some(domain), Some(port)) => Ok(DNSResolver {
+            (Some(domain), Some(port)) => Some(DNSResolver {
                 peer_id: extract_peer_id(&source_address),
                 domain: domain.to_string(),
                 source_address,
                 port,
                 phantom: PhantomData,
             }),
-            _ => Err(()),
+            _ => None,
         }
     }
 }
