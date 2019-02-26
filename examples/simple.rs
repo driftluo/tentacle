@@ -94,7 +94,7 @@ impl ServiceProtocol for PHandle {
                 }
             })
             .map_err(|err| info!("{}", err));
-        let _ = control.future_task(interval_task);
+        control.future_task(interval_task);
     }
 
     fn disconnected(&mut self, _control: &mut ServiceContext, session: &SessionContext) {
@@ -151,7 +151,7 @@ impl ServiceHandle for SHandle {
                 })
                 .map_err(|err| info!("{}", err));
 
-            let _ = env.future_task(Box::new(delay_task));
+            env.future_task(Box::new(delay_task));
         }
     }
 }

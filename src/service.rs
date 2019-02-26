@@ -813,7 +813,7 @@ where
                 let (sender, receiver) = mpsc::channel(32);
                 let stream = ServiceProtocolStream::new(
                     handle,
-                    self.service_context.clone(),
+                    self.service_context.clone_self(),
                     receiver,
                     proto_id,
                 );
@@ -843,7 +843,7 @@ where
             let (sender, receiver) = mpsc::channel(32);
             let stream = SessionProtocolStream::new(
                 handle,
-                self.service_context.clone(),
+                self.service_context.clone_self(),
                 session_context.clone(),
                 receiver,
                 proto_id,
@@ -1262,6 +1262,11 @@ where
                     break;
                 }
             }
+        }
+
+        // process any task buffer
+        while let Some(task) = self.service_context.task_buf.pop_front() {
+            self.handle_service_task(task);
         }
 
         // Double check service state

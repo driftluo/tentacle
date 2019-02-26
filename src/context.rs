@@ -6,7 +6,7 @@ use log::{debug, warn};
 use multiaddr::Multiaddr;
 use secio::PublicKey;
 use std::{
-    collections::HashMap,
+    collections::{HashMap, VecDeque},
     sync::Arc,
     time::{Duration, Instant},
 };
@@ -37,6 +37,7 @@ pub struct SessionContext {
 pub struct ServiceContext {
     // For tell notify finished
     session_notify_senders: HashMap<(SessionId, ProtocolId), Vec<oneshot::Sender<()>>>,
+    pub(crate) task_buf: VecDeque<ServiceTask>,
     listens: Vec<Multiaddr>,
     inner: ServiceControl,
 }
@@ -50,37 +51,41 @@ impl ServiceContext {
         ServiceContext {
             inner: ServiceControl::new(service_task_sender, proto_infos),
             session_notify_senders: HashMap::default(),
+            task_buf: VecDeque::default(),
             listens: Vec::new(),
         }
     }
 
     /// Create a new listener
     #[inline]
-    pub fn listen(&mut self, address: Multiaddr) -> Result<(), Error<ServiceTask>> {
-        self.inner.listen(address)
+    pub fn listen(&mut self, address: Multiaddr) {
+        if let Err(Error::TaskFull(task)) = self.inner.listen(address) {
+            self.task_buf.push_back(task);
+        }
     }
 
     /// Initiate a connection request to address
     #[inline]
-    pub fn dial(&mut self, address: Multiaddr) -> Result<(), Error<ServiceTask>> {
-        self.inner.dial(address)
+    pub fn dial(&mut self, address: Multiaddr) {
+        if let Err(Error::TaskFull(task)) = self.inner.dial(address) {
+            self.task_buf.push_back(task);
+        }
     }
 
     /// Disconnect a connection
     #[inline]
-    pub fn disconnect(&mut self, session_id: SessionId) -> Result<(), Error<ServiceTask>> {
-        self.inner.disconnect(session_id)
+    pub fn disconnect(&mut self, session_id: SessionId) {
+        if let Err(Error::TaskFull(task)) = self.inner.disconnect(session_id) {
+            self.task_buf.push_back(task);
+        }
     }
 
     /// Send message
     #[inline]
-    pub fn send_message(
-        &mut self,
-        session_id: SessionId,
-        proto_id: ProtocolId,
-        data: Vec<u8>,
-    ) -> Result<(), Error<ServiceTask>> {
-        self.inner.send_message(session_id, proto_id, data)
+    pub fn send_message(&mut self, session_id: SessionId, proto_id: ProtocolId, data: Vec<u8>) {
+        if let Err(Error::TaskFull(task)) = self.inner.send_message(session_id, proto_id, data) {
+            self.task_buf.push_back(task);
+        }
     }
 
     /// Send data to the specified protocol for the specified sessions.
@@ -90,17 +95,22 @@ impl ServiceContext {
         session_ids: Option<Vec<SessionId>>,
         proto_id: ProtocolId,
         data: Vec<u8>,
-    ) -> Result<(), Error<ServiceTask>> {
-        self.inner.filter_broadcast(session_ids, proto_id, data)
+    ) {
+        if let Err(Error::TaskFull(task)) = self.inner.filter_broadcast(session_ids, proto_id, data)
+        {
+            self.task_buf.push_back(task);
+        }
     }
 
     /// Send a future task
     #[inline]
-    pub fn future_task<T>(&mut self, task: T) -> Result<(), Error<ServiceTask>>
+    pub fn future_task<T>(&mut self, task: T)
     where
         T: Future<Item = (), Error = ()> + 'static + Send,
     {
-        self.inner.future_task(task)
+        if let Err(Error::TaskFull(task)) = self.inner.future_task(task) {
+            self.task_buf.push_back(task);
+        }
     }
 
     /// Set a service notify token
@@ -116,7 +126,7 @@ impl ServiceContext {
                     })
             })
             .map_err(|err| warn!("{}", err));
-        let _ = self.future_task(fut);
+        self.future_task(fut);
     }
 
     /// Set as session notify token
@@ -151,7 +161,7 @@ impl ServiceContext {
                 }
             })
             .map_err(|err| warn!("{}", err));
-        let _ = self.future_task(fut);
+        self.future_task(fut);
     }
 
     /// Get the internal channel sender side handle
@@ -174,8 +184,10 @@ impl ServiceContext {
 
     /// Send raw event
     #[inline]
-    pub fn send(&mut self, event: ServiceTask) -> Result<(), Error<ServiceTask>> {
-        self.inner.send(event)
+    pub fn send(&mut self, event: ServiceTask) {
+        if let Err(Error::TaskFull(task)) = self.inner.send(event) {
+            self.task_buf.push_back(task);
+        }
     }
 
     /// Update listen list
@@ -193,6 +205,15 @@ impl ServiceContext {
             for sender in senders {
                 let _ = sender.send(());
             }
+        }
+    }
+
+    pub(crate) fn clone_self(&self) -> Self {
+        ServiceContext {
+            inner: self.inner.clone(),
+            session_notify_senders: HashMap::default(),
+            task_buf: VecDeque::default(),
+            listens: self.listens.clone(),
         }
     }
 }
@@ -283,15 +304,5 @@ impl ServiceControl {
         self.send(ServiceTask::FutureTask {
             task: Box::new(task),
         })
-    }
-}
-
-impl Clone for ServiceContext {
-    fn clone(&self) -> Self {
-        ServiceContext {
-            inner: self.inner.clone(),
-            session_notify_senders: HashMap::default(),
-            listens: self.listens.clone(),
-        }
     }
 }

@@ -125,7 +125,7 @@ impl ServiceProtocol for DiscoveryProtocol {
                     })
             })
             .unwrap();
-        let _ = control.future_task(discovery_task);
+        control.future_task(discovery_task);
     }
 
     fn connected(&mut self, control: &mut ServiceContext, session: &SessionContext, _: &str) {
