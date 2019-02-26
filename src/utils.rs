@@ -6,7 +6,7 @@ use std::net::SocketAddr;
 pub mod dns;
 
 /// Change multiaddr to socketaddr
-pub fn multiaddr_to_socketaddr(addr: &Multiaddr) -> Result<SocketAddr, ()> {
+pub fn multiaddr_to_socketaddr(addr: &Multiaddr) -> Option<SocketAddr> {
     let mut iter = addr.iter().peekable();
 
     while iter.peek().is_some() {
@@ -18,17 +18,21 @@ pub fn multiaddr_to_socketaddr(addr: &Multiaddr) -> Result<SocketAddr, ()> {
             }
         }
 
-        let proto1 = iter.next().ok_or(())?;
-        let proto2 = iter.next().ok_or(())?;
+        let proto1 = iter.next()?;
+        let proto2 = iter.next()?;
 
         match (proto1, proto2) {
-            (Protocol::Ip4(ip), Protocol::Tcp(port)) => return Ok(SocketAddr::new(ip.into(), port)),
-            (Protocol::Ip6(ip), Protocol::Tcp(port)) => return Ok(SocketAddr::new(ip.into(), port)),
+            (Protocol::Ip4(ip), Protocol::Tcp(port)) => {
+                return Some(SocketAddr::new(ip.into(), port));
+            }
+            (Protocol::Ip6(ip), Protocol::Tcp(port)) => {
+                return Some(SocketAddr::new(ip.into(), port));
+            }
             _ => (),
         }
     }
 
-    Err(())
+    None
 }
 
 /// Get peer id from multiaddr
