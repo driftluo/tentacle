@@ -1,4 +1,4 @@
-use futures::{prelude::*, sync::mpsc};
+use futures::{prelude::*, sync::mpsc, task};
 use log::warn;
 use multiaddr::Multiaddr;
 use std::collections::HashMap;
@@ -119,6 +119,14 @@ impl Stream for ServiceProtocolStream {
             }
         }
 
+        for task in self.service_context.task_buf.split_off(0) {
+            self.service_context.send(task);
+        }
+
+        if !self.service_context.task_buf.is_empty() {
+            task::current().notify();
+        }
+
         Ok(Async::NotReady)
     }
 }
@@ -223,6 +231,15 @@ impl Stream for SessionProtocolStream {
                 }
             }
         }
+
+        for task in self.service_context.task_buf.split_off(0) {
+            self.service_context.send(task);
+        }
+
+        if !self.service_context.task_buf.is_empty() {
+            task::current().notify();
+        }
+
         Ok(Async::NotReady)
     }
 }

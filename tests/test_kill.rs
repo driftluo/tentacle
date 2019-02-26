@@ -113,7 +113,7 @@ impl ServiceProtocol for PHandle {
     }
 
     fn received(&mut self, env: &mut ServiceContext, _session: &SessionContext, data: Vec<u8>) {
-        let _ = env.filter_broadcast(None, self.proto_id, data);
+        env.filter_broadcast(None, self.proto_id, data);
     }
 }
 

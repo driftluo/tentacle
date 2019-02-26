@@ -160,8 +160,7 @@ where
                 let mut fbb = FlatBufferBuilder::new();
                 let msg = PingMessage::build_pong(&mut fbb, ping_msg.nonce());
                 fbb.finish(msg, None);
-                let _ =
-                    control.send_message(session.id, self.proto_id, fbb.finished_data().to_vec());
+                control.send_message(session.id, self.proto_id, fbb.finished_data().to_vec());
                 let _ = self.event_sender.try_send(Event::Ping(session.id));
             }
             PingPayload::Pong => {
@@ -221,7 +220,7 @@ where
                         .into_iter()
                         .map(|(session_id, _)| session_id)
                         .collect();
-                    let _ = control.filter_broadcast(
+                    control.filter_broadcast(
                         Some(peer_ids),
                         self.proto_id,
                         fbb.finished_data().to_vec(),
