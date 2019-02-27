@@ -14,14 +14,15 @@ use futures::{
 };
 use tokio::codec::length_delimited::LengthDelimitedCodec;
 
-use p2p::{
+use tentacle::{
     builder::ServiceBuilder,
     context::{ServiceContext, SessionContext},
     multiaddr::{Multiaddr, ToMultiaddr},
     service::{ServiceError, ServiceEvent},
     traits::{ProtocolMeta, ServiceHandle, ServiceProtocol},
     utils::multiaddr_to_socketaddr,
-    ProtocolId, SessionId, SessionType,
+    yamux::session::SessionType,
+    ProtocolId, SessionId,
 };
 
 use discovery::{AddressManager, Direction, Discovery, DiscoveryHandle, RawAddr, Substream};

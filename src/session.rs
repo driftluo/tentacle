@@ -4,21 +4,21 @@ use futures::{
     task::{self, Task},
 };
 use log::{debug, error, trace, warn};
-use multiaddr::Multiaddr;
-use secio::{codec::stream_handle::StreamHandle as SecureHandle, PublicKey};
 use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
 use std::{error, io, time::Duration};
 use tokio::codec::{Decoder, Encoder, Framed, FramedParts};
 use tokio::prelude::{AsyncRead, AsyncWrite, FutureExt};
-use yamux::{session::SessionType, Config, Session as YamuxSession, StreamHandle};
 
 use crate::{
     error::Error,
+    multiaddr::Multiaddr,
     protocol_select::{client_select, server_select, ProtocolInfo},
+    secio::{codec::stream_handle::StreamHandle as SecureHandle, PublicKey},
     service::ServiceTask,
     substream::{ProtocolEvent, SubStream},
     traits::ProtocolMeta,
+    yamux::{session::SessionType, Config, Session as YamuxSession, StreamHandle},
     ProtocolId, SessionId, StreamId,
 };
 

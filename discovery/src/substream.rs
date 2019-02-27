@@ -8,7 +8,7 @@ use futures::{sync::mpsc::Receiver, Async, AsyncSink, Poll, Sink, Stream};
 use log::{debug, trace, warn};
 use p2p::multiaddr::{Multiaddr, ToMultiaddr};
 use p2p::{
-    context::ServiceControl, error::Error, utils::multiaddr_to_socketaddr, ProtocolId, SessionId,
+    error::Error, service::ServiceControl, utils::multiaddr_to_socketaddr, ProtocolId, SessionId,
 };
 use tokio::codec::Framed;
 use tokio::io::{AsyncRead, AsyncWrite};

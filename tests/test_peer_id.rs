@@ -1,14 +1,15 @@
 use futures::prelude::Stream;
-use p2p::{
+use std::thread;
+use tentacle::{
     builder::ServiceBuilder,
     context::ServiceContext,
     error::Error,
     multiaddr::{multihash::Multihash, Protocol as MultiProtocol},
+    secio::SecioKeyPair,
     service::{Service, ServiceError, ServiceEvent},
     traits::{ProtocolMeta, ServiceHandle, ServiceProtocol},
-    ProtocolId, SecioKeyPair,
+    ProtocolId,
 };
-use std::thread;
 use tokio::codec::LengthDelimitedCodec;
 
 pub fn create<T, F>(key_pair: SecioKeyPair, meta: T, shandle: F) -> Service<F, LengthDelimitedCodec>
@@ -129,7 +130,7 @@ fn test_peer_id(fail: bool) {
         assert_eq!(error_receiver.recv(), Ok(9));
     } else {
         listen_addr.append(MultiProtocol::P2p(
-            Multihash::from_bytes(key.to_peer_id().as_bytes().to_vec()).expect("Invalid peer id"),
+            Multihash::from_bytes(key.to_peer_id().into_bytes()).expect("Invalid peer id"),
         ));
         control.dial(listen_addr).unwrap();
         assert_eq!(error_receiver.recv(), Ok(0));

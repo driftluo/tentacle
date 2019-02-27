@@ -4,13 +4,13 @@ use log::{debug, info};
 use std::time::Duration;
 
 use futures::{future::lazy, prelude::*, sync::mpsc::channel};
-use p2p::{
+use ping::{Event, PingProtocol};
+use tentacle::{
     builder::ServiceBuilder,
     context::ServiceContext,
     service::{ServiceError, ServiceEvent},
     traits::ServiceHandle,
 };
-use ping::{Event, PingProtocol};
 
 fn main() {
     env_logger::init();

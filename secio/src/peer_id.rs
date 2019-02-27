@@ -68,6 +68,12 @@ impl PeerId {
         &self.inner
     }
 
+    /// Consume self, return raw bytes representation of this peer id
+    #[inline]
+    pub fn into_bytes(self) -> Vec<u8> {
+        self.inner
+    }
+
     /// Returns a base-58 encoded string of this `PeerId`.
     #[inline]
     pub fn to_base58(&self) -> String {

@@ -1,13 +1,13 @@
-use secio::SecioKeyPair;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::{error, io, time::Duration};
 use tokio::codec::{Decoder, Encoder};
-use yamux::Config;
 
 use crate::{
+    secio::SecioKeyPair,
     service::Service,
     traits::{ProtocolMeta, ServiceHandle},
+    yamux::Config,
 };
 
 /// Builder for Service

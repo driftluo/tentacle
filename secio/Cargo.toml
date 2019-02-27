@@ -1,5 +1,5 @@
 [package]
-name = "secio"
+name = "tentacle-secio"
 version = "0.1.0"
 license = "MIT"
 description = "Secio encryption protocol for p2p"

@@ -2,8 +2,8 @@ use bytes::BytesMut;
 use env_logger;
 use futures::prelude::*;
 use log::info;
-use secio::{handshake::Config, SecioKeyPair};
 use std::io::Write;
+use tentacle_secio::{handshake::Config, SecioKeyPair};
 use tokio::net::{TcpListener, TcpStream};
 
 fn main() {
