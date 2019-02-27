@@ -150,7 +150,7 @@ where
                 debug!("connected sessions are: {:?}", self.connected_session_ids);
             }
             None => {
-                let _ = control.disconnect(session.id);
+                control.disconnect(session.id);
             }
         }
     }
@@ -176,11 +176,7 @@ where
                     let mut fbb = FlatBufferBuilder::new();
                     let msg = PingMessage::build_pong(&mut fbb, ping_msg.nonce());
                     fbb.finish(msg, None);
-                    let _ = control.send_message(
-                        session.id,
-                        self.proto_id,
-                        fbb.finished_data().to_vec(),
-                    );
+                    control.send_message(session.id, self.proto_id, fbb.finished_data().to_vec());
                     self.send_event(Event::Ping(peer_id));
                 }
                 PingPayload::Pong => {
