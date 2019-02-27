@@ -7,7 +7,7 @@ use crate::protocol_generated::p2p::ping::*;
 use flatbuffers::{get_root, FlatBufferBuilder};
 use fnv::FnvHashMap;
 use generic_channel::Sender;
-use log::debug;
+use log::{debug, error};
 use p2p::{
     context::{ServiceContext, SessionContext},
     traits::{ProtocolMeta, ServiceProtocol},
@@ -87,6 +87,14 @@ struct PingHandler<S: Sender<Event>> {
     timeout: Duration,
     connected_session_ids: FnvHashMap<SessionId, PingStatus>,
     event_sender: S,
+}
+
+impl<S: Sender<Event>> PingHandler<S> {
+    pub fn send_event(&mut self, event: Event) {
+        if let Err(err) = self.event_sender.try_send(event) {
+            error!("send ping event error: {}", err);
+        }
+    }
 }
 
 /// PingStatus of a peer
@@ -173,7 +181,7 @@ where
                         self.proto_id,
                         fbb.finished_data().to_vec(),
                     );
-                    let _ = self.event_sender.try_send(Event::Ping(peer_id));
+                    self.send_event(Event::Ping(peer_id));
                 }
                 PingPayload::Pong => {
                     let pong_msg = msg.payload_as_pong().unwrap();
@@ -184,20 +192,22 @@ where
                         .map(|ps| (ps.processing, ps.nonce()))
                         == Some((true, pong_msg.nonce()))
                     {
-                        if let Some(ps) = self.connected_session_ids.get_mut(&session.id) {
-                            ps.processing = false;
-                            let _ = self
-                                .event_sender
-                                .try_send(Event::Pong(peer_id, ps.elapsed()));
-                        }
+                        let ping_time = match self.connected_session_ids.get_mut(&session.id) {
+                            Some(ps) => {
+                                ps.processing = false;
+                                ps.elapsed()
+                            }
+                            None => return,
+                        };
+                        self.send_event(Event::Pong(peer_id, ping_time));
                     } else {
                         // ignore if nonce is incorrect
-                        let _ = self.event_sender.try_send(Event::UnexpectedError(peer_id));
+                        self.send_event(Event::UnexpectedError(peer_id));
                     }
                 }
                 PingPayload::NONE => {
                     // can't decode msg
-                    let _ = self.event_sender.try_send(Event::UnexpectedError(peer_id));
+                    self.send_event(Event::UnexpectedError(peer_id));
                 }
             }
         }
@@ -239,14 +249,14 @@ where
             CHECK_TIMEOUT_TOKEN => {
                 debug!("proto [{}] check ping timeout", self.proto_id);
                 let timeout = self.timeout;
-                for ps in self
+                for peer_id in self
                     .connected_session_ids
                     .values()
                     .filter(|ps| ps.processing && ps.elapsed() >= timeout)
+                    .map(|ps| ps.peer_id.clone())
+                    .collect::<Vec<PeerId>>()
                 {
-                    let _ = self
-                        .event_sender
-                        .try_send(Event::Timeout(ps.peer_id.clone()));
+                    self.send_event(Event::Timeout(peer_id));
                 }
             }
             _ => panic!("unknown token {}", token),
