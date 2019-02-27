@@ -1,5 +1,7 @@
-use multiaddr::{Multiaddr, Protocol};
-use secio::PeerId;
+use crate::{
+    multiaddr::{Multiaddr, Protocol},
+    secio::PeerId,
+};
 use std::net::SocketAddr;
 
 /// This module create a `DNSResolver` future task to DNS resolver
@@ -50,9 +52,11 @@ pub fn extract_peer_id(addr: &Multiaddr) -> Option<PeerId> {
 
 #[cfg(test)]
 mod test {
-    use crate::utils::{extract_peer_id, multiaddr_to_socketaddr};
-    use multiaddr::Multiaddr;
-    use secio::SecioKeyPair;
+    use crate::{
+        multiaddr::Multiaddr,
+        secio::SecioKeyPair,
+        utils::{extract_peer_id, multiaddr_to_socketaddr},
+    };
 
     #[test]
     fn parser_peer_id_from_multiaddr() {

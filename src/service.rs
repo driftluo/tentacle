@@ -4,8 +4,6 @@ use futures::{
     task::{self, Task},
 };
 use log::{debug, error, trace, warn};
-use multiaddr::{multihash::Multihash, Multiaddr, Protocol, ToMultiaddr};
-use secio::{handshake::Config, PublicKey, SecioKeyPair};
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::Arc;
 use std::{
@@ -22,20 +20,26 @@ use tokio::{
     prelude::{AsyncRead, AsyncWrite, FutureExt},
     timer::Timeout,
 };
-use yamux::{session::SessionType, Config as YamuxConfig};
 
 use crate::{
-    context::{ServiceContext, ServiceControl, SessionContext},
+    context::{ServiceContext, SessionContext},
     error::Error,
+    multiaddr::{multihash::Multihash, Multiaddr, Protocol, ToMultiaddr},
     protocol_handle_stream::{
         ServiceProtocolEvent, ServiceProtocolStream, SessionProtocolEvent, SessionProtocolStream,
     },
     protocol_select::ProtocolInfo,
+    secio::{handshake::Config, PublicKey, SecioKeyPair},
     session::{Session, SessionEvent, SessionMeta},
     traits::{ProtocolMeta, ServiceHandle, ServiceProtocol, SessionProtocol},
     utils::{dns::DNSResolver, extract_peer_id, multiaddr_to_socketaddr},
+    yamux::{session::SessionType, Config as YamuxConfig},
     ProtocolId, SessionId, StreamId,
 };
+
+mod control;
+
+pub use crate::service::control::ServiceControl;
 
 /// Protocol handle value
 pub(crate) enum ProtocolHandle {
@@ -712,7 +716,7 @@ where
                         }
                     } else {
                         address.append(Protocol::P2p(
-                            Multihash::from_bytes(key.peer_id().as_bytes().to_vec())
+                            Multihash::from_bytes(key.peer_id().into_bytes())
                                 .expect("Invalid peer id"),
                         ))
                     }

@@ -1,12 +1,13 @@
 use futures::prelude::Stream;
-use p2p::{
+use std::{thread, time::Duration};
+use tentacle::{
     builder::ServiceBuilder,
     context::{ServiceContext, SessionContext},
+    secio::SecioKeyPair,
     service::Service,
     traits::{ProtocolMeta, ServiceHandle, ServiceProtocol},
-    ProtocolId, SecioKeyPair,
+    ProtocolId,
 };
-use std::{thread, time::Duration};
 use tokio::codec::LengthDelimitedCodec;
 
 pub fn create<T, F>(secio: bool, meta: T, shandle: F) -> Service<F, LengthDelimitedCodec>

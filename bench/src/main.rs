@@ -2,10 +2,11 @@ use bench::Bench;
 use futures::prelude::Stream;
 use p2p::{
     builder::ServiceBuilder,
-    context::{ServiceContext, ServiceControl, SessionContext},
-    service::Service,
+    context::{ServiceContext, SessionContext},
+    secio::SecioKeyPair,
+    service::{Service, ServiceControl},
     traits::{ProtocolMeta, ServiceHandle, ServiceProtocol},
-    ProtocolId, SecioKeyPair,
+    ProtocolId,
 };
 use std::{sync::Once, thread};
 use tokio::codec::{length_delimited::Builder, LengthDelimitedCodec};

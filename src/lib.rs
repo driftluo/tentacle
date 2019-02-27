@@ -1,15 +1,29 @@
-//! A multiplexed p2p network based on yamux that supports mounting custom protocols
+//! ## Summary
 //!
+//! A multiplexed p2p network framework based on yamux that supports mounting custom protocols.
+//!
+//! The crate is aimed at implementing a framework that light weight, simple, reliable, high performance, and friendly to users.
+//!
+//! ### Concept
+//!
+//! #### Multiaddr
+//!
+//! [Multiaddr](https://github.com/multiformats/multiaddr) aims to make network addresses future-proof, composable, and efficient.
+//!
+//! It can express almost all network protocols, such as:
+//! - TCP/IP: `/ip4/127.0.0.1/tcp/1337`
+//! - DNS/IP: `/dns4/localhost/tcp/1337`
+//! - UDP: `/ip4/127.0.0.1/udp/1234`
 //!
 
 #![deny(missing_docs)]
 
 /// Re-pub multiaddr crate
 pub use multiaddr;
-/// Re-pub some useful structures in secio
-pub use secio::{error::SecioError, PeerId, PublicKey, SecioKeyPair};
-/// Re-pub some useful structures in yamux
-pub use yamux::{session::SessionType, Config as YamuxConfig, Session};
+/// Re-pub secio crate
+pub use secio;
+/// Re-pub yamux crate
+pub use yamux;
 
 /// Some gadgets that help create a service
 pub mod builder;

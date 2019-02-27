@@ -1,5 +1,5 @@
 [package]
-name = "p2p"
+name = "tentacle"
 version = "0.1.0"
 license = "MIT"
 description = "Minimal implementation for a multiplexed p2p network framework."
@@ -12,7 +12,7 @@ edition = "2018"
 
 [dependencies]
 yamux = { path = "yamux", package = "tokio-yamux" }
-secio = { path = "secio" }
+secio = { path = "secio", package = "tentacle-secio" }
 
 futures = "0.1"
 tokio = "0.1"

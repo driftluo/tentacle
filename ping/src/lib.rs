@@ -10,8 +10,9 @@ use generic_channel::Sender;
 use log::{debug, error};
 use p2p::{
     context::{ServiceContext, SessionContext},
+    secio::PeerId,
     traits::{ProtocolMeta, ServiceProtocol},
-    PeerId, ProtocolId, SessionId,
+    ProtocolId, SessionId,
 };
 use std::{
     str,

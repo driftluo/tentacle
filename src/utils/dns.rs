@@ -1,9 +1,12 @@
 use futures::{Async, Future, Poll};
-use multiaddr::{multihash::Multihash, Multiaddr, Protocol, ToMultiaddr};
-use secio::PeerId;
 use std::{io, marker::PhantomData, net::ToSocketAddrs};
 
-use crate::{error::Error, utils::extract_peer_id};
+use crate::{
+    error::Error,
+    multiaddr::{multihash::Multihash, Multiaddr, Protocol, ToMultiaddr},
+    secio::PeerId,
+    utils::extract_peer_id,
+};
 
 /// DNS resolver, use on multi-thread tokio runtime
 pub struct DNSResolver<T> {
@@ -16,7 +19,7 @@ pub struct DNSResolver<T> {
 
 impl<T> DNSResolver<T> {
     /// If address like `/dns4/localhost/tcp/80` or `"/dns6/localhost/tcp/80"`,
-    /// it will be return Ok, else Error
+    /// it will be return Some, else None
     pub fn new(source_address: Multiaddr) -> Option<Self> {
         let mut iter = source_address.iter().peekable();
 
@@ -69,8 +72,7 @@ where
                     let mut address = address.to_multiaddr().unwrap();
                     if let Some(peer_id) = self.peer_id.take() {
                         address.append(Protocol::P2p(
-                            Multihash::from_bytes(peer_id.as_bytes().to_vec())
-                                .expect("Invalid peer id"),
+                            Multihash::from_bytes(peer_id.into_bytes()).expect("Invalid peer id"),
                         ))
                     }
                     Ok(Async::Ready(address))
@@ -94,8 +96,7 @@ where
 
 #[cfg(test)]
 mod test {
-    use crate::utils::dns::DNSResolver;
-    use multiaddr::Multiaddr;
+    use crate::{multiaddr::Multiaddr, utils::dns::DNSResolver};
 
     #[test]
     fn dns_parser() {

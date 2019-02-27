@@ -5,7 +5,7 @@ authors = ["Linfeng Qian <thewawar@gmail.com>"]
 edition = "2018"
 
 [dependencies]
-p2p = { path = "..", package = "p2p" }
+p2p = { path = "..", package = "tentacle" }
 bytes = "0.4"
 byteorder = "1.2"
 fnv = "1.0"

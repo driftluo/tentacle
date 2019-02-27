@@ -13,9 +13,8 @@ use tokio::{
     codec::{length_delimited::LengthDelimitedCodec, Decoder, Encoder, Framed},
     prelude::AsyncWrite,
 };
-use yamux::StreamHandle;
 
-use crate::{error::Error, service::ServiceTask, ProtocolId, StreamId};
+use crate::{error::Error, service::ServiceTask, yamux::StreamHandle, ProtocolId, StreamId};
 
 /// Event generated/received by the protocol stream
 #[derive(Debug)]

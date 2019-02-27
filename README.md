@@ -30,11 +30,16 @@ Detailed introduction: [中文](./docs/introduction_zh.md)/[English](./docs/intr
 
 ## Status
 
-The api of this project is changing dramatically, but the core ideas will hardly change much, PR is welcome.
-
-This library still lacks a lot of stability tests and stress tests, I will try to do these things.
+The API of this project is basically usable. However we still need more tests. PR is welcome.
 
 ## Usage
+
+### From cargo
+
+```toml
+[dependencies]
+tentacle = "0.1"
+```
 
 ### Example
 

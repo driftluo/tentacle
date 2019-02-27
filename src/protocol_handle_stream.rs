@@ -1,10 +1,10 @@
 use futures::{prelude::*, sync::mpsc, task};
 use log::warn;
-use multiaddr::Multiaddr;
 use std::collections::HashMap;
 
 use crate::{
     context::{ServiceContext, SessionContext},
+    multiaddr::Multiaddr,
     traits::{ServiceProtocol, SessionProtocol},
     ProtocolId, SessionId,
 };

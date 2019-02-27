@@ -1,6 +1,5 @@
-use crate::SessionId;
+use crate::{secio::error::SecioError, SessionId};
 use futures::sync::mpsc;
-use secio::error::SecioError;
 use std::{error, fmt, io};
 
 /// Error from p2p framework

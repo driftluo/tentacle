@@ -1,17 +1,18 @@
 use env_logger;
 use futures::{oneshot, prelude::*, sync::oneshot::Sender};
 use log::info;
-use p2p::{
-    builder::ServiceBuilder,
-    context::{ServiceContext, SessionContext},
-    service::{Service, ServiceError, ServiceEvent},
-    traits::{ProtocolMeta, ServiceHandle, ServiceProtocol},
-    ProtocolId, SecioKeyPair, SessionId,
-};
 use std::collections::HashMap;
 use std::{
     str,
     time::{Duration, Instant},
+};
+use tentacle::{
+    builder::ServiceBuilder,
+    context::{ServiceContext, SessionContext},
+    secio::SecioKeyPair,
+    service::{Service, ServiceError, ServiceEvent},
+    traits::{ProtocolMeta, ServiceHandle, ServiceProtocol},
+    ProtocolId, SessionId,
 };
 use tokio::codec::length_delimited::LengthDelimitedCodec;
 use tokio::timer::{Delay, Error, Interval};

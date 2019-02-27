@@ -3,15 +3,16 @@ use nix::{
     sys::signal::{kill, Signal},
     unistd::{fork, ForkResult},
 };
-use p2p::{
-    builder::ServiceBuilder,
-    context::{ServiceContext, SessionContext},
-    service::Service,
-    traits::{ProtocolMeta, ServiceHandle, ServiceProtocol},
-    ProtocolId, SecioKeyPair,
-};
 use std::{thread, time::Duration};
 use systemstat::{Platform, System};
+use tentacle::{
+    builder::ServiceBuilder,
+    context::{ServiceContext, SessionContext},
+    secio::SecioKeyPair,
+    service::Service,
+    traits::{ProtocolMeta, ServiceHandle, ServiceProtocol},
+    ProtocolId,
+};
 use tokio::codec::LengthDelimitedCodec;
 
 /// Get current used memory(bytes)
