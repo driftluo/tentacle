@@ -37,7 +37,7 @@ pub struct SessionContext {
 pub struct ServiceContext {
     // For tell notify finished
     session_notify_senders: HashMap<(SessionId, ProtocolId), Vec<oneshot::Sender<()>>>,
-    pub(crate) pending_task: VecDeque<ServiceTask>,
+    pub(crate) pending_tasks: VecDeque<ServiceTask>,
     listens: Vec<Multiaddr>,
     inner: ServiceControl,
 }
@@ -51,7 +51,7 @@ impl ServiceContext {
         ServiceContext {
             inner: ServiceControl::new(service_task_sender, proto_infos),
             session_notify_senders: HashMap::default(),
-            pending_task: VecDeque::default(),
+            pending_tasks: VecDeque::default(),
             listens: Vec::new(),
         }
     }
@@ -60,7 +60,7 @@ impl ServiceContext {
     #[inline]
     pub fn listen(&mut self, address: Multiaddr) {
         if let Err(Error::TaskFull(task)) = self.inner.listen(address) {
-            self.pending_task.push_back(task);
+            self.pending_tasks.push_back(task);
         }
     }
 
@@ -68,7 +68,7 @@ impl ServiceContext {
     #[inline]
     pub fn dial(&mut self, address: Multiaddr) {
         if let Err(Error::TaskFull(task)) = self.inner.dial(address) {
-            self.pending_task.push_back(task);
+            self.pending_tasks.push_back(task);
         }
     }
 
@@ -76,7 +76,7 @@ impl ServiceContext {
     #[inline]
     pub fn disconnect(&mut self, session_id: SessionId) {
         if let Err(Error::TaskFull(task)) = self.inner.disconnect(session_id) {
-            self.pending_task.push_back(task);
+            self.pending_tasks.push_back(task);
         }
     }
 
@@ -84,7 +84,7 @@ impl ServiceContext {
     #[inline]
     pub fn send_message(&mut self, session_id: SessionId, proto_id: ProtocolId, data: Vec<u8>) {
         if let Err(Error::TaskFull(task)) = self.inner.send_message(session_id, proto_id, data) {
-            self.pending_task.push_back(task);
+            self.pending_tasks.push_back(task);
         }
     }
 
@@ -98,7 +98,7 @@ impl ServiceContext {
     ) {
         if let Err(Error::TaskFull(task)) = self.inner.filter_broadcast(session_ids, proto_id, data)
         {
-            self.pending_task.push_back(task);
+            self.pending_tasks.push_back(task);
         }
     }
 
@@ -109,7 +109,7 @@ impl ServiceContext {
         T: Future<Item = (), Error = ()> + 'static + Send,
     {
         if let Err(Error::TaskFull(task)) = self.inner.future_task(task) {
-            self.pending_task.push_back(task);
+            self.pending_tasks.push_back(task);
         }
     }
 
@@ -186,7 +186,7 @@ impl ServiceContext {
     #[inline]
     pub fn send(&mut self, event: ServiceTask) {
         if let Err(Error::TaskFull(task)) = self.inner.send(event) {
-            self.pending_task.push_back(task);
+            self.pending_tasks.push_back(task);
         }
     }
 
@@ -212,7 +212,7 @@ impl ServiceContext {
         ServiceContext {
             inner: self.inner.clone(),
             session_notify_senders: HashMap::default(),
-            pending_task: VecDeque::default(),
+            pending_tasks: VecDeque::default(),
             listens: self.listens.clone(),
         }
     }
