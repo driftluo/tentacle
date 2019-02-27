@@ -212,8 +212,6 @@ pub struct Service<T, U> {
     /// The buffer which will distribute to session protocol handle
     read_session_buf: VecDeque<(SessionId, ProtocolId, SessionProtocolEvent)>,
 
-    pending_task: Vec<ServiceTask>,
-
     // The service protocols open with the session
     session_service_protos: HashMap<SessionId, HashSet<ProtocolId>>,
 
@@ -277,7 +275,6 @@ where
             write_buf: VecDeque::default(),
             read_service_buf: VecDeque::default(),
             read_session_buf: VecDeque::default(),
-            pending_task: Vec::default(),
             session_event_sender,
             session_event_receiver,
             service_context: ServiceContext::new(service_task_sender, proto_infos),
@@ -339,9 +336,11 @@ where
                         }),
                 ),
             });
-            self.pending_task.push(ServiceTask::FutureTask {
-                task: Box::new(future_task),
-            });
+            self.service_context
+                .pending_task
+                .push_back(ServiceTask::FutureTask {
+                    task: Box::new(future_task),
+                });
             self.task_count += 1;
             address
         };
@@ -386,9 +385,11 @@ where
                         }),
                 ),
             });
-            self.pending_task.push(ServiceTask::FutureTask {
-                task: Box::new(future_task),
-            });
+            self.service_context
+                .pending_task
+                .push_back(ServiceTask::FutureTask {
+                    task: Box::new(future_task),
+                });
             self.task_count += 1;
         }
 
@@ -944,8 +945,9 @@ where
             .remove_session_notify_senders(session_id, proto_id);
     }
 
+    #[inline(always)]
     fn send_pending_task(&mut self) {
-        for task in self.pending_task.split_off(0) {
+        while let Some(task) = self.service_context.pending_task.pop_front() {
             self.handle_service_task(task);
         }
     }
@@ -1219,13 +1221,9 @@ where
         if self.listens.is_empty()
             && self.task_count == 0
             && self.sessions.is_empty()
-            && self.pending_task.is_empty()
+            && self.service_context.pending_task.is_empty()
         {
             return Ok(Async::Ready(None));
-        }
-
-        if !self.pending_task.is_empty() {
-            self.send_pending_task();
         }
 
         if !self.write_buf.is_empty()
@@ -1265,15 +1263,13 @@ where
         }
 
         // process any task buffer
-        while let Some(task) = self.service_context.task_buf.pop_front() {
-            self.handle_service_task(task);
-        }
+        self.send_pending_task();
 
         // Double check service state
         if self.listens.is_empty()
             && self.task_count == 0
             && self.sessions.is_empty()
-            && self.pending_task.is_empty()
+            && self.service_context.pending_task.is_empty()
         {
             return Ok(Async::Ready(None));
         }
@@ -1282,7 +1278,7 @@ where
             self.listens.len(),
             self.task_count,
             self.sessions.len(),
-            &&self.pending_task.len(),
+            self.service_context.pending_task.len(),
         );
 
         self.notify = Some(task::current());

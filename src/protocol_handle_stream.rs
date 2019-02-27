@@ -119,11 +119,11 @@ impl Stream for ServiceProtocolStream {
             }
         }
 
-        for task in self.service_context.task_buf.split_off(0) {
+        for task in self.service_context.pending_task.split_off(0) {
             self.service_context.send(task);
         }
 
-        if !self.service_context.task_buf.is_empty() {
+        if !self.service_context.pending_task.is_empty() {
             task::current().notify();
         }
 
@@ -232,11 +232,11 @@ impl Stream for SessionProtocolStream {
             }
         }
 
-        for task in self.service_context.task_buf.split_off(0) {
+        for task in self.service_context.pending_task.split_off(0) {
             self.service_context.send(task);
         }
 
-        if !self.service_context.task_buf.is_empty() {
+        if !self.service_context.pending_task.is_empty() {
             task::current().notify();
         }
 
