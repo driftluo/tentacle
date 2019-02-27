@@ -7,11 +7,11 @@ use crate::protocol_generated::p2p::ping::*;
 use flatbuffers::{get_root, FlatBufferBuilder};
 use fnv::FnvHashMap;
 use generic_channel::Sender;
-use log::debug;
+use log::{debug, error};
 use p2p::{
     context::{ServiceContext, SessionContext},
     traits::{ProtocolMeta, ServiceProtocol},
-    ProtocolId, SessionId,
+    PeerId, ProtocolId, SessionId,
 };
 use std::{
     str,
@@ -21,8 +21,6 @@ use tokio::codec::length_delimited::LengthDelimitedCodec;
 
 const SEND_PING_TOKEN: u64 = 0;
 const CHECK_TIMEOUT_TOKEN: u64 = 1;
-// TODO: replace this with real PeerId
-type PeerId = SessionId;
 
 /// Ping protocol events
 #[derive(Debug)]
@@ -91,13 +89,22 @@ struct PingHandler<S: Sender<Event>> {
     event_sender: S,
 }
 
+impl<S: Sender<Event>> PingHandler<S> {
+    pub fn send_event(&mut self, event: Event) {
+        if let Err(err) = self.event_sender.try_send(event) {
+            error!("send ping event error: {}", err);
+        }
+    }
+}
+
 /// PingStatus of a peer
-#[derive(Copy, Clone, Debug)]
+#[derive(Clone, Debug)]
 struct PingStatus {
     /// Are we currently pinging this peer?
     processing: bool,
     /// The time we last send ping to this peer.
     last_ping: SystemTime,
+    peer_id: PeerId,
 }
 
 impl PingStatus {
@@ -125,23 +132,27 @@ where
         control.set_service_notify(self.proto_id, self.timeout, CHECK_TIMEOUT_TOKEN);
     }
 
-    fn connected(
-        &mut self,
-        _control: &mut ServiceContext,
-        session: &SessionContext,
-        version: &str,
-    ) {
-        self.connected_session_ids
-            .entry(session.id)
-            .or_insert_with(|| PingStatus {
-                last_ping: SystemTime::now(),
-                processing: false,
-            });
-        debug!(
-            "proto id [{}] open on session [{}], address: [{}], type: [{:?}], version: {}",
-            self.proto_id, session.id, session.address, session.ty, version
-        );
-        debug!("connected sessions are: {:?}", self.connected_session_ids);
+    fn connected(&mut self, control: &mut ServiceContext, session: &SessionContext, version: &str) {
+        match session.remote_pubkey {
+            Some(ref pubkey) => {
+                let peer_id = pubkey.peer_id();
+                self.connected_session_ids
+                    .entry(session.id)
+                    .or_insert_with(|| PingStatus {
+                        last_ping: SystemTime::now(),
+                        processing: false,
+                        peer_id,
+                    });
+                debug!(
+                    "proto id [{}] open on session [{}], address: [{}], type: [{:?}], version: {}",
+                    self.proto_id, session.id, session.address, session.ty, version
+                );
+                debug!("connected sessions are: {:?}", self.connected_session_ids);
+            }
+            None => {
+                control.disconnect(session.id);
+            }
+        }
     }
 
     fn disconnected(&mut self, _control: &mut ServiceContext, session: &SessionContext) {
@@ -153,43 +164,47 @@ where
     }
 
     fn received(&mut self, control: &mut ServiceContext, session: &SessionContext, data: Vec<u8>) {
-        let msg = get_root::<PingMessage>(&data);
-        match msg.payload_type() {
-            PingPayload::Ping => {
-                let ping_msg = msg.payload_as_ping().unwrap();
-                let mut fbb = FlatBufferBuilder::new();
-                let msg = PingMessage::build_pong(&mut fbb, ping_msg.nonce());
-                fbb.finish(msg, None);
-                control.send_message(session.id, self.proto_id, fbb.finished_data().to_vec());
-                let _ = self.event_sender.try_send(Event::Ping(session.id));
-            }
-            PingPayload::Pong => {
-                let pong_msg = msg.payload_as_pong().unwrap();
-                // check pong
-                if self
-                    .connected_session_ids
-                    .get(&session.id)
-                    .map(|ps| (ps.processing, ps.nonce()))
-                    == Some((true, pong_msg.nonce()))
-                {
-                    if let Some(ps) = self.connected_session_ids.get_mut(&session.id) {
-                        ps.processing = false;
-                        let _ = self
-                            .event_sender
-                            .try_send(Event::Pong(session.id, ps.elapsed()));
-                    }
-                } else {
-                    // ignore if nonce is incorrect
-                    let _ = self
-                        .event_sender
-                        .try_send(Event::UnexpectedError(session.id));
+        if let Some(peer_id) = self
+            .connected_session_ids
+            .get(&session.id)
+            .map(|ps| ps.peer_id.clone())
+        {
+            let msg = get_root::<PingMessage>(&data);
+            match msg.payload_type() {
+                PingPayload::Ping => {
+                    let ping_msg = msg.payload_as_ping().unwrap();
+                    let mut fbb = FlatBufferBuilder::new();
+                    let msg = PingMessage::build_pong(&mut fbb, ping_msg.nonce());
+                    fbb.finish(msg, None);
+                    control.send_message(session.id, self.proto_id, fbb.finished_data().to_vec());
+                    self.send_event(Event::Ping(peer_id));
                 }
-            }
-            PingPayload::NONE => {
-                // can't decode msg
-                let _ = self
-                    .event_sender
-                    .try_send(Event::UnexpectedError(session.id));
+                PingPayload::Pong => {
+                    let pong_msg = msg.payload_as_pong().unwrap();
+                    // check pong
+                    if self
+                        .connected_session_ids
+                        .get(&session.id)
+                        .map(|ps| (ps.processing, ps.nonce()))
+                        == Some((true, pong_msg.nonce()))
+                    {
+                        let ping_time = match self.connected_session_ids.get_mut(&session.id) {
+                            Some(ps) => {
+                                ps.processing = false;
+                                ps.elapsed()
+                            }
+                            None => return,
+                        };
+                        self.send_event(Event::Pong(peer_id, ping_time));
+                    } else {
+                        // ignore if nonce is incorrect
+                        self.send_event(Event::UnexpectedError(peer_id));
+                    }
+                }
+                PingPayload::NONE => {
+                    // can't decode msg
+                    self.send_event(Event::UnexpectedError(peer_id));
+                }
             }
         }
     }
@@ -230,12 +245,14 @@ where
             CHECK_TIMEOUT_TOKEN => {
                 debug!("proto [{}] check ping timeout", self.proto_id);
                 let timeout = self.timeout;
-                for (session_id, _) in self
+                for peer_id in self
                     .connected_session_ids
-                    .iter()
-                    .filter(|(_, ps)| ps.processing && ps.elapsed() >= timeout)
+                    .values()
+                    .filter(|ps| ps.processing && ps.elapsed() >= timeout)
+                    .map(|ps| ps.peer_id.clone())
+                    .collect::<Vec<PeerId>>()
                 {
-                    let _ = self.event_sender.try_send(Event::Timeout(*session_id));
+                    self.send_event(Event::Timeout(peer_id));
                 }
             }
             _ => panic!("unknown token {}", token),
