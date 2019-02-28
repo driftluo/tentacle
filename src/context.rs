@@ -22,7 +22,7 @@ use crate::{
 };
 
 /// Session context, contains basic information about the current connection
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct SessionContext {
     pub(crate) event_sender: mpsc::Sender<SessionEvent>,
     /// Session's ID

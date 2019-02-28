@@ -7,7 +7,7 @@ use log::{debug, error, trace, warn};
 use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
 use std::{error, io, time::Duration};
-use tokio::codec::{Decoder, Encoder, Framed, FramedParts};
+use tokio::codec::{Decoder, Encoder, Framed, FramedParts, LengthDelimitedCodec};
 use tokio::prelude::{AsyncRead, AsyncWrite, FutureExt};
 
 use crate::{
@@ -95,10 +95,16 @@ pub(crate) enum SessionEvent {
         /// Stream id
         stream_id: StreamId,
     },
+    ProtocolSelectError {
+        /// Session id
+        id: SessionId,
+        /// proto_name
+        proto_name: Option<String>,
+    },
     /// Codec error
     ProtocolError {
-        /// Stream id
-        id: StreamId,
+        /// Session id
+        id: SessionId,
         /// Protocol id
         proto_id: ProtocolId,
         /// Codec error
@@ -181,21 +187,24 @@ where
         }
     }
 
-    /// After the session is established, the client is requested to open some custom protocol sub stream.
-    pub fn open_proto_stream(&mut self, proto_name: &str) {
-        debug!("try open proto, {}", proto_name);
+    /// select procedure
+    #[inline(always)]
+    fn select_procedure(
+        &mut self,
+        procedure: impl Future<
+                Item = (
+                    Framed<StreamHandle, LengthDelimitedCodec>,
+                    String,
+                    Option<String>,
+                ),
+                Error = io::Error,
+            > + Send
+            + 'static,
+    ) {
         let event_sender = self.proto_event_sender.clone();
-        let handle = self.socket.open_stream().unwrap();
-        let versions = self
-            .protocol_configs
-            .get(proto_name)
-            .unwrap()
-            .support_versions();
-        let proto_info = ProtocolInfo::new(&proto_name, versions);
-
-        let task = client_select(handle, proto_info)
-            .and_then(|(handle, name, version)| {
-                match version {
+        let task = procedure.timeout(self.timeout).then(|result| {
+            match result {
+                Ok((handle, name, version)) => match version {
                     Some(version) => {
                         let send_task = event_sender.send(ProtocolEvent::Open {
                             sub_stream: Box::new(handle),
@@ -206,16 +215,45 @@ where
                             error!("stream send back error: {:?}", err);
                         }));
                     }
-                    None => debug!("Negotiation to open the protocol {} failed", name),
+                    None => {
+                        debug!("Negotiation to open the protocol {} failed", name);
+                        let send_task = event_sender.send(ProtocolEvent::SelectError {
+                            proto_name: Some(name),
+                        });
+                        tokio::spawn(send_task.map(|_| ()).map_err(|err| {
+                            error!("select error send back error: {:?}", err);
+                        }));
+                    }
+                },
+                Err(err) => {
+                    debug!("stream protocol select err: {:?}", err);
+                    let send_task =
+                        event_sender.send(ProtocolEvent::SelectError { proto_name: None });
+                    tokio::spawn(send_task.map(|_| ()).map_err(|err| {
+                        error!("select error send back error: {:?}", err);
+                    }));
                 }
-                Ok(())
-            })
-            .timeout(self.timeout)
-            .map_err(|err| {
-                trace!("stream protocol select err: {:?}", err);
-            });
+            }
+
+            Ok(())
+        });
 
         tokio::spawn(task);
+    }
+
+    /// After the session is established, the client is requested to open some custom protocol sub stream.
+    pub fn open_proto_stream(&mut self, proto_name: &str) {
+        debug!("try open proto, {}", proto_name);
+        let handle = self.socket.open_stream().unwrap();
+        let versions = self
+            .protocol_configs
+            .get(proto_name)
+            .unwrap()
+            .support_versions();
+        let proto_info = ProtocolInfo::new(&proto_name, versions);
+
+        let task = client_select(handle, proto_info);
+        self.select_procedure(task);
     }
 
     /// Push the generated event to the Service
@@ -277,7 +315,6 @@ where
 
     /// Handling client-initiated open protocol sub stream requests
     fn handle_sub_stream(&mut self, sub_stream: StreamHandle) {
-        let event_sender = self.proto_event_sender.clone();
         let proto_metas = self
             .protocol_configs
             .values()
@@ -288,34 +325,8 @@ where
             })
             .collect();
 
-        let task = server_select(sub_stream, proto_metas)
-            .and_then(|(handle, name, version)| {
-                match version {
-                    Some(version) => {
-                        let send_task = event_sender.send(ProtocolEvent::Open {
-                            sub_stream: Box::new(handle),
-                            proto_name: name,
-                            version,
-                        });
-
-                        tokio::spawn(send_task.map(|_| ()).map_err(|err| {
-                            error!("stream send back error: {:?}", err);
-                        }));
-                    }
-                    None => {
-                        // server close the connect
-                        let _ = handle.into_inner().shutdown();
-                        debug!("negotiation to open the protocol [{}] failed", name);
-                    }
-                }
-                Ok(())
-            })
-            .timeout(self.timeout)
-            .map_err(|err| {
-                trace!("stream protocol select err: {:?}", err);
-            });
-
-        tokio::spawn(task);
+        let task = server_select(sub_stream, proto_metas);
+        self.select_procedure(task);
     }
 
     /// Handling events uploaded by the protocol stream
@@ -382,6 +393,12 @@ where
                     id: self.id,
                     proto_id,
                     data,
+                })
+            }
+            ProtocolEvent::SelectError { proto_name } => {
+                self.event_output(SessionEvent::ProtocolSelectError {
+                    id: self.id,
+                    proto_name,
                 })
             }
             ProtocolEvent::Error {
