@@ -6,9 +6,15 @@ use futures::{
 use log::{debug, error, trace, warn};
 use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
-use std::{error, io, time::Duration};
-use tokio::codec::{Decoder, Encoder, Framed, FramedParts, LengthDelimitedCodec};
+use std::{
+    error, io,
+    time::{Duration, Instant},
+};
 use tokio::prelude::{AsyncRead, AsyncWrite, FutureExt};
+use tokio::{
+    codec::{Decoder, Encoder, Framed, FramedParts, LengthDelimitedCodec},
+    timer::Delay,
+};
 
 use crate::{
     error::Error,
@@ -120,6 +126,7 @@ pub(crate) struct Session<T, U> {
 
     id: SessionId,
     timeout: Duration,
+    timeout_check: Option<Delay>,
 
     dead: bool,
 
@@ -172,6 +179,7 @@ where
             protocol_configs: meta.protocol_configs,
             id: meta.id,
             timeout: meta.timeout,
+            timeout_check: Some(Delay::new(Instant::now() + meta.timeout)),
             ty: meta.ty,
             next_stream: 0,
             sub_streams: HashMap::default(),
@@ -492,6 +500,18 @@ where
 
         if !self.read_buf.is_empty() || !self.write_buf.is_empty() {
             self.flush();
+        }
+
+        if let Some(mut check) = self.timeout_check.take() {
+            match check.poll() {
+                Ok(Async::Ready(_)) => {
+                    if self.sub_streams.is_empty() {
+                        self.dead = true;
+                    }
+                }
+                Ok(Async::NotReady) => self.timeout_check = Some(check),
+                Err(e) => debug!("timeout check error: {}", e),
+            }
         }
 
         loop {
