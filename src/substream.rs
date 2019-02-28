@@ -44,6 +44,9 @@ pub(crate) enum ProtocolEvent {
         /// Data
         data: bytes::Bytes,
     },
+    SelectError {
+        proto_name: Option<String>,
+    },
     /// Codec error
     Error {
         /// Stream id

@@ -34,7 +34,7 @@ use crate::{
     traits::{ProtocolMeta, ServiceHandle, ServiceProtocol, SessionProtocol},
     utils::{dns::DNSResolver, extract_peer_id, multiaddr_to_socketaddr},
     yamux::{session::SessionType, Config as YamuxConfig},
-    ProtocolId, SessionId, StreamId,
+    ProtocolId, SessionId,
 };
 
 mod control;
@@ -66,10 +66,18 @@ pub enum ServiceError {
         /// error
         error: Error<ServiceTask>,
     },
+    /// Protocol select fail
+    ProtocolSelectError {
+        /// Protocol name, if none, timeout or other net problem,
+        /// if Some, don't support this proto
+        proto_name: Option<String>,
+        /// Session context
+        session_context: SessionContext,
+    },
     /// Protocol error during interaction
     ProtocolError {
-        /// Stream id
-        id: StreamId,
+        /// Session id
+        id: SessionId,
         /// Protocol id
         proto_id: ProtocolId,
         /// Codec error
@@ -1022,6 +1030,17 @@ where
                 ..
             } => self.protocol_open(id, proto_id, version),
             SessionEvent::ProtocolClose { id, proto_id, .. } => self.protocol_close(id, proto_id),
+            SessionEvent::ProtocolSelectError { id, proto_name } => {
+                if let Some(session_context) = self.sessions.get(&id).cloned() {
+                    self.handle.handle_error(
+                        &mut self.service_context,
+                        ServiceError::ProtocolSelectError {
+                            proto_name,
+                            session_context,
+                        },
+                    )
+                }
+            }
             SessionEvent::ProtocolError {
                 id,
                 proto_id,
