@@ -14,7 +14,7 @@ use tokio::codec::Framed;
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::timer::Interval;
 
-use crate::addr::{AddrKnown, AddressManager, RawAddr};
+use crate::addr::{AddrKnown, AddressManager, Misbehavior, RawAddr};
 use crate::message::{DiscoveryCodec, DiscoveryMessage, Node, Nodes};
 
 // FIXME: should be a more high level version number
@@ -24,6 +24,9 @@ const MAX_ADDR_TO_SEND: usize = 1000;
 // Every 24 hours send announce nodes message
 // const ANNOUNCE_INTERVAL: u64 = 3600 * 24;
 const ANNOUNCE_THRESHOLD: usize = 10;
+
+// The maximum number addresses in on Nodes item
+const MAX_ADDRS: usize = 3;
 
 #[derive(Eq, PartialEq, Hash, Debug, Clone)]
 pub struct SubstreamKey {
@@ -189,7 +192,11 @@ impl SubstreamValue {
             DiscoveryMessage::GetNodes { listen_port, .. } => {
                 if self.received_get_nodes {
                     // TODO: misbehavior
-                    if addr_mgr.misbehave(self.remote_addr.into_multiaddr(), 111) < 0 {
+                    if addr_mgr.misbehave(
+                        self.remote_addr.into_multiaddr(),
+                        Misbehavior::DuplicateGetNodes,
+                    ) < 0
+                    {
                         // TODO: more clear error type
                         warn!("Already received get nodes");
                         return Err(io::ErrorKind::Other.into());
@@ -228,11 +235,25 @@ impl SubstreamValue {
                 }
             }
             DiscoveryMessage::Nodes(nodes) => {
+                for item in &nodes.items {
+                    if item.addresses.len() > MAX_ADDRS {
+                        let misbehavior = Misbehavior::TooManyAddresses(item.addresses.len());
+                        if addr_mgr.misbehave(self.remote_addr.into_multiaddr(), misbehavior) < 0 {
+                            // TODO: more clear error type
+                            return Err(io::ErrorKind::Other.into());
+                        }
+                    }
+                }
+
                 if nodes.announce {
                     if nodes.items.len() > ANNOUNCE_THRESHOLD {
-                        warn!("Nodes number more than {}", ANNOUNCE_THRESHOLD);
+                        warn!("Nodes items more than {}", ANNOUNCE_THRESHOLD);
                         // TODO: misbehavior
-                        if addr_mgr.misbehave(self.remote_addr.into_multiaddr(), 222) < 0 {
+                        let misbehavior = Misbehavior::TooManyItems {
+                            announce: nodes.announce,
+                            length: nodes.items.len(),
+                        };
+                        if addr_mgr.misbehave(self.remote_addr.into_multiaddr(), misbehavior) < 0 {
                             // TODO: more clear error type
                             return Err(io::ErrorKind::Other.into());
                         }
@@ -242,17 +263,25 @@ impl SubstreamValue {
                 } else if self.received_nodes {
                     warn!("already received Nodes(announce=false) message");
                     // TODO: misbehavior
-                    if addr_mgr.misbehave(self.remote_addr.into_multiaddr(), 333) < 0 {
+                    if addr_mgr.misbehave(
+                        self.remote_addr.into_multiaddr(),
+                        Misbehavior::DuplicateFirstNodes,
+                    ) < 0
+                    {
                         // TODO: more clear error type
                         return Err(io::ErrorKind::Other.into());
                     }
                 } else if nodes.items.len() > MAX_ADDR_TO_SEND {
                     warn!(
-                        "Too many addresses(announce=false): the length={}",
+                        "Too many items (announce=false) length={}",
                         nodes.items.len()
                     );
                     // TODO: misbehavior
-                    if addr_mgr.misbehave(self.remote_addr.into_multiaddr(), 444) < 0 {
+                    let misbehavior = Misbehavior::TooManyItems {
+                        announce: nodes.announce,
+                        length: nodes.items.len(),
+                    };
+                    if addr_mgr.misbehave(self.remote_addr.into_multiaddr(), misbehavior) < 0 {
                         // TODO: more clear error type
                         return Err(io::ErrorKind::Other.into());
                     }
