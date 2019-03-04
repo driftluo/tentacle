@@ -14,6 +14,10 @@ mod addr;
 mod message;
 mod substream;
 
+#[rustfmt::skip]
+#[allow(clippy::all)]
+mod message_generated;
+
 pub use crate::{
     addr::{AddrKnown, AddressManager, Misbehavior, RawAddr},
     message::{DiscoveryMessage, Node, Nodes},

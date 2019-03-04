@@ -1,12 +1,17 @@
 use std::io;
 
 use bytes::{Bytes, BytesMut};
+use flatbuffers::{get_root, FlatBufferBuilder};
 use log::debug;
-use serde_derive::{Deserialize, Serialize};
 use tokio::codec::length_delimited::LengthDelimitedCodec;
 use tokio::codec::{Decoder, Encoder};
 
 use crate::addr::RawAddr;
+use crate::message_generated::p2p::discovery::{
+    BytesBuilder, DiscoveryMessage as FbsDiscoveryMessage, DiscoveryMessageBuilder,
+    DiscoveryPayload as FbsDiscoveryPayload, GetNodes as FbsGetNodes, GetNodesBuilder, NodeBuilder,
+    Nodes as FbsNodes, NodesBuilder,
+};
 
 pub(crate) struct DiscoveryCodec {
     inner: LengthDelimitedCodec,
@@ -28,8 +33,8 @@ impl Decoder for DiscoveryCodec {
         match self.inner.decode(src) {
             Ok(Some(frame)) => {
                 // TODO: more error information
-                bincode::deserialize(&frame).map(Some).map_err(|err| {
-                    debug!("deserialize error: {:?}", err);
+                DiscoveryMessage::decode(&frame).map(Some).ok_or_else(|| {
+                    debug!("deserialize error");
                     io::ErrorKind::InvalidData.into()
                 })
             }
@@ -49,16 +54,12 @@ impl Encoder for DiscoveryCodec {
 
     fn encode(&mut self, item: Self::Item, dst: &mut BytesMut) -> Result<(), Self::Error> {
         // TODO: more error information
-        bincode::serialize(&item)
-            .map_err(|err| {
-                debug!("serialize error: {:?}", err);
-                io::ErrorKind::InvalidData.into()
-            })
-            .and_then(|frame| self.inner.encode(Bytes::from(frame), dst))
+        let data = DiscoveryMessage::encode(&item);
+        self.inner.encode(Bytes::from(data), dst)
     }
 }
 
-#[derive(Clone, Serialize, Deserialize, PartialEq, Eq, Debug)]
+#[derive(Clone, PartialEq, Eq, Debug)]
 pub enum DiscoveryMessage {
     GetNodes {
         version: u32,
@@ -68,13 +69,107 @@ pub enum DiscoveryMessage {
     Nodes(Nodes),
 }
 
-#[derive(Clone, Serialize, Deserialize, PartialEq, Eq, Debug)]
+impl DiscoveryMessage {
+    pub fn encode(&self) -> Vec<u8> {
+        let mut fbb = FlatBufferBuilder::new();
+        let offset = match self {
+            DiscoveryMessage::GetNodes {
+                version,
+                count,
+                listen_port,
+            } => {
+                let mut get_nodes_builder = GetNodesBuilder::new(&mut fbb);
+                get_nodes_builder.add_version(*version);
+                get_nodes_builder.add_count(*count);
+                get_nodes_builder.add_listen_port(listen_port.unwrap_or(0));
+
+                let get_nodes = get_nodes_builder.finish();
+
+                let mut builder = DiscoveryMessageBuilder::new(&mut fbb);
+                builder.add_payload_type(FbsDiscoveryPayload::GetNodes);
+                builder.add_payload(get_nodes.as_union_value());
+                builder.finish()
+            }
+            DiscoveryMessage::Nodes(Nodes { announce, items }) => {
+                let mut vec_items = Vec::new();
+                for item in items {
+                    let mut vec_addrs = Vec::new();
+                    for address in &item.addresses {
+                        let seq = fbb.create_vector(&address.0);
+                        let mut bytes_builder = BytesBuilder::new(&mut fbb);
+                        bytes_builder.add_seq(seq);
+                        vec_addrs.push(bytes_builder.finish());
+                    }
+                    let fbs_addrs = fbb.create_vector(&vec_addrs);
+                    let mut node_builder = NodeBuilder::new(&mut fbb);
+                    node_builder.add_addresses(fbs_addrs);
+                    vec_items.push(node_builder.finish());
+                }
+                let fbs_items = fbb.create_vector(&vec_items);
+                let mut nodes_builder = NodesBuilder::new(&mut fbb);
+                nodes_builder.add_announce(*announce);
+                nodes_builder.add_items(fbs_items);
+                let nodes = nodes_builder.finish();
+
+                let mut builder = DiscoveryMessageBuilder::new(&mut fbb);
+                builder.add_payload_type(FbsDiscoveryPayload::Nodes);
+                builder.add_payload(nodes.as_union_value());
+                builder.finish()
+            }
+        };
+        fbb.finish(offset, None);
+        fbb.finished_data().to_vec()
+    }
+
+    pub fn decode(data: &[u8]) -> Option<Self> {
+        let fbs_message = get_root::<FbsDiscoveryMessage>(data);
+        let payload = fbs_message.payload()?;
+        match fbs_message.payload_type() {
+            FbsDiscoveryPayload::GetNodes => {
+                let fbs_get_nodes = FbsGetNodes::init_from_table(payload);
+                let listen_port = if fbs_get_nodes.listen_port() == 0 {
+                    None
+                } else {
+                    Some(fbs_get_nodes.listen_port())
+                };
+                Some(DiscoveryMessage::GetNodes {
+                    version: fbs_get_nodes.version(),
+                    count: fbs_get_nodes.count(),
+                    listen_port,
+                })
+            }
+            FbsDiscoveryPayload::Nodes => {
+                let fbs_nodes = FbsNodes::init_from_table(payload);
+                let fbs_items = fbs_nodes.items()?;
+                let mut items = Vec::new();
+                for i in 0..fbs_items.len() {
+                    let fbs_node = fbs_items.get(i);
+                    let fbs_addresses = fbs_node.addresses()?;
+                    let mut addresses = Vec::new();
+                    for j in 0..fbs_addresses.len() {
+                        let address = fbs_addresses.get(j);
+                        let bytes: &[u8] = address.seq()?;
+                        addresses.push(RawAddr::from(bytes))
+                    }
+                    items.push(Node { addresses });
+                }
+                Some(DiscoveryMessage::Nodes(Nodes {
+                    announce: fbs_nodes.announce(),
+                    items,
+                }))
+            }
+            _ => None,
+        }
+    }
+}
+
+#[derive(Clone, PartialEq, Eq, Debug)]
 pub struct Nodes {
     pub(crate) announce: bool,
     pub(crate) items: Vec<Node>,
 }
 
-#[derive(Clone, Serialize, Deserialize, PartialEq, Eq, Debug)]
+#[derive(Clone, PartialEq, Eq, Debug)]
 pub struct Node {
     pub(crate) addresses: Vec<RawAddr>,
 }

@@ -79,7 +79,16 @@ impl Default for AddrKnown {
 }
 
 #[derive(Copy, Clone, Debug, PartialOrd, Ord, Eq, PartialEq, Hash, Serialize, Deserialize)]
-pub struct RawAddr([u8; 18]);
+pub struct RawAddr(pub(crate) [u8; 18]);
+
+impl From<&[u8]> for RawAddr {
+    fn from(source: &[u8]) -> RawAddr {
+        let n = std::cmp::min(source.len(), 18);
+        let mut data = PCH_IPV4;
+        data.copy_from_slice(&source[0..n]);
+        RawAddr(data)
+    }
+}
 
 impl From<SocketAddr> for RawAddr {
     // CService::GetKey()
