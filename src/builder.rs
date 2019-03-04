@@ -5,7 +5,7 @@ use tokio::codec::{Decoder, Encoder};
 
 use crate::{
     secio::SecioKeyPair,
-    service::Service,
+    service::{config::ServiceConfig, Service},
     traits::{ProtocolMeta, ServiceHandle},
     yamux::Config,
 };
@@ -15,9 +15,7 @@ pub struct ServiceBuilder<U> {
     inner: HashMap<String, Box<dyn ProtocolMeta<U> + Send + Sync>>,
     key_pair: Option<SecioKeyPair>,
     forever: bool,
-    timeout: Duration,
-    yamux_config: Config,
-    max_frame_length: usize,
+    config: ServiceConfig,
 }
 
 impl<U> ServiceBuilder<U>
@@ -41,10 +39,8 @@ where
             handle,
             self.key_pair,
             self.forever,
-            self.timeout,
+            self.config,
         )
-        .max_frame_length(self.max_frame_length)
-        .yamux_config(self.yamux_config)
     }
 
     /// Insert a custom protocol
@@ -52,6 +48,10 @@ where
     where
         T: ProtocolMeta<U> + Send + Sync + 'static,
     {
+        self.config.event.insert(
+            protocol.id(),
+            protocol.session_handle().is_none() && protocol.service_handle().is_none(),
+        );
         self.inner.insert(
             protocol.name(),
             Box::new(protocol) as Box<dyn ProtocolMeta<_> + Send + Sync>,
@@ -78,7 +78,7 @@ where
     ///
     /// Default 10 second
     pub fn timeout(mut self, timeout: Duration) -> Self {
-        self.timeout = timeout;
+        self.config.timeout = timeout;
         self
     }
 
@@ -86,8 +86,8 @@ where
     ///
     /// Panic when max_frame_length < yamux_max_window_size
     pub fn yamux_config(mut self, config: Config) -> Self {
-        assert!(self.max_frame_length as u32 >= config.max_stream_window_size);
-        self.yamux_config = config;
+        assert!(self.config.max_frame_length as u32 >= config.max_stream_window_size);
+        self.config.yamux_config = config;
         self
     }
 
@@ -95,14 +95,15 @@ where
     ///
     /// Panic when max_frame_length < yamux_max_window_size
     pub fn max_frame_length(mut self, size: usize) -> Self {
-        assert!(size as u32 >= self.yamux_config.max_stream_window_size);
-        self.max_frame_length = size;
+        assert!(size as u32 >= self.config.yamux_config.max_stream_window_size);
+        self.config.max_frame_length = size;
         self
     }
 
     /// Clear all protocols
     pub fn clear(&mut self) {
         self.inner.clear();
+        self.config.event.clear();
     }
 }
 
@@ -117,9 +118,7 @@ where
             inner: HashMap::new(),
             key_pair: None,
             forever: false,
-            timeout: Duration::from_secs(10),
-            yamux_config: Config::default(),
-            max_frame_length: 1024 * 1024 * 8,
+            config: ServiceConfig::default(),
         }
     }
 }

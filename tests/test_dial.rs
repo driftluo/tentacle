@@ -96,9 +96,9 @@ impl ServiceHandle for SHandle {
     }
 
     fn handle_event(&mut self, _env: &mut ServiceContext, event: ServiceEvent) {
-        if let ServiceEvent::SessionOpen { id, ty, .. } = event {
-            self.session_id = id;
-            self.kind = ty;
+        if let ServiceEvent::SessionOpen { session_context } = event {
+            self.session_id = session_context.id;
+            self.kind = session_context.ty;
         }
     }
 }

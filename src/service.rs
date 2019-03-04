@@ -9,7 +9,6 @@ use std::sync::Arc;
 use std::{
     error::{self, Error as ErrorTrait},
     io,
-    time::Duration,
 };
 use tokio::net::{
     tcp::{ConnectFuture, Incoming},
@@ -30,6 +29,7 @@ use crate::{
     },
     protocol_select::ProtocolInfo,
     secio::{handshake::Config, PublicKey, SecioKeyPair},
+    service::config::ServiceConfig,
     session::{Session, SessionEvent, SessionMeta},
     traits::{ProtocolMeta, ServiceHandle, ServiceProtocol, SessionProtocol},
     utils::{dns::DNSResolver, extract_peer_id, multiaddr_to_socketaddr},
@@ -37,12 +37,13 @@ use crate::{
     ProtocolId, SessionId,
 };
 
+pub(crate) mod config;
 mod control;
 mod event;
 
 pub use crate::service::{
     control::ServiceControl,
-    event::{ServiceError, ServiceEvent, ServiceTask},
+    event::{ProtocolEvent, ServiceError, ServiceEvent, ServiceTask},
 };
 
 /// Protocol handle value
@@ -62,7 +63,7 @@ pub struct Service<T, U> {
     listens: Vec<(Multiaddr, Incoming)>,
 
     dial: Vec<(Multiaddr, Timeout<ConnectFuture>)>,
-    timeout: Duration,
+    config: ServiceConfig,
     /// Calculate the number of connection requests that need to be sent externally,
     /// if run forever, it will default to 1, else it default to 0
     task_count: usize,
@@ -70,10 +71,6 @@ pub struct Service<T, U> {
     next_session: SessionId,
 
     key_pair: Option<SecioKeyPair>,
-
-    yamux_config: YamuxConfig,
-
-    max_frame_length: usize,
 
     /// Can be upgrade to list service level protocols
     handle: T,
@@ -118,7 +115,7 @@ where
         handle: T,
         key_pair: Option<SecioKeyPair>,
         forever: bool,
-        timeout: Duration,
+        config: ServiceConfig,
     ) -> Self {
         let (session_event_sender, session_event_receiver) = mpsc::channel(256);
         let (service_task_sender, service_task_receiver) = mpsc::channel(256);
@@ -140,9 +137,7 @@ where
             session_proto_handles: HashMap::default(),
             listens: Vec::new(),
             dial: Vec::new(),
-            timeout,
-            yamux_config: YamuxConfig::default(),
-            max_frame_length: 1024 * 1024 * 8,
+            config,
             task_count: if forever { 1 } else { 0 },
             next_session: 0,
             write_buf: VecDeque::default(),
@@ -160,8 +155,8 @@ where
     ///
     /// Panic when max_frame_length < yamux_max_window_size
     pub fn yamux_config(mut self, config: YamuxConfig) -> Self {
-        assert!(self.max_frame_length as u32 >= config.max_stream_window_size);
-        self.yamux_config = config;
+        assert!(self.config.max_frame_length as u32 >= config.max_stream_window_size);
+        self.config.yamux_config = config;
         self
     }
 
@@ -169,8 +164,8 @@ where
     ///
     /// Panic when max_frame_length < yamux_max_window_size
     pub fn max_frame_length(mut self, size: usize) -> Self {
-        assert!(size as u32 >= self.yamux_config.max_stream_window_size);
-        self.max_frame_length = size;
+        assert!(size as u32 >= self.config.yamux_config.max_stream_window_size);
+        self.config.max_frame_length = size;
         self
     }
 
@@ -230,7 +225,7 @@ where
     #[inline(always)]
     fn dial_inner(&mut self, address: Multiaddr) -> Result<(), io::Error> {
         if let Some(socket_address) = multiaddr_to_socketaddr(&address) {
-            let dial = TcpStream::connect(&socket_address).timeout(self.timeout);
+            let dial = TcpStream::connect(&socket_address).timeout(self.config.timeout);
             self.dial.push((address, dial));
             self.task_count += 1;
         } else {
@@ -474,9 +469,9 @@ where
             let sender = self.session_event_sender.clone();
 
             let task = Config::new(key_pair)
-                .max_frame_length(self.max_frame_length)
+                .max_frame_length(self.config.max_frame_length)
                 .handshake(socket)
-                .timeout(self.timeout)
+                .timeout(self.config.timeout)
                 .then(move |result| {
                     let send_task = match result {
                         Ok((handle, public_key, _)) => {
@@ -601,15 +596,15 @@ where
         let session = SessionContext {
             event_sender: service_event_sender,
             id: self.next_session,
-            address: address.clone(),
+            address,
             ty,
-            remote_pubkey: remote_pubkey.clone(),
+            remote_pubkey,
         };
         self.sessions.insert(session.id, session);
 
-        let meta = SessionMeta::new(self.next_session, ty, self.timeout)
+        let meta = SessionMeta::new(self.next_session, ty, self.config.timeout)
             .protocol(self.protocol_configs.clone())
-            .config(self.yamux_config);
+            .config(self.config.yamux_config);
 
         let mut session = Session::new(
             handle,
@@ -626,15 +621,12 @@ where
 
         tokio::spawn(session.for_each(|_| Ok(())).map_err(|_| ()));
 
-        self.handle.handle_event(
-            &mut self.service_context,
-            ServiceEvent::SessionOpen {
-                id: self.next_session,
-                address,
-                ty,
-                public_key: remote_pubkey,
-            },
-        );
+        if let Some(session_context) = self.sessions.get(&self.next_session) {
+            self.handle.handle_event(
+                &mut self.service_context,
+                ServiceEvent::SessionOpen { session_context },
+            );
+        }
     }
 
     /// Close the specified session, clean up the handle
@@ -657,11 +649,15 @@ where
             self.protocol_close(id, proto_id);
         });
 
-        self.sessions.remove(&id);
-
-        // Service handle processing flow
-        self.handle
-            .handle_event(&mut self.service_context, ServiceEvent::SessionClose { id });
+        if let Some(session_context) = self.sessions.remove(&id) {
+            // Service handle processing flow
+            self.handle.handle_event(
+                &mut self.service_context,
+                ServiceEvent::SessionClose {
+                    session_context: &session_context,
+                },
+            );
+        }
     }
 
     /// Open the handle corresponding to the protocol
@@ -680,63 +676,76 @@ where
             .or_default()
             .insert(proto_id);
 
-        // Service proto handle processing flow
-        if !self.service_proto_handles.contains_key(&proto_id) {
-            if let Some(ProtocolHandle::Service(handle)) = self.proto_handle(false, proto_id) {
-                debug!("init service level [{}] proto handle", proto_id);
+        if *self.config.event.get(&proto_id).unwrap_or_else(|| &true) {
+            // event output
+            self.handle.handle_proto(
+                &mut self.service_context,
+                ProtocolEvent::Connected {
+                    session_context,
+                    proto_id,
+                    version,
+                },
+            );
+        } else {
+            // callback output
+            // Service proto handle processing flow
+            if !self.service_proto_handles.contains_key(&proto_id) {
+                if let Some(ProtocolHandle::Service(handle)) = self.proto_handle(false, proto_id) {
+                    debug!("init service level [{}] proto handle", proto_id);
+                    let (sender, receiver) = mpsc::channel(32);
+                    let stream = ServiceProtocolStream::new(
+                        handle,
+                        self.service_context.clone_self(),
+                        receiver,
+                        proto_id,
+                    );
+
+                    self.service_proto_handles.insert(proto_id, sender);
+
+                    tokio::spawn(stream.for_each(|_| Ok(())).map_err(|_| ()));
+
+                    self.read_service_buf
+                        .push_back((proto_id, ServiceProtocolEvent::Init));
+                }
+            }
+
+            if self.service_proto_handles.contains_key(&proto_id) {
+                self.read_service_buf.push_back((
+                    proto_id,
+                    ServiceProtocolEvent::Connected {
+                        session: session_context.clone(),
+                        version: version.clone(),
+                    },
+                ));
+            }
+
+            // Session proto handle processing flow
+            if let Some(ProtocolHandle::Session(handle)) = self.proto_handle(true, proto_id) {
+                debug!("init session [{}] level proto [{}] handle", id, proto_id);
                 let (sender, receiver) = mpsc::channel(32);
-                let stream = ServiceProtocolStream::new(
+                let stream = SessionProtocolStream::new(
                     handle,
                     self.service_context.clone_self(),
+                    session_context.clone(),
                     receiver,
                     proto_id,
                 );
 
-                self.service_proto_handles.insert(proto_id, sender);
-
                 tokio::spawn(stream.for_each(|_| Ok(())).map_err(|_| ()));
 
-                self.read_service_buf
-                    .push_back((proto_id, ServiceProtocolEvent::Init));
+                self.session_proto_handles
+                    .entry((id, proto_id))
+                    .or_insert(sender);
+
+                self.read_session_buf.push_back((
+                    id,
+                    proto_id,
+                    SessionProtocolEvent::Connected { version },
+                ));
             }
+
+            self.distribute_to_user_level();
         }
-
-        if self.service_proto_handles.contains_key(&proto_id) {
-            self.read_service_buf.push_back((
-                proto_id,
-                ServiceProtocolEvent::Connected {
-                    session: session_context.clone(),
-                    version: version.clone(),
-                },
-            ));
-        }
-
-        // Session proto handle processing flow
-        if let Some(ProtocolHandle::Session(handle)) = self.proto_handle(true, proto_id) {
-            debug!("init session [{}] level proto [{}] handle", id, proto_id);
-            let (sender, receiver) = mpsc::channel(32);
-            let stream = SessionProtocolStream::new(
-                handle,
-                self.service_context.clone_self(),
-                session_context.clone(),
-                receiver,
-                proto_id,
-            );
-
-            tokio::spawn(stream.for_each(|_| Ok(())).map_err(|_| ()));
-
-            self.session_proto_handles
-                .entry((id, proto_id))
-                .or_insert(sender);
-
-            self.read_session_buf.push_back((
-                id,
-                proto_id,
-                SessionProtocolEvent::Connected { version },
-            ));
-        }
-
-        self.distribute_to_user_level();
     }
 
     /// Processing the received data
@@ -754,30 +763,43 @@ where
             data.len()
         );
 
-        // Service proto handle processing flow
-        if self.service_proto_handles.contains_key(&proto_id) {
-            self.read_service_buf.push_back((
-                proto_id,
-                ServiceProtocolEvent::Received {
-                    id: session_id,
-                    data: data.clone(),
+        if *self.config.event.get(&proto_id).unwrap_or_else(|| &true) {
+            // event output
+            self.handle.handle_proto(
+                &mut self.service_context,
+                ProtocolEvent::Received {
+                    session_id,
+                    proto_id,
+                    data: data.to_vec(),
                 },
-            ));
-        }
+            );
+        } else {
+            // callback output
+            // Service proto handle processing flow
+            if self.service_proto_handles.contains_key(&proto_id) {
+                self.read_service_buf.push_back((
+                    proto_id,
+                    ServiceProtocolEvent::Received {
+                        id: session_id,
+                        data: data.clone(),
+                    },
+                ));
+            }
 
-        // Session proto handle processing flow
-        if self
-            .session_proto_handles
-            .contains_key(&(session_id, proto_id))
-        {
-            self.read_session_buf.push_back((
-                session_id,
-                proto_id,
-                SessionProtocolEvent::Received { data },
-            ));
-        }
+            // Session proto handle processing flow
+            if self
+                .session_proto_handles
+                .contains_key(&(session_id, proto_id))
+            {
+                self.read_session_buf.push_back((
+                    session_id,
+                    proto_id,
+                    SessionProtocolEvent::Received { data },
+                ));
+            }
 
-        self.distribute_to_user_level();
+            self.distribute_to_user_level();
+        }
     }
 
     /// Protocol stream is closed, clean up data
@@ -788,26 +810,37 @@ where
             session_id, proto_id
         );
 
-        // Service proto handle processing flow
-        if self.service_proto_handles.contains_key(&proto_id) {
-            self.read_service_buf.push_back((
-                proto_id,
-                ServiceProtocolEvent::Disconnected { id: session_id },
-            ));
-            self.distribute_to_user_level();
-        }
+        if *self.config.event.get(&proto_id).unwrap_or_else(|| &true) {
+            if let Some(session_context) = self.sessions.get(&session_id) {
+                self.handle.handle_proto(
+                    &mut self.service_context,
+                    ProtocolEvent::DisConnected {
+                        proto_id,
+                        session_context,
+                    },
+                )
+            }
+        } else {
+            // Service proto handle processing flow
+            if self.service_proto_handles.contains_key(&proto_id) {
+                self.read_service_buf.push_back((
+                    proto_id,
+                    ServiceProtocolEvent::Disconnected { id: session_id },
+                ));
+                self.distribute_to_user_level();
+            }
 
-        // Session proto handle processing flow
-        if let Some(sender) = self.session_proto_handles.remove(&(session_id, proto_id)) {
-            let send_task = sender.send(SessionProtocolEvent::Disconnected);
-            tokio::spawn(send_task.map(|_| ()).map_err(|err| {
-                error!(
-                    "service session close event send to session handle error: {:?}",
-                    err
-                );
-            }));
+            // Session proto handle processing flow
+            if let Some(sender) = self.session_proto_handles.remove(&(session_id, proto_id)) {
+                let send_task = sender.send(SessionProtocolEvent::Disconnected);
+                tokio::spawn(send_task.map(|_| ()).map_err(|err| {
+                    error!(
+                        "service session close event send to session handle error: {:?}",
+                        err
+                    );
+                }));
+            }
         }
-
         // Session proto info remove
         if let Some(infos) = self.session_service_protos.get_mut(&session_id) {
             infos.remove(&proto_id);
@@ -992,7 +1025,14 @@ where
                 tokio::spawn(task);
             }
             ServiceTask::ProtocolNotify { proto_id, token } => {
-                if self.service_proto_handles.contains_key(&proto_id) {
+                if *self.config.event.get(&proto_id).unwrap_or_else(|| &true) {
+                    // event output
+                    self.handle.handle_proto(
+                        &mut self.service_context,
+                        ProtocolEvent::Notify { proto_id, token },
+                    )
+                } else if self.service_proto_handles.contains_key(&proto_id) {
+                    // callback output
                     self.read_service_buf
                         .push_back((proto_id, ServiceProtocolEvent::Notify { token }));
                     self.distribute_to_user_level();
@@ -1004,15 +1044,30 @@ where
                 token,
             } => {
                 if self
-                    .session_proto_handles
-                    .contains_key(&(session_id, proto_id))
+                    .session_service_protos
+                    .get(&session_id)
+                    .map(|protos| protos.contains(&proto_id))
+                    .unwrap_or_else(|| false)
                 {
-                    self.read_session_buf.push_back((
-                        session_id,
-                        proto_id,
-                        SessionProtocolEvent::Notify { token },
-                    ));
-                    self.distribute_to_user_level();
+                    if *self.config.event.get(&proto_id).unwrap_or_else(|| &true) {
+                        // event output
+                        self.handle.handle_proto(
+                            &mut self.service_context,
+                            ProtocolEvent::SessionNotify {
+                                proto_id,
+                                session_id,
+                                token,
+                            },
+                        )
+                    } else {
+                        // callback output
+                        self.read_session_buf.push_back((
+                            session_id,
+                            proto_id,
+                            SessionProtocolEvent::Notify { token },
+                        ));
+                        self.distribute_to_user_level();
+                    }
                 } else {
                     self.service_context
                         .remove_session_notify_senders(session_id, proto_id);
