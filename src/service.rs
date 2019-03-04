@@ -1059,7 +1059,10 @@ where
                                 token,
                             },
                         )
-                    } else {
+                    } else if self
+                        .session_proto_handles
+                        .contains_key(&(session_id, proto_id))
+                    {
                         // callback output
                         self.read_session_buf.push_back((
                             session_id,
