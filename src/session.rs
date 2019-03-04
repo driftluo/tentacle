@@ -107,6 +107,10 @@ pub(crate) enum SessionEvent {
         /// proto_name
         proto_name: Option<String>,
     },
+    SessionTimeout {
+        /// Session id
+        id: SessionId,
+    },
     /// Codec error
     ProtocolError {
         /// Session id
@@ -506,6 +510,7 @@ where
             match check.poll() {
                 Ok(Async::Ready(_)) => {
                     if self.sub_streams.is_empty() {
+                        self.event_output(SessionEvent::SessionTimeout { id: self.id });
                         self.dead = true;
                     }
                 }
