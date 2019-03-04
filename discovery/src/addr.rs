@@ -14,10 +14,21 @@ pub(crate) const PCH_IPV4: [u8; 18] = [
 ];
 pub(crate) const DEFAULT_MAX_KNOWN: usize = 5000;
 
+pub enum Misbehavior {
+    // Already received GetNodes message
+    DuplicateGetNodes,
+    // Already received Nodes(announce=false) message
+    DuplicateFirstNodes,
+    // Nodes message include too many items
+    TooManyItems { announce: bool, length: usize },
+    // Too many address in one item
+    TooManyAddresses(usize),
+}
+
 // FIXME: Should be peer store?
 pub trait AddressManager {
     fn add_new(&mut self, addr: Multiaddr);
-    fn misbehave(&mut self, addr: Multiaddr, ty: u64) -> i32;
+    fn misbehave(&mut self, addr: Multiaddr, kind: Misbehavior) -> i32;
     fn get_random(&mut self, n: usize) -> Vec<Multiaddr>;
 }
 

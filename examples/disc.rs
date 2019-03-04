@@ -25,7 +25,9 @@ use tentacle::{
     ProtocolId, SessionId,
 };
 
-use discovery::{AddressManager, Direction, Discovery, DiscoveryHandle, RawAddr, Substream};
+use discovery::{
+    AddressManager, Direction, Discovery, DiscoveryHandle, Misbehavior, RawAddr, Substream,
+};
 
 fn main() {
     env_logger::init();
@@ -240,7 +242,7 @@ impl AddressManager for SimpleAddressManager {
             .or_insert(100);
     }
 
-    fn misbehave(&mut self, addr: Multiaddr, _ty: u64) -> i32 {
+    fn misbehave(&mut self, addr: Multiaddr, _ty: Misbehavior) -> i32 {
         let value = self
             .addrs
             .entry(RawAddr::from(multiaddr_to_socketaddr(&addr).unwrap()))
