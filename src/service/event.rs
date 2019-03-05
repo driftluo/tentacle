@@ -79,7 +79,7 @@ pub enum ProtocolEvent<'a> {
         /// Protocol id
         proto_id: ProtocolId,
         /// Protocol version
-        data: Vec<u8>,
+        data: bytes::Bytes,
     },
     /// Protocol close event
     DisConnected {
@@ -88,15 +88,15 @@ pub enum ProtocolEvent<'a> {
         /// session context
         session_context: &'a SessionContext,
     },
-    /// Notify
-    Notify {
+    /// Service-level notify
+    ProtocolNotify {
         /// Protocol id
         proto_id: ProtocolId,
         /// token
         token: u64,
     },
     /// Session-level notify task
-    SessionNotify {
+    ProtocolSessionNotify {
         /// Session id
         session_id: SessionId,
         /// Protocol id

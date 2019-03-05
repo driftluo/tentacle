@@ -48,10 +48,10 @@ where
     where
         T: ProtocolMeta<U> + Send + Sync + 'static,
     {
-        self.config.event.insert(
-            protocol.id(),
-            protocol.session_handle().is_none() && protocol.service_handle().is_none(),
-        );
+        if protocol.session_handle().is_event() || protocol.service_handle().is_event() {
+            self.config.event.insert(protocol.id());
+        }
+
         self.inner.insert(
             protocol.name(),
             Box::new(protocol) as Box<dyn ProtocolMeta<_> + Send + Sync>,

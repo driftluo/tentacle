@@ -11,7 +11,7 @@ use tentacle::{
     context::{ServiceContext, SessionContext},
     secio::SecioKeyPair,
     service::{Service, ServiceError, ServiceEvent},
-    traits::{ProtocolMeta, ServiceHandle, ServiceProtocol},
+    traits::{ProtocolHandle, ProtocolMeta, ServiceHandle, ServiceProtocol},
     ProtocolId, SessionId,
 };
 use tokio::codec::length_delimited::LengthDelimitedCodec;
@@ -35,7 +35,7 @@ impl ProtocolMeta<LengthDelimitedCodec> for Protocol {
         LengthDelimitedCodec::new()
     }
 
-    fn service_handle(&self) -> Option<Box<dyn ServiceProtocol + Send + 'static>> {
+    fn service_handle(&self) -> ProtocolHandle<Box<dyn ServiceProtocol + Send + 'static>> {
         // All protocol use the same handle.
         // This is just an example. In the actual environment, this should be a different handle.
         let handle = Box::new(PHandle {
@@ -44,7 +44,7 @@ impl ProtocolMeta<LengthDelimitedCodec> for Protocol {
             connected_session_ids: Vec::new(),
             clear_handle: HashMap::new(),
         });
-        Some(handle)
+        ProtocolHandle::Callback(handle)
     }
 }
 
@@ -117,13 +117,18 @@ impl ServiceProtocol for PHandle {
         );
     }
 
-    fn received(&mut self, _env: &mut ServiceContext, session: &SessionContext, data: Vec<u8>) {
+    fn received(
+        &mut self,
+        _env: &mut ServiceContext,
+        session: &SessionContext,
+        data: bytes::Bytes,
+    ) {
         self.count += 1;
         info!(
             "received from [{}]: proto [{}] data {:?}, message count: {}",
             session.id,
             self.proto_id,
-            str::from_utf8(&data).unwrap(),
+            str::from_utf8(data.as_ref()).unwrap(),
             self.count
         );
     }

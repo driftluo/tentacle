@@ -5,7 +5,7 @@ use p2p::{
     context::{ServiceContext, SessionContext},
     secio::SecioKeyPair,
     service::{Service, ServiceControl},
-    traits::{ProtocolMeta, ServiceHandle, ServiceProtocol},
+    traits::{ProtocolHandle, ProtocolMeta, ServiceHandle, ServiceProtocol},
     ProtocolId,
 };
 use std::{sync::Once, thread};
@@ -23,7 +23,7 @@ static mut NO_SECIO_RECV: Option<crossbeam_channel::Receiver<Notify>> = None;
 #[derive(Debug, PartialEq)]
 enum Notify {
     Connected,
-    Message(Vec<u8>),
+    Message(bytes::Bytes),
 }
 
 pub fn create<T, F>(secio: bool, meta: T, shandle: F) -> Service<F, LengthDelimitedCodec>
@@ -66,16 +66,16 @@ impl ProtocolMeta<LengthDelimitedCodec> for Protocol {
             .new_codec()
     }
 
-    fn service_handle(&self) -> Option<Box<dyn ServiceProtocol + Send + 'static>> {
+    fn service_handle(&self) -> ProtocolHandle<Box<dyn ServiceProtocol + Send + 'static>> {
         if self.id == 0 {
-            None
+            ProtocolHandle::Empty
         } else {
             let handle = Box::new(PHandle {
                 proto_id: self.id,
                 connected_count: 0,
                 sender: self.sender.clone(),
             });
-            Some(handle)
+            ProtocolHandle::Callback(handle)
         }
     }
 }
@@ -104,7 +104,12 @@ impl ServiceProtocol for PHandle {
         self.connected_count -= 1;
     }
 
-    fn received(&mut self, _env: &mut ServiceContext, _session: &SessionContext, data: Vec<u8>) {
+    fn received(
+        &mut self,
+        _env: &mut ServiceContext,
+        _session: &SessionContext,
+        data: bytes::Bytes,
+    ) {
         let _ = self.sender.send(Notify::Message(data));
     }
 }
@@ -167,7 +172,7 @@ fn secio_and_send_data(data: &[u8]) {
             .as_mut()
             .map(|control| control.filter_broadcast(None, 1, data.to_vec()));
         if let Some(rev) = SECIO_RECV.as_ref() {
-            assert_eq!(rev.recv(), Ok(Notify::Message(data.to_vec())))
+            assert_eq!(rev.recv(), Ok(Notify::Message(bytes::Bytes::from(data))))
         }
     }
 }
@@ -179,7 +184,7 @@ fn no_secio_and_send_data(data: &[u8]) {
             .map(|control| control.filter_broadcast(None, 1, data.to_vec()));
 
         if let Some(rev) = NO_SECIO_RECV.as_ref() {
-            assert_eq!(rev.recv(), Ok(Notify::Message(data.to_vec())))
+            assert_eq!(rev.recv(), Ok(Notify::Message(bytes::Bytes::from(data))))
         }
     }
 }

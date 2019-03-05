@@ -5,7 +5,7 @@ use tentacle::{
     context::{ServiceContext, SessionContext},
     secio::SecioKeyPair,
     service::Service,
-    traits::{ProtocolMeta, ServiceHandle, ServiceProtocol},
+    traits::{ProtocolHandle, ProtocolMeta, ServiceHandle, ServiceProtocol},
     ProtocolId,
 };
 use tokio::codec::LengthDelimitedCodec;
@@ -45,15 +45,15 @@ impl ProtocolMeta<LengthDelimitedCodec> for Protocol {
         LengthDelimitedCodec::new()
     }
 
-    fn service_handle(&self) -> Option<Box<dyn ServiceProtocol + Send + 'static>> {
+    fn service_handle(&self) -> ProtocolHandle<Box<dyn ServiceProtocol + Send + 'static>> {
         if self.id == 0 {
-            None
+            ProtocolHandle::Empty
         } else {
             let handle = Box::new(PHandle {
                 proto_id: self.id,
                 connected_count: 0,
             });
-            Some(handle)
+            ProtocolHandle::Callback(handle)
         }
     }
 }

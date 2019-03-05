@@ -80,7 +80,7 @@ impl ServiceProtocolStream {
             Received { id, data } => {
                 if let Some(session) = self.sessions.get_mut(&id) {
                     self.handle
-                        .received(&mut self.service_context, session, data.to_vec());
+                        .received(&mut self.service_context, session, data);
                 }
             }
             Notify { token } => {
@@ -189,8 +189,7 @@ impl SessionProtocolStream {
                 self.close();
             }
             Received { data } => {
-                self.handle
-                    .received(&mut self.service_context, data.to_vec());
+                self.handle.received(&mut self.service_context, data);
             }
             Notify { token } => {
                 self.handle.notify(&mut self.service_context, token);

@@ -19,7 +19,7 @@ use tentacle::{
     context::{ServiceContext, SessionContext},
     multiaddr::{Multiaddr, ToMultiaddr},
     service::{ServiceError, ServiceEvent},
-    traits::{ProtocolMeta, ServiceHandle, ServiceProtocol},
+    traits::{ProtocolHandle, ProtocolMeta, ServiceHandle, ServiceProtocol},
     utils::multiaddr_to_socketaddr,
     yamux::session::SessionType,
     ProtocolId, SessionId,
@@ -86,7 +86,7 @@ impl ProtocolMeta<LengthDelimitedCodec> for DiscoveryProtocolMeta {
         LengthDelimitedCodec::new()
     }
 
-    fn service_handle(&self) -> Option<Box<dyn ServiceProtocol + Send + 'static>> {
+    fn service_handle(&self) -> ProtocolHandle<Box<dyn ServiceProtocol + Send + 'static>> {
         let discovery = Discovery::new(self.addr_mgr.clone());
         let discovery_handle = discovery.handle();
         let handle = Box::new(DiscoveryProtocol {
@@ -97,7 +97,7 @@ impl ProtocolMeta<LengthDelimitedCodec> for DiscoveryProtocolMeta {
             discovery_senders: FnvHashMap::default(),
             sessions: HashMap::default(),
         });
-        Some(handle)
+        ProtocolHandle::Callback(handle)
     }
 }
 
@@ -172,14 +172,19 @@ impl ServiceProtocol for DiscoveryProtocol {
         debug!("protocol [discovery] close on session [{}]", session.id);
     }
 
-    fn received(&mut self, _control: &mut ServiceContext, session: &SessionContext, data: Vec<u8>) {
+    fn received(
+        &mut self,
+        _control: &mut ServiceContext,
+        session: &SessionContext,
+        data: bytes::Bytes,
+    ) {
         debug!("[received message]: length={}", data.len());
         self.sessions
             .get_mut(&session.id)
             .unwrap()
-            .push_data(data.clone());
+            .push_data(data.to_vec());
         if let Some(ref mut sender) = self.discovery_senders.get_mut(&session.id) {
-            if let Err(err) = sender.try_send(data) {
+            if let Err(err) = sender.try_send(data.to_vec()) {
                 if err.is_full() {
                     warn!("channel is full");
                 } else if err.is_disconnected() {

@@ -7,7 +7,7 @@ use tentacle::{
     multiaddr::Multiaddr,
     secio::SecioKeyPair,
     service::{Service, ServiceError, ServiceEvent},
-    traits::{ProtocolMeta, ServiceHandle, ServiceProtocol},
+    traits::{ProtocolHandle, ProtocolMeta, ServiceHandle, ServiceProtocol},
     yamux::session::SessionType,
     ProtocolId, SessionId,
 };
@@ -123,9 +123,9 @@ impl ProtocolMeta<LengthDelimitedCodec> for Protocol {
         LengthDelimitedCodec::new()
     }
 
-    fn service_handle(&self) -> Option<Box<dyn ServiceProtocol + Send + 'static>> {
+    fn service_handle(&self) -> ProtocolHandle<Box<dyn ServiceProtocol + Send + 'static>> {
         if self.id == 0 {
-            None
+            ProtocolHandle::Empty
         } else {
             let handle = Box::new(PHandle {
                 proto_id: self.id,
@@ -134,7 +134,7 @@ impl ProtocolMeta<LengthDelimitedCodec> for Protocol {
                 dial_count: 0,
                 dial_addr: None,
             });
-            Some(handle)
+            ProtocolHandle::Callback(handle)
         }
     }
 }
