@@ -11,7 +11,7 @@ use log::{debug, error};
 use p2p::{
     context::{ServiceContext, SessionContext},
     secio::PeerId,
-    traits::{ProtocolMeta, ServiceProtocol},
+    traits::{ProtocolHandle, ProtocolMeta, ServiceProtocol},
     ProtocolId, SessionId,
 };
 use std::{
@@ -70,7 +70,7 @@ where
         LengthDelimitedCodec::new()
     }
 
-    fn service_handle(&self) -> Option<Box<dyn ServiceProtocol + Send + 'static>> {
+    fn service_handle(&self) -> ProtocolHandle<Box<dyn ServiceProtocol + Send + 'static>> {
         let handle = Box::new(PingHandler {
             proto_id: self.id,
             interval: self.interval,
@@ -78,7 +78,7 @@ where
             connected_session_ids: Default::default(),
             event_sender: self.event_sender.clone(),
         });
-        Some(handle)
+        ProtocolHandle::Callback(handle)
     }
 }
 
@@ -164,13 +164,18 @@ where
         );
     }
 
-    fn received(&mut self, control: &mut ServiceContext, session: &SessionContext, data: Vec<u8>) {
+    fn received(
+        &mut self,
+        control: &mut ServiceContext,
+        session: &SessionContext,
+        data: bytes::Bytes,
+    ) {
         if let Some(peer_id) = self
             .connected_session_ids
             .get(&session.id)
             .map(|ps| ps.peer_id.clone())
         {
-            let msg = get_root::<PingMessage>(&data);
+            let msg = get_root::<PingMessage>(data.as_ref());
             match msg.payload_type() {
                 PingPayload::Ping => {
                     let ping_msg = msg.payload_as_ping().unwrap();

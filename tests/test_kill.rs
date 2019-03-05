@@ -10,7 +10,7 @@ use tentacle::{
     context::{ServiceContext, SessionContext},
     secio::SecioKeyPair,
     service::Service,
-    traits::{ProtocolMeta, ServiceHandle, ServiceProtocol},
+    traits::{ProtocolHandle, ProtocolMeta, ServiceHandle, ServiceProtocol},
     ProtocolId,
 };
 use tokio::codec::LengthDelimitedCodec;
@@ -74,16 +74,16 @@ impl ProtocolMeta<LengthDelimitedCodec> for Protocol {
         LengthDelimitedCodec::new()
     }
 
-    fn service_handle(&self) -> Option<Box<dyn ServiceProtocol + Send + 'static>> {
+    fn service_handle(&self) -> ProtocolHandle<Box<dyn ServiceProtocol + Send + 'static>> {
         if self.id == 0 {
-            None
+            ProtocolHandle::Empty
         } else {
             let handle = Box::new(PHandle {
                 proto_id: self.id,
                 connected_count: 0,
                 sender: self.sender.clone(),
             });
-            Some(handle)
+            ProtocolHandle::Callback(handle)
         }
     }
 }
@@ -113,8 +113,13 @@ impl ServiceProtocol for PHandle {
         assert_eq!(self.sender.send(()), Ok(()));
     }
 
-    fn received(&mut self, env: &mut ServiceContext, _session: &SessionContext, data: Vec<u8>) {
-        env.filter_broadcast(None, self.proto_id, data);
+    fn received(
+        &mut self,
+        env: &mut ServiceContext,
+        _session: &SessionContext,
+        data: bytes::Bytes,
+    ) {
+        env.filter_broadcast(None, self.proto_id, data.to_vec());
     }
 }
 

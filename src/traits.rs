@@ -3,9 +3,69 @@ use tokio::codec::{Decoder, Encoder};
 
 use crate::{
     context::{ServiceContext, SessionContext},
-    service::{ServiceError, ServiceEvent},
+    service::{ProtocolEvent, ServiceError, ServiceEvent},
     ProtocolId,
 };
+
+/// Protocol handle
+pub enum ProtocolHandle<T: Sized> {
+    /// No operation
+    Empty,
+    /// Event output
+    Event,
+    /// Both event and callback
+    Both(T),
+    /// Callback handle
+    Callback(T),
+}
+
+impl<T> ProtocolHandle<T> {
+    /// Returns true if the enum is a callback value.
+    #[inline]
+    pub fn is_callback(&self) -> bool {
+        if let ProtocolHandle::Callback(_) = self {
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Returns true if the enum is a empty value.
+    #[inline]
+    pub fn is_empty(&self) -> bool {
+        if let ProtocolHandle::Empty = self {
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Returns true if the enum is a event value.
+    #[inline]
+    pub fn is_event(&self) -> bool {
+        if let ProtocolHandle::Event = self {
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Returns true if the enum is a both value.
+    #[inline]
+    pub fn is_both(&self) -> bool {
+        if let ProtocolHandle::Both(_) = self {
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Returns true if the enum is a both value.
+    #[inline]
+    pub fn has_event(&self) -> bool {
+        self.is_event() || self.is_both()
+    }
+}
 
 /// Service handle
 ///
@@ -26,6 +86,15 @@ pub trait ServiceHandle {
     fn handle_error(&mut self, _control: &mut ServiceContext, _error: ServiceError) {}
     /// Handling session establishment and disconnection events
     fn handle_event(&mut self, _control: &mut ServiceContext, _event: ServiceEvent) {}
+    /// Handling all protocol events
+    ///
+    /// ---
+    ///
+    /// **Note** that this is a compatibility mode interface.
+    ///
+    /// If the handle of a protocol is event, then its events will be placed here.
+    /// If there is no event handle in the protocol, this interface will not be called.
+    fn handle_proto(&mut self, _control: &mut ServiceContext, _event: ProtocolEvent) {}
 }
 
 /// Service level protocol handle
@@ -69,7 +138,7 @@ pub trait ServiceProtocol {
         &mut self,
         _service: &mut ServiceContext,
         _session: &SessionContext,
-        _data: Vec<u8>,
+        _data: bytes::Bytes,
     ) {
     }
     /// Called when the Service receives the notify task
@@ -89,7 +158,7 @@ pub trait SessionProtocol {
     /// Called when closing protocol
     fn disconnected(&mut self, _service: &mut ServiceContext) {}
     /// Called when the corresponding protocol message is received
-    fn received(&mut self, _service: &mut ServiceContext, _data: Vec<u8>) {}
+    fn received(&mut self, _service: &mut ServiceContext, _data: bytes::Bytes) {}
     /// Called when the session receives the notify task
     fn notify(&mut self, _service: &mut ServiceContext, _token: u64) {}
 }
@@ -126,8 +195,8 @@ where
     ///
     /// This function is called when the protocol is first opened in the service
     /// and remains in memory until the entire service is closed.
-    fn service_handle(&self) -> Option<Box<dyn ServiceProtocol + Send + 'static>> {
-        None
+    fn service_handle(&self) -> ProtocolHandle<Box<dyn ServiceProtocol + Send + 'static>> {
+        ProtocolHandle::Empty
     }
 
     /// A session level callback handle for a protocol.
@@ -140,8 +209,8 @@ where
     /// the function will be called again to generate the corresponding exclusive handle.
     ///
     /// Correspondingly, whenever the protocol is closed, the corresponding exclusive handle is cleared.
-    fn session_handle(&self) -> Option<Box<dyn SessionProtocol + Send + 'static>> {
-        None
+    fn session_handle(&self) -> ProtocolHandle<Box<dyn SessionProtocol + Send + 'static>> {
+        ProtocolHandle::Empty
     }
 }
 
@@ -153,6 +222,10 @@ impl ServiceHandle for Box<dyn ServiceHandle + Send + 'static> {
     fn handle_event(&mut self, control: &mut ServiceContext, event: ServiceEvent) {
         (&mut **self).handle_event(control, event)
     }
+
+    fn handle_proto(&mut self, control: &mut ServiceContext, event: ProtocolEvent) {
+        (&mut **self).handle_proto(control, event)
+    }
 }
 
 impl ServiceHandle for Box<dyn ServiceHandle + Send + Sync + 'static> {
@@ -162,6 +235,10 @@ impl ServiceHandle for Box<dyn ServiceHandle + Send + Sync + 'static> {
 
     fn handle_event(&mut self, control: &mut ServiceContext, event: ServiceEvent) {
         (&mut **self).handle_event(control, event)
+    }
+
+    fn handle_proto(&mut self, control: &mut ServiceContext, event: ProtocolEvent) {
+        (&mut **self).handle_proto(control, event)
     }
 }
 
