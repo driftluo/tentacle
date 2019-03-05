@@ -1,0 +1,29 @@
+namespace P2P.Discovery;
+
+union DiscoveryPayload {
+    GetNodes,
+    Nodes,
+}
+
+table DiscoveryMessage {
+    payload: DiscoveryPayload;
+}
+
+table GetNodes {
+    version: uint32;
+    count: uint32;
+    listen_port: ushort;
+}
+
+table Nodes {
+    announce: bool;
+    items: [Node];
+}
+
+table Node {
+    addresses: [Bytes];
+}
+
+table Bytes {
+    seq: [ubyte];
+}
