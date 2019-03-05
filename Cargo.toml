@@ -35,4 +35,4 @@ ping = { path = "ping", package = "tentacle-ping" }
 generic-channel = { version = "0.2.0", features = ["all"] }
 
 [workspace]
-members = ["yamux", "secio", "discovery", "ping", "bench"]
+members = ["yamux", "secio", "discovery", "identify", "ping", "bench"]

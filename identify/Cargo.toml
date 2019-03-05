@@ -1,0 +1,10 @@
+[package]
+name = "identify"
+version = "0.1.0"
+authors = ["Qian Linfeng <thewawar@gmail.com>"]
+edition = "2018"
+
+[dependencies]
+p2p = { path = "..", package = "tentacle" }
+bytes = "0.4"
+flatbuffers = "0.5.0"
