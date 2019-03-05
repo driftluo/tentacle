@@ -232,13 +232,13 @@ impl<'a> ListenAddrs<'a> {
     pub const VT_ADDRS: flatbuffers::VOffsetT = 4;
 
   #[inline]
-  pub fn addrs(&self) -> Option<flatbuffers::Vector<flatbuffers::ForwardsUOffset<Bytes<'a>>>> {
-    self._tab.get::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<flatbuffers::ForwardsUOffset<Bytes<'a>>>>>(ListenAddrs::VT_ADDRS, None)
+  pub fn addrs(&self) -> Option<flatbuffers::Vector<flatbuffers::ForwardsUOffset<Address<'a>>>> {
+    self._tab.get::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<flatbuffers::ForwardsUOffset<Address<'a>>>>>(ListenAddrs::VT_ADDRS, None)
   }
 }
 
 pub struct ListenAddrsArgs<'a> {
-    pub addrs: Option<flatbuffers::WIPOffset<flatbuffers::Vector<'a , flatbuffers::ForwardsUOffset<Bytes<'a >>>>>,
+    pub addrs: Option<flatbuffers::WIPOffset<flatbuffers::Vector<'a , flatbuffers::ForwardsUOffset<Address<'a >>>>>,
 }
 impl<'a> Default for ListenAddrsArgs<'a> {
     #[inline]
@@ -254,7 +254,7 @@ pub struct ListenAddrsBuilder<'a: 'b, 'b> {
 }
 impl<'a: 'b, 'b> ListenAddrsBuilder<'a, 'b> {
   #[inline]
-  pub fn add_addrs(&mut self, addrs: flatbuffers::WIPOffset<flatbuffers::Vector<'b , flatbuffers::ForwardsUOffset<Bytes<'b >>>>) {
+  pub fn add_addrs(&mut self, addrs: flatbuffers::WIPOffset<flatbuffers::Vector<'b , flatbuffers::ForwardsUOffset<Address<'b >>>>) {
     self.fbb_.push_slot_always::<flatbuffers::WIPOffset<_>>(ListenAddrs::VT_ADDRS, addrs);
   }
   #[inline]
@@ -308,13 +308,13 @@ impl<'a> ObservedAddr<'a> {
     pub const VT_ADDR: flatbuffers::VOffsetT = 4;
 
   #[inline]
-  pub fn addr(&self) -> Option<Bytes<'a>> {
-    self._tab.get::<flatbuffers::ForwardsUOffset<Bytes<'a>>>(ObservedAddr::VT_ADDR, None)
+  pub fn addr(&self) -> Option<Address<'a>> {
+    self._tab.get::<flatbuffers::ForwardsUOffset<Address<'a>>>(ObservedAddr::VT_ADDR, None)
   }
 }
 
 pub struct ObservedAddrArgs<'a> {
-    pub addr: Option<flatbuffers::WIPOffset<Bytes<'a >>>,
+    pub addr: Option<flatbuffers::WIPOffset<Address<'a >>>,
 }
 impl<'a> Default for ObservedAddrArgs<'a> {
     #[inline]
@@ -330,8 +330,8 @@ pub struct ObservedAddrBuilder<'a: 'b, 'b> {
 }
 impl<'a: 'b, 'b> ObservedAddrBuilder<'a, 'b> {
   #[inline]
-  pub fn add_addr(&mut self, addr: flatbuffers::WIPOffset<Bytes<'b >>) {
-    self.fbb_.push_slot_always::<flatbuffers::WIPOffset<Bytes>>(ObservedAddr::VT_ADDR, addr);
+  pub fn add_addr(&mut self, addr: flatbuffers::WIPOffset<Address<'b >>) {
+    self.fbb_.push_slot_always::<flatbuffers::WIPOffset<Address>>(ObservedAddr::VT_ADDR, addr);
   }
   #[inline]
   pub fn new(_fbb: &'b mut flatbuffers::FlatBufferBuilder<'a>) -> ObservedAddrBuilder<'a, 'b> {
@@ -348,15 +348,15 @@ impl<'a: 'b, 'b> ObservedAddrBuilder<'a, 'b> {
   }
 }
 
-pub enum BytesOffset {}
+pub enum AddressOffset {}
 #[derive(Copy, Clone, Debug, PartialEq)]
 
-pub struct Bytes<'a> {
+pub struct Address<'a> {
   pub _tab: flatbuffers::Table<'a>,
 }
 
-impl<'a> flatbuffers::Follow<'a> for Bytes<'a> {
-    type Inner = Bytes<'a>;
+impl<'a> flatbuffers::Follow<'a> for Address<'a> {
+    type Inner = Address<'a>;
     #[inline]
     fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
         Self {
@@ -365,60 +365,72 @@ impl<'a> flatbuffers::Follow<'a> for Bytes<'a> {
     }
 }
 
-impl<'a> Bytes<'a> {
+impl<'a> Address<'a> {
     #[inline]
     pub fn init_from_table(table: flatbuffers::Table<'a>) -> Self {
-        Bytes {
+        Address {
             _tab: table,
         }
     }
     #[allow(unused_mut)]
     pub fn create<'bldr: 'args, 'args: 'mut_bldr, 'mut_bldr>(
         _fbb: &'mut_bldr mut flatbuffers::FlatBufferBuilder<'bldr>,
-        args: &'args BytesArgs<'args>) -> flatbuffers::WIPOffset<Bytes<'bldr>> {
-      let mut builder = BytesBuilder::new(_fbb);
-      if let Some(x) = args.seq { builder.add_seq(x); }
+        args: &'args AddressArgs<'args>) -> flatbuffers::WIPOffset<Address<'bldr>> {
+      let mut builder = AddressBuilder::new(_fbb);
+      if let Some(x) = args.ip { builder.add_ip(x); }
+      builder.add_port(args.port);
       builder.finish()
     }
 
-    pub const VT_SEQ: flatbuffers::VOffsetT = 4;
+    pub const VT_IP: flatbuffers::VOffsetT = 4;
+    pub const VT_PORT: flatbuffers::VOffsetT = 6;
 
   #[inline]
-  pub fn seq(&self) -> Option<&'a [u8]> {
-    self._tab.get::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'a, u8>>>(Bytes::VT_SEQ, None).map(|v| v.safe_slice())
+  pub fn ip(&self) -> Option<&'a [u8]> {
+    self._tab.get::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'a, u8>>>(Address::VT_IP, None).map(|v| v.safe_slice())
+  }
+  #[inline]
+  pub fn port(&self) -> u16 {
+    self._tab.get::<u16>(Address::VT_PORT, Some(0)).unwrap()
   }
 }
 
-pub struct BytesArgs<'a> {
-    pub seq: Option<flatbuffers::WIPOffset<flatbuffers::Vector<'a ,  u8>>>,
+pub struct AddressArgs<'a> {
+    pub ip: Option<flatbuffers::WIPOffset<flatbuffers::Vector<'a ,  u8>>>,
+    pub port: u16,
 }
-impl<'a> Default for BytesArgs<'a> {
+impl<'a> Default for AddressArgs<'a> {
     #[inline]
     fn default() -> Self {
-        BytesArgs {
-            seq: None,
+        AddressArgs {
+            ip: None,
+            port: 0,
         }
     }
 }
-pub struct BytesBuilder<'a: 'b, 'b> {
+pub struct AddressBuilder<'a: 'b, 'b> {
   fbb_: &'b mut flatbuffers::FlatBufferBuilder<'a>,
   start_: flatbuffers::WIPOffset<flatbuffers::TableUnfinishedWIPOffset>,
 }
-impl<'a: 'b, 'b> BytesBuilder<'a, 'b> {
+impl<'a: 'b, 'b> AddressBuilder<'a, 'b> {
   #[inline]
-  pub fn add_seq(&mut self, seq: flatbuffers::WIPOffset<flatbuffers::Vector<'b , u8>>) {
-    self.fbb_.push_slot_always::<flatbuffers::WIPOffset<_>>(Bytes::VT_SEQ, seq);
+  pub fn add_ip(&mut self, ip: flatbuffers::WIPOffset<flatbuffers::Vector<'b , u8>>) {
+    self.fbb_.push_slot_always::<flatbuffers::WIPOffset<_>>(Address::VT_IP, ip);
   }
   #[inline]
-  pub fn new(_fbb: &'b mut flatbuffers::FlatBufferBuilder<'a>) -> BytesBuilder<'a, 'b> {
+  pub fn add_port(&mut self, port: u16) {
+    self.fbb_.push_slot::<u16>(Address::VT_PORT, port, 0);
+  }
+  #[inline]
+  pub fn new(_fbb: &'b mut flatbuffers::FlatBufferBuilder<'a>) -> AddressBuilder<'a, 'b> {
     let start = _fbb.start_table();
-    BytesBuilder {
+    AddressBuilder {
       fbb_: _fbb,
       start_: start,
     }
   }
   #[inline]
-  pub fn finish(self) -> flatbuffers::WIPOffset<Bytes<'a>> {
+  pub fn finish(self) -> flatbuffers::WIPOffset<Address<'a>> {
     let o = self.fbb_.end_table(self.start_);
     flatbuffers::WIPOffset::new(o.value())
   }

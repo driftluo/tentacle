@@ -10,13 +10,14 @@ table IdentifyMessage {
 }
 
 table ListenAddrs {
-    addrs: [Bytes];
+    addrs: [Address];
 }
 
 table ObservedAddr {
-    addr: Bytes;
+    addr: Address;
 }
 
-table Bytes {
-    seq: [ubyte];
+table Address {
+    ip: [ubyte];
+    port: ushort;
 }

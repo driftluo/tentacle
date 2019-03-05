@@ -1,7 +1,7 @@
+#[rustfmt::skip]
+#[allow(clippy::all)]
+mod protocol_generated;
 
+mod message;
 
-pub struct Identify {
-}
-
-pub enum IdentifyMessage {
-}
+pub struct Identify {}
