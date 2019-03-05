@@ -48,7 +48,7 @@ where
     where
         T: ProtocolMeta<U> + Send + Sync + 'static,
     {
-        if protocol.session_handle().is_event() || protocol.service_handle().is_event() {
+        if protocol.session_handle().has_event() || protocol.service_handle().has_event() {
             self.config.event.insert(protocol.id());
         }
 

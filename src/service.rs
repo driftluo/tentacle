@@ -445,15 +445,19 @@ where
             .filter(|proto| proto.id() == proto_id)
             .find_map(|proto| {
                 if session {
-                    if let RawProtocolHandle::Callback(handle) = proto.session_handle() {
-                        Some(ProtocolHandle::Session(handle))
-                    } else {
-                        None
+                    match proto.session_handle() {
+                        RawProtocolHandle::Callback(handle) | RawProtocolHandle::Both(handle) => {
+                            Some(ProtocolHandle::Session(handle))
+                        }
+                        _ => None,
                     }
-                } else if let RawProtocolHandle::Callback(handle) = proto.service_handle() {
-                    Some(ProtocolHandle::Service(handle))
                 } else {
-                    None
+                    match proto.service_handle() {
+                        RawProtocolHandle::Callback(handle) | RawProtocolHandle::Both(handle) => {
+                            Some(ProtocolHandle::Service(handle))
+                        }
+                        _ => None,
+                    }
                 }
             });
 

@@ -8,17 +8,20 @@ use crate::{
 };
 
 /// Protocol handle
-pub enum ProtocolHandle<T> {
+pub enum ProtocolHandle<T: Sized> {
     /// No operation
     Empty,
     /// Event output
     Event,
+    /// Both event and callback
+    Both(T),
     /// Callback handle
     Callback(T),
 }
 
 impl<T> ProtocolHandle<T> {
     /// Returns true if the enum is a callback value.
+    #[inline]
     pub fn is_callback(&self) -> bool {
         if let ProtocolHandle::Callback(_) = self {
             true
@@ -28,6 +31,7 @@ impl<T> ProtocolHandle<T> {
     }
 
     /// Returns true if the enum is a empty value.
+    #[inline]
     pub fn is_empty(&self) -> bool {
         if let ProtocolHandle::Empty = self {
             true
@@ -37,12 +41,29 @@ impl<T> ProtocolHandle<T> {
     }
 
     /// Returns true if the enum is a event value.
+    #[inline]
     pub fn is_event(&self) -> bool {
         if let ProtocolHandle::Event = self {
             true
         } else {
             false
         }
+    }
+
+    /// Returns true if the enum is a both value.
+    #[inline]
+    pub fn is_both(&self) -> bool {
+        if let ProtocolHandle::Both(_) = self {
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Returns true if the enum is a both value.
+    #[inline]
+    pub fn has_event(&self) -> bool {
+        self.is_event() || self.is_both()
     }
 }
 
