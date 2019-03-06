@@ -53,13 +53,13 @@ $ git clone https://github.com/nervosnetwork/p2p.git
 
 Listen on 127.0.0.1:1337
 ```bash
-$ RUST_LOG=simple=info,p2p=debug cargo run --example simple -- server
+$ RUST_LOG=simple=info,tentacle=debug cargo run --example simple -- server
 ```
 
 3. On another terminal:
 
 ```bash
-$ RUST_LOG=simple=info,p2p=debug cargo run --example simple
+$ RUST_LOG=simple=info,tentacle=debug cargo run --example simple
 ```
 
 4. Now you can see some data interaction information on the terminal.
