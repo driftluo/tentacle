@@ -18,16 +18,16 @@ use p2p::{
 use rand::seq::SliceRandom;
 
 mod addr;
-mod message;
+mod protocol;
 mod substream;
 
 #[rustfmt::skip]
 #[allow(clippy::all)]
-mod message_generated;
+mod protocol_generated;
 
 pub use crate::{
     addr::{AddrKnown, AddressManager, MisbehaveResult, Misbehavior, RawAddr},
-    message::{DiscoveryMessage, Node, Nodes},
+    protocol::{DiscoveryMessage, Node, Nodes},
     substream::{Direction, Substream, SubstreamKey, SubstreamValue},
 };
 

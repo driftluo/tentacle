@@ -7,7 +7,7 @@ use tokio::codec::length_delimited::LengthDelimitedCodec;
 use tokio::codec::{Decoder, Encoder};
 
 use crate::addr::RawAddr;
-use crate::message_generated::p2p::discovery::{
+use crate::protocol_generated::p2p::discovery::{
     BytesBuilder, DiscoveryMessage as FbsDiscoveryMessage, DiscoveryMessageBuilder,
     DiscoveryPayload as FbsDiscoveryPayload, GetNodes as FbsGetNodes, GetNodesBuilder, NodeBuilder,
     Nodes as FbsNodes, NodesBuilder,

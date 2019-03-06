@@ -15,7 +15,7 @@ use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::timer::Interval;
 
 use crate::addr::{AddrKnown, AddressManager, Misbehavior, RawAddr};
-use crate::message::{DiscoveryCodec, DiscoveryMessage, Node, Nodes};
+use crate::protocol::{DiscoveryCodec, DiscoveryMessage, Node, Nodes};
 
 // FIXME: should be a more high level version number
 const VERSION: u32 = 0;
