@@ -10,7 +10,7 @@ use crate::{
 /// Protocol handle
 pub enum ProtocolHandle<T: Sized> {
     /// No operation
-    Empty,
+    Neither,
     /// Event output
     Event,
     /// Both event and callback
@@ -32,8 +32,8 @@ impl<T> ProtocolHandle<T> {
 
     /// Returns true if the enum is a empty value.
     #[inline]
-    pub fn is_empty(&self) -> bool {
-        if let ProtocolHandle::Empty = self {
+    pub fn is_neither(&self) -> bool {
+        if let ProtocolHandle::Neither = self {
             true
         } else {
             false
@@ -92,7 +92,7 @@ pub trait ServiceHandle {
     ///
     /// **Note** that this is a compatibility mode interface.
     ///
-    /// If the handle of a protocol is event, then its events will be placed here.
+    /// If the handle of the protocol has event, then its events will be placed here.
     /// If there is no event handle in the protocol, this interface will not be called.
     fn handle_proto(&mut self, _control: &mut ServiceContext, _event: ProtocolEvent) {}
 }
@@ -196,7 +196,7 @@ where
     /// This function is called when the protocol is first opened in the service
     /// and remains in memory until the entire service is closed.
     fn service_handle(&self) -> ProtocolHandle<Box<dyn ServiceProtocol + Send + 'static>> {
-        ProtocolHandle::Empty
+        ProtocolHandle::Neither
     }
 
     /// A session level callback handle for a protocol.
@@ -210,7 +210,7 @@ where
     ///
     /// Correspondingly, whenever the protocol is closed, the corresponding exclusive handle is cleared.
     fn session_handle(&self) -> ProtocolHandle<Box<dyn SessionProtocol + Send + 'static>> {
-        ProtocolHandle::Empty
+        ProtocolHandle::Neither
     }
 }
 

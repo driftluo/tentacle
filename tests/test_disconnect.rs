@@ -47,7 +47,7 @@ impl ProtocolMeta<LengthDelimitedCodec> for Protocol {
 
     fn service_handle(&self) -> ProtocolHandle<Box<dyn ServiceProtocol + Send + 'static>> {
         if self.id == 0 {
-            ProtocolHandle::Empty
+            ProtocolHandle::Neither
         } else {
             let handle = Box::new(PHandle {
                 proto_id: self.id,
