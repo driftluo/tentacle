@@ -2,6 +2,10 @@
 #[allow(clippy::all)]
 mod protocol_generated;
 
-mod message;
+mod protocol;
 
-pub struct Identify {}
+pub trait AddrManager {
+}
+
+pub struct Identify {
+}

@@ -15,7 +15,7 @@ pub enum IdentifyMessage {
 }
 
 impl IdentifyMessage {
-    pub fn encode(&self) -> Vec<u8> {
+    pub(crate) fn encode(&self) -> Vec<u8> {
         let mut fbb = FlatBufferBuilder::new();
         let offset = match self {
             IdentifyMessage::ListenAddrs(addrs) => {
@@ -49,7 +49,7 @@ impl IdentifyMessage {
         fbb.finished_data().to_vec()
     }
 
-    pub fn decode(data: &[u8]) -> Option<Self> {
+    pub(crate) fn decode(data: &[u8]) -> Option<Self> {
         let fbs_message = get_root::<FbsIdentifyMessage>(data);
         let payload = fbs_message.payload()?;
         match fbs_message.payload_type() {
