@@ -4,7 +4,7 @@ use tentacle::{
     builder::ServiceBuilder,
     context::{ServiceContext, SessionContext},
     secio::SecioKeyPair,
-    service::Service,
+    service::{DialProtocol, Service},
     traits::{ProtocolHandle, ProtocolMeta, ServiceHandle, ServiceProtocol},
     ProtocolId,
 };
@@ -89,7 +89,7 @@ fn test_disconnect(secio: bool) {
     thread::spawn(|| tokio::run(service.for_each(|_| Ok(()))));
 
     let mut service = create(secio, Protocol::new(1), ());
-    service.dial(listen_addr).unwrap();
+    service.dial(listen_addr, DialProtocol::All).unwrap();
     let mut control = service.control().clone();
     let handle = thread::spawn(|| tokio::run(service.for_each(|_| Ok(()))));
     thread::sleep(Duration::from_secs(5));

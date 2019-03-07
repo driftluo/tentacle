@@ -4,7 +4,7 @@ use p2p::{
     builder::ServiceBuilder,
     context::{ServiceContext, SessionContext},
     secio::SecioKeyPair,
-    service::{Service, ServiceControl},
+    service::{DialProtocol, Service, ServiceControl},
     traits::{ProtocolHandle, ProtocolMeta, ServiceHandle, ServiceProtocol},
     ProtocolId,
 };
@@ -133,7 +133,7 @@ pub fn init() {
 
         let (meta, client_receiver) = create_meta(1);
         let mut service = create(true, meta, ());
-        service.dial(listen_addr).unwrap();
+        service.dial(listen_addr, DialProtocol::All).unwrap();
         thread::spawn(|| tokio::run(service.for_each(|_| Ok(()))));
 
         assert_eq!(client_receiver.recv(), Ok(Notify::Connected));
@@ -155,7 +155,7 @@ pub fn init() {
 
         let (meta, client_receiver) = create_meta(1);
         let mut service = create(false, meta, ());
-        service.dial(listen_addr).unwrap();
+        service.dial(listen_addr, DialProtocol::All).unwrap();
         thread::spawn(|| tokio::run(service.for_each(|_| Ok(()))));
 
         assert_eq!(client_receiver.recv(), Ok(Notify::Connected));

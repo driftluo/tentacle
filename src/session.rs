@@ -21,7 +21,7 @@ use crate::{
     multiaddr::Multiaddr,
     protocol_select::{client_select, server_select, ProtocolInfo},
     secio::{codec::stream_handle::StreamHandle as SecureHandle, PublicKey},
-    service::ServiceTask,
+    service::{DialProtocol, ServiceTask},
     substream::{ProtocolEvent, SubStream},
     traits::ProtocolMeta,
     yamux::{session::SessionType, Config, Session as YamuxSession, StreamHandle},
@@ -41,6 +41,8 @@ pub(crate) enum SessionEvent {
         ty: SessionType,
         /// address
         address: Multiaddr,
+        /// dial protocol
+        target: DialProtocol,
     },
     HandshakeSuccess {
         /// Secure handle
@@ -87,8 +89,6 @@ pub(crate) enum SessionEvent {
         id: SessionId,
         /// Protocol id
         proto_id: ProtocolId,
-        /// Stream id
-        stream_id: StreamId,
         /// Protocol version
         version: String,
     },
@@ -98,8 +98,6 @@ pub(crate) enum SessionEvent {
         id: SessionId,
         /// Protocol id
         proto_id: ProtocolId,
-        /// Stream id
-        stream_id: StreamId,
     },
     ProtocolSelectError {
         /// Session id
@@ -375,7 +373,6 @@ where
 
                 self.event_output(SessionEvent::ProtocolOpen {
                     id: self.id,
-                    stream_id: self.next_stream,
                     proto_id,
                     version,
                 });
@@ -392,12 +389,7 @@ where
                 self.event_output(SessionEvent::ProtocolClose {
                     id: self.id,
                     proto_id,
-                    stream_id: id,
                 });
-                if self.sub_streams.is_empty() {
-                    debug!("Session no longer has protocol open, session closed");
-                    self.dead = true;
-                }
             }
             ProtocolEvent::Message { data, proto_id, .. } => {
                 debug!("get proto [{}] data len: {}", proto_id, data.len());
@@ -451,6 +443,33 @@ where
                             proto_id: *proto_id,
                         });
                     }
+                }
+            }
+            SessionEvent::ProtocolOpen { proto_id, .. } => {
+                if self.proto_streams.contains_key(&proto_id) {
+                    debug!("proto [{}] has been open", proto_id);
+                } else {
+                    let name = self.protocol_configs.values().find_map(|meta| {
+                        if meta.id() == proto_id {
+                            Some(meta.name())
+                        } else {
+                            None
+                        }
+                    });
+                    match name {
+                        Some(name) => self.open_proto_stream(&name),
+                        None => debug!("This protocol [{}] is not supported", proto_id),
+                    }
+                }
+            }
+            SessionEvent::ProtocolClose { proto_id, .. } => {
+                if !self.proto_streams.contains_key(&proto_id) {
+                    debug!("proto [{}] has been closed", proto_id);
+                } else {
+                    self.write_buf.push_back(ProtocolEvent::Close {
+                        id: self.proto_streams[&proto_id],
+                        proto_id,
+                    });
                 }
             }
             _ => (),

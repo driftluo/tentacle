@@ -45,6 +45,7 @@ mod control;
 mod event;
 
 pub use crate::service::{
+    config::DialProtocol,
     control::ServiceControl,
     event::{ProtocolEvent, ServiceError, ServiceEvent, ServiceTask},
 };
@@ -66,6 +67,7 @@ pub struct Service<T, U> {
     listens: Vec<(Multiaddr, Incoming)>,
 
     dial: Vec<(Multiaddr, Timeout<ConnectFuture>)>,
+    dial_protocols: HashMap<Multiaddr, DialProtocol>,
     config: ServiceConfig,
     /// Calculate the number of connection requests that need to be sent externally,
     /// if run forever, it will default to 1, else it default to 0
@@ -79,7 +81,7 @@ pub struct Service<T, U> {
     handle: T,
 
     /// The buffer which will distribute to sessions
-    write_buf: VecDeque<SessionEvent>,
+    write_buf: VecDeque<(SessionId, SessionEvent)>,
     /// The buffer which will distribute to service protocol handle
     read_service_buf: VecDeque<(ProtocolId, ServiceProtocolEvent)>,
     /// The buffer which will distribute to session protocol handle
@@ -140,6 +142,7 @@ where
             session_proto_handles: HashMap::default(),
             listens: Vec::new(),
             dial: Vec::new(),
+            dial_protocols: HashMap::default(),
             config,
             task_count: if forever { 1 } else { 0 },
             next_session: 0,
@@ -192,6 +195,7 @@ where
                         .send(SessionEvent::DNSResolverSuccess {
                             ty: SessionType::Server,
                             address,
+                            target: DialProtocol::All,
                         })
                         .map(|_| ())
                         .map_err(|err| {
@@ -219,16 +223,21 @@ where
     }
 
     /// Dial the given address, doesn't actually make a request, just generate a future
-    pub fn dial(&mut self, address: Multiaddr) -> Result<&mut Self, io::Error> {
-        self.dial_inner(address)?;
+    pub fn dial(
+        &mut self,
+        address: Multiaddr,
+        target: DialProtocol,
+    ) -> Result<&mut Self, io::Error> {
+        self.dial_inner(address, target)?;
         Ok(self)
     }
 
     /// Use by inner
     #[inline(always)]
-    fn dial_inner(&mut self, address: Multiaddr) -> Result<(), io::Error> {
+    fn dial_inner(&mut self, address: Multiaddr, target: DialProtocol) -> Result<(), io::Error> {
         if let Some(socket_address) = multiaddr_to_socketaddr(&address) {
             let dial = TcpStream::connect(&socket_address).timeout(self.config.timeout);
+            self.dial_protocols.insert(address.clone(), target);
             self.dial.push((address, dial));
             self.task_count += 1;
         } else {
@@ -241,6 +250,7 @@ where
                         .send(SessionEvent::DNSResolverSuccess {
                             ty: SessionType::Client,
                             address,
+                            target,
                         })
                         .map(|_| ())
                         .map_err(|err| {
@@ -282,45 +292,19 @@ where
     /// Distribute event to sessions
     #[inline]
     fn distribute_to_session(&mut self) {
-        for event in self.write_buf.split_off(0) {
-            match event {
-                SessionEvent::ProtocolMessage { id, proto_id, data } => {
-                    if let Some(session) = self.sessions.get_mut(&id) {
-                        if let Err(e) = session
-                            .event_sender
-                            .try_send(SessionEvent::ProtocolMessage { id, proto_id, data })
-                        {
-                            if e.is_full() {
-                                debug!("session [{}] is full", id);
-                                self.write_buf.push_back(e.into_inner());
-                                self.notify();
-                            } else {
-                                error!("channel shutdown, message can't send")
-                            }
-                        }
+        for (id, event) in self.write_buf.split_off(0) {
+            if let Some(session) = self.sessions.get_mut(&id) {
+                if let Err(e) = session.event_sender.try_send(event) {
+                    if e.is_full() {
+                        debug!("session [{}] is full", id);
+                        self.write_buf.push_back((id, e.into_inner()));
+                        self.notify();
                     } else {
-                        debug!("Can't find session {}, proto {} to send data", id, proto_id);
+                        error!("channel shutdown, message can't send")
                     }
                 }
-                SessionEvent::SessionClose { id } => {
-                    if let Some(session) = self.sessions.get_mut(&id) {
-                        if let Err(e) = session
-                            .event_sender
-                            .try_send(SessionEvent::SessionClose { id })
-                        {
-                            if e.is_full() {
-                                debug!("session [{}] is full", id);
-                                self.write_buf.push_back(e.into_inner());
-                                self.notify();
-                            } else {
-                                error!("channel shutdown, message can't send")
-                            }
-                        }
-                    } else {
-                        debug!("Can't find session {} to close", id);
-                    }
-                }
-                _ => (),
+            } else {
+                debug!("Can't find session {} to send data", id);
             }
         }
     }
@@ -372,11 +356,14 @@ where
     /// Valid after Service starts
     #[inline]
     pub fn send_message(&mut self, session_id: SessionId, proto_id: ProtocolId, data: &[u8]) {
-        self.write_buf.push_back(SessionEvent::ProtocolMessage {
-            id: session_id,
-            proto_id,
-            data: data.into(),
-        });
+        self.write_buf.push_back((
+            session_id,
+            SessionEvent::ProtocolMessage {
+                id: session_id,
+                proto_id,
+                data: data.into(),
+            },
+        ));
         self.distribute_to_session();
     }
 
@@ -402,11 +389,14 @@ where
                             proto_id,
                             data.len()
                         );
-                        self.write_buf.push_back(SessionEvent::ProtocolMessage {
-                            id: *id,
-                            proto_id,
-                            data: data.clone(),
-                        });
+                        self.write_buf.push_back((
+                            *id,
+                            SessionEvent::ProtocolMessage {
+                                id: *id,
+                                proto_id,
+                                data: data.clone(),
+                            },
+                        ));
                     }
                 }
                 self.distribute_to_session();
@@ -427,11 +417,14 @@ where
         );
         let data: bytes::Bytes = data.into();
         for id in self.sessions.keys() {
-            self.write_buf.push_back(SessionEvent::ProtocolMessage {
-                id: *id,
-                proto_id,
-                data: data.clone(),
-            });
+            self.write_buf.push_back((
+                *id,
+                SessionEvent::ProtocolMessage {
+                    id: *id,
+                    proto_id,
+                    data: data.clone(),
+                },
+            ));
         }
         self.distribute_to_session();
     }
@@ -545,6 +538,10 @@ where
     ) where
         H: AsyncRead + AsyncWrite + Send + 'static,
     {
+        let target = self
+            .dial_protocols
+            .remove(&address)
+            .unwrap_or_else(|| DialProtocol::All);
         if let Some(ref key) = remote_pubkey {
             // If the public key exists, the connection has been established
             // and then the useless connection needs to be closed.
@@ -604,14 +601,13 @@ where
         }
 
         let (service_event_sender, service_event_receiver) = mpsc::channel(32);
-        let session = SessionContext {
+        let session_context = SessionContext {
             event_sender: service_event_sender,
             id: self.next_session,
             address,
             ty,
             remote_pubkey,
         };
-        self.sessions.insert(session.id, session);
 
         let meta = SessionMeta::new(self.next_session, ty, self.config.timeout)
             .protocol(self.protocol_configs.clone())
@@ -625,19 +621,39 @@ where
         );
 
         if ty == SessionType::Client {
-            self.protocol_configs
-                .keys()
-                .for_each(|name| session.open_proto_stream(name));
+            match target {
+                DialProtocol::All => {
+                    self.protocol_configs
+                        .keys()
+                        .for_each(|name| session.open_proto_stream(name));
+                }
+                DialProtocol::Single(proto_id) => {
+                    self.protocol_configs
+                        .values()
+                        .find(|meta| meta.id() == proto_id)
+                        .and_then(|meta| {
+                            session.open_proto_stream(&meta.name());
+                            Some(())
+                        });
+                }
+                DialProtocol::Multi(proto_ids) => self
+                    .protocol_configs
+                    .values()
+                    .filter(|meta| proto_ids.contains(&meta.id()))
+                    .for_each(|meta| session.open_proto_stream(&meta.name())),
+            }
         }
 
         tokio::spawn(session.for_each(|_| Ok(())).map_err(|_| ()));
 
-        if let Some(session_context) = self.sessions.get(&self.next_session) {
-            self.handle.handle_event(
-                &mut self.service_context,
-                ServiceEvent::SessionOpen { session_context },
-            );
-        }
+        self.handle.handle_event(
+            &mut self.service_context,
+            ServiceEvent::SessionOpen {
+                session_context: &session_context,
+            },
+        );
+
+        self.sessions.insert(session_context.id, session_context);
     }
 
     /// Close the specified session, clean up the handle
@@ -645,7 +661,8 @@ where
     fn session_close(&mut self, id: SessionId, source: Source) {
         if source == Source::External {
             debug!("try close service session [{}] ", id);
-            self.write_buf.push_back(SessionEvent::SessionClose { id });
+            self.write_buf
+                .push_back((id, SessionEvent::SessionClose { id }));
             self.distribute_to_session();
             return;
         }
@@ -657,7 +674,7 @@ where
         debug!("session [{}] close proto [{:?}]", id, close_proto_ids);
 
         close_proto_ids.into_iter().for_each(|proto_id| {
-            self.protocol_close(id, proto_id);
+            self.protocol_close(id, proto_id, Source::Internal);
         });
 
         if let Some(session_context) = self.sessions.remove(&id) {
@@ -673,7 +690,27 @@ where
 
     /// Open the handle corresponding to the protocol
     #[inline]
-    fn protocol_open(&mut self, id: SessionId, proto_id: ProtocolId, version: String) {
+    fn protocol_open(
+        &mut self,
+        id: SessionId,
+        proto_id: ProtocolId,
+        version: String,
+        source: Source,
+    ) {
+        if source == Source::External {
+            debug!("try open session [{}] proto [{}]", id, proto_id);
+            self.write_buf.push_back((
+                id,
+                SessionEvent::ProtocolOpen {
+                    id,
+                    proto_id,
+                    version,
+                },
+            ));
+            self.distribute_to_session();
+            return;
+        }
+
         debug!("service session [{}] proto [{}] open", id, proto_id);
         let session_context = self
             .sessions
@@ -815,7 +852,20 @@ where
 
     /// Protocol stream is closed, clean up data
     #[inline]
-    fn protocol_close(&mut self, session_id: SessionId, proto_id: ProtocolId) {
+    fn protocol_close(&mut self, session_id: SessionId, proto_id: ProtocolId, source: Source) {
+        if source == Source::External {
+            debug!("try close session [{}] proto [{}]", session_id, proto_id);
+            self.write_buf.push_back((
+                session_id,
+                SessionEvent::ProtocolClose {
+                    id: session_id,
+                    proto_id,
+                },
+            ));
+            self.distribute_to_session();
+            return;
+        }
+
         debug!(
             "service session [{}] proto [{}] close",
             session_id, proto_id
@@ -933,9 +983,10 @@ where
                 id,
                 proto_id,
                 version,
-                ..
-            } => self.protocol_open(id, proto_id, version),
-            SessionEvent::ProtocolClose { id, proto_id, .. } => self.protocol_close(id, proto_id),
+            } => self.protocol_open(id, proto_id, version, Source::Internal),
+            SessionEvent::ProtocolClose { id, proto_id } => {
+                self.protocol_close(id, proto_id, Source::Internal)
+            }
             SessionEvent::ProtocolSelectError { id, proto_name } => {
                 if let Some(session_context) = self.sessions.get(&id) {
                     self.handle.handle_error(
@@ -975,13 +1026,19 @@ where
                     )
                 }
             }
-            SessionEvent::DNSResolverSuccess { ty, address } => {
+            SessionEvent::DNSResolverSuccess {
+                ty,
+                address,
+                target,
+            } => {
                 self.task_count -= 1;
                 match ty {
                     SessionType::Server => {
                         self.handle_service_task(ServiceTask::Listen { address })
                     }
-                    SessionType::Client => self.handle_service_task(ServiceTask::Dial { address }),
+                    SessionType::Client => {
+                        self.handle_service_task(ServiceTask::Dial { address, target })
+                    }
                 }
             }
         }
@@ -995,9 +1052,9 @@ where
                 proto_id,
                 data,
             } => self.filter_broadcast(session_ids, proto_id, &data),
-            ServiceTask::Dial { address } => {
+            ServiceTask::Dial { address, target } => {
                 if !self.dial.iter().any(|(addr, _)| addr == &address) {
-                    if let Err(e) = self.dial_inner(address.clone()) {
+                    if let Err(e) = self.dial_inner(address.clone(), target) {
                         self.handle.handle_error(
                             &mut self.service_context,
                             ServiceError::DialerError {
@@ -1088,6 +1145,14 @@ where
                         .remove_session_notify_senders(session_id, proto_id);
                 }
             }
+            ServiceTask::ProtocolOpen {
+                session_id,
+                proto_id,
+            } => self.protocol_open(session_id, proto_id, String::default(), Source::External),
+            ServiceTask::ProtocolClose {
+                session_id,
+                proto_id,
+            } => self.protocol_close(session_id, proto_id, Source::External),
         }
     }
 

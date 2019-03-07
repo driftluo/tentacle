@@ -9,7 +9,7 @@ use tentacle::{
     builder::ServiceBuilder,
     context::{ServiceContext, SessionContext},
     secio::SecioKeyPair,
-    service::Service,
+    service::{DialProtocol, Service},
     traits::{ProtocolHandle, ProtocolMeta, ServiceHandle, ServiceProtocol},
     ProtocolId,
 };
@@ -163,7 +163,7 @@ fn test_kill(secio: bool) {
         Ok(ForkResult::Child) => {
             let (meta, _receiver) = create_meta(1);
             let mut service = create(secio, meta, ());
-            service.dial(listen_addr).unwrap();
+            service.dial(listen_addr, DialProtocol::All).unwrap();
             let handle = thread::spawn(|| tokio::run(service.for_each(|_| Ok(()))));
             handle.join().expect("child process done")
         }
