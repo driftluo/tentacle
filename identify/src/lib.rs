@@ -147,7 +147,6 @@ impl ServiceProtocol for IdentifyProtocol {
                 if info.listen_addrs.is_some() {
                     // TODO report misbehavior: repeat send listen_addrs
                     debug!("remote({:?}) repeat send observed address", info.peer_id);
-                    service.disconnect(session.id);
                 } else {
                     trace!("received listen addresses: {:?}", addrs);
                     info.listen_addrs = Some(addrs);
@@ -157,7 +156,6 @@ impl ServiceProtocol for IdentifyProtocol {
                 if info.observed_addr.is_some() {
                     // TODO report misbehavior: repeat send listen_addrs
                     debug!("remote({:?}) repeat send listen addresses", info.peer_id);
-                    service.disconnect(session.id);
                 } else {
                     trace!("received observed address: {}", addr);
                     info.observed_addr = Some(addr);
@@ -171,7 +169,6 @@ impl ServiceProtocol for IdentifyProtocol {
                     info.peer_id
                 );
                 // TODO: report misbehavior: invalid data
-                service.disconnect(session.id);
             }
         }
     }
@@ -183,7 +180,6 @@ impl ServiceProtocol for IdentifyProtocol {
             {
                 // TODO: report timeout
                 debug!("{:?} receive identify message timeout", info.peer_id);
-                service.disconnect(*session_id);
             }
         }
     }
