@@ -8,3 +8,5 @@ edition = "2018"
 p2p = { path = "..", package = "tentacle" }
 bytes = "0.4"
 flatbuffers = "0.5.0"
+tokio = "0.1"
+log = "0.4"
