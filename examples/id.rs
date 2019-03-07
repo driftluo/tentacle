@@ -1,9 +1,7 @@
 use env_logger;
-use log::{debug, info};
+use log::debug;
 
-use std::time::Duration;
-
-use futures::{future::lazy, prelude::*, sync::mpsc::channel};
+use futures::{future::lazy, prelude::*};
 use identify::IdentifyProtocol;
 use tentacle::{
     builder::ServiceBuilder,
