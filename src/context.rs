@@ -15,7 +15,7 @@ use crate::{
     multiaddr::Multiaddr,
     protocol_select::ProtocolInfo,
     secio::PublicKey,
-    service::{ServiceControl, ServiceTask},
+    service::{DialProtocol, ServiceControl, ServiceTask},
     session::SessionEvent,
     yamux::session::SessionType,
     ProtocolId, SessionId,
@@ -71,8 +71,8 @@ impl ServiceContext {
 
     /// Initiate a connection request to address
     #[inline]
-    pub fn dial(&mut self, address: Multiaddr) {
-        if let Err(Error::TaskFull(task)) = self.inner.dial(address) {
+    pub fn dial(&mut self, address: Multiaddr, target: DialProtocol) {
+        if let Err(Error::TaskFull(task)) = self.inner.dial(address, target) {
             self.pending_tasks.push_back(task);
         }
     }
@@ -114,6 +114,26 @@ impl ServiceContext {
         T: Future<Item = (), Error = ()> + 'static + Send,
     {
         if let Err(Error::TaskFull(task)) = self.inner.future_task(task) {
+            self.pending_tasks.push_back(task);
+        }
+    }
+
+    /// Try open a protocol
+    ///
+    /// If the protocol has been open, do nothing
+    #[inline]
+    pub fn open_protocol(&mut self, session_id: SessionId, proto_id: ProtocolId) {
+        if let Err(Error::TaskFull(task)) = self.inner.open_protocol(session_id, proto_id) {
+            self.pending_tasks.push_back(task);
+        }
+    }
+
+    /// Try close a protocol
+    ///
+    /// If the protocol has been closed, do nothing
+    #[inline]
+    pub fn close_protocol(&mut self, session_id: SessionId, proto_id: ProtocolId) {
+        if let Err(Error::TaskFull(task)) = self.inner.close_protocol(session_id, proto_id) {
             self.pending_tasks.push_back(task);
         }
     }

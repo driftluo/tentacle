@@ -10,7 +10,7 @@ use tentacle::{
     builder::ServiceBuilder,
     context::{ServiceContext, SessionContext},
     secio::SecioKeyPair,
-    service::{Service, ServiceError, ServiceEvent},
+    service::{DialProtocol, Service, ServiceError, ServiceEvent},
     traits::{ProtocolHandle, ProtocolMeta, ServiceHandle, ServiceProtocol},
     ProtocolId, SessionId,
 };
@@ -206,7 +206,10 @@ fn server() {
 fn client() {
     let mut service = create_client();
     service
-        .dial("/dns4/localhost/tcp/1337".parse().unwrap())
+        .dial(
+            "/dns4/localhost/tcp/1337".parse().unwrap(),
+            DialProtocol::All,
+        )
         .unwrap();
     let _ = service.listen("/ip4/127.0.0.1/tcp/1337".parse().unwrap());
 

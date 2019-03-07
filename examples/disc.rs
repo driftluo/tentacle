@@ -18,7 +18,7 @@ use tentacle::{
     builder::ServiceBuilder,
     context::{ServiceContext, SessionContext},
     multiaddr::{Multiaddr, ToMultiaddr},
-    service::{ServiceError, ServiceEvent},
+    service::{DialProtocol, ServiceError, ServiceEvent},
     traits::{ProtocolHandle, ProtocolMeta, ServiceHandle, ServiceProtocol},
     utils::multiaddr_to_socketaddr,
     yamux::session::SessionType,
@@ -48,7 +48,10 @@ fn main() {
             .forever(true)
             .build(SHandle {});
 
-        let _ = service.dial("/ip4/127.0.0.1/tcp/1337".parse().unwrap());
+        let _ = service.dial(
+            "/ip4/127.0.0.1/tcp/1337".parse().unwrap(),
+            DialProtocol::All,
+        );
         let _ = service.listen("/ip4/127.0.0.1/tcp/1338".parse().unwrap());
         tokio::run(service.for_each(|_| Ok(())))
     }

@@ -8,7 +8,7 @@ use ping::{Event, PingProtocol};
 use tentacle::{
     builder::ServiceBuilder,
     context::ServiceContext,
-    service::{ServiceError, ServiceEvent},
+    service::{DialProtocol, ServiceError, ServiceEvent},
     traits::ServiceHandle,
 };
 
@@ -40,7 +40,10 @@ fn main() {
             .insert_protocol(protocol)
             .forever(true)
             .build(SimpleHandler {});
-        let _ = service.dial("/ip4/127.0.0.1/tcp/1337".parse().unwrap());
+        let _ = service.dial(
+            "/ip4/127.0.0.1/tcp/1337".parse().unwrap(),
+            DialProtocol::All,
+        );
         let _ = service.listen("/ip4/127.0.0.1/tcp/1338".parse().unwrap());
         tokio::run(lazy(|| {
             tokio::spawn(receiver.for_each(|event| {

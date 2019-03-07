@@ -6,7 +6,7 @@ use tentacle::{
     error::Error,
     multiaddr::Multiaddr,
     secio::SecioKeyPair,
-    service::{Service, ServiceError, ServiceEvent},
+    service::{DialProtocol, Service, ServiceError, ServiceEvent},
     traits::{ProtocolHandle, ProtocolMeta, ServiceHandle, ServiceProtocol},
     yamux::session::SessionType,
     ProtocolId, SessionId,
@@ -173,7 +173,7 @@ impl ServiceProtocol for PHandle {
     }
 
     fn notify(&mut self, control: &mut ServiceContext, _token: u64) {
-        control.dial(self.dial_addr.as_ref().unwrap().clone());
+        control.dial(self.dial_addr.as_ref().unwrap().clone(), DialProtocol::All);
         self.dial_count += 1;
         if self.dial_count == 10 {
             self.sender.try_send(self.connected_count).unwrap();
@@ -233,7 +233,7 @@ fn test_repeated_dial(secio: bool) {
     let (shandle, error_receiver_2) = create_shandle(secio, false);
 
     let mut service = create(secio, meta, shandle);
-    service.dial(listen_addr).unwrap();
+    service.dial(listen_addr, DialProtocol::All).unwrap();
     thread::spawn(|| tokio::run(service.for_each(|_| Ok(()))));
 
     if secio {
@@ -258,7 +258,7 @@ fn test_dial_with_no_notify(secio: bool) {
     // macOs can't dial 0 port
     (1..11).for_each(|i| {
         let addr = format!("/ip4/127.0.0.1/tcp/{}", i).parse().unwrap();
-        control.dial(addr).unwrap();
+        control.dial(addr, DialProtocol::All).unwrap();
     });
     assert_eq!(error_receiver.recv(), Ok(9));
 }

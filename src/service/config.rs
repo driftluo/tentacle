@@ -20,3 +20,14 @@ impl Default for ServiceConfig {
         }
     }
 }
+
+/// When dial, specify which protocol want to open
+#[derive(Debug, Clone, Eq, PartialEq, Ord, PartialOrd)]
+pub enum DialProtocol {
+    /// Try open all protocol
+    All,
+    /// Try open one protocol
+    Single(ProtocolId),
+    /// Try open some protocol
+    Multi(Vec<ProtocolId>),
+}
