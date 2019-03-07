@@ -113,7 +113,6 @@ impl ServiceProtocol for IdentifyProtocol {
         let listen_addrs: HashSet<SocketAddr> = self
             .observed_addrs
             .values()
-            .into_iter()
             .chain(self.listen_addrs.iter())
             .map(Clone::clone)
             .collect();
