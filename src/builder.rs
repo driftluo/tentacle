@@ -5,7 +5,10 @@ use tokio::codec::LengthDelimitedCodec;
 
 use crate::{
     secio::SecioKeyPair,
-    service::{config::ServiceConfig, ProtocolHandle, ProtocolMeta, Service},
+    service::{
+        config::{Meta, ServiceConfig},
+        ProtocolHandle, ProtocolMeta, Service,
+    },
     traits::{Codec, ServiceHandle, ServiceProtocol, SessionProtocol},
     yamux::Config,
     ProtocolId,
@@ -30,13 +33,7 @@ impl ServiceBuilder {
     where
         H: ServiceHandle,
     {
-        Service::new(
-            Arc::new(self.inner),
-            handle,
-            self.key_pair,
-            self.forever,
-            self.config,
-        )
+        Service::new(self.inner, handle, self.key_pair, self.forever, self.config)
     }
 
     /// Insert a custom protocol
@@ -108,14 +105,21 @@ impl Default for ServiceBuilder {
     }
 }
 
+pub(crate) type NameFn = Box<Fn(ProtocolId) -> String + Send + Sync>;
+pub(crate) type CodecFn = Box<Fn() -> Box<dyn Codec + Send + 'static> + Send + Sync>;
+pub(crate) type ServiceHandleFn =
+    Box<Fn(&ProtocolMeta) -> ProtocolHandle<Box<dyn ServiceProtocol + Send + 'static>> + Send>;
+pub(crate) type SessionHandleFn =
+    Box<Fn(&ProtocolMeta) -> ProtocolHandle<Box<dyn SessionProtocol + Send + 'static>> + Send>;
+
 /// Builder for protocol meta
 pub struct MetaBuilder {
     id: ProtocolId,
-    name: Box<Fn(&ProtocolMeta) -> String + Send + Sync>,
+    name: NameFn,
     support_versions: Vec<String>,
-    codec: Box<Fn(&ProtocolMeta) -> Box<dyn Codec + Send + 'static> + Send + Sync>,
-    service_handle: Box<Fn(&ProtocolMeta) -> ProtocolHandle<Box<dyn ServiceProtocol + Send + 'static>> + Send + Sync>,
-    session_handle: Box<Fn(&ProtocolMeta) -> ProtocolHandle<Box<dyn SessionProtocol + Send + 'static>> + Send + Sync>,
+    codec: CodecFn,
+    service_handle: ServiceHandleFn,
+    session_handle: SessionHandleFn,
 }
 
 impl MetaBuilder {
@@ -131,7 +135,7 @@ impl MetaBuilder {
     }
 
     /// Define protocol name
-    pub fn name<T: Fn(&ProtocolMeta) -> String + 'static + Send + Sync>(mut self, name: T) -> Self {
+    pub fn name<T: Fn(ProtocolId) -> String + 'static + Send + Sync>(mut self, name: T) -> Self {
         self.name = Box::new(name);
         self
     }
@@ -142,14 +146,21 @@ impl MetaBuilder {
         self
     }
 
-    /// Define protocol codec
-    pub fn codec<T: Fn(&ProtocolMeta) -> Box<dyn Codec + Send + 'static> + 'static + Send + Sync>(mut self, codec: T) -> Self {
+    /// Define protocol codec, default is LengthDelimitedCodec
+    pub fn codec<T: Fn() -> Box<dyn Codec + Send + 'static> + 'static + Send + Sync>(
+        mut self,
+        codec: T,
+    ) -> Self {
         self.codec = Box::new(codec);
         self
     }
 
-    /// Define protocol service handle
-    pub fn service_handle<T: Fn(&ProtocolMeta) -> ProtocolHandle<Box<dyn ServiceProtocol + Send + 'static>> + 'static + Sync + Send>(
+    /// Define protocol service handle, default is neither
+    pub fn service_handle<
+        T: Fn(&ProtocolMeta) -> ProtocolHandle<Box<dyn ServiceProtocol + Send + 'static>>
+            + Send
+            + 'static,
+    >(
         mut self,
         service_handle: T,
     ) -> Self {
@@ -157,8 +168,12 @@ impl MetaBuilder {
         self
     }
 
-    /// Define protocol session handle
-    pub fn session_handle<T: Fn(&ProtocolMeta) -> ProtocolHandle<Box<dyn SessionProtocol + Send + 'static>> + 'static + Send + Sync>(
+    /// Define protocol session handle, default is neither
+    pub fn session_handle<
+        T: Fn(&ProtocolMeta) -> ProtocolHandle<Box<dyn SessionProtocol + Send + 'static>>
+            + Send
+            + 'static,
+    >(
         mut self,
         session_handle: T,
     ) -> Self {
@@ -168,11 +183,14 @@ impl MetaBuilder {
 
     /// Combine the configuration of this builder to create a ProtocolMeta
     pub fn build(self) -> ProtocolMeta {
-        ProtocolMeta {
+        let meta = Meta {
             id: self.id,
             name: self.name,
             support_versions: self.support_versions,
             codec: self.codec,
+        };
+        ProtocolMeta {
+            inner: Arc::new(meta),
             service_handle: self.service_handle,
             session_handle: self.session_handle,
         }
@@ -183,9 +201,9 @@ impl Default for MetaBuilder {
     fn default() -> Self {
         MetaBuilder {
             id: 0,
-            name: Box::new(|meta| format!("/p2p/{}", meta.id)),
+            name: Box::new(|id| format!("/p2p/{}", id)),
             support_versions: vec!["0.0.1".to_owned()],
-            codec: Box::new(|_| Box::new(LengthDelimitedCodec::new())),
+            codec: Box::new(|| Box::new(LengthDelimitedCodec::new())),
             service_handle: Box::new(|_| ProtocolHandle::Neither),
             session_handle: Box::new(|_| ProtocolHandle::Neither),
         }

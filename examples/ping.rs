@@ -4,7 +4,7 @@ use log::{debug, info};
 use std::time::Duration;
 
 use futures::{future::lazy, prelude::*, sync::mpsc::channel};
-use ping::{Event, PingProtocol};
+use ping::{create_meta, Event};
 use tentacle::{
     builder::ServiceBuilder,
     context::ServiceContext,
@@ -17,8 +17,7 @@ fn main() {
     if std::env::args().nth(1) == Some("server".to_string()) {
         debug!("Starting server ......");
         let (sender, receiver) = channel(256);
-        let protocol =
-            PingProtocol::new(1, Duration::from_secs(5), Duration::from_secs(15), sender);
+        let protocol = create_meta(1, Duration::from_secs(5), Duration::from_secs(15), sender);
         let mut service = ServiceBuilder::default()
             .insert_protocol(protocol)
             .forever(true)
@@ -34,8 +33,7 @@ fn main() {
     } else {
         debug!("Starting client ......");
         let (sender, receiver) = channel(256);
-        let protocol =
-            PingProtocol::new(1, Duration::from_secs(5), Duration::from_secs(15), sender);
+        let protocol = create_meta(1, Duration::from_secs(5), Duration::from_secs(15), sender);
         let mut service = ServiceBuilder::default()
             .insert_protocol(protocol)
             .forever(true)

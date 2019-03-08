@@ -3,69 +3,9 @@ use tokio::codec::{Decoder, Encoder};
 
 use crate::{
     context::{ServiceContext, SessionContext},
-    service::{ProtocolEvent, ServiceError, ServiceEvent},
+    service::{ProtocolEvent, ProtocolHandle, ServiceError, ServiceEvent},
     ProtocolId,
 };
-
-/// Protocol handle
-pub enum ProtocolHandle<T: Sized> {
-    /// No operation
-    Neither,
-    /// Event output
-    Event,
-    /// Both event and callback
-    Both(T),
-    /// Callback handle
-    Callback(T),
-}
-
-impl<T> ProtocolHandle<T> {
-    /// Returns true if the enum is a callback value.
-    #[inline]
-    pub fn is_callback(&self) -> bool {
-        if let ProtocolHandle::Callback(_) = self {
-            true
-        } else {
-            false
-        }
-    }
-
-    /// Returns true if the enum is a empty value.
-    #[inline]
-    pub fn is_neither(&self) -> bool {
-        if let ProtocolHandle::Neither = self {
-            true
-        } else {
-            false
-        }
-    }
-
-    /// Returns true if the enum is a event value.
-    #[inline]
-    pub fn is_event(&self) -> bool {
-        if let ProtocolHandle::Event = self {
-            true
-        } else {
-            false
-        }
-    }
-
-    /// Returns true if the enum is a both value.
-    #[inline]
-    pub fn is_both(&self) -> bool {
-        if let ProtocolHandle::Both(_) = self {
-            true
-        } else {
-            false
-        }
-    }
-
-    /// Returns true if the enum is a both value.
-    #[inline]
-    pub fn has_event(&self) -> bool {
-        self.is_event() || self.is_both()
-    }
-}
 
 /// Service handle
 ///

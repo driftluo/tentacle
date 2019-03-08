@@ -9,16 +9,17 @@ use fnv::FnvHashMap;
 use generic_channel::Sender;
 use log::{debug, error};
 use p2p::{
+    builder::MetaBuilder,
     context::{ServiceContext, SessionContext},
     secio::PeerId,
-    traits::{Codec, ProtocolHandle, ProtocolMeta, ServiceProtocol},
+    service::{ProtocolHandle, ProtocolMeta},
+    traits::ServiceProtocol,
     ProtocolId, SessionId,
 };
 use std::{
     str,
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
-use tokio::codec::length_delimited::LengthDelimitedCodec;
 
 const SEND_PING_TOKEN: u64 = 0;
 const CHECK_TIMEOUT_TOKEN: u64 = 1;
@@ -36,50 +37,29 @@ pub enum Event {
     UnexpectedError(PeerId),
 }
 
-pub struct PingProtocol<S: Sender<Event> + Send + Clone> {
+/// Ping protocol mete create.
+///
+/// The interval means that we send ping to peers.
+/// The timeout means that consider peer is timeout if during a timeout we still have not received pong from a peer
+pub fn create_meta<S: Sender<Event> + Send + Clone + 'static>(
     id: ProtocolId,
-    /// the interval that we send ping to peers.
     interval: Duration,
-    /// consider peer is timeout if during a timeout we still have not received pong from a peer
     timeout: Duration,
     event_sender: S,
-}
-
-impl<S> PingProtocol<S>
-where
-    S: Sender<Event> + Send + Clone,
-{
-    pub fn new(id: ProtocolId, interval: Duration, timeout: Duration, event_sender: S) -> Self {
-        PingProtocol {
-            id,
-            interval,
-            timeout,
-            event_sender,
-        }
-    }
-}
-
-impl<S> ProtocolMeta for PingProtocol<S>
-where
-    S: Sender<Event> + Send + Clone + 'static,
-{
-    fn id(&self) -> ProtocolId {
-        self.id
-    }
-    fn codec(&self) -> Box<dyn Codec + Send + 'static> {
-        Box::new(LengthDelimitedCodec::new())
-    }
-
-    fn service_handle(&self) -> ProtocolHandle<Box<dyn ServiceProtocol + Send + 'static>> {
-        let handle = Box::new(PingHandler {
-            proto_id: self.id,
-            interval: self.interval,
-            timeout: self.timeout,
-            connected_session_ids: Default::default(),
-            event_sender: self.event_sender.clone(),
-        });
-        ProtocolHandle::Callback(handle)
-    }
+) -> ProtocolMeta {
+    MetaBuilder::new()
+        .id(id)
+        .service_handle(move |meta| {
+            let handle = Box::new(PingHandler {
+                proto_id: meta.id(),
+                interval,
+                timeout,
+                connected_session_ids: Default::default(),
+                event_sender: event_sender.clone(),
+            });
+            ProtocolHandle::Callback(handle)
+        })
+        .build()
 }
 
 struct PingHandler<S: Sender<Event>> {

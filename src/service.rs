@@ -5,7 +5,6 @@ use futures::{
 };
 use log::{debug, error, trace, warn};
 use std::collections::{HashMap, HashSet, VecDeque};
-use std::sync::Arc;
 use std::{error::Error as ErrorTrait, io};
 use tokio::net::{
     tcp::{ConnectFuture, Incoming},
@@ -53,7 +52,7 @@ pub(crate) enum InnerProtocolHandle {
 
 /// An abstraction of p2p service, currently only supports TCP protocol
 pub struct Service<T> {
-    protocol_configs: Arc<HashMap<String, ProtocolMeta>>,
+    protocol_configs: HashMap<String, ProtocolMeta>,
 
     sessions: HashMap<SessionId, SessionContext>,
 
@@ -106,7 +105,7 @@ where
 {
     /// New a Service
     pub(crate) fn new(
-        protocol_configs: Arc<HashMap<String, ProtocolMeta>>,
+        protocol_configs: HashMap<String, ProtocolMeta>,
         handle: T,
         key_pair: Option<SecioKeyPair>,
         forever: bool,
@@ -268,7 +267,7 @@ where
     }
 
     /// Get service current protocol configure
-    pub fn protocol_configs(&self) -> &Arc<HashMap<String, ProtocolMeta>> {
+    pub fn protocol_configs(&self) -> &HashMap<String, ProtocolMeta> {
         &self.protocol_configs
     }
 
@@ -598,7 +597,12 @@ where
         };
 
         let meta = SessionMeta::new(self.next_session, ty, self.config.timeout)
-            .protocol(self.protocol_configs.clone())
+            .protocol(
+                self.protocol_configs
+                    .iter()
+                    .map(|(key, value)| (key.clone(), value.inner.clone()))
+                    .collect(),
+            )
             .config(self.config.yamux_config);
 
         let mut session = Session::new(

@@ -1,9 +1,11 @@
 use crate::{
+    builder::{CodecFn, NameFn, ServiceHandleFn, SessionHandleFn},
     traits::{Codec, ServiceProtocol, SessionProtocol},
     yamux::config::Config as YamuxConfig,
     ProtocolId,
 };
 use std::collections::HashSet;
+use std::sync::Arc;
 use std::time::Duration;
 
 pub(crate) struct ServiceConfig {
@@ -38,37 +40,34 @@ pub enum DialProtocol {
 
 /// Define the minimum data required for a custom protocol
 pub struct ProtocolMeta {
-    pub(crate) id: ProtocolId,
-    pub(crate) name: Box<Fn(&ProtocolMeta) -> String + Send + Sync + 'static>,
-    pub(crate) support_versions: Vec<String>,
-    pub(crate) codec: Box<Fn(&ProtocolMeta) -> Box<dyn Codec + Send + 'static> + Send + Sync + 'static>,
-    pub(crate) service_handle: Box<Fn(&ProtocolMeta) -> ProtocolHandle<Box<dyn ServiceProtocol + Send + 'static>> + Send + Sync + 'static>,
-    pub(crate) session_handle: Box<Fn(&ProtocolMeta) -> ProtocolHandle<Box<dyn SessionProtocol + Send + 'static>> + Send + Sync + 'static>,
+    pub(crate) inner: Arc<Meta>,
+    pub(crate) service_handle: ServiceHandleFn,
+    pub(crate) session_handle: SessionHandleFn,
 }
 
 impl ProtocolMeta {
     /// Protocol id
     #[inline]
     pub fn id(&self) -> ProtocolId {
-        self.id
+        self.inner.id
     }
 
     /// Protocol name, default is "/p2p/protocol_id"
     #[inline]
     pub fn name(&self) -> String {
-        (self.name)(&self)
+        (self.inner.name)(self.inner.id)
     }
 
     /// Protocol supported version
     #[inline]
     pub fn support_versions(&self) -> Vec<String> {
-        self.support_versions.clone()
+        self.inner.support_versions.clone()
     }
 
     /// The codec used by the custom protocol, such as `LengthDelimitedCodec` by tokio
     #[inline]
     pub fn codec(&self) -> Box<dyn Codec + Send + 'static> {
-        (self.codec)(&self)
+        (self.inner.codec)()
     }
 
     /// A service level callback handle for a protocol.
@@ -98,6 +97,13 @@ impl ProtocolMeta {
     pub fn session_handle(&self) -> ProtocolHandle<Box<dyn SessionProtocol + Send + 'static>> {
         (self.session_handle)(&self)
     }
+}
+
+pub(crate) struct Meta {
+    pub(crate) id: ProtocolId,
+    pub(crate) name: NameFn,
+    pub(crate) support_versions: Vec<String>,
+    pub(crate) codec: CodecFn,
 }
 
 /// Protocol handle

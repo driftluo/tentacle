@@ -1,18 +1,16 @@
 use futures::prelude::Stream;
 use std::{thread, time::Duration};
 use tentacle::{
-    builder::ServiceBuilder,
+    builder::{MetaBuilder, ServiceBuilder},
     context::{ServiceContext, SessionContext},
     secio::SecioKeyPair,
-    service::{DialProtocol, Service},
-    traits::{Codec, ProtocolHandle, ProtocolMeta, ServiceHandle, ServiceProtocol},
+    service::{DialProtocol, ProtocolHandle, ProtocolMeta, Service},
+    traits::{ServiceHandle, ServiceProtocol},
     ProtocolId,
 };
-use tokio::codec::LengthDelimitedCodec;
 
-pub fn create<T, F>(secio: bool, meta: T, shandle: F) -> Service<F>
+pub fn create<F>(secio: bool, meta: ProtocolMeta, shandle: F) -> Service<F>
 where
-    T: ProtocolMeta + Send + Sync + 'static,
     F: ServiceHandle,
 {
     let builder = ServiceBuilder::default().insert_protocol(meta);
@@ -23,38 +21,6 @@ where
             .build(shandle)
     } else {
         builder.build(shandle)
-    }
-}
-
-#[derive(Clone)]
-pub struct Protocol {
-    id: ProtocolId,
-}
-
-impl Protocol {
-    fn new(id: ProtocolId) -> Self {
-        Protocol { id }
-    }
-}
-
-impl ProtocolMeta for Protocol {
-    fn id(&self) -> ProtocolId {
-        self.id
-    }
-    fn codec(&self) -> Box<dyn Codec + Send + 'static> {
-        Box::new(LengthDelimitedCodec::new())
-    }
-
-    fn service_handle(&self) -> ProtocolHandle<Box<dyn ServiceProtocol + Send + 'static>> {
-        if self.id == 0 {
-            ProtocolHandle::Neither
-        } else {
-            let handle = Box::new(PHandle {
-                proto_id: self.id,
-                connected_count: 0,
-            });
-            ProtocolHandle::Callback(handle)
-        }
     }
 }
 
@@ -81,14 +47,31 @@ impl ServiceProtocol for PHandle {
     }
 }
 
+fn create_meta(id: ProtocolId) -> ProtocolMeta {
+    MetaBuilder::new()
+        .id(id)
+        .service_handle(move |meta| {
+            if meta.id() == 0 {
+                ProtocolHandle::Neither
+            } else {
+                let handle = Box::new(PHandle {
+                    proto_id: meta.id(),
+                    connected_count: 0,
+                });
+                ProtocolHandle::Callback(handle)
+            }
+        })
+        .build()
+}
+
 fn test_disconnect(secio: bool) {
-    let mut service = create(secio, Protocol::new(1), ());
+    let mut service = create(secio, create_meta(1), ());
     let listen_addr = service
         .listen("/ip4/127.0.0.1/tcp/0".parse().unwrap())
         .unwrap();
     thread::spawn(|| tokio::run(service.for_each(|_| Ok(()))));
 
-    let mut service = create(secio, Protocol::new(1), ());
+    let mut service = create(secio, create_meta(1), ());
     service.dial(listen_addr, DialProtocol::All).unwrap();
     let mut control = service.control().clone();
     let handle = thread::spawn(|| tokio::run(service.for_each(|_| Ok(()))));

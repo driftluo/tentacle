@@ -12,14 +12,13 @@ use futures::{
     prelude::*,
     sync::mpsc::{channel, Sender},
 };
-use tokio::codec::length_delimited::LengthDelimitedCodec;
 
 use tentacle::{
-    builder::ServiceBuilder,
+    builder::{MetaBuilder, ServiceBuilder},
     context::{ServiceContext, SessionContext},
     multiaddr::{Multiaddr, ToMultiaddr},
-    service::{DialProtocol, ServiceError, ServiceEvent},
-    traits::{Codec, ProtocolHandle, ProtocolMeta, ServiceHandle, ServiceProtocol},
+    service::{DialProtocol, ProtocolHandle, ProtocolMeta, ServiceError, ServiceEvent},
+    traits::{ServiceHandle, ServiceProtocol},
     utils::multiaddr_to_socketaddr,
     yamux::session::SessionType,
     ProtocolId, SessionId,
@@ -42,7 +41,7 @@ fn main() {
         tokio::run(service.for_each(|_| Ok(())))
     } else {
         debug!("Starting client ......");
-        let meta = create_meta(5000, 0);
+        let meta = create_meta(1, 0);
         let mut service = ServiceBuilder::default()
             .insert_protocol(meta)
             .forever(true)
@@ -57,18 +56,27 @@ fn main() {
     }
 }
 
-fn create_meta(start: u16, id: usize) -> DiscoveryProtocolMeta {
-    let addrs: FnvHashMap<RawAddr, i32> = (start..start + 3333)
-        .map(|port| SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), port))
-        .map(|addr| (RawAddr::from(addr), 100))
-        .collect();
-    let addr_mgr = SimpleAddressManager { addrs };
-    DiscoveryProtocolMeta { id, addr_mgr }
-}
-
-struct DiscoveryProtocolMeta {
-    id: ProtocolId,
-    addr_mgr: SimpleAddressManager,
+fn create_meta(id: ProtocolId, start: u16) -> ProtocolMeta {
+    MetaBuilder::default()
+        .id(id)
+        .service_handle(move |meta| {
+            let addrs: FnvHashMap<RawAddr, i32> = (start..start + 3333)
+                .map(|port| SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), port))
+                .map(|addr| (RawAddr::from(addr), 100))
+                .collect();
+            let discovery = Discovery::new(SimpleAddressManager { addrs });
+            let discovery_handle = discovery.handle();
+            let handle = Box::new(DiscoveryProtocol {
+                id: meta.id(),
+                notify_counter: 0,
+                discovery: Some(discovery),
+                discovery_handle,
+                discovery_senders: FnvHashMap::default(),
+                sessions: HashMap::default(),
+            });
+            ProtocolHandle::Callback(handle)
+        })
+        .build()
 }
 
 struct DiscoveryProtocol {
@@ -78,30 +86,6 @@ struct DiscoveryProtocol {
     discovery_handle: DiscoveryHandle,
     discovery_senders: FnvHashMap<SessionId, Sender<Vec<u8>>>,
     sessions: HashMap<SessionId, SessionData>,
-}
-
-impl ProtocolMeta for DiscoveryProtocolMeta {
-    fn id(&self) -> ProtocolId {
-        self.id
-    }
-
-    fn codec(&self) -> Box<dyn Codec + Send + 'static> {
-        Box::new(LengthDelimitedCodec::new())
-    }
-
-    fn service_handle(&self) -> ProtocolHandle<Box<dyn ServiceProtocol + Send + 'static>> {
-        let discovery = Discovery::new(self.addr_mgr.clone());
-        let discovery_handle = discovery.handle();
-        let handle = Box::new(DiscoveryProtocol {
-            id: self.id,
-            notify_counter: 0,
-            discovery: Some(discovery),
-            discovery_handle,
-            discovery_senders: FnvHashMap::default(),
-            sessions: HashMap::default(),
-        });
-        ProtocolHandle::Callback(handle)
-    }
 }
 
 impl ServiceProtocol for DiscoveryProtocol {
