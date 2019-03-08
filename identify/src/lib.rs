@@ -13,7 +13,7 @@ use p2p::{
     context::{ServiceContext, SessionContext},
     multiaddr::Multiaddr,
     secio::PeerId,
-    traits::{ProtocolHandle, ProtocolMeta, ServiceProtocol},
+    traits::{Codec, ProtocolHandle, ProtocolMeta, ServiceProtocol},
     utils::multiaddr_to_socketaddr,
     ProtocolId, SessionId,
 };
@@ -129,13 +129,13 @@ impl RemoteInfo {
     }
 }
 
-impl<T: AddrManager + 'static> ProtocolMeta<LengthDelimitedCodec> for IdentifyProtocol<T> {
+impl<T: AddrManager + 'static> ProtocolMeta for IdentifyProtocol<T> {
     fn id(&self) -> ProtocolId {
         self.id
     }
 
-    fn codec(&self) -> LengthDelimitedCodec {
-        LengthDelimitedCodec::new()
+    fn codec(&self) -> Box<dyn Codec + Send + 'static> {
+        Box::new(LengthDelimitedCodec::new())
     }
 
     fn service_handle(&self) -> ProtocolHandle<Box<dyn ServiceProtocol + Send + 'static>> {
