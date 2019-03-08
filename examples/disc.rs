@@ -19,7 +19,7 @@ use tentacle::{
     context::{ServiceContext, SessionContext},
     multiaddr::{Multiaddr, ToMultiaddr},
     service::{DialProtocol, ServiceError, ServiceEvent},
-    traits::{ProtocolHandle, ProtocolMeta, ServiceHandle, ServiceProtocol},
+    traits::{Codec, ProtocolHandle, ProtocolMeta, ServiceHandle, ServiceProtocol},
     utils::multiaddr_to_socketaddr,
     yamux::session::SessionType,
     ProtocolId, SessionId,
@@ -80,13 +80,13 @@ struct DiscoveryProtocol {
     sessions: HashMap<SessionId, SessionData>,
 }
 
-impl ProtocolMeta<LengthDelimitedCodec> for DiscoveryProtocolMeta {
+impl ProtocolMeta for DiscoveryProtocolMeta {
     fn id(&self) -> ProtocolId {
         self.id
     }
 
-    fn codec(&self) -> LengthDelimitedCodec {
-        LengthDelimitedCodec::new()
+    fn codec(&self) -> Box<dyn Codec + Send + 'static> {
+        Box::new(LengthDelimitedCodec::new())
     }
 
     fn service_handle(&self) -> ProtocolHandle<Box<dyn ServiceProtocol + Send + 'static>> {

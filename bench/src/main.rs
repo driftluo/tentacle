@@ -5,11 +5,11 @@ use p2p::{
     context::{ServiceContext, SessionContext},
     secio::SecioKeyPair,
     service::{DialProtocol, Service, ServiceControl},
-    traits::{ProtocolHandle, ProtocolMeta, ServiceHandle, ServiceProtocol},
+    traits::{Codec, ProtocolHandle, ProtocolMeta, ServiceHandle, ServiceProtocol},
     ProtocolId,
 };
 use std::{sync::Once, thread};
-use tokio::codec::{length_delimited::Builder, LengthDelimitedCodec};
+use tokio::codec::length_delimited::Builder;
 
 static START_SECIO: Once = Once::new();
 static START_NO_SECIO: Once = Once::new();
@@ -26,9 +26,9 @@ enum Notify {
     Message(bytes::Bytes),
 }
 
-pub fn create<T, F>(secio: bool, meta: T, shandle: F) -> Service<F, LengthDelimitedCodec>
+pub fn create<T, F>(secio: bool, meta: T, shandle: F) -> Service<F>
 where
-    T: ProtocolMeta<LengthDelimitedCodec> + Send + Sync + 'static,
+    T: ProtocolMeta + Send + Sync + 'static,
     F: ServiceHandle,
 {
     let builder = ServiceBuilder::default()
@@ -56,14 +56,16 @@ impl Protocol {
     }
 }
 
-impl ProtocolMeta<LengthDelimitedCodec> for Protocol {
+impl ProtocolMeta for Protocol {
     fn id(&self) -> ProtocolId {
         self.id
     }
-    fn codec(&self) -> LengthDelimitedCodec {
-        Builder::new()
-            .max_frame_length(1024 * 1024 * 20)
-            .new_codec()
+    fn codec(&self) -> Box<dyn Codec + Send + 'static> {
+        Box::new(
+            Builder::new()
+                .max_frame_length(1024 * 1024 * 20)
+                .new_codec(),
+        )
     }
 
     fn service_handle(&self) -> ProtocolHandle<Box<dyn ServiceProtocol + Send + 'static>> {

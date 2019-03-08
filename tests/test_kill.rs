@@ -10,7 +10,7 @@ use tentacle::{
     context::{ServiceContext, SessionContext},
     secio::SecioKeyPair,
     service::{DialProtocol, Service},
-    traits::{ProtocolHandle, ProtocolMeta, ServiceHandle, ServiceProtocol},
+    traits::{Codec, ProtocolHandle, ProtocolMeta, ServiceHandle, ServiceProtocol},
     ProtocolId,
 };
 use tokio::codec::LengthDelimitedCodec;
@@ -36,9 +36,9 @@ fn current_used_cpu() -> Option<f32> {
     }
 }
 
-pub fn create<T, F>(secio: bool, meta: T, shandle: F) -> Service<F, LengthDelimitedCodec>
+pub fn create<T, F>(secio: bool, meta: T, shandle: F) -> Service<F>
 where
-    T: ProtocolMeta<LengthDelimitedCodec> + Send + Sync + 'static,
+    T: ProtocolMeta + Send + Sync + 'static,
     F: ServiceHandle,
 {
     let builder = ServiceBuilder::default()
@@ -66,12 +66,12 @@ impl Protocol {
     }
 }
 
-impl ProtocolMeta<LengthDelimitedCodec> for Protocol {
+impl ProtocolMeta for Protocol {
     fn id(&self) -> ProtocolId {
         self.id
     }
-    fn codec(&self) -> LengthDelimitedCodec {
-        LengthDelimitedCodec::new()
+    fn codec(&self) -> Box<dyn Codec + Send + 'static> {
+        Box::new(LengthDelimitedCodec::new())
     }
 
     fn service_handle(&self) -> ProtocolHandle<Box<dyn ServiceProtocol + Send + 'static>> {

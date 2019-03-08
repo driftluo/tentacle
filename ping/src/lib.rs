@@ -11,7 +11,7 @@ use log::{debug, error};
 use p2p::{
     context::{ServiceContext, SessionContext},
     secio::PeerId,
-    traits::{ProtocolHandle, ProtocolMeta, ServiceProtocol},
+    traits::{Codec, ProtocolHandle, ProtocolMeta, ServiceProtocol},
     ProtocolId, SessionId,
 };
 use std::{
@@ -59,15 +59,15 @@ where
     }
 }
 
-impl<S> ProtocolMeta<LengthDelimitedCodec> for PingProtocol<S>
+impl<S> ProtocolMeta for PingProtocol<S>
 where
     S: Sender<Event> + Send + Clone + 'static,
 {
     fn id(&self) -> ProtocolId {
         self.id
     }
-    fn codec(&self) -> LengthDelimitedCodec {
-        LengthDelimitedCodec::new()
+    fn codec(&self) -> Box<dyn Codec + Send + 'static> {
+        Box::new(LengthDelimitedCodec::new())
     }
 
     fn service_handle(&self) -> ProtocolHandle<Box<dyn ServiceProtocol + Send + 'static>> {

@@ -6,16 +6,12 @@ use futures::{
 use log::{debug, error, trace, warn};
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::Arc;
-use std::{
-    error::{self, Error as ErrorTrait},
-    io,
-};
+use std::{error::Error as ErrorTrait, io};
 use tokio::net::{
     tcp::{ConnectFuture, Incoming},
     TcpListener, TcpStream,
 };
 use tokio::{
-    codec::{Decoder, Encoder},
     prelude::{AsyncRead, AsyncWrite, FutureExt},
     timer::Timeout,
 };
@@ -59,8 +55,8 @@ pub(crate) enum ProtocolHandle {
 }
 
 /// An abstraction of p2p service, currently only supports TCP protocol
-pub struct Service<T, U> {
-    protocol_configs: Arc<HashMap<String, Box<dyn ProtocolMeta<U> + Send + Sync>>>,
+pub struct Service<T> {
+    protocol_configs: Arc<HashMap<String, Box<dyn ProtocolMeta + Send + Sync>>>,
 
     sessions: HashMap<SessionId, SessionContext>,
 
@@ -107,16 +103,13 @@ pub struct Service<T, U> {
     notify: Option<Task>,
 }
 
-impl<T, U> Service<T, U>
+impl<T> Service<T>
 where
     T: ServiceHandle,
-    U: Decoder<Item = bytes::BytesMut> + Encoder<Item = bytes::Bytes> + Send + 'static,
-    <U as Decoder>::Error: error::Error + Into<io::Error>,
-    <U as Encoder>::Error: error::Error + Into<io::Error>,
 {
     /// New a Service
     pub(crate) fn new(
-        protocol_configs: Arc<HashMap<String, Box<dyn ProtocolMeta<U> + Send + Sync>>>,
+        protocol_configs: Arc<HashMap<String, Box<dyn ProtocolMeta + Send + Sync>>>,
         handle: T,
         key_pair: Option<SecioKeyPair>,
         forever: bool,
@@ -278,9 +271,7 @@ where
     }
 
     /// Get service current protocol configure
-    pub fn protocol_configs(
-        &self,
-    ) -> &Arc<HashMap<String, Box<dyn ProtocolMeta<U> + Send + Sync>>> {
+    pub fn protocol_configs(&self) -> &Arc<HashMap<String, Box<dyn ProtocolMeta + Send + Sync>>> {
         &self.protocol_configs
     }
 
@@ -1234,12 +1225,9 @@ where
     }
 }
 
-impl<T, U> Stream for Service<T, U>
+impl<T> Stream for Service<T>
 where
     T: ServiceHandle,
-    U: Decoder<Item = bytes::BytesMut> + Encoder<Item = bytes::Bytes> + Send + 'static,
-    <U as Decoder>::Error: error::Error + Into<io::Error>,
-    <U as Encoder>::Error: error::Error + Into<io::Error>,
 {
     type Item = ();
     type Error = ();
