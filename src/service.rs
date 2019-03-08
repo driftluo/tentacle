@@ -27,10 +27,7 @@ use crate::{
     secio::{handshake::Config, PublicKey, SecioKeyPair},
     service::config::ServiceConfig,
     session::{Session, SessionEvent, SessionMeta},
-    traits::{
-        ProtocolHandle as RawProtocolHandle, ProtocolMeta, ServiceHandle, ServiceProtocol,
-        SessionProtocol,
-    },
+    traits::{ServiceHandle, ServiceProtocol, SessionProtocol},
     utils::{dns::DNSResolver, extract_peer_id, multiaddr_to_socketaddr},
     yamux::{session::SessionType, Config as YamuxConfig},
     ProtocolId, SessionId,
@@ -41,13 +38,13 @@ mod control;
 mod event;
 
 pub use crate::service::{
-    config::DialProtocol,
+    config::{DialProtocol, ProtocolHandle, ProtocolMeta},
     control::ServiceControl,
     event::{ProtocolEvent, ServiceError, ServiceEvent, ServiceTask},
 };
 
 /// Protocol handle value
-pub(crate) enum ProtocolHandle {
+pub(crate) enum InnerProtocolHandle {
     /// Service level protocol
     Service(Box<dyn ServiceProtocol + Send + 'static>),
     /// Session level protocol
@@ -56,7 +53,7 @@ pub(crate) enum ProtocolHandle {
 
 /// An abstraction of p2p service, currently only supports TCP protocol
 pub struct Service<T> {
-    protocol_configs: Arc<HashMap<String, Box<dyn ProtocolMeta + Send + Sync>>>,
+    protocol_configs: Arc<HashMap<String, ProtocolMeta>>,
 
     sessions: HashMap<SessionId, SessionContext>,
 
@@ -109,7 +106,7 @@ where
 {
     /// New a Service
     pub(crate) fn new(
-        protocol_configs: Arc<HashMap<String, Box<dyn ProtocolMeta + Send + Sync>>>,
+        protocol_configs: Arc<HashMap<String, ProtocolMeta>>,
         handle: T,
         key_pair: Option<SecioKeyPair>,
         forever: bool,
@@ -271,7 +268,7 @@ where
     }
 
     /// Get service current protocol configure
-    pub fn protocol_configs(&self) -> &Arc<HashMap<String, Box<dyn ProtocolMeta + Send + Sync>>> {
+    pub fn protocol_configs(&self) -> &Arc<HashMap<String, ProtocolMeta>> {
         &self.protocol_configs
     }
 
@@ -422,7 +419,7 @@ where
 
     /// Get the callback handle of the specified protocol
     #[inline]
-    fn proto_handle(&self, session: bool, proto_id: ProtocolId) -> Option<ProtocolHandle> {
+    fn proto_handle(&self, session: bool, proto_id: ProtocolId) -> Option<InnerProtocolHandle> {
         let handle = self
             .protocol_configs
             .values()
@@ -430,15 +427,15 @@ where
             .find_map(|proto| {
                 if session {
                     match proto.session_handle() {
-                        RawProtocolHandle::Callback(handle) | RawProtocolHandle::Both(handle) => {
-                            Some(ProtocolHandle::Session(handle))
+                        ProtocolHandle::Callback(handle) | ProtocolHandle::Both(handle) => {
+                            Some(InnerProtocolHandle::Session(handle))
                         }
                         _ => None,
                     }
                 } else {
                     match proto.service_handle() {
-                        RawProtocolHandle::Callback(handle) | RawProtocolHandle::Both(handle) => {
-                            Some(ProtocolHandle::Service(handle))
+                        ProtocolHandle::Callback(handle) | ProtocolHandle::Both(handle) => {
+                            Some(InnerProtocolHandle::Service(handle))
                         }
                         _ => None,
                     }
@@ -730,7 +727,7 @@ where
         // callback output
         // Service proto handle processing flow
         if !self.service_proto_handles.contains_key(&proto_id) {
-            if let Some(ProtocolHandle::Service(handle)) = self.proto_handle(false, proto_id) {
+            if let Some(InnerProtocolHandle::Service(handle)) = self.proto_handle(false, proto_id) {
                 debug!("init service level [{}] proto handle", proto_id);
                 let (sender, receiver) = mpsc::channel(32);
                 let stream = ServiceProtocolStream::new(
@@ -760,7 +757,7 @@ where
         }
 
         // Session proto handle processing flow
-        if let Some(ProtocolHandle::Session(handle)) = self.proto_handle(true, proto_id) {
+        if let Some(InnerProtocolHandle::Session(handle)) = self.proto_handle(true, proto_id) {
             debug!("init session [{}] level proto [{}] handle", id, proto_id);
             let (sender, receiver) = mpsc::channel(32);
             let stream = SessionProtocolStream::new(

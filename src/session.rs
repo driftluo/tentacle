@@ -21,9 +21,8 @@ use crate::{
     multiaddr::Multiaddr,
     protocol_select::{client_select, server_select, ProtocolInfo},
     secio::{codec::stream_handle::StreamHandle as SecureHandle, PublicKey},
-    service::{DialProtocol, ServiceTask},
+    service::{DialProtocol, ProtocolMeta, ServiceTask},
     substream::{ProtocolEvent, SubStream},
-    traits::ProtocolMeta,
     yamux::{session::SessionType, Config, Session as YamuxSession, StreamHandle},
     ProtocolId, SessionId, StreamId,
 };
@@ -124,7 +123,7 @@ pub(crate) enum SessionEvent {
 pub(crate) struct Session<T> {
     socket: YamuxSession<T>,
 
-    protocol_configs: Arc<HashMap<String, Box<dyn ProtocolMeta + Send + Sync>>>,
+    protocol_configs: Arc<HashMap<String, ProtocolMeta>>,
 
     id: SessionId,
     timeout: Duration,
@@ -592,7 +591,7 @@ where
 pub(crate) struct SessionMeta {
     config: Config,
     id: SessionId,
-    protocol_configs: Arc<HashMap<String, Box<dyn ProtocolMeta + Send + Sync>>>,
+    protocol_configs: Arc<HashMap<String, ProtocolMeta>>,
     ty: SessionType,
     // remote_address: ::std::net::SocketAddr,
     // remote_public_key: Option<PublicKey>,
@@ -610,10 +609,7 @@ impl SessionMeta {
         }
     }
 
-    pub fn protocol(
-        mut self,
-        config: Arc<HashMap<String, Box<dyn ProtocolMeta + Send + Sync>>>,
-    ) -> Self {
+    pub fn protocol(mut self, config: Arc<HashMap<String, ProtocolMeta>>) -> Self {
         self.protocol_configs = config;
         self
     }
