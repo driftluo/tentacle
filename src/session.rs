@@ -7,12 +7,12 @@ use log::{debug, error, trace, warn};
 use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
 use std::{
-    error, io,
+    io,
     time::{Duration, Instant},
 };
 use tokio::prelude::{AsyncRead, AsyncWrite, FutureExt};
 use tokio::{
-    codec::{Decoder, Encoder, Framed, FramedParts, LengthDelimitedCodec},
+    codec::{Framed, FramedParts, LengthDelimitedCodec},
     timer::Delay,
 };
 
@@ -121,10 +121,10 @@ pub(crate) enum SessionEvent {
 }
 
 /// Wrapper for real data streams, such as TCP stream
-pub(crate) struct Session<T, U> {
+pub(crate) struct Session<T> {
     socket: YamuxSession<T>,
 
-    protocol_configs: Arc<HashMap<String, Box<dyn ProtocolMeta<U> + Send + Sync>>>,
+    protocol_configs: Arc<HashMap<String, Box<dyn ProtocolMeta + Send + Sync>>>,
 
     id: SessionId,
     timeout: Duration,
@@ -160,19 +160,16 @@ pub(crate) struct Session<T, U> {
     notify: Option<Task>,
 }
 
-impl<T, U> Session<T, U>
+impl<T> Session<T>
 where
     T: AsyncRead + AsyncWrite,
-    U: Decoder<Item = bytes::BytesMut> + Encoder<Item = bytes::Bytes> + Send + 'static,
-    <U as Decoder>::Error: error::Error + Into<io::Error>,
-    <U as Encoder>::Error: error::Error + Into<io::Error>,
 {
     /// New a session
     pub fn new(
         socket: T,
         service_sender: mpsc::Sender<SessionEvent>,
         service_receiver: mpsc::Receiver<SessionEvent>,
-        meta: SessionMeta<U>,
+        meta: SessionMeta,
     ) -> Self {
         let socket = YamuxSession::new(socket, meta.config, meta.ty);
         let (proto_event_sender, proto_event_receiver) = mpsc::channel(256);
@@ -503,12 +500,9 @@ where
     }
 }
 
-impl<T, U> Stream for Session<T, U>
+impl<T> Stream for Session<T>
 where
     T: AsyncRead + AsyncWrite,
-    U: Decoder<Item = bytes::BytesMut> + Encoder<Item = bytes::Bytes> + Send + 'static,
-    <U as Decoder>::Error: error::Error + Into<io::Error>,
-    <U as Encoder>::Error: error::Error + Into<io::Error>,
 {
     type Item = ();
     type Error = io::Error;
@@ -595,22 +589,17 @@ where
     }
 }
 
-pub(crate) struct SessionMeta<U> {
+pub(crate) struct SessionMeta {
     config: Config,
     id: SessionId,
-    protocol_configs: Arc<HashMap<String, Box<dyn ProtocolMeta<U> + Send + Sync>>>,
+    protocol_configs: Arc<HashMap<String, Box<dyn ProtocolMeta + Send + Sync>>>,
     ty: SessionType,
     // remote_address: ::std::net::SocketAddr,
     // remote_public_key: Option<PublicKey>,
     timeout: Duration,
 }
 
-impl<U> SessionMeta<U>
-where
-    U: Decoder<Item = bytes::BytesMut> + Encoder<Item = bytes::Bytes> + Send + 'static,
-    <U as Decoder>::Error: error::Error + Into<io::Error>,
-    <U as Encoder>::Error: error::Error + Into<io::Error>,
-{
+impl SessionMeta {
     pub fn new(id: SessionId, ty: SessionType, timeout: Duration) -> Self {
         SessionMeta {
             config: Config::default(),
@@ -623,7 +612,7 @@ where
 
     pub fn protocol(
         mut self,
-        config: Arc<HashMap<String, Box<dyn ProtocolMeta<U> + Send + Sync>>>,
+        config: Arc<HashMap<String, Box<dyn ProtocolMeta + Send + Sync>>>,
     ) -> Self {
         self.protocol_configs = config;
         self

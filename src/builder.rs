@@ -1,7 +1,6 @@
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::{error, io, time::Duration};
-use tokio::codec::{Decoder, Encoder};
+use std::time::Duration;
 
 use crate::{
     secio::SecioKeyPair,
@@ -11,26 +10,21 @@ use crate::{
 };
 
 /// Builder for Service
-pub struct ServiceBuilder<U> {
-    inner: HashMap<String, Box<dyn ProtocolMeta<U> + Send + Sync>>,
+pub struct ServiceBuilder {
+    inner: HashMap<String, Box<dyn ProtocolMeta + Send + Sync>>,
     key_pair: Option<SecioKeyPair>,
     forever: bool,
     config: ServiceConfig,
 }
 
-impl<U> ServiceBuilder<U>
-where
-    U: Decoder<Item = bytes::BytesMut> + Encoder<Item = bytes::Bytes> + Send + 'static,
-    <U as Decoder>::Error: error::Error + Into<io::Error>,
-    <U as Encoder>::Error: error::Error + Into<io::Error>,
-{
+impl ServiceBuilder {
     /// New a default empty builder
     pub fn new() -> Self {
         Default::default()
     }
 
     /// Combine the configuration of this builder with service handle to create a Service.
-    pub fn build<H>(self, handle: H) -> Service<H, U>
+    pub fn build<H>(self, handle: H) -> Service<H>
     where
         H: ServiceHandle,
     {
@@ -46,7 +40,7 @@ where
     /// Insert a custom protocol
     pub fn insert_protocol<T>(mut self, protocol: T) -> Self
     where
-        T: ProtocolMeta<U> + Send + Sync + 'static,
+        T: ProtocolMeta + Send + Sync + 'static,
     {
         if protocol.session_handle().has_event() || protocol.service_handle().has_event() {
             self.config.event.insert(protocol.id());
@@ -54,7 +48,7 @@ where
 
         self.inner.insert(
             protocol.name(),
-            Box::new(protocol) as Box<dyn ProtocolMeta<_> + Send + Sync>,
+            Box::new(protocol) as Box<dyn ProtocolMeta + Send + Sync>,
         );
         self
     }
@@ -107,12 +101,7 @@ where
     }
 }
 
-impl<U> Default for ServiceBuilder<U>
-where
-    U: Decoder<Item = bytes::BytesMut> + Encoder<Item = bytes::Bytes> + Send + 'static,
-    <U as Decoder>::Error: error::Error + Into<io::Error>,
-    <U as Encoder>::Error: error::Error + Into<io::Error>,
-{
+impl Default for ServiceBuilder {
     fn default() -> Self {
         ServiceBuilder {
             inner: HashMap::new(),

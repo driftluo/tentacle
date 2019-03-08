@@ -1,4 +1,4 @@
-use std::{error, io};
+use std::io;
 use tokio::codec::{Decoder, Encoder};
 
 use crate::{
@@ -163,13 +163,38 @@ pub trait SessionProtocol {
     fn notify(&mut self, _service: &mut ServiceContext, _token: u64) {}
 }
 
-/// Define the minimum data required for a custom protocol
-pub trait ProtocolMeta<U>
-where
-    U: Decoder<Item = bytes::BytesMut> + Encoder<Item = bytes::Bytes> + Send + 'static,
-    <U as Decoder>::Error: error::Error + Into<io::Error>,
-    <U as Encoder>::Error: error::Error + Into<io::Error>,
+/// A trait can define codec
+pub trait Codec:
+    Decoder<Item = bytes::BytesMut, Error = io::Error> + Encoder<Item = bytes::Bytes, Error = io::Error>
 {
+}
+
+impl<T> Codec for T where
+    T: Decoder<Item = bytes::BytesMut, Error = io::Error>
+        + Encoder<Item = bytes::Bytes, Error = io::Error>
+{
+}
+
+impl Decoder for Box<dyn Codec + Send + 'static> {
+    type Item = bytes::BytesMut;
+    type Error = io::Error;
+
+    fn decode(&mut self, src: &mut bytes::BytesMut) -> Result<Option<Self::Item>, Self::Error> {
+        Decoder::decode(&mut **self, src)
+    }
+}
+
+impl Encoder for Box<dyn Codec + Send + 'static> {
+    type Item = bytes::Bytes;
+    type Error = io::Error;
+
+    fn encode(&mut self, item: Self::Item, dst: &mut bytes::BytesMut) -> Result<(), Self::Error> {
+        Encoder::encode(&mut **self, item, dst)
+    }
+}
+
+/// Define the minimum data required for a custom protocol
+pub trait ProtocolMeta {
     /// Protocol id
     fn id(&self) -> ProtocolId;
 
@@ -185,7 +210,7 @@ where
     }
 
     /// The codec used by the custom protocol, such as `LengthDelimitedCodec` by tokio
-    fn codec(&self) -> U;
+    fn codec(&self) -> Box<dyn Codec + Send + 'static>;
 
     /// A service level callback handle for a protocol.
     ///

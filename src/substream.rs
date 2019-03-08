@@ -5,16 +5,15 @@ use futures::{
 };
 use log::{debug, warn};
 use std::collections::VecDeque;
-use std::{
-    error,
-    io::{self, ErrorKind},
-};
+use std::io::ErrorKind;
 use tokio::{
-    codec::{length_delimited::LengthDelimitedCodec, Decoder, Encoder, Framed},
+    codec::{length_delimited::LengthDelimitedCodec, Framed},
     prelude::AsyncWrite,
 };
 
-use crate::{error::Error, service::ServiceTask, yamux::StreamHandle, ProtocolId, StreamId};
+use crate::{
+    error::Error, service::ServiceTask, traits::Codec, yamux::StreamHandle, ProtocolId, StreamId,
+};
 
 /// Event generated/received by the protocol stream
 #[derive(Debug)]
@@ -80,9 +79,7 @@ pub(crate) struct SubStream<U> {
 
 impl<U> SubStream<U>
 where
-    U: Decoder<Item = bytes::BytesMut> + Encoder<Item = bytes::Bytes> + Send + 'static,
-    <U as Decoder>::Error: error::Error + Into<io::Error>,
-    <U as Encoder>::Error: error::Error + Into<io::Error>,
+    U: Codec,
 {
     /// New a protocol sub stream
     pub fn new(
@@ -219,9 +216,7 @@ where
 
 impl<U> Stream for SubStream<U>
 where
-    U: Decoder<Item = bytes::BytesMut> + Encoder<Item = bytes::Bytes> + Send + 'static,
-    <U as Decoder>::Error: error::Error + Into<io::Error>,
-    <U as Encoder>::Error: error::Error + Into<io::Error>,
+    U: Codec,
 {
     type Item = ();
     type Error = ();
@@ -255,7 +250,6 @@ where
                 Ok(Async::NotReady) => break,
                 Err(err) => {
                     warn!("sub stream codec error: {:?}", err);
-                    let err = err.into();
                     match err.kind() {
                         ErrorKind::BrokenPipe
                         | ErrorKind::ConnectionAborted

@@ -11,7 +11,7 @@ use tentacle::{
     context::{ServiceContext, SessionContext},
     secio::SecioKeyPair,
     service::{DialProtocol, Service, ServiceError, ServiceEvent},
-    traits::{ProtocolHandle, ProtocolMeta, ServiceHandle, ServiceProtocol},
+    traits::{Codec, ProtocolHandle, ProtocolMeta, ServiceHandle, ServiceProtocol},
     ProtocolId, SessionId,
 };
 use tokio::codec::length_delimited::LengthDelimitedCodec;
@@ -27,12 +27,12 @@ impl Protocol {
     }
 }
 
-impl ProtocolMeta<LengthDelimitedCodec> for Protocol {
+impl ProtocolMeta for Protocol {
     fn id(&self) -> ProtocolId {
         self.id
     }
-    fn codec(&self) -> LengthDelimitedCodec {
-        LengthDelimitedCodec::new()
+    fn codec(&self) -> Box<dyn Codec + Send + 'static> {
+        Box::new(LengthDelimitedCodec::new())
     }
 
     fn service_handle(&self) -> ProtocolHandle<Box<dyn ServiceProtocol + Send + 'static>> {
@@ -174,7 +174,7 @@ fn main() {
     }
 }
 
-fn create_server() -> Service<SHandle, LengthDelimitedCodec> {
+fn create_server() -> Service<SHandle> {
     ServiceBuilder::default()
         .insert_protocol(Protocol::new(0))
         .insert_protocol(Protocol::new(1))
@@ -187,7 +187,7 @@ fn create_server() -> Service<SHandle, LengthDelimitedCodec> {
 /// Proto 2 open failure
 ///
 /// Because server only supports 0,1
-fn create_client() -> Service<SHandle, LengthDelimitedCodec> {
+fn create_client() -> Service<SHandle> {
     ServiceBuilder::default()
         .insert_protocol(Protocol::new(0))
         .insert_protocol(Protocol::new(1))
