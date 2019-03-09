@@ -1,20 +1,18 @@
 use futures::prelude::Stream;
 use std::thread;
 use tentacle::{
-    builder::ServiceBuilder,
+    builder::{MetaBuilder, ServiceBuilder},
     context::ServiceContext,
     error::Error,
     multiaddr::{multihash::Multihash, Protocol as MultiProtocol},
     secio::SecioKeyPair,
-    service::{DialProtocol, Service, ServiceError, ServiceEvent},
-    traits::{Codec, ProtocolHandle, ProtocolMeta, ServiceHandle, ServiceProtocol},
+    service::{DialProtocol, ProtocolHandle, ProtocolMeta, Service, ServiceError, ServiceEvent},
+    traits::{ServiceHandle, ServiceProtocol},
     ProtocolId,
 };
-use tokio::codec::LengthDelimitedCodec;
 
-pub fn create<T, F>(key_pair: SecioKeyPair, meta: T, shandle: F) -> Service<F>
+pub fn create<F>(key_pair: SecioKeyPair, meta: ProtocolMeta, shandle: F) -> Service<F>
 where
-    T: ProtocolMeta + Send + Sync + 'static,
     F: ServiceHandle,
 {
     ServiceBuilder::default()
@@ -22,35 +20,6 @@ where
         .forever(true)
         .key_pair(key_pair)
         .build(shandle)
-}
-
-#[derive(Clone)]
-pub struct Protocol {
-    id: ProtocolId,
-}
-
-impl Protocol {
-    fn new(id: ProtocolId) -> Self {
-        Protocol { id }
-    }
-}
-
-impl ProtocolMeta for Protocol {
-    fn id(&self) -> ProtocolId {
-        self.id
-    }
-    fn codec(&self) -> Box<dyn Codec + Send + 'static> {
-        Box::new(LengthDelimitedCodec::new())
-    }
-
-    fn service_handle(&self) -> ProtocolHandle<Box<dyn ServiceProtocol + Send + 'static>> {
-        if self.id == 0 {
-            ProtocolHandle::Neither
-        } else {
-            let handle = Box::new(PHandle);
-            ProtocolHandle::Callback(handle)
-        }
-    }
 }
 
 struct PHandle;
@@ -98,10 +67,24 @@ fn create_shandle() -> (EmptySHandle, crossbeam_channel::Receiver<usize>) {
     )
 }
 
+fn create_meta(id: ProtocolId) -> ProtocolMeta {
+    MetaBuilder::new()
+        .id(id)
+        .service_handle(|meta| {
+            if meta.id() == 0 {
+                ProtocolHandle::Neither
+            } else {
+                let handle = Box::new(PHandle);
+                ProtocolHandle::Callback(handle)
+            }
+        })
+        .build()
+}
+
 fn test_peer_id(fail: bool) {
-    let meta = Protocol::new(1);
+    let meta = create_meta(1);
     let key = SecioKeyPair::secp256k1_generated();
-    let mut service = create(key.clone(), meta.clone(), ());
+    let mut service = create(key.clone(), meta, ());
 
     let mut listen_addr = service
         .listen("/ip4/127.0.0.1/tcp/0".parse().unwrap())
@@ -109,6 +92,7 @@ fn test_peer_id(fail: bool) {
     thread::spawn(|| tokio::run(service.for_each(|_| Ok(()))));
 
     let (shandle, error_receiver) = create_shandle();
+    let meta = create_meta(1);
     let mut service = create(SecioKeyPair::secp256k1_generated(), meta, shandle);
     let mut control = service.control().clone();
     thread::spawn(|| tokio::run(service.for_each(|_| Ok(()))));

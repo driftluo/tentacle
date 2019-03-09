@@ -1,5 +1,11 @@
-use crate::{yamux::config::Config as YamuxConfig, ProtocolId};
+use crate::{
+    builder::{CodecFn, NameFn, ServiceHandleFn, SessionHandleFn},
+    traits::{Codec, ServiceProtocol, SessionProtocol},
+    yamux::config::Config as YamuxConfig,
+    ProtocolId,
+};
 use std::collections::HashSet;
+use std::sync::Arc;
 use std::time::Duration;
 
 pub(crate) struct ServiceConfig {
@@ -30,4 +36,132 @@ pub enum DialProtocol {
     Single(ProtocolId),
     /// Try open some protocol
     Multi(Vec<ProtocolId>),
+}
+
+/// Define the minimum data required for a custom protocol
+pub struct ProtocolMeta {
+    pub(crate) inner: Arc<Meta>,
+    pub(crate) service_handle: ServiceHandleFn,
+    pub(crate) session_handle: SessionHandleFn,
+}
+
+impl ProtocolMeta {
+    /// Protocol id
+    #[inline]
+    pub fn id(&self) -> ProtocolId {
+        self.inner.id
+    }
+
+    /// Protocol name, default is "/p2p/protocol_id"
+    #[inline]
+    pub fn name(&self) -> String {
+        (self.inner.name)(self.inner.id)
+    }
+
+    /// Protocol supported version
+    #[inline]
+    pub fn support_versions(&self) -> Vec<String> {
+        self.inner.support_versions.clone()
+    }
+
+    /// The codec used by the custom protocol, such as `LengthDelimitedCodec` by tokio
+    #[inline]
+    pub fn codec(&self) -> Box<dyn Codec + Send + 'static> {
+        (self.inner.codec)()
+    }
+
+    /// A service level callback handle for a protocol.
+    ///
+    /// ---
+    ///
+    /// #### Behavior
+    ///
+    /// This function is called when the protocol is first opened in the service
+    /// and remains in memory until the entire service is closed.
+    #[inline]
+    pub fn service_handle(&self) -> ProtocolHandle<Box<dyn ServiceProtocol + Send + 'static>> {
+        (self.service_handle)(&self)
+    }
+
+    /// A session level callback handle for a protocol.
+    ///
+    /// ---
+    ///
+    /// #### Behavior
+    ///
+    /// When a session is opened, whenever the protocol of the session is opened,
+    /// the function will be called again to generate the corresponding exclusive handle.
+    ///
+    /// Correspondingly, whenever the protocol is closed, the corresponding exclusive handle is cleared.
+    #[inline]
+    pub fn session_handle(&self) -> ProtocolHandle<Box<dyn SessionProtocol + Send + 'static>> {
+        (self.session_handle)(&self)
+    }
+}
+
+pub(crate) struct Meta {
+    pub(crate) id: ProtocolId,
+    pub(crate) name: NameFn,
+    pub(crate) support_versions: Vec<String>,
+    pub(crate) codec: CodecFn,
+}
+
+/// Protocol handle
+pub enum ProtocolHandle<T: Sized> {
+    /// No operation
+    Neither,
+    /// Event output
+    Event,
+    /// Both event and callback
+    Both(T),
+    /// Callback handle
+    Callback(T),
+}
+
+impl<T> ProtocolHandle<T> {
+    /// Returns true if the enum is a callback value.
+    #[inline]
+    pub fn is_callback(&self) -> bool {
+        if let ProtocolHandle::Callback(_) = self {
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Returns true if the enum is a empty value.
+    #[inline]
+    pub fn is_neither(&self) -> bool {
+        if let ProtocolHandle::Neither = self {
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Returns true if the enum is a event value.
+    #[inline]
+    pub fn is_event(&self) -> bool {
+        if let ProtocolHandle::Event = self {
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Returns true if the enum is a both value.
+    #[inline]
+    pub fn is_both(&self) -> bool {
+        if let ProtocolHandle::Both(_) = self {
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Returns true if the enum is a both value.
+    #[inline]
+    pub fn has_event(&self) -> bool {
+        self.is_event() || self.is_both()
+    }
 }

@@ -1,11 +1,11 @@
 use bench::Bench;
 use futures::prelude::Stream;
 use p2p::{
-    builder::ServiceBuilder,
+    builder::{MetaBuilder, ServiceBuilder},
     context::{ServiceContext, SessionContext},
     secio::SecioKeyPair,
-    service::{DialProtocol, Service, ServiceControl},
-    traits::{Codec, ProtocolHandle, ProtocolMeta, ServiceHandle, ServiceProtocol},
+    service::{DialProtocol, ProtocolHandle, ProtocolMeta, Service, ServiceControl},
+    traits::{ServiceHandle, ServiceProtocol},
     ProtocolId,
 };
 use std::{sync::Once, thread};
@@ -26,9 +26,8 @@ enum Notify {
     Message(bytes::Bytes),
 }
 
-pub fn create<T, F>(secio: bool, meta: T, shandle: F) -> Service<F>
+pub fn create<F>(secio: bool, meta: ProtocolMeta, shandle: F) -> Service<F>
 where
-    T: ProtocolMeta + Send + Sync + 'static,
     F: ServiceHandle,
 {
     let builder = ServiceBuilder::default()
@@ -41,44 +40,6 @@ where
             .build(shandle)
     } else {
         builder.build(shandle)
-    }
-}
-
-#[derive(Clone)]
-pub struct Protocol {
-    id: ProtocolId,
-    sender: crossbeam_channel::Sender<Notify>,
-}
-
-impl Protocol {
-    fn new(id: ProtocolId, sender: crossbeam_channel::Sender<Notify>) -> Self {
-        Protocol { id, sender }
-    }
-}
-
-impl ProtocolMeta for Protocol {
-    fn id(&self) -> ProtocolId {
-        self.id
-    }
-    fn codec(&self) -> Box<dyn Codec + Send + 'static> {
-        Box::new(
-            Builder::new()
-                .max_frame_length(1024 * 1024 * 20)
-                .new_codec(),
-        )
-    }
-
-    fn service_handle(&self) -> ProtocolHandle<Box<dyn ServiceProtocol + Send + 'static>> {
-        if self.id == 0 {
-            ProtocolHandle::Neither
-        } else {
-            let handle = Box::new(PHandle {
-                proto_id: self.id,
-                connected_count: 0,
-                sender: self.sender.clone(),
-            });
-            ProtocolHandle::Callback(handle)
-        }
     }
 }
 
@@ -116,10 +77,33 @@ impl ServiceProtocol for PHandle {
     }
 }
 
-fn create_meta(id: ProtocolId) -> (Protocol, crossbeam_channel::Receiver<Notify>) {
+fn create_meta(id: ProtocolId) -> (ProtocolMeta, crossbeam_channel::Receiver<Notify>) {
     let (sender, receiver) = crossbeam_channel::bounded(1);
 
-    (Protocol::new(id, sender), receiver)
+    let meta = MetaBuilder::new()
+        .id(id)
+        .codec(|| {
+            Box::new(
+                Builder::new()
+                    .max_frame_length(1024 * 1024 * 20)
+                    .new_codec(),
+            )
+        })
+        .service_handle(move |meta| {
+            if meta.id() == 0 {
+                ProtocolHandle::Neither
+            } else {
+                let handle = Box::new(PHandle {
+                    proto_id: meta.id(),
+                    connected_count: 0,
+                    sender: sender.clone(),
+                });
+                ProtocolHandle::Callback(handle)
+            }
+        })
+        .build();
+
+    (meta, receiver)
 }
 
 pub fn init() {

@@ -6,14 +6,13 @@ use nix::{
 use std::{thread, time::Duration};
 use systemstat::{Platform, System};
 use tentacle::{
-    builder::ServiceBuilder,
+    builder::{MetaBuilder, ServiceBuilder},
     context::{ServiceContext, SessionContext},
     secio::SecioKeyPair,
-    service::{DialProtocol, Service},
-    traits::{Codec, ProtocolHandle, ProtocolMeta, ServiceHandle, ServiceProtocol},
+    service::{DialProtocol, ProtocolHandle, ProtocolMeta, Service},
+    traits::{ServiceHandle, ServiceProtocol},
     ProtocolId,
 };
-use tokio::codec::LengthDelimitedCodec;
 
 /// Get current used memory(bytes)
 fn current_used_memory() -> Option<f32> {
@@ -36,9 +35,8 @@ fn current_used_cpu() -> Option<f32> {
     }
 }
 
-pub fn create<T, F>(secio: bool, meta: T, shandle: F) -> Service<F>
+pub fn create<F>(secio: bool, meta: ProtocolMeta, shandle: F) -> Service<F>
 where
-    T: ProtocolMeta + Send + Sync + 'static,
     F: ServiceHandle,
 {
     let builder = ServiceBuilder::default()
@@ -51,40 +49,6 @@ where
             .build(shandle)
     } else {
         builder.build(shandle)
-    }
-}
-
-#[derive(Clone)]
-pub struct Protocol {
-    id: ProtocolId,
-    sender: crossbeam_channel::Sender<()>,
-}
-
-impl Protocol {
-    fn new(id: ProtocolId, sender: crossbeam_channel::Sender<()>) -> Self {
-        Protocol { id, sender }
-    }
-}
-
-impl ProtocolMeta for Protocol {
-    fn id(&self) -> ProtocolId {
-        self.id
-    }
-    fn codec(&self) -> Box<dyn Codec + Send + 'static> {
-        Box::new(LengthDelimitedCodec::new())
-    }
-
-    fn service_handle(&self) -> ProtocolHandle<Box<dyn ServiceProtocol + Send + 'static>> {
-        if self.id == 0 {
-            ProtocolHandle::Neither
-        } else {
-            let handle = Box::new(PHandle {
-                proto_id: self.id,
-                connected_count: 0,
-                sender: self.sender.clone(),
-            });
-            ProtocolHandle::Callback(handle)
-        }
     }
 }
 
@@ -123,10 +87,26 @@ impl ServiceProtocol for PHandle {
     }
 }
 
-fn create_meta(id: ProtocolId) -> (Protocol, crossbeam_channel::Receiver<()>) {
+fn create_meta(id: ProtocolId) -> (ProtocolMeta, crossbeam_channel::Receiver<()>) {
     let (sender, receiver) = crossbeam_channel::bounded(1);
 
-    (Protocol::new(id, sender), receiver)
+    let meta = MetaBuilder::new()
+        .id(id)
+        .service_handle(move |meta| {
+            if meta.id() == 0 {
+                ProtocolHandle::Neither
+            } else {
+                let handle = Box::new(PHandle {
+                    proto_id: meta.id(),
+                    connected_count: 0,
+                    sender: sender.clone(),
+                });
+                ProtocolHandle::Callback(handle)
+            }
+        })
+        .build();
+
+    (meta, receiver)
 }
 
 /// Test just like https://github.com/libp2p/rust-libp2p/issues/648 this issue, kill some peer

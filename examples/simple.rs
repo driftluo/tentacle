@@ -7,45 +7,30 @@ use std::{
     time::{Duration, Instant},
 };
 use tentacle::{
-    builder::ServiceBuilder,
+    builder::{MetaBuilder, ServiceBuilder},
     context::{ServiceContext, SessionContext},
     secio::SecioKeyPair,
-    service::{DialProtocol, Service, ServiceError, ServiceEvent},
-    traits::{Codec, ProtocolHandle, ProtocolMeta, ServiceHandle, ServiceProtocol},
+    service::{DialProtocol, ProtocolHandle, ProtocolMeta, Service, ServiceError, ServiceEvent},
+    traits::{ServiceHandle, ServiceProtocol},
     ProtocolId, SessionId,
 };
-use tokio::codec::length_delimited::LengthDelimitedCodec;
 use tokio::timer::{Delay, Error, Interval};
 
-pub struct Protocol {
-    id: ProtocolId,
-}
-
-impl Protocol {
-    fn new(id: ProtocolId) -> Self {
-        Protocol { id }
-    }
-}
-
-impl ProtocolMeta for Protocol {
-    fn id(&self) -> ProtocolId {
-        self.id
-    }
-    fn codec(&self) -> Box<dyn Codec + Send + 'static> {
-        Box::new(LengthDelimitedCodec::new())
-    }
-
-    fn service_handle(&self) -> ProtocolHandle<Box<dyn ServiceProtocol + Send + 'static>> {
-        // All protocol use the same handle.
-        // This is just an example. In the actual environment, this should be a different handle.
-        let handle = Box::new(PHandle {
-            proto_id: self.id,
-            count: 0,
-            connected_session_ids: Vec::new(),
-            clear_handle: HashMap::new(),
-        });
-        ProtocolHandle::Callback(handle)
-    }
+fn create_meta(id: ProtocolId) -> ProtocolMeta {
+    MetaBuilder::new()
+        .id(id)
+        .service_handle(|meta| {
+            // All protocol use the same handle.
+            // This is just an example. In the actual environment, this should be a different handle.
+            let handle = Box::new(PHandle {
+                proto_id: meta.id(),
+                count: 0,
+                connected_session_ids: Vec::new(),
+                clear_handle: HashMap::new(),
+            });
+            ProtocolHandle::Callback(handle)
+        })
+        .build()
 }
 
 #[derive(Default)]
@@ -176,8 +161,8 @@ fn main() {
 
 fn create_server() -> Service<SHandle> {
     ServiceBuilder::default()
-        .insert_protocol(Protocol::new(0))
-        .insert_protocol(Protocol::new(1))
+        .insert_protocol(create_meta(0))
+        .insert_protocol(create_meta(1))
         .key_pair(SecioKeyPair::secp256k1_generated())
         .build(SHandle)
 }
@@ -189,9 +174,9 @@ fn create_server() -> Service<SHandle> {
 /// Because server only supports 0,1
 fn create_client() -> Service<SHandle> {
     ServiceBuilder::default()
-        .insert_protocol(Protocol::new(0))
-        .insert_protocol(Protocol::new(1))
-        .insert_protocol(Protocol::new(2))
+        .insert_protocol(create_meta(0))
+        .insert_protocol(create_meta(1))
+        .insert_protocol(create_meta(2))
         .key_pair(SecioKeyPair::secp256k1_generated())
         .build(SHandle)
 }

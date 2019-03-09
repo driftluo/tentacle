@@ -21,9 +21,8 @@ use crate::{
     multiaddr::Multiaddr,
     protocol_select::{client_select, server_select, ProtocolInfo},
     secio::{codec::stream_handle::StreamHandle as SecureHandle, PublicKey},
-    service::{DialProtocol, ServiceTask},
+    service::{config::Meta, DialProtocol, ServiceTask},
     substream::{ProtocolEvent, SubStream},
-    traits::ProtocolMeta,
     yamux::{session::SessionType, Config, Session as YamuxSession, StreamHandle},
     ProtocolId, SessionId, StreamId,
 };
@@ -124,7 +123,7 @@ pub(crate) enum SessionEvent {
 pub(crate) struct Session<T> {
     socket: YamuxSession<T>,
 
-    protocol_configs: Arc<HashMap<String, Box<dyn ProtocolMeta + Send + Sync>>>,
+    protocol_configs: HashMap<String, Arc<Meta>>,
 
     id: SessionId,
     timeout: Duration,
@@ -252,11 +251,7 @@ where
     pub fn open_proto_stream(&mut self, proto_name: &str) {
         debug!("try open proto, {}", proto_name);
         let handle = self.socket.open_stream().unwrap();
-        let versions = self
-            .protocol_configs
-            .get(proto_name)
-            .unwrap()
-            .support_versions();
+        let versions = self.protocol_configs[proto_name].support_versions.clone();
         let proto_info = ProtocolInfo::new(&proto_name, versions);
 
         let task = client_select(handle, proto_info);
@@ -326,8 +321,8 @@ where
             .protocol_configs
             .values()
             .map(|proto_meta| {
-                let name = proto_meta.name();
-                let proto_info = ProtocolInfo::new(&name, proto_meta.support_versions());
+                let name = (proto_meta.name)(proto_meta.id);
+                let proto_info = ProtocolInfo::new(&name, proto_meta.support_versions.clone());
                 (name, proto_info)
             })
             .collect();
@@ -349,9 +344,9 @@ where
                     None => unreachable!(),
                 };
 
-                let proto_id = proto.id();
+                let proto_id = proto.id;
                 let raw_part = sub_stream.into_parts();
-                let mut part = FramedParts::new(raw_part.io, proto.codec());
+                let mut part = FramedParts::new(raw_part.io, (proto.codec)());
                 // Replace buffered data
                 part.read_buf = raw_part.read_buf;
                 part.write_buf = raw_part.write_buf;
@@ -447,8 +442,8 @@ where
                     debug!("proto [{}] has been open", proto_id);
                 } else {
                     let name = self.protocol_configs.values().find_map(|meta| {
-                        if meta.id() == proto_id {
-                            Some(meta.name())
+                        if meta.id == proto_id {
+                            Some((meta.name)(meta.id))
                         } else {
                             None
                         }
@@ -592,7 +587,7 @@ where
 pub(crate) struct SessionMeta {
     config: Config,
     id: SessionId,
-    protocol_configs: Arc<HashMap<String, Box<dyn ProtocolMeta + Send + Sync>>>,
+    protocol_configs: HashMap<String, Arc<Meta>>,
     ty: SessionType,
     // remote_address: ::std::net::SocketAddr,
     // remote_public_key: Option<PublicKey>,
@@ -605,15 +600,12 @@ impl SessionMeta {
             config: Config::default(),
             id,
             ty,
-            protocol_configs: Arc::new(HashMap::new()),
+            protocol_configs: HashMap::new(),
             timeout,
         }
     }
 
-    pub fn protocol(
-        mut self,
-        config: Arc<HashMap<String, Box<dyn ProtocolMeta + Send + Sync>>>,
-    ) -> Self {
+    pub fn protocol(mut self, config: HashMap<String, Arc<Meta>>) -> Self {
         self.protocol_configs = config;
         self
     }

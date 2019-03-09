@@ -1,21 +1,19 @@
 use futures::prelude::Stream;
 use std::{thread, time::Duration};
 use tentacle::{
-    builder::ServiceBuilder,
+    builder::{MetaBuilder, ServiceBuilder},
     context::{ServiceContext, SessionContext},
     error::Error,
     multiaddr::Multiaddr,
     secio::SecioKeyPair,
-    service::{DialProtocol, Service, ServiceError, ServiceEvent},
-    traits::{Codec, ProtocolHandle, ProtocolMeta, ServiceHandle, ServiceProtocol},
+    service::{DialProtocol, ProtocolHandle, ProtocolMeta, Service, ServiceError, ServiceEvent},
+    traits::{ServiceHandle, ServiceProtocol},
     yamux::session::SessionType,
     ProtocolId, SessionId,
 };
-use tokio::codec::LengthDelimitedCodec;
 
-pub fn create<T, F>(secio: bool, meta: T, shandle: F) -> Service<F>
+pub fn create<F>(secio: bool, meta: ProtocolMeta, shandle: F) -> Service<F>
 where
-    T: ProtocolMeta + Send + Sync + 'static,
     F: ServiceHandle,
 {
     let builder = ServiceBuilder::default()
@@ -103,42 +101,6 @@ impl ServiceHandle for SHandle {
     }
 }
 
-#[derive(Clone)]
-pub struct Protocol {
-    id: ProtocolId,
-    sender: crossbeam_channel::Sender<usize>,
-}
-
-impl Protocol {
-    fn new(id: ProtocolId, sender: crossbeam_channel::Sender<usize>) -> Self {
-        Protocol { id, sender }
-    }
-}
-
-impl ProtocolMeta for Protocol {
-    fn id(&self) -> ProtocolId {
-        self.id
-    }
-    fn codec(&self) -> Box<dyn Codec + Send + 'static> {
-        Box::new(LengthDelimitedCodec::new())
-    }
-
-    fn service_handle(&self) -> ProtocolHandle<Box<dyn ServiceProtocol + Send + 'static>> {
-        if self.id == 0 {
-            ProtocolHandle::Neither
-        } else {
-            let handle = Box::new(PHandle {
-                proto_id: self.id,
-                connected_count: 0,
-                sender: self.sender.clone(),
-                dial_count: 0,
-                dial_addr: None,
-            });
-            ProtocolHandle::Callback(handle)
-        }
-    }
-}
-
 struct PHandle {
     proto_id: ProtocolId,
     connected_count: usize,
@@ -181,10 +143,28 @@ impl ServiceProtocol for PHandle {
     }
 }
 
-fn create_meta(id: ProtocolId) -> (Protocol, crossbeam_channel::Receiver<usize>) {
-    let (sender, receiver) = crossbeam_channel::bounded(2);
+fn create_meta(id: ProtocolId) -> (ProtocolMeta, crossbeam_channel::Receiver<usize>) {
+    let (sender, receiver) = crossbeam_channel::bounded(1);
 
-    (Protocol::new(id, sender), receiver)
+    let meta = MetaBuilder::new()
+        .id(id)
+        .service_handle(move |meta| {
+            if meta.id() == 0 {
+                ProtocolHandle::Neither
+            } else {
+                let handle = Box::new(PHandle {
+                    proto_id: meta.id(),
+                    connected_count: 0,
+                    sender: sender.clone(),
+                    dial_count: 0,
+                    dial_addr: None,
+                });
+                ProtocolHandle::Callback(handle)
+            }
+        })
+        .build();
+
+    (meta, receiver)
 }
 
 fn create_shandle(
@@ -220,10 +200,11 @@ fn create_shandle(
 }
 
 fn test_repeated_dial(secio: bool) {
-    let (meta, receiver) = create_meta(1);
+    let (meta_1, receiver_1) = create_meta(1);
+    let (meta_2, receiver_2) = create_meta(1);
     let (shandle, error_receiver_1) = create_shandle(secio, false);
 
-    let mut service = create(secio, meta.clone(), shandle);
+    let mut service = create(secio, meta_1, shandle);
 
     let listen_addr = service
         .listen("/ip4/127.0.0.1/tcp/0".parse().unwrap())
@@ -232,18 +213,18 @@ fn test_repeated_dial(secio: bool) {
 
     let (shandle, error_receiver_2) = create_shandle(secio, false);
 
-    let mut service = create(secio, meta, shandle);
+    let mut service = create(secio, meta_2, shandle);
     service.dial(listen_addr, DialProtocol::All).unwrap();
     thread::spawn(|| tokio::run(service.for_each(|_| Ok(()))));
 
     if secio {
-        assert_eq!(receiver.recv(), Ok(1));
-        assert_eq!(receiver.recv(), Ok(1));
+        assert_eq!(receiver_1.recv(), Ok(1));
+        assert_eq!(receiver_2.recv(), Ok(1));
         assert!(error_receiver_1.recv().unwrap() > 8);
         assert!(error_receiver_2.recv().unwrap() > 8);
     } else {
-        assert_ne!(receiver.recv(), Ok(1));
-        assert_ne!(receiver.recv(), Ok(1));
+        assert_ne!(receiver_1.recv(), Ok(1));
+        assert_ne!(receiver_2.recv(), Ok(1));
         assert!(error_receiver_1.is_empty());
         assert!(error_receiver_2.is_empty());
     }
