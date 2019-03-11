@@ -3,8 +3,7 @@ use tokio::codec::{Decoder, Encoder};
 
 use crate::{
     context::{ServiceContext, SessionContext},
-    service::{ProtocolEvent, ProtocolHandle, ServiceError, ServiceEvent},
-    ProtocolId,
+    service::{ProtocolEvent, ServiceError, ServiceEvent},
 };
 
 /// Service handle
@@ -83,6 +82,9 @@ pub trait ServiceProtocol {
     }
     /// Called when the Service receives the notify task
     fn notify(&mut self, _service: &mut ServiceContext, _token: u64) {}
+    /// Behave like `Stream::poll`, but nothing output
+    #[inline]
+    fn poll(&mut self, _service: &mut ServiceContext) {}
 }
 
 /// Session level protocol handle
@@ -96,14 +98,23 @@ pub trait SessionProtocol {
     ) {
     }
     /// Called when closing protocol
-    fn disconnected(&mut self, _service: &mut ServiceContext) {}
+    fn disconnected(&mut self, _service: &mut ServiceContext, _session: &SessionContext) {}
     /// Called when the corresponding protocol message is received
-    fn received(&mut self, _service: &mut ServiceContext, _data: bytes::Bytes) {}
+    fn received(
+        &mut self,
+        _service: &mut ServiceContext,
+        _session: &SessionContext,
+        _data: bytes::Bytes,
+    ) {
+    }
     /// Called when the session receives the notify task
-    fn notify(&mut self, _service: &mut ServiceContext, _token: u64) {}
+    fn notify(&mut self, _service: &mut ServiceContext, _session: &SessionContext, _token: u64) {}
+    /// Behave like `Stream::poll`, but nothing output, shutdown when session close
+    #[inline]
+    fn poll(&mut self, _service: &mut ServiceContext, _session: &SessionContext) {}
 }
 
-/// A trait can define codec
+/// A trait can define codec, just wrapper `Decoder` and `Encoder`
 pub trait Codec:
     Decoder<Item = bytes::BytesMut, Error = io::Error> + Encoder<Item = bytes::Bytes, Error = io::Error>
 {
@@ -130,52 +141,6 @@ impl Encoder for Box<dyn Codec + Send + 'static> {
 
     fn encode(&mut self, item: Self::Item, dst: &mut bytes::BytesMut) -> Result<(), Self::Error> {
         Encoder::encode(&mut **self, item, dst)
-    }
-}
-
-/// Define the minimum data required for a custom protocol
-pub trait ProtocolMeta {
-    /// Protocol id
-    fn id(&self) -> ProtocolId;
-
-    /// Protocol name, default is "/p2p/protocol_id"
-    #[inline]
-    fn name(&self) -> String {
-        format!("/p2p/{}", self.id())
-    }
-
-    /// Protocol supported version
-    fn support_versions(&self) -> Vec<String> {
-        vec!["0.0.1".to_owned()]
-    }
-
-    /// The codec used by the custom protocol, such as `LengthDelimitedCodec` by tokio
-    fn codec(&self) -> Box<dyn Codec + Send + 'static>;
-
-    /// A service level callback handle for a protocol.
-    ///
-    /// ---
-    ///
-    /// #### Behavior
-    ///
-    /// This function is called when the protocol is first opened in the service
-    /// and remains in memory until the entire service is closed.
-    fn service_handle(&self) -> ProtocolHandle<Box<dyn ServiceProtocol + Send + 'static>> {
-        ProtocolHandle::Neither
-    }
-
-    /// A session level callback handle for a protocol.
-    ///
-    /// ---
-    ///
-    /// #### Behavior
-    ///
-    /// When a session is opened, whenever the protocol of the session is opened,
-    /// the function will be called again to generate the corresponding exclusive handle.
-    ///
-    /// Correspondingly, whenever the protocol is closed, the corresponding exclusive handle is cleared.
-    fn session_handle(&self) -> ProtocolHandle<Box<dyn SessionProtocol + Send + 'static>> {
-        ProtocolHandle::Neither
     }
 }
 
