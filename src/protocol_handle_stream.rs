@@ -78,7 +78,7 @@ impl ServiceProtocolStream {
                     .remove_session_notify_senders(id, self.proto_id);
             }
             Received { id, data } => {
-                if let Some(session) = self.sessions.get_mut(&id) {
+                if let Some(session) = self.sessions.get(&id) {
                     self.handle
                         .received(&mut self.service_context, session, data);
                 }
@@ -118,6 +118,8 @@ impl Stream for ServiceProtocolStream {
                 }
             }
         }
+
+        self.handle.poll(&mut self.service_context);
 
         for task in self.service_context.pending_tasks.split_off(0) {
             self.service_context.send(task);
@@ -185,14 +187,17 @@ impl SessionProtocolStream {
                     .connected(&mut self.service_context, &self.context, &version);
             }
             Disconnected => {
-                self.handle.disconnected(&mut self.service_context);
+                self.handle
+                    .disconnected(&mut self.service_context, &self.context);
                 self.close();
             }
             Received { data } => {
-                self.handle.received(&mut self.service_context, data);
+                self.handle
+                    .received(&mut self.service_context, &self.context, data);
             }
             Notify { token } => {
-                self.handle.notify(&mut self.service_context, token);
+                self.handle
+                    .notify(&mut self.service_context, &self.context, token);
             }
             Update { listen_addrs } => {
                 self.service_context.update_listens(listen_addrs);
@@ -230,6 +235,8 @@ impl Stream for SessionProtocolStream {
                 }
             }
         }
+
+        self.handle.poll(&mut self.service_context, &self.context);
 
         for task in self.service_context.pending_tasks.split_off(0) {
             self.service_context.send(task);

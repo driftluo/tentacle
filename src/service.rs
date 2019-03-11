@@ -673,9 +673,7 @@ where
             // Service handle processing flow
             self.handle.handle_event(
                 &mut self.service_context,
-                ServiceEvent::SessionClose {
-                    session_context: &session_context,
-                },
+                ServiceEvent::SessionClose { session_context },
             );
         }
     }
@@ -804,15 +802,17 @@ where
         );
 
         if self.config.event.contains(&proto_id) {
-            // event output
-            self.handle.handle_proto(
-                &mut self.service_context,
-                ProtocolEvent::Received {
-                    session_id,
-                    proto_id,
-                    data: data.clone(),
-                },
-            );
+            if let Some(session_context) = self.sessions.get(&session_id) {
+                // event output
+                self.handle.handle_proto(
+                    &mut self.service_context,
+                    ProtocolEvent::Received {
+                        session_context,
+                        proto_id,
+                        data: data.clone(),
+                    },
+                );
+            }
         }
 
         // callback output
@@ -1111,15 +1111,17 @@ where
                     .unwrap_or_else(|| false)
                 {
                     if self.config.event.contains(&proto_id) {
-                        // event output
-                        self.handle.handle_proto(
-                            &mut self.service_context,
-                            ProtocolEvent::ProtocolSessionNotify {
-                                proto_id,
-                                session_id,
-                                token,
-                            },
-                        )
+                        if let Some(session_context) = self.sessions.get(&session_id) {
+                            // event output
+                            self.handle.handle_proto(
+                                &mut self.service_context,
+                                ProtocolEvent::ProtocolSessionNotify {
+                                    proto_id,
+                                    session_context,
+                                    token,
+                                },
+                            )
+                        }
                     } else if self
                         .session_proto_handles
                         .contains_key(&(session_id, proto_id))

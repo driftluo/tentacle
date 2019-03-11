@@ -54,7 +54,7 @@ pub enum ServiceEvent<'a> {
     /// A session close
     SessionClose {
         /// Session context
-        session_context: &'a SessionContext,
+        session_context: SessionContext,
     },
     /// A session open
     SessionOpen {
@@ -77,8 +77,8 @@ pub enum ProtocolEvent<'a> {
     },
     /// Received protocol data
     Received {
-        /// Session id
-        session_id: SessionId,
+        /// Session context
+        session_context: &'a SessionContext,
         /// Protocol id
         proto_id: ProtocolId,
         /// Protocol version
@@ -100,8 +100,8 @@ pub enum ProtocolEvent<'a> {
     },
     /// Session-level notify task
     ProtocolSessionNotify {
-        /// Session id
-        session_id: SessionId,
+        /// Session context
+        session_context: &'a SessionContext,
         /// Protocol id
         proto_id: ProtocolId,
         /// Notify token
