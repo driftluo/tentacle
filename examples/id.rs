@@ -1,22 +1,26 @@
 use env_logger;
 use log::debug;
-use std::net::SocketAddr;
 
 use futures::{future::lazy, prelude::*};
 use identify::{AddrManager, IdentifyProtocol, MisbehaveResult, Misbehavior};
 use tentacle::{
-    builder::ServiceBuilder,
+    builder::{MetaBuilder, ServiceBuilder},
     context::ServiceContext,
     multiaddr::Multiaddr,
-    secio::SecioKeyPair,
-    service::{DialProtocol, ServiceError, ServiceEvent},
+    secio::{PeerId, SecioKeyPair},
+    service::{DialProtocol, ProtocolHandle, ServiceError, ServiceEvent},
     traits::ServiceHandle,
 };
 
 fn main() {
     env_logger::init();
     let addr_mgr = SimpleAddrManager {};
-    let protocol = IdentifyProtocol::new(1, addr_mgr);
+    let protocol = MetaBuilder::default()
+        .id(1)
+        .service_handle(move |meta| {
+            ProtocolHandle::Callback(Box::new(IdentifyProtocol::new(meta.id(), addr_mgr.clone())))
+        })
+        .build();
     if std::env::args().nth(1) == Some("server".to_string()) {
         debug!("Starting server ......");
         let mut service = ServiceBuilder::default()
@@ -51,11 +55,11 @@ struct SimpleAddrManager {}
 
 impl AddrManager for SimpleAddrManager {
     /// Add remote peer's listen addresses
-    fn add_listen_addrs(&mut self, _peer_addr: Multiaddr, _addrs: Vec<SocketAddr>) {}
+    fn add_listen_addrs(&mut self, _peer: &PeerId, _addrs: Vec<Multiaddr>) {}
     /// Add our address observed by remote peer
-    fn add_observed_addr(&mut self, _peer_addr: Multiaddr, _addr: SocketAddr) {}
+    fn add_observed_addr(&mut self, _peer: &PeerId, _addr: Multiaddr) {}
     /// Report misbehavior
-    fn misbehave(&mut self, _peer_addr: Multiaddr, _kind: Misbehavior) -> MisbehaveResult {
+    fn misbehave(&mut self, _peer: &PeerId, _kind: Misbehavior) -> MisbehaveResult {
         MisbehaveResult::Disconnect
     }
 }

@@ -13,11 +13,10 @@ use p2p::{
     context::{ServiceContext, SessionContext},
     multiaddr::{Multiaddr, ToMultiaddr},
     secio::PeerId,
-    traits::{Codec, ProtocolHandle, ProtocolMeta, ServiceProtocol},
+    traits::ServiceProtocol,
     utils::multiaddr_to_socketaddr,
     ProtocolId, SessionId,
 };
-use tokio::codec::length_delimited::LengthDelimitedCodec;
 
 use protocol::IdentifyMessage;
 
@@ -128,23 +127,6 @@ impl RemoteInfo {
             listen_addrs: None,
             observed_addr: None,
         }
-    }
-}
-
-impl<T: AddrManager + 'static> ProtocolMeta for IdentifyProtocol<T> {
-    fn id(&self) -> ProtocolId {
-        self.id
-    }
-
-    fn codec(&self) -> Box<dyn Codec + Send + 'static> {
-        Box::new(LengthDelimitedCodec::new())
-    }
-
-    fn service_handle(&self) -> ProtocolHandle<Box<dyn ServiceProtocol + Send + 'static>> {
-        ProtocolHandle::Callback(Box::new(IdentifyProtocol::new(
-            self.id,
-            self.addr_mgr.clone(),
-        )))
     }
 }
 

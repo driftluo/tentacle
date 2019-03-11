@@ -1,5 +1,5 @@
 [package]
-name = "identify"
+name = "tentacle-identify"
 version = "0.1.0"
 authors = ["Qian Linfeng <thewawar@gmail.com>"]
 edition = "2018"
