@@ -8,10 +8,10 @@ use std::collections::{HashMap, HashSet};
 use std::net::SocketAddr;
 use std::time::{Duration, Instant};
 
-use log::{debug, trace};
+use log::{debug, error, trace};
 use p2p::{
     context::{ServiceContext, SessionContext},
-    multiaddr::Multiaddr,
+    multiaddr::{Multiaddr, ToMultiaddr},
     secio::PeerId,
     traits::{Codec, ProtocolHandle, ProtocolMeta, ServiceProtocol},
     utils::multiaddr_to_socketaddr,
@@ -67,11 +67,11 @@ impl MisbehaveResult {
 /// The trait to communicate with underlying peer storage
 pub trait AddrManager: Clone + Send {
     /// Add remote peer's listen addresses
-    fn add_listen_addrs(&mut self, peer_addr: Multiaddr, addrs: Vec<SocketAddr>);
+    fn add_listen_addrs(&mut self, peer: &PeerId, addrs: Vec<Multiaddr>);
     /// Add our address observed by remote peer
-    fn add_observed_addr(&mut self, peer_addr: Multiaddr, addr: SocketAddr);
+    fn add_observed_addr(&mut self, peer: &PeerId, addr: Multiaddr);
     /// Report misbehavior
-    fn misbehave(&mut self, peer_addr: Multiaddr, kind: Misbehavior) -> MisbehaveResult;
+    fn misbehave(&mut self, peer: &PeerId, kind: Misbehavior) -> MisbehaveResult;
 }
 
 /// Identify protocol
@@ -81,6 +81,7 @@ pub struct IdentifyProtocol<T> {
     listen_addrs: Vec<SocketAddr>,
     observed_addrs: HashMap<PeerId, SocketAddr>,
     remote_infos: HashMap<SessionId, RemoteInfo>,
+    secio_enabled: bool,
 }
 
 impl<T: AddrManager> IdentifyProtocol<T> {
@@ -91,6 +92,7 @@ impl<T: AddrManager> IdentifyProtocol<T> {
             listen_addrs: Vec::new(),
             observed_addrs: HashMap::default(),
             remote_infos: HashMap::default(),
+            secio_enabled: true,
         }
     }
 }
@@ -163,8 +165,12 @@ impl<T: AddrManager> ServiceProtocol for IdentifyProtocol<T> {
 
     fn connected(&mut self, service: &mut ServiceContext, session: &SessionContext, version: &str) {
         if session.remote_pubkey.is_none() {
-            panic!("IdentifyProtocol require secio enabled!");
+            error!("IdentifyProtocol require secio enabled!");
+            service.disconnect(session.id);
+            self.secio_enabled = false;
+            return;
         }
+
         let remote_info = RemoteInfo::new(
             session.clone(),
             version,
@@ -178,7 +184,7 @@ impl<T: AddrManager> ServiceProtocol for IdentifyProtocol<T> {
             .values()
             .chain(self.listen_addrs.iter())
             .take(MAX_ADDRS)
-            .map(Clone::clone)
+            .cloned()
             .collect();
         let data = IdentifyMessage::ListenAddrs(listen_addrs.into_iter().collect()).encode();
         service.send_message(session.id, self.id, data);
@@ -189,11 +195,13 @@ impl<T: AddrManager> ServiceProtocol for IdentifyProtocol<T> {
     }
 
     fn disconnected(&mut self, _service: &mut ServiceContext, session: &SessionContext) {
-        let info = self
-            .remote_infos
-            .remove(&session.id)
-            .expect("RemoteInfo must exists");
-        trace!("IdentifyProtocol disconnected from {:?}", info.peer_id);
+        if self.secio_enabled {
+            let info = self
+                .remote_infos
+                .remove(&session.id)
+                .expect("RemoteInfo must exists");
+            trace!("IdentifyProtocol disconnected from {:?}", info.peer_id);
+        }
     }
 
     fn received(
@@ -202,6 +210,10 @@ impl<T: AddrManager> ServiceProtocol for IdentifyProtocol<T> {
         session: &SessionContext,
         data: bytes::Bytes,
     ) {
+        if !self.secio_enabled {
+            return;
+        }
+
         let info = self
             .remote_infos
             .get_mut(&session.id)
@@ -212,7 +224,7 @@ impl<T: AddrManager> ServiceProtocol for IdentifyProtocol<T> {
                     debug!("remote({:?}) repeat send observed address", info.peer_id);
                     if self
                         .addr_mgr
-                        .misbehave(session.address.clone(), Misbehavior::DuplicateListenAddrs)
+                        .misbehave(&info.peer_id, Misbehavior::DuplicateListenAddrs)
                         .is_disconnect()
                     {
                         service.disconnect(session.id);
@@ -220,18 +232,19 @@ impl<T: AddrManager> ServiceProtocol for IdentifyProtocol<T> {
                 } else if addrs.len() > MAX_ADDRS {
                     if self
                         .addr_mgr
-                        .misbehave(
-                            session.address.clone(),
-                            Misbehavior::TooManyAddresses(addrs.len()),
-                        )
+                        .misbehave(&info.peer_id, Misbehavior::TooManyAddresses(addrs.len()))
                         .is_disconnect()
                     {
                         service.disconnect(session.id);
                     }
                 } else {
                     trace!("received listen addresses: {:?}", addrs);
+                    let multiaddr_addrs = addrs
+                        .iter()
+                        .filter_map(|addr| addr.to_multiaddr().ok())
+                        .collect::<Vec<_>>();
                     self.addr_mgr
-                        .add_listen_addrs(session.address.clone(), addrs.clone());
+                        .add_listen_addrs(&info.peer_id, multiaddr_addrs);
                     info.listen_addrs = Some(addrs);
                 }
             }
@@ -240,7 +253,7 @@ impl<T: AddrManager> ServiceProtocol for IdentifyProtocol<T> {
                     debug!("remote({:?}) repeat send listen addresses", info.peer_id);
                     if self
                         .addr_mgr
-                        .misbehave(session.address.clone(), Misbehavior::DuplicateObservedAddr)
+                        .misbehave(&info.peer_id, Misbehavior::DuplicateObservedAddr)
                         .is_disconnect()
                     {
                         service.disconnect(session.id);
@@ -249,8 +262,9 @@ impl<T: AddrManager> ServiceProtocol for IdentifyProtocol<T> {
                     trace!("received observed address: {}", addr);
                     info.observed_addr = Some(addr);
                     // TODO how can we trust this address?
-                    self.addr_mgr
-                        .add_observed_addr(session.address.clone(), addr);
+                    if let Ok(multiaddr) = addr.to_multiaddr() {
+                        self.addr_mgr.add_observed_addr(&info.peer_id, multiaddr);
+                    }
                     self.observed_addrs.insert(info.peer_id.clone(), addr);
                 }
             }
@@ -261,7 +275,7 @@ impl<T: AddrManager> ServiceProtocol for IdentifyProtocol<T> {
                 );
                 if self
                     .addr_mgr
-                    .misbehave(session.address.clone(), Misbehavior::InvalidData)
+                    .misbehave(&info.peer_id, Misbehavior::InvalidData)
                     .is_disconnect()
                 {
                     service.disconnect(session.id);
@@ -271,14 +285,19 @@ impl<T: AddrManager> ServiceProtocol for IdentifyProtocol<T> {
     }
 
     fn notify(&mut self, service: &mut ServiceContext, _token: u64) {
+        if !self.secio_enabled {
+            return;
+        }
+
+        let now = Instant::now();
         for (session_id, info) in &self.remote_infos {
             if (info.listen_addrs.is_none() || info.observed_addr.is_none())
-                && (info.connected_at + info.timeout) <= Instant::now()
+                && (info.connected_at + info.timeout) <= now
             {
                 debug!("{:?} receive identify message timeout", info.peer_id);
                 if self
                     .addr_mgr
-                    .misbehave(info.session.address.clone(), Misbehavior::Timeout)
+                    .misbehave(&info.peer_id, Misbehavior::Timeout)
                     .is_disconnect()
                 {
                     service.disconnect(*session_id);
