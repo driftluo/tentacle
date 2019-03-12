@@ -1,31 +1,23 @@
 use env_logger;
-use log::{debug, warn};
+use log::debug;
 
 use fnv::FnvHashMap;
-use std::{
-    collections::HashMap,
-    net::{IpAddr, Ipv4Addr, SocketAddr},
-    time::Duration,
-};
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 
-use futures::{
-    prelude::*,
-    sync::mpsc::{channel, Sender},
-};
+use futures::prelude::*;
 
 use tentacle::{
     builder::{MetaBuilder, ServiceBuilder},
-    context::{ServiceContext, SessionContext},
+    context::ServiceContext,
     multiaddr::{Multiaddr, ToMultiaddr},
     service::{DialProtocol, ProtocolHandle, ProtocolMeta, ServiceError, ServiceEvent},
-    traits::{ServiceHandle, ServiceProtocol},
+    traits::ServiceHandle,
     utils::multiaddr_to_socketaddr,
-    yamux::session::SessionType,
-    ProtocolId, SessionId,
+    ProtocolId,
 };
 
 use discovery::{
-    AddressManager, Direction, Discovery, DiscoveryHandle, Misbehavior, RawAddr, Substream,
+    AddressManager, Discovery, DiscoveryProtocol, MisbehaveResult, Misbehavior, RawAddr,
 };
 
 fn main() {
@@ -57,136 +49,18 @@ fn main() {
 }
 
 fn create_meta(id: ProtocolId, start: u16) -> ProtocolMeta {
+    let addrs: FnvHashMap<RawAddr, i32> = (start..start + 3333)
+        .map(|port| SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), port))
+        .map(|addr| (RawAddr::from(addr), 100))
+        .collect();
+    let addr_mgr = SimpleAddressManager { addrs };
     MetaBuilder::default()
         .id(id)
         .service_handle(move |meta| {
-            let addrs: FnvHashMap<RawAddr, i32> = (start..start + 3333)
-                .map(|port| SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), port))
-                .map(|addr| (RawAddr::from(addr), 100))
-                .collect();
-            let discovery = Discovery::new(SimpleAddressManager { addrs });
-            let discovery_handle = discovery.handle();
-            let handle = Box::new(DiscoveryProtocol {
-                id: meta.id(),
-                notify_counter: 0,
-                discovery: Some(discovery),
-                discovery_handle,
-                discovery_senders: FnvHashMap::default(),
-                sessions: HashMap::default(),
-            });
-            ProtocolHandle::Callback(handle)
+            let discovery = Discovery::new(addr_mgr.clone());
+            ProtocolHandle::Callback(Box::new(DiscoveryProtocol::new(meta.id(), discovery)))
         })
         .build()
-}
-
-struct DiscoveryProtocol {
-    id: usize,
-    notify_counter: u32,
-    discovery: Option<Discovery<SimpleAddressManager>>,
-    discovery_handle: DiscoveryHandle,
-    discovery_senders: FnvHashMap<SessionId, Sender<Vec<u8>>>,
-    sessions: HashMap<SessionId, SessionData>,
-}
-
-impl ServiceProtocol for DiscoveryProtocol {
-    fn init(&mut self, control: &mut ServiceContext) {
-        debug!("protocol [discovery({})]: init", self.id);
-
-        let interval = Duration::from_secs(5);
-        debug!("Setup interval {:?}", interval);
-        control.set_service_notify(self.id, interval, 3);
-        let discovery_task = self
-            .discovery
-            .take()
-            .map(|discovery| {
-                debug!("Start discovery future_task");
-                discovery
-                    .for_each(|()| {
-                        debug!("discovery.for_each()");
-                        Ok(())
-                    })
-                    .map_err(|err| {
-                        warn!("discovery stream error: {:?}", err);
-                        ()
-                    })
-                    .then(|_| {
-                        warn!("End of discovery");
-                        Ok(())
-                    })
-            })
-            .unwrap();
-        control.future_task(discovery_task);
-    }
-
-    fn connected(&mut self, control: &mut ServiceContext, session: &SessionContext, _: &str) {
-        self.sessions
-            .entry(session.id)
-            .or_insert(SessionData::new(session.address.clone(), session.ty));
-        debug!(
-            "protocol [discovery] open on session [{}], address: [{}], type: [{:?}]",
-            session.id, session.address, session.ty
-        );
-
-        let direction = if session.ty == SessionType::Server {
-            Direction::Inbound
-        } else {
-            Direction::Outbound
-        };
-        let (sender, receiver) = channel(8);
-        self.discovery_senders.insert(session.id, sender);
-        let substream = Substream::new(
-            &session.address,
-            direction,
-            self.id,
-            session.id,
-            receiver,
-            control.control().clone(),
-            control.listens(),
-        );
-        match self.discovery_handle.substream_sender.try_send(substream) {
-            Ok(_) => {
-                debug!("Send substream success");
-            }
-            Err(err) => {
-                warn!("Send substream failed : {:?}", err);
-            }
-        }
-    }
-
-    fn disconnected(&mut self, _control: &mut ServiceContext, session: &SessionContext) {
-        self.sessions.remove(&session.id);
-        self.discovery_senders.remove(&session.id);
-        debug!("protocol [discovery] close on session [{}]", session.id);
-    }
-
-    fn received(
-        &mut self,
-        _control: &mut ServiceContext,
-        session: &SessionContext,
-        data: bytes::Bytes,
-    ) {
-        debug!("[received message]: length={}", data.len());
-        self.sessions
-            .get_mut(&session.id)
-            .unwrap()
-            .push_data(data.to_vec());
-        if let Some(ref mut sender) = self.discovery_senders.get_mut(&session.id) {
-            if let Err(err) = sender.try_send(data.to_vec()) {
-                if err.is_full() {
-                    warn!("channel is full");
-                } else if err.is_disconnected() {
-                    warn!("channel is disconnected");
-                } else {
-                    warn!("other channel error: {:?}", err);
-                }
-            }
-        }
-    }
-
-    fn notify(&mut self, _control: &mut ServiceContext, token: u64) {
-        debug!("protocol [discovery] received notify token: {}", token);
-        self.notify_counter += 1;
-    }
 }
 
 struct SHandle {}
@@ -198,27 +72,6 @@ impl ServiceHandle for SHandle {
 
     fn handle_event(&mut self, _env: &mut ServiceContext, event: ServiceEvent) {
         debug!("service event: {:?}", event);
-    }
-}
-
-#[derive(Clone)]
-struct SessionData {
-    ty: SessionType,
-    address: Multiaddr,
-    data: Vec<Vec<u8>>,
-}
-
-impl SessionData {
-    fn new(address: Multiaddr, ty: SessionType) -> Self {
-        SessionData {
-            address,
-            ty,
-            data: Vec::new(),
-        }
-    }
-
-    fn push_data(&mut self, data: Vec<u8>) {
-        self.data.push(data);
     }
 }
 
@@ -234,13 +87,17 @@ impl AddressManager for SimpleAddressManager {
             .or_insert(100);
     }
 
-    fn misbehave(&mut self, addr: Multiaddr, _ty: Misbehavior) -> i32 {
+    fn misbehave(&mut self, addr: Multiaddr, _ty: Misbehavior) -> MisbehaveResult {
         let value = self
             .addrs
             .entry(RawAddr::from(multiaddr_to_socketaddr(&addr).unwrap()))
             .or_insert(100);
         *value -= 20;
-        *value
+        if *value < 0 {
+            MisbehaveResult::Disconnect
+        } else {
+            MisbehaveResult::Continue
+        }
     }
 
     fn get_random(&mut self, n: usize) -> Vec<Multiaddr> {

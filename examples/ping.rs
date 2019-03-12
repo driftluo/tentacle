@@ -4,12 +4,14 @@ use log::{debug, info};
 use std::time::Duration;
 
 use futures::{future::lazy, prelude::*, sync::mpsc::channel};
-use ping::{create_meta, Event};
+use generic_channel::Sender;
+use ping::{Event, PingHandler};
 use tentacle::{
-    builder::ServiceBuilder,
+    builder::{MetaBuilder, ServiceBuilder},
     context::ServiceContext,
-    service::{DialProtocol, ServiceError, ServiceEvent},
+    service::{DialProtocol, ProtocolHandle, ProtocolMeta, ServiceError, ServiceEvent},
     traits::ServiceHandle,
+    ProtocolId,
 };
 
 fn main() {
@@ -51,6 +53,26 @@ fn main() {
             service.for_each(|_| Ok(()))
         }))
     }
+}
+
+pub fn create_meta<S: Sender<Event> + Send + Clone + 'static>(
+    id: ProtocolId,
+    interval: Duration,
+    timeout: Duration,
+    event_sender: S,
+) -> ProtocolMeta {
+    MetaBuilder::new()
+        .id(id)
+        .service_handle(move |meta| {
+            let handle = Box::new(PingHandler::new(
+                meta.id(),
+                interval,
+                timeout,
+                event_sender.clone(),
+            ));
+            ProtocolHandle::Callback(handle)
+        })
+        .build()
 }
 
 struct SimpleHandler {}
