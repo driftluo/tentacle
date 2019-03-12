@@ -92,14 +92,14 @@ fn create_meta(id: ProtocolId) -> (ProtocolMeta, crossbeam_channel::Receiver<()>
 
     let meta = MetaBuilder::new()
         .id(id)
-        .service_handle(move |meta| {
-            if meta.id() == 0 {
+        .service_handle(move || {
+            if id == 0 {
                 ProtocolHandle::Neither
             } else {
                 let handle = Box::new(PHandle {
-                    proto_id: meta.id(),
+                    proto_id: id,
                     connected_count: 0,
-                    sender: sender.clone(),
+                    sender,
                 });
                 ProtocolHandle::Callback(handle)
             }

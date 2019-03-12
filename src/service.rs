@@ -419,11 +419,8 @@ where
     /// Get the callback handle of the specified protocol
     #[inline]
     fn proto_handle(&self, session: bool, proto_id: ProtocolId) -> Option<InnerProtocolHandle> {
-        let handle = self
-            .protocol_configs
-            .values()
-            .filter(|proto| proto.id() == proto_id)
-            .find_map(|proto| {
+        let handle = self.protocol_configs.values().find_map(|proto| {
+            if proto.id() == proto_id {
                 if session {
                     match proto.session_handle() {
                         ProtocolHandle::Callback(handle) | ProtocolHandle::Both(handle) => {
@@ -439,7 +436,10 @@ where
                         _ => None,
                     }
                 }
-            });
+            } else {
+                None
+            }
+        });
 
         if handle.is_none() {
             debug!(
