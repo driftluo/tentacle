@@ -3,11 +3,18 @@ use std::io;
 
 use fnv::{FnvHashMap, FnvHashSet};
 use futures::{
+    prelude::*,
     sync::mpsc::{channel, Receiver, Sender},
     Async, Poll, Stream,
 };
-use log::debug;
-use p2p::multiaddr::ToMultiaddr;
+use log::{debug, warn};
+use p2p::{
+    context::{ServiceContext, SessionContext},
+    multiaddr::ToMultiaddr,
+    traits::ServiceProtocol,
+    yamux::session::SessionType,
+    ProtocolId, SessionId,
+};
 use rand::seq::SliceRandom;
 
 mod addr;
@@ -25,6 +32,109 @@ pub use crate::{
 };
 
 use crate::{addr::DEFAULT_MAX_KNOWN, substream::RemoteAddress};
+
+pub struct DiscoveryProtocol<M> {
+    id: ProtocolId,
+    discovery: Option<Discovery<M>>,
+    discovery_handle: DiscoveryHandle,
+    discovery_senders: FnvHashMap<SessionId, Sender<Vec<u8>>>,
+}
+
+impl<M: AddressManager> DiscoveryProtocol<M> {
+    pub fn new(id: ProtocolId, discovery: Discovery<M>) -> DiscoveryProtocol<M> {
+        let discovery_handle = discovery.handle();
+        DiscoveryProtocol {
+            id,
+            discovery: Some(discovery),
+            discovery_handle,
+            discovery_senders: FnvHashMap::default(),
+        }
+    }
+}
+
+impl<M: AddressManager + Send + 'static> ServiceProtocol for DiscoveryProtocol<M> {
+    fn init(&mut self, control: &mut ServiceContext) {
+        debug!("protocol [discovery({})]: init", self.id);
+
+        let discovery_task = self
+            .discovery
+            .take()
+            .map(|discovery| {
+                debug!("Start discovery future_task");
+                discovery
+                    .for_each(|()| Ok(()))
+                    .map_err(|err| {
+                        warn!("discovery stream error: {:?}", err);
+                    })
+                    .then(|_| {
+                        debug!("End of discovery");
+                        Ok(())
+                    })
+            })
+            .unwrap();
+        control.future_task(discovery_task);
+    }
+
+    fn connected(&mut self, control: &mut ServiceContext, session: &SessionContext, _: &str) {
+        debug!(
+            "protocol [discovery] open on session [{}], address: [{}], type: [{:?}]",
+            session.id, session.address, session.ty
+        );
+
+        let direction = if session.ty == SessionType::Server {
+            Direction::Inbound
+        } else {
+            Direction::Outbound
+        };
+        let (sender, receiver) = channel(8);
+        self.discovery_senders.insert(session.id, sender);
+        let substream = Substream::new(
+            &session.address,
+            direction,
+            self.id,
+            session.id,
+            receiver,
+            control.control().clone(),
+            control.listens(),
+        );
+        match self.discovery_handle.substream_sender.try_send(substream) {
+            Ok(_) => {
+                debug!("Send substream success");
+            }
+            Err(err) => {
+                // TODO: handle channel is full (wait for poll API?)
+                warn!("Send substream failed : {:?}", err);
+            }
+        }
+    }
+
+    fn disconnected(&mut self, _control: &mut ServiceContext, session: &SessionContext) {
+        self.discovery_senders.remove(&session.id);
+        debug!("protocol [discovery] close on session [{}]", session.id);
+    }
+
+    fn received(
+        &mut self,
+        _control: &mut ServiceContext,
+        session: &SessionContext,
+        data: bytes::Bytes,
+    ) {
+        debug!("[received message]: length={}", data.len());
+
+        if let Some(ref mut sender) = self.discovery_senders.get_mut(&session.id) {
+            // TODO: handle channel is full (wait for poll API?)
+            if let Err(err) = sender.try_send(data.to_vec()) {
+                if err.is_full() {
+                    warn!("channel is full");
+                } else if err.is_disconnected() {
+                    warn!("channel is disconnected");
+                } else {
+                    warn!("other channel error: {:?}", err);
+                }
+            }
+        }
+    }
+}
 
 pub struct Discovery<M> {
     // Default: 5000
