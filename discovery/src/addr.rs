@@ -1,9 +1,9 @@
-use p2p::multiaddr::Multiaddr;
 use std::collections::BTreeMap;
 use std::net::{IpAddr, SocketAddr};
 use std::time::Instant;
 
 use fnv::{FnvHashMap, FnvHashSet};
+use p2p::multiaddr::Multiaddr;
 use serde_derive::{Deserialize, Serialize};
 
 // See: bitcoin/netaddress.cpp pchIPv4[12]
@@ -25,10 +25,33 @@ pub enum Misbehavior {
     TooManyAddresses(usize),
 }
 
+/// Misbehavior report result
+pub enum MisbehaveResult {
+    /// Continue to run
+    Continue,
+    /// Disconnect this peer
+    Disconnect,
+}
+
+impl MisbehaveResult {
+    pub fn is_continue(&self) -> bool {
+        match self {
+            MisbehaveResult::Continue => true,
+            _ => false,
+        }
+    }
+    pub fn is_disconnect(&self) -> bool {
+        match self {
+            MisbehaveResult::Disconnect => true,
+            _ => false,
+        }
+    }
+}
+
 // FIXME: Should be peer store?
 pub trait AddressManager {
     fn add_new(&mut self, addr: Multiaddr);
-    fn misbehave(&mut self, addr: Multiaddr, kind: Misbehavior) -> i32;
+    fn misbehave(&mut self, addr: Multiaddr, kind: Misbehavior) -> MisbehaveResult;
     fn get_random(&mut self, n: usize) -> Vec<Multiaddr>;
 }
 

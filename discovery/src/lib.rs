@@ -26,7 +26,7 @@ mod substream;
 mod message_generated;
 
 pub use crate::{
-    addr::{AddrKnown, AddressManager, Misbehavior, RawAddr},
+    addr::{AddrKnown, AddressManager, MisbehaveResult, Misbehavior, RawAddr},
     message::{DiscoveryMessage, Node, Nodes},
     substream::{Direction, Substream, SubstreamKey, SubstreamValue},
 };

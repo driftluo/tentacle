@@ -192,10 +192,12 @@ impl SubstreamValue {
             DiscoveryMessage::GetNodes { listen_port, .. } => {
                 if self.received_get_nodes {
                     // TODO: misbehavior
-                    if addr_mgr.misbehave(
-                        self.remote_addr.into_multiaddr(),
-                        Misbehavior::DuplicateGetNodes,
-                    ) < 0
+                    if addr_mgr
+                        .misbehave(
+                            self.remote_addr.into_multiaddr(),
+                            Misbehavior::DuplicateGetNodes,
+                        )
+                        .is_disconnect()
                     {
                         // TODO: more clear error type
                         warn!("Already received get nodes");
@@ -238,7 +240,10 @@ impl SubstreamValue {
                 for item in &nodes.items {
                     if item.addresses.len() > MAX_ADDRS {
                         let misbehavior = Misbehavior::TooManyAddresses(item.addresses.len());
-                        if addr_mgr.misbehave(self.remote_addr.into_multiaddr(), misbehavior) < 0 {
+                        if addr_mgr
+                            .misbehave(self.remote_addr.into_multiaddr(), misbehavior)
+                            .is_disconnect()
+                        {
                             // TODO: more clear error type
                             return Err(io::ErrorKind::Other.into());
                         }
@@ -253,7 +258,10 @@ impl SubstreamValue {
                             announce: nodes.announce,
                             length: nodes.items.len(),
                         };
-                        if addr_mgr.misbehave(self.remote_addr.into_multiaddr(), misbehavior) < 0 {
+                        if addr_mgr
+                            .misbehave(self.remote_addr.into_multiaddr(), misbehavior)
+                            .is_disconnect()
+                        {
                             // TODO: more clear error type
                             return Err(io::ErrorKind::Other.into());
                         }
@@ -263,10 +271,12 @@ impl SubstreamValue {
                 } else if self.received_nodes {
                     warn!("already received Nodes(announce=false) message");
                     // TODO: misbehavior
-                    if addr_mgr.misbehave(
-                        self.remote_addr.into_multiaddr(),
-                        Misbehavior::DuplicateFirstNodes,
-                    ) < 0
+                    if addr_mgr
+                        .misbehave(
+                            self.remote_addr.into_multiaddr(),
+                            Misbehavior::DuplicateFirstNodes,
+                        )
+                        .is_disconnect()
                     {
                         // TODO: more clear error type
                         return Err(io::ErrorKind::Other.into());
@@ -281,7 +291,10 @@ impl SubstreamValue {
                         announce: nodes.announce,
                         length: nodes.items.len(),
                     };
-                    if addr_mgr.misbehave(self.remote_addr.into_multiaddr(), misbehavior) < 0 {
+                    if addr_mgr
+                        .misbehave(self.remote_addr.into_multiaddr(), misbehavior)
+                        .is_disconnect()
+                    {
                         // TODO: more clear error type
                         return Err(io::ErrorKind::Other.into());
                     }
