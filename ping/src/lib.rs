@@ -9,10 +9,8 @@ use fnv::FnvHashMap;
 use generic_channel::Sender;
 use log::{debug, error};
 use p2p::{
-    builder::MetaBuilder,
     context::{ServiceContext, SessionContext},
     secio::PeerId,
-    service::{ProtocolHandle, ProtocolMeta},
     traits::ServiceProtocol,
     ProtocolId, SessionId,
 };
@@ -37,33 +35,12 @@ pub enum Event {
     UnexpectedError(PeerId),
 }
 
-/// Ping protocol mete create.
+/// Ping protocol handler.
 ///
 /// The interval means that we send ping to peers.
 /// The timeout means that consider peer is timeout if during a timeout we still have not received pong from a peer
-pub fn create_meta<S: Sender<Event> + Send + Clone + 'static>(
+pub struct PingHandler<S: Sender<Event>> {
     id: ProtocolId,
-    interval: Duration,
-    timeout: Duration,
-    event_sender: S,
-) -> ProtocolMeta {
-    MetaBuilder::new()
-        .id(id)
-        .service_handle(move |meta| {
-            let handle = Box::new(PingHandler {
-                proto_id: meta.id(),
-                interval,
-                timeout,
-                connected_session_ids: Default::default(),
-                event_sender: event_sender.clone(),
-            });
-            ProtocolHandle::Callback(handle)
-        })
-        .build()
-}
-
-struct PingHandler<S: Sender<Event>> {
-    proto_id: ProtocolId,
     interval: Duration,
     timeout: Duration,
     connected_session_ids: FnvHashMap<SessionId, PingStatus>,
@@ -71,6 +48,21 @@ struct PingHandler<S: Sender<Event>> {
 }
 
 impl<S: Sender<Event>> PingHandler<S> {
+    pub fn new(
+        id: ProtocolId,
+        interval: Duration,
+        timeout: Duration,
+        event_sender: S,
+    ) -> PingHandler<S> {
+        PingHandler {
+            id,
+            interval,
+            timeout,
+            connected_session_ids: Default::default(),
+            event_sender,
+        }
+    }
+
     pub fn send_event(&mut self, event: Event) {
         if let Err(err) = self.event_sender.try_send(event) {
             error!("send ping event error: {}", err);
@@ -109,8 +101,8 @@ where
 {
     fn init(&mut self, control: &mut ServiceContext) {
         // periodicly send ping to peers
-        control.set_service_notify(self.proto_id, self.interval, SEND_PING_TOKEN);
-        control.set_service_notify(self.proto_id, self.timeout, CHECK_TIMEOUT_TOKEN);
+        control.set_service_notify(self.id, self.interval, SEND_PING_TOKEN);
+        control.set_service_notify(self.id, self.timeout, CHECK_TIMEOUT_TOKEN);
     }
 
     fn connected(&mut self, control: &mut ServiceContext, session: &SessionContext, version: &str) {
@@ -126,7 +118,7 @@ where
                     });
                 debug!(
                     "proto id [{}] open on session [{}], address: [{}], type: [{:?}], version: {}",
-                    self.proto_id, session.id, session.address, session.ty, version
+                    self.id, session.id, session.address, session.ty, version
                 );
                 debug!("connected sessions are: {:?}", self.connected_session_ids);
             }
@@ -138,10 +130,7 @@ where
 
     fn disconnected(&mut self, _control: &mut ServiceContext, session: &SessionContext) {
         self.connected_session_ids.remove(&session.id);
-        debug!(
-            "proto id [{}] close on session [{}]",
-            self.proto_id, session.id
-        );
+        debug!("proto id [{}] close on session [{}]", self.id, session.id);
     }
 
     fn received(
@@ -162,7 +151,7 @@ where
                     let mut fbb = FlatBufferBuilder::new();
                     let msg = PingMessage::build_pong(&mut fbb, ping_msg.nonce());
                     fbb.finish(msg, None);
-                    control.send_message(session.id, self.proto_id, fbb.finished_data().to_vec());
+                    control.send_message(session.id, self.id, fbb.finished_data().to_vec());
                     self.send_event(Event::Ping(peer_id));
                 }
                 PingPayload::Pong => {
@@ -198,7 +187,7 @@ where
     fn notify(&mut self, control: &mut ServiceContext, token: u64) {
         match token {
             SEND_PING_TOKEN => {
-                debug!("proto [{}] start ping peers", self.proto_id);
+                debug!("proto [{}] start ping peers", self.id);
                 let now = SystemTime::now();
                 let peers: Vec<(SessionId, u32)> = self
                     .connected_session_ids
@@ -221,15 +210,11 @@ where
                         .into_iter()
                         .map(|(session_id, _)| session_id)
                         .collect();
-                    control.filter_broadcast(
-                        Some(peer_ids),
-                        self.proto_id,
-                        fbb.finished_data().to_vec(),
-                    );
+                    control.filter_broadcast(Some(peer_ids), self.id, fbb.finished_data().to_vec());
                 }
             }
             CHECK_TIMEOUT_TOKEN => {
-                debug!("proto [{}] check ping timeout", self.proto_id);
+                debug!("proto [{}] check ping timeout", self.id);
                 let timeout = self.timeout;
                 for peer_id in self
                     .connected_session_ids
