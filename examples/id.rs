@@ -57,7 +57,9 @@ impl AddrManager for SimpleAddrManager {
     /// Add remote peer's listen addresses
     fn add_listen_addrs(&mut self, _peer: &PeerId, _addrs: Vec<Multiaddr>) {}
     /// Add our address observed by remote peer
-    fn add_observed_addr(&mut self, _peer: &PeerId, _addr: Multiaddr) {}
+    fn add_observed_addr(&mut self, _peer: &PeerId, _addr: Multiaddr) -> MisbehaveResult {
+        MisbehaveResult::Continue
+    }
     /// Report misbehavior
     fn misbehave(&mut self, _peer: &PeerId, _kind: Misbehavior) -> MisbehaveResult {
         MisbehaveResult::Disconnect

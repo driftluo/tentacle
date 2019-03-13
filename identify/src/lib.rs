@@ -68,7 +68,7 @@ pub trait AddrManager: Clone + Send {
     /// Add remote peer's listen addresses
     fn add_listen_addrs(&mut self, peer: &PeerId, addrs: Vec<Multiaddr>);
     /// Add our address observed by remote peer
-    fn add_observed_addr(&mut self, peer: &PeerId, addr: Multiaddr);
+    fn add_observed_addr(&mut self, peer: &PeerId, addr: Multiaddr) -> MisbehaveResult;
     /// Report misbehavior
     fn misbehave(&mut self, peer: &PeerId, kind: Misbehavior) -> MisbehaveResult;
 }
@@ -245,7 +245,13 @@ impl<T: AddrManager> ServiceProtocol for IdentifyProtocol<T> {
                     info.observed_addr = Some(addr);
                     // TODO how can we trust this address?
                     if let Ok(multiaddr) = addr.to_multiaddr() {
-                        self.addr_mgr.add_observed_addr(&info.peer_id, multiaddr);
+                        if self
+                            .addr_mgr
+                            .add_observed_addr(&info.peer_id, multiaddr)
+                            .is_disconnect()
+                        {
+                            service.disconnect(session.id);
+                        }
                     }
                     self.observed_addrs.insert(info.peer_id.clone(), addr);
                 }
