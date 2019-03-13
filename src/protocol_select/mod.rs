@@ -6,6 +6,7 @@ use bytes::Bytes;
 use flatbuffers::{get_root, FlatBufferBuilder};
 use futures::{future, prelude::*};
 use log::debug;
+use std::cmp::Ordering;
 use std::{collections::HashMap, io};
 use tokio::codec::{length_delimited::LengthDelimitedCodec, Framed};
 use tokio::prelude::{AsyncRead, AsyncWrite};
@@ -159,13 +160,14 @@ pub(crate) fn server_select<T: AsyncWrite + AsyncRead + Send>(
                             return Err(err);
                         }
                     };
-                    let version = match proto_infos.remove(&remote_info.name) {
-                        Some(local_info) => select_version(
-                            &local_info.support_versions,
-                            &remote_info.support_versions,
-                        ),
-                        None => Vec::new(),
-                    };
+                    let version = proto_infos
+                        .remove(&remote_info.name)
+                        .and_then(|local_info| {
+                            select_version(
+                                &local_info.support_versions,
+                                &remote_info.support_versions,
+                            )
+                        });
                     Ok((socket, remote_info.name, version))
                 })
         })
@@ -174,44 +176,29 @@ pub(crate) fn server_select<T: AsyncWrite + AsyncRead + Send>(
                 .send(Bytes::from(
                     ProtocolInfo {
                         name: name.clone(),
-                        support_versions: version.clone(),
+                        support_versions: version.clone().into_iter().collect(),
                     }
                     .encode(),
                 ))
                 .from_err()
                 .map(|socket| (socket, name, version))
         })
-        .and_then(|(socket, name, mut version)| Ok((socket, name, version.pop())))
+        .and_then(|(socket, name, version)| Ok((socket, name, version)))
 }
 
-/// Choose the highest version of the two sides
+/// Choose the highest version of the two sides, assume that slices are sorted
 #[inline]
-fn select_version<T: Ord + Clone>(local: &[T], remote: &[T]) -> Vec<T> {
-    let (mut remote_index, mut local_index) = if !remote.is_empty() && !local.is_empty() {
-        (remote.len() - 1, local.len() - 1)
-    } else {
-        return Vec::new();
-    };
-
-    loop {
-        if local[local_index] > remote[remote_index] {
-            if local_index > 0 {
-                local_index -= 1;
-            } else {
-                break;
-            }
-        } else if local[local_index] < remote[remote_index] {
-            if remote_index > 0 {
-                remote_index -= 1;
-            } else {
-                break;
-            }
-        } else {
-            return vec![local[local_index].clone()];
+fn select_version<T: Ord + Clone>(local: &[T], remote: &[T]) -> Option<T> {
+    let (mut local_iter, mut remote_iter) = (local.iter().rev(), remote.iter().rev());
+    let (mut local, mut remote) = (local_iter.next(), remote_iter.next());
+    while let (Some(l), Some(r)) = (local, remote) {
+        match l.cmp(r) {
+            Ordering::Less => remote = remote_iter.next(),
+            Ordering::Greater => local = local_iter.next(),
+            Ordering::Equal => return Some(l.clone()),
         }
     }
-
-    Vec::new()
+    None
 }
 
 #[cfg(test)]
@@ -247,13 +234,13 @@ mod tests {
         let d = vec!["5.0.0".to_string()];
         let e = vec!["1.0.0".to_string()];
 
-        assert_eq!(select_version(&b, &a), vec!["2.0.0".to_string()]);
-        assert_eq!(select_version(&b, &e), vec!["1.0.0".to_string()]);
-        assert!(select_version(&b, &c).is_empty());
-        assert!(select_version(&b, &d).is_empty());
-        assert!(select_version(&d, &a).is_empty());
-        assert!(select_version(&d, &e).is_empty());
-        assert!(select_version(&e, &d).is_empty());
+        assert_eq!(select_version(&b, &a), Some("2.0.0".to_string()));
+        assert_eq!(select_version(&b, &e), Some("1.0.0".to_string()));
+        assert!(select_version(&b, &c).is_none());
+        assert!(select_version(&b, &d).is_none());
+        assert!(select_version(&d, &a).is_none());
+        assert!(select_version(&d, &e).is_none());
+        assert!(select_version(&e, &d).is_none());
     }
 
     fn select_protocol(server: Vec<String>, client: Vec<String>, result: &Option<String>) {
