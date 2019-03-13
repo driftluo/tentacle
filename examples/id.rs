@@ -17,8 +17,8 @@ fn main() {
     let addr_mgr = SimpleAddrManager {};
     let protocol = MetaBuilder::default()
         .id(1)
-        .service_handle(move |meta| {
-            ProtocolHandle::Callback(Box::new(IdentifyProtocol::new(meta.id(), addr_mgr.clone())))
+        .service_handle(move || {
+            ProtocolHandle::Callback(Box::new(IdentifyProtocol::new(1, addr_mgr)))
         })
         .build();
     if std::env::args().nth(1) == Some("server".to_string()) {
