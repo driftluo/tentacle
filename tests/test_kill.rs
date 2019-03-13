@@ -1,3 +1,4 @@
+#![cfg(target_os = "linux")]
 use futures::prelude::Stream;
 use nix::{
     sys::signal::{kill, Signal},
