@@ -1,5 +1,5 @@
 use crate::{
-    builder::{CodecFn, NameFn, ServiceHandleFn, SessionHandleFn},
+    builder::{CodecFn, NameFn, SessionHandleFn},
     traits::{Codec, ServiceProtocol, SessionProtocol},
     yamux::config::Config as YamuxConfig,
     ProtocolId,
@@ -41,7 +41,7 @@ pub enum DialProtocol {
 /// Define the minimum data required for a custom protocol
 pub struct ProtocolMeta {
     pub(crate) inner: Arc<Meta>,
-    pub(crate) service_handle: ServiceHandleFn,
+    pub(crate) service_handle: ProtocolHandle<Box<dyn ServiceProtocol + Send + 'static>>,
     pub(crate) session_handle: SessionHandleFn,
 }
 
@@ -78,9 +78,14 @@ impl ProtocolMeta {
     ///
     /// This function is called when the protocol is first opened in the service
     /// and remains in memory until the entire service is closed.
+    ///
+    /// #### Warning
+    ///
+    /// Only can be called once, and will return `ProtocolHandle::Neither` or later.
     #[inline]
     pub fn service_handle(&self) -> ProtocolHandle<Box<dyn ServiceProtocol + Send + 'static>> {
-        (self.service_handle)(&self)
+        let ptr = self as *const Self as *mut Self;
+        unsafe { ::std::mem::replace(&mut (*ptr).service_handle, ProtocolHandle::Neither) }
     }
 
     /// A session level callback handle for a protocol.
@@ -95,7 +100,7 @@ impl ProtocolMeta {
     /// Correspondingly, whenever the protocol is closed, the corresponding exclusive handle is cleared.
     #[inline]
     pub fn session_handle(&self) -> ProtocolHandle<Box<dyn SessionProtocol + Send + 'static>> {
-        (self.session_handle)(&self)
+        (self.session_handle)(self.inner.id)
     }
 }
 

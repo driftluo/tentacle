@@ -38,7 +38,7 @@ impl ServiceBuilder {
 
     /// Insert a custom protocol
     pub fn insert_protocol(mut self, protocol: ProtocolMeta) -> Self {
-        if protocol.session_handle().has_event() || protocol.service_handle().has_event() {
+        if protocol.session_handle().has_event() || protocol.service_handle.has_event() {
             self.config.event.insert(protocol.id());
         }
 
@@ -107,10 +107,8 @@ impl Default for ServiceBuilder {
 
 pub(crate) type NameFn = Box<Fn(ProtocolId) -> String + Send + Sync>;
 pub(crate) type CodecFn = Box<Fn() -> Box<dyn Codec + Send + 'static> + Send + Sync>;
-pub(crate) type ServiceHandleFn =
-    Box<Fn(&ProtocolMeta) -> ProtocolHandle<Box<dyn ServiceProtocol + Send + 'static>> + Send>;
 pub(crate) type SessionHandleFn =
-    Box<Fn(&ProtocolMeta) -> ProtocolHandle<Box<dyn SessionProtocol + Send + 'static>> + Send>;
+    Box<Fn(ProtocolId) -> ProtocolHandle<Box<dyn SessionProtocol + Send + 'static>> + Send>;
 
 /// Builder for protocol meta
 pub struct MetaBuilder {
@@ -118,7 +116,7 @@ pub struct MetaBuilder {
     name: NameFn,
     support_versions: Vec<String>,
     codec: CodecFn,
-    service_handle: ServiceHandleFn,
+    service_handle: ProtocolHandle<Box<dyn ServiceProtocol + Send + 'static>>,
     session_handle: SessionHandleFn,
 }
 
@@ -129,18 +127,32 @@ impl MetaBuilder {
     }
 
     /// Define protocol id
+    ///
+    /// It is just an internal index of the system that
+    /// identifies the open/close and message transfer for the specified protocol.
     pub fn id(mut self, id: ProtocolId) -> Self {
         self.id = id;
         self
     }
 
-    /// Define protocol name
+    /// Define protocol name, default is "/p2p/protocol_id"
+    ///
+    /// Used to interact with the remote service to determine whether the protocol is supported.
+    ///
+    /// If not found, the protocol connection(not session just sub stream) will be closed,
+    /// and return a `ProtocolSelectError` event.
     pub fn name<T: Fn(ProtocolId) -> String + 'static + Send + Sync>(mut self, name: T) -> Self {
         self.name = Box::new(name);
         self
     }
 
-    /// Define protocol support versions
+    /// Define protocol support versions, default is `vec!["0.0.1".to_owned()]`
+    ///
+    /// Used to interact with the remote service to confirm that both parties
+    /// open the same version of the protocol.
+    ///
+    /// If not found, the protocol connection(not session just sub stream) will be closed,
+    /// and return a `ProtocolSelectError` event.
     pub fn support_versions(mut self, versions: Vec<String>) -> Self {
         self.support_versions = versions;
         self
@@ -157,20 +169,18 @@ impl MetaBuilder {
 
     /// Define protocol service handle, default is neither
     pub fn service_handle<
-        T: Fn(&ProtocolMeta) -> ProtocolHandle<Box<dyn ServiceProtocol + Send + 'static>>
-            + Send
-            + 'static,
+        T: FnOnce() -> ProtocolHandle<Box<dyn ServiceProtocol + Send + 'static>>,
     >(
         mut self,
         service_handle: T,
     ) -> Self {
-        self.service_handle = Box::new(service_handle);
+        self.service_handle = service_handle();
         self
     }
 
     /// Define protocol session handle, default is neither
     pub fn session_handle<
-        T: Fn(&ProtocolMeta) -> ProtocolHandle<Box<dyn SessionProtocol + Send + 'static>>
+        T: Fn(ProtocolId) -> ProtocolHandle<Box<dyn SessionProtocol + Send + 'static>>
             + Send
             + 'static,
     >(
@@ -204,7 +214,7 @@ impl Default for MetaBuilder {
             name: Box::new(|id| format!("/p2p/{}", id)),
             support_versions: vec!["0.0.1".to_owned()],
             codec: Box::new(|| Box::new(LengthDelimitedCodec::new())),
-            service_handle: Box::new(|_| ProtocolHandle::Neither),
+            service_handle: ProtocolHandle::Neither,
             session_handle: Box::new(|_| ProtocolHandle::Neither),
         }
     }

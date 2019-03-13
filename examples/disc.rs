@@ -56,9 +56,9 @@ fn create_meta(id: ProtocolId, start: u16) -> ProtocolMeta {
     let addr_mgr = SimpleAddressManager { addrs };
     MetaBuilder::default()
         .id(id)
-        .service_handle(move |meta| {
-            let discovery = Discovery::new(addr_mgr.clone());
-            ProtocolHandle::Callback(Box::new(DiscoveryProtocol::new(meta.id(), discovery)))
+        .service_handle(move || {
+            let discovery = Discovery::new(addr_mgr);
+            ProtocolHandle::Callback(Box::new(DiscoveryProtocol::new(id, discovery)))
         })
         .build()
 }

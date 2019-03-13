@@ -19,11 +19,11 @@ use tokio::timer::{Delay, Error, Interval};
 fn create_meta(id: ProtocolId) -> ProtocolMeta {
     MetaBuilder::new()
         .id(id)
-        .service_handle(|meta| {
+        .service_handle(move || {
             // All protocol use the same handle.
             // This is just an example. In the actual environment, this should be a different handle.
             let handle = Box::new(PHandle {
-                proto_id: meta.id(),
+                proto_id: id,
                 count: 0,
                 connected_session_ids: Vec::new(),
                 clear_handle: HashMap::new(),

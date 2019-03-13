@@ -70,8 +70,8 @@ fn create_shandle() -> (EmptySHandle, crossbeam_channel::Receiver<usize>) {
 fn create_meta(id: ProtocolId) -> ProtocolMeta {
     MetaBuilder::new()
         .id(id)
-        .service_handle(|meta| {
-            if meta.id() == 0 {
+        .service_handle(move || {
+            if id == 0 {
                 ProtocolHandle::Neither
             } else {
                 let handle = Box::new(PHandle);
