@@ -2,6 +2,11 @@
 name = "tentacle-discovery"
 version = "0.1.0"
 authors = ["Linfeng Qian <thewawar@gmail.com>"]
+license = "MIT"
+description = "p2p discovery protocol main reference bitcoin"
+keywords = ["network", "peer-to-peer", "p2p", "discovery"]
+repository = "https://github.com/nervosnetwork/p2p"
+categories = ["network-programming", "asynchronous"]
 edition = "2018"
 
 [dependencies]
