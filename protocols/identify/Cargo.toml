@@ -10,7 +10,7 @@ categories = ["network-programming", "asynchronous"]
 edition = "2018"
 
 [dependencies]
-p2p = { path = "..", package = "tentacle" }
+p2p = { path = "../..", package = "tentacle" }
 bytes = "0.4"
 flatbuffers = "0.5.0"
 tokio = "0.1"
