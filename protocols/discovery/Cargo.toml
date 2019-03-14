@@ -10,7 +10,7 @@ categories = ["network-programming", "asynchronous"]
 edition = "2018"
 
 [dependencies]
-p2p = { path = "..", package = "tentacle" }
+p2p = { path = "../..", version = "0.2.0-alpha.1", package = "tentacle" }
 bytes = "0.4"
 byteorder = "1.2"
 fnv = "1.0"
