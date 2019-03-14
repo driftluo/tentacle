@@ -1,0 +1,22 @@
+namespace P2P.Identify;
+
+union IdentifyPayload {
+    ListenAddrs,
+    ObservedAddr,
+}
+
+table IdentifyMessage {
+    payload: IdentifyPayload;
+}
+
+table ListenAddrs {
+    addrs: [Address];
+}
+
+table ObservedAddr {
+    addr: Address;
+}
+
+table Address {
+    bytes: [ubyte];
+}
