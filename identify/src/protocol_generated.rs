@@ -377,34 +377,26 @@ impl<'a> Address<'a> {
         _fbb: &'mut_bldr mut flatbuffers::FlatBufferBuilder<'bldr>,
         args: &'args AddressArgs<'args>) -> flatbuffers::WIPOffset<Address<'bldr>> {
       let mut builder = AddressBuilder::new(_fbb);
-      if let Some(x) = args.ip { builder.add_ip(x); }
-      builder.add_port(args.port);
+      if let Some(x) = args.bytes { builder.add_bytes(x); }
       builder.finish()
     }
 
-    pub const VT_IP: flatbuffers::VOffsetT = 4;
-    pub const VT_PORT: flatbuffers::VOffsetT = 6;
+    pub const VT_BYTES: flatbuffers::VOffsetT = 4;
 
   #[inline]
-  pub fn ip(&self) -> Option<&'a [u8]> {
-    self._tab.get::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'a, u8>>>(Address::VT_IP, None).map(|v| v.safe_slice())
-  }
-  #[inline]
-  pub fn port(&self) -> u16 {
-    self._tab.get::<u16>(Address::VT_PORT, Some(0)).unwrap()
+  pub fn bytes(&self) -> Option<&'a [u8]> {
+    self._tab.get::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<'a, u8>>>(Address::VT_BYTES, None).map(|v| v.safe_slice())
   }
 }
 
 pub struct AddressArgs<'a> {
-    pub ip: Option<flatbuffers::WIPOffset<flatbuffers::Vector<'a ,  u8>>>,
-    pub port: u16,
+    pub bytes: Option<flatbuffers::WIPOffset<flatbuffers::Vector<'a ,  u8>>>,
 }
 impl<'a> Default for AddressArgs<'a> {
     #[inline]
     fn default() -> Self {
         AddressArgs {
-            ip: None,
-            port: 0,
+            bytes: None,
         }
     }
 }
@@ -414,12 +406,8 @@ pub struct AddressBuilder<'a: 'b, 'b> {
 }
 impl<'a: 'b, 'b> AddressBuilder<'a, 'b> {
   #[inline]
-  pub fn add_ip(&mut self, ip: flatbuffers::WIPOffset<flatbuffers::Vector<'b , u8>>) {
-    self.fbb_.push_slot_always::<flatbuffers::WIPOffset<_>>(Address::VT_IP, ip);
-  }
-  #[inline]
-  pub fn add_port(&mut self, port: u16) {
-    self.fbb_.push_slot::<u16>(Address::VT_PORT, port, 0);
+  pub fn add_bytes(&mut self, bytes: flatbuffers::WIPOffset<flatbuffers::Vector<'b , u8>>) {
+    self.fbb_.push_slot_always::<flatbuffers::WIPOffset<_>>(Address::VT_BYTES, bytes);
   }
   #[inline]
   pub fn new(_fbb: &'b mut flatbuffers::FlatBufferBuilder<'a>) -> AddressBuilder<'a, 'b> {

@@ -1,5 +1,3 @@
-use std::net::{IpAddr, SocketAddr};
-
 use flatbuffers::{get_root, FlatBufferBuilder, WIPOffset};
 
 use crate::protocol_generated::p2p::identify::{
@@ -7,11 +5,12 @@ use crate::protocol_generated::p2p::identify::{
     IdentifyMessageBuilder, IdentifyPayload as FbsIdentifyPayload, ListenAddrs as FbsListenAddrs,
     ListenAddrsBuilder, ObservedAddr as FbsObservedAddr, ObservedAddrBuilder,
 };
+use p2p::multiaddr::Multiaddr;
 
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub enum IdentifyMessage {
-    ListenAddrs(Vec<SocketAddr>),
-    ObservedAddr(SocketAddr),
+    ListenAddrs(Vec<Multiaddr>),
+    ObservedAddr(Multiaddr),
 }
 
 impl IdentifyMessage {
@@ -76,32 +75,14 @@ impl IdentifyMessage {
 
 fn addr_to_offset<'b>(
     fbb: &mut FlatBufferBuilder<'b>,
-    addr: &SocketAddr,
+    addr: &Multiaddr,
 ) -> WIPOffset<FbsAddress<'b>> {
-    let ip = match addr.ip() {
-        IpAddr::V4(ipv4) => fbb.create_vector(&ipv4.octets()),
-        IpAddr::V6(ipv6) => fbb.create_vector(&ipv6.octets()),
-    };
+    let bytes = fbb.create_vector(&addr.to_bytes());
     let mut addr_builder = AddressBuilder::new(fbb);
-    addr_builder.add_ip(ip);
-    addr_builder.add_port(addr.port());
+    addr_builder.add_bytes(bytes);
     addr_builder.finish()
 }
 
-fn fbs_to_addr(addr: &FbsAddress) -> Option<SocketAddr> {
-    let ip_bytes = addr.ip()?;
-    let ip_addr = match ip_bytes.len() {
-        4 => {
-            let mut data = [0u8; 4];
-            data.copy_from_slice(ip_bytes);
-            Some(IpAddr::from(data))
-        }
-        16 => {
-            let mut data = [0u8; 16];
-            data.copy_from_slice(ip_bytes);
-            Some(IpAddr::from(data))
-        }
-        _ => None,
-    };
-    ip_addr.map(|ip| SocketAddr::new(ip, addr.port()))
+fn fbs_to_addr(addr: &FbsAddress) -> Option<Multiaddr> {
+    Multiaddr::from_bytes(addr.bytes()?.to_vec()).ok()
 }

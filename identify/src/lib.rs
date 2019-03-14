@@ -5,16 +5,14 @@ mod protocol_generated;
 mod protocol;
 
 use std::collections::{HashMap, HashSet};
-use std::net::SocketAddr;
 use std::time::{Duration, Instant};
 
 use log::{debug, error, trace};
 use p2p::{
     context::{ServiceContext, SessionContext},
-    multiaddr::{Multiaddr, ToMultiaddr},
+    multiaddr::Multiaddr,
     secio::PeerId,
     traits::ServiceProtocol,
-    utils::multiaddr_to_socketaddr,
     ProtocolId, SessionId,
 };
 
@@ -77,8 +75,8 @@ pub trait AddrManager: Clone + Send {
 pub struct IdentifyProtocol<T> {
     id: ProtocolId,
     addr_mgr: T,
-    listen_addrs: Vec<SocketAddr>,
-    observed_addrs: HashMap<PeerId, SocketAddr>,
+    listen_addrs: Vec<Multiaddr>,
+    observed_addrs: HashMap<PeerId, Multiaddr>,
     remote_infos: HashMap<SessionId, RemoteInfo>,
     secio_enabled: bool,
 }
@@ -107,8 +105,8 @@ pub(crate) struct RemoteInfo {
 
     connected_at: Instant,
     timeout: Duration,
-    listen_addrs: Option<Vec<SocketAddr>>,
-    observed_addr: Option<SocketAddr>,
+    listen_addrs: Option<Vec<Multiaddr>>,
+    observed_addr: Option<Multiaddr>,
 }
 
 impl RemoteInfo {
@@ -132,11 +130,7 @@ impl RemoteInfo {
 
 impl<T: AddrManager> ServiceProtocol for IdentifyProtocol<T> {
     fn init(&mut self, service: &mut ServiceContext) {
-        self.listen_addrs = service
-            .listens()
-            .iter()
-            .map(|addr| multiaddr_to_socketaddr(addr).unwrap())
-            .collect();
+        self.listen_addrs = service.listens().clone();
 
         service.set_service_notify(
             self.id,
@@ -161,7 +155,7 @@ impl<T: AddrManager> ServiceProtocol for IdentifyProtocol<T> {
         trace!("IdentifyProtocol sconnected from {:?}", remote_info.peer_id);
         self.remote_infos.insert(session.id, remote_info);
 
-        let listen_addrs: HashSet<SocketAddr> = self
+        let listen_addrs: HashSet<Multiaddr> = self
             .observed_addrs
             .values()
             .chain(self.listen_addrs.iter())
@@ -170,9 +164,7 @@ impl<T: AddrManager> ServiceProtocol for IdentifyProtocol<T> {
             .collect();
         let data = IdentifyMessage::ListenAddrs(listen_addrs.into_iter().collect()).encode();
         service.send_message(session.id, self.id, data);
-        let remote_addr =
-            multiaddr_to_socketaddr(&session.address).expect("Can not get remote address");
-        let data = IdentifyMessage::ObservedAddr(remote_addr).encode();
+        let data = IdentifyMessage::ObservedAddr(session.address.clone()).encode();
         service.send_message(session.id, self.id, data);
     }
 
@@ -221,12 +213,7 @@ impl<T: AddrManager> ServiceProtocol for IdentifyProtocol<T> {
                     }
                 } else {
                     trace!("received listen addresses: {:?}", addrs);
-                    let multiaddr_addrs = addrs
-                        .iter()
-                        .filter_map(|addr| addr.to_multiaddr().ok())
-                        .collect::<Vec<_>>();
-                    self.addr_mgr
-                        .add_listen_addrs(&info.peer_id, multiaddr_addrs);
+                    self.addr_mgr.add_listen_addrs(&info.peer_id, addrs.clone());
                     info.listen_addrs = Some(addrs);
                 }
             }
@@ -242,16 +229,14 @@ impl<T: AddrManager> ServiceProtocol for IdentifyProtocol<T> {
                     }
                 } else {
                     trace!("received observed address: {}", addr);
-                    info.observed_addr = Some(addr);
+                    info.observed_addr = Some(addr.clone());
                     // TODO how can we trust this address?
-                    if let Ok(multiaddr) = addr.to_multiaddr() {
-                        if self
-                            .addr_mgr
-                            .add_observed_addr(&info.peer_id, multiaddr)
-                            .is_disconnect()
-                        {
-                            service.disconnect(session.id);
-                        }
+                    if self
+                        .addr_mgr
+                        .add_observed_addr(&info.peer_id, addr.clone())
+                        .is_disconnect()
+                    {
+                        service.disconnect(session.id);
                     }
                     self.observed_addrs.insert(info.peer_id.clone(), addr);
                 }

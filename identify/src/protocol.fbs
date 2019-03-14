@@ -18,6 +18,5 @@ table ObservedAddr {
 }
 
 table Address {
-    ip: [ubyte];
-    port: ushort;
+    bytes: [ubyte];
 }
