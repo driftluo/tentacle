@@ -12,8 +12,8 @@ categories = ["network-programming", "asynchronous"]
 edition = "2018"
 
 [dependencies]
-yamux = { path = "yamux", package = "tokio-yamux" }
-secio = { path = "secio", package = "tentacle-secio" }
+yamux = { path = "yamux", version = "0.1.4", package = "tokio-yamux" }
+secio = { path = "secio", version = "0.1.0", package = "tentacle-secio" }
 
 futures = "0.1"
 tokio = "0.1"
