@@ -2,6 +2,11 @@
 name = "tentacle-identify"
 version = "0.1.0"
 authors = ["Qian Linfeng <thewawar@gmail.com>"]
+license = "MIT"
+description = "p2p identify protocol"
+keywords = ["network", "peer-to-peer", "p2p", "identify"]
+repository = "https://github.com/nervosnetwork/p2p"
+categories = ["network-programming", "asynchronous"]
 edition = "2018"
 
 [dependencies]
