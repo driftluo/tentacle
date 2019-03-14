@@ -96,7 +96,10 @@ where
 
 #[cfg(test)]
 mod test {
-    use crate::{multiaddr::Multiaddr, utils::dns::DNSResolver};
+    use crate::{
+        multiaddr::{Multiaddr, Protocol},
+        utils::dns::DNSResolver,
+    };
 
     #[test]
     fn dns_parser() {
@@ -104,6 +107,12 @@ mod test {
             DNSResolver::new("/dns4/localhost/tcp/80".parse().unwrap()).unwrap();
         let mut rt = tokio::runtime::Runtime::new().unwrap();
         let addr = rt.block_on(future).unwrap();
-        assert_eq!("/ip4/127.0.0.1/tcp/80".parse::<Multiaddr>().unwrap(), addr)
+        match addr.iter().next().unwrap() {
+            Protocol::Ip4(_) => {
+                assert_eq!("/ip4/127.0.0.1/tcp/80".parse::<Multiaddr>().unwrap(), addr)
+            }
+            Protocol::Ip6(_) => assert_eq!("/ip6/::1/tcp/80".parse::<Multiaddr>().unwrap(), addr),
+            _ => panic!("Dns resolver fail"),
+        }
     }
 }
