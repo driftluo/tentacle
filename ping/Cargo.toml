@@ -1,8 +1,12 @@
 [package]
 name = "tentacle-ping"
 version = "0.1.0"
-license = "MIT"
 authors = ["Nervos Core Dev <dev@nervos.org>"]
+license = "MIT"
+keywords = ["network", "peer-to-peer", "p2p", "ping"]
+categories = ["network-programming", "asynchronous"]
+repository = "https://github.com/nervosnetwork/p2p"
+description = "ping protocol implementation for tentacle"
 edition = "2018"
 
 [dependencies]
