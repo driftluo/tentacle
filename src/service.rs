@@ -1033,6 +1033,17 @@ where
                     }
                 }
             }
+            SessionEvent::MuxerError { id, error } => {
+                if let Some(session_context) = self.sessions.get(&id) {
+                    self.handle.handle_error(
+                        &mut self.service_context,
+                        ServiceError::MuxerError {
+                            session_context,
+                            error,
+                        },
+                    )
+                }
+            }
         }
     }
 

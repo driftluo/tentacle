@@ -7,7 +7,7 @@ use log::{debug, error, trace, warn};
 use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
 use std::{
-    io,
+    io::{self, ErrorKind},
     time::{Duration, Instant},
 };
 use tokio::prelude::{AsyncRead, AsyncWrite, FutureExt};
@@ -115,6 +115,10 @@ pub(crate) enum SessionEvent {
         /// Protocol id
         proto_id: ProtocolId,
         /// Codec error
+        error: Error<ServiceTask>,
+    },
+    MuxerError {
+        id: SessionId,
         error: Error<ServiceTask>,
     },
 }
@@ -538,6 +542,21 @@ where
                 Err(err) => {
                     warn!("session poll error: {:?}", err);
                     self.dead = true;
+
+                    match err.kind() {
+                        ErrorKind::BrokenPipe
+                        | ErrorKind::ConnectionAborted
+                        | ErrorKind::ConnectionReset
+                        | ErrorKind::NotConnected
+                        | ErrorKind::UnexpectedEof => (),
+                        _ => {
+                            self.event_output(SessionEvent::MuxerError {
+                                id: self.id,
+                                error: err.into(),
+                            });
+                        }
+                    }
+
                     break;
                 }
             }
