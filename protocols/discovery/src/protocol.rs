@@ -3,10 +3,10 @@ use std::io;
 use bytes::{Bytes, BytesMut};
 use flatbuffers::{get_root, FlatBufferBuilder};
 use log::debug;
+use p2p::multiaddr::Multiaddr;
 use tokio::codec::length_delimited::LengthDelimitedCodec;
 use tokio::codec::{Decoder, Encoder};
 
-use crate::addr::RawAddr;
 use crate::protocol_generated::p2p::discovery::{
     BytesBuilder, DiscoveryMessage as FbsDiscoveryMessage, DiscoveryMessageBuilder,
     DiscoveryPayload as FbsDiscoveryPayload, GetNodes as FbsGetNodes, GetNodesBuilder, NodeBuilder,
@@ -95,7 +95,7 @@ impl DiscoveryMessage {
                 for item in items {
                     let mut vec_addrs = Vec::new();
                     for address in &item.addresses {
-                        let seq = fbb.create_vector(&address.0);
+                        let seq = fbb.create_vector(&address.to_bytes());
                         let mut bytes_builder = BytesBuilder::new(&mut fbb);
                         bytes_builder.add_seq(seq);
                         vec_addrs.push(bytes_builder.finish());
@@ -148,8 +148,8 @@ impl DiscoveryMessage {
                     let mut addresses = Vec::new();
                     for j in 0..fbs_addresses.len() {
                         let address = fbs_addresses.get(j);
-                        let bytes: &[u8] = address.seq()?;
-                        addresses.push(RawAddr::from(bytes))
+                        let multiaddr = Multiaddr::from_bytes(address.seq()?.to_vec()).ok()?;
+                        addresses.push(multiaddr);
                     }
                     items.push(Node { addresses });
                 }
@@ -171,7 +171,7 @@ pub struct Nodes {
 
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct Node {
-    pub(crate) addresses: Vec<RawAddr>,
+    pub(crate) addresses: Vec<Multiaddr>,
 }
 
 impl std::fmt::Display for DiscoveryMessage {
