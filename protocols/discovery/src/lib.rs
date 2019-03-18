@@ -10,7 +10,6 @@ use futures::{
 use log::{debug, warn};
 use p2p::{
     context::{ServiceContext, SessionContext},
-    secio::PeerId,
     traits::ServiceProtocol,
     yamux::session::SessionType,
     ProtocolId, SessionId,
@@ -144,7 +143,7 @@ pub struct Discovery<M> {
     addr_mgr: M,
 
     // The Nodes not yet been yield
-    pending_nodes: VecDeque<(SubstreamKey, PeerId, Nodes)>,
+    pending_nodes: VecDeque<(SubstreamKey, SessionId, Nodes)>,
 
     // For manage those substreams
     substreams: FnvHashMap<SubstreamKey, SubstreamValue>,
@@ -232,10 +231,10 @@ impl<M: AddressManager> Stream for Discovery<M> {
             }
 
             match value.receive_messages(&mut self.addr_mgr) {
-                Ok(Some((peer_id, nodes_list))) => {
+                Ok(Some((session_id, nodes_list))) => {
                     for nodes in nodes_list {
                         self.pending_nodes
-                            .push_back((key.clone(), peer_id.clone(), nodes));
+                            .push_back((key.clone(), session_id, nodes));
                     }
                 }
                 Ok(None) => {
@@ -317,13 +316,13 @@ impl<M: AddressManager> Stream for Discovery<M> {
         }
 
         match self.pending_nodes.pop_front() {
-            Some((_key, peer_id, nodes)) => {
+            Some((_key, session_id, nodes)) => {
                 let addrs = nodes
                     .items
                     .into_iter()
                     .flat_map(|node| node.addresses.into_iter())
                     .collect::<Vec<_>>();
-                self.addr_mgr.add_new_addrs(&peer_id, addrs);
+                self.addr_mgr.add_new_addrs(session_id, addrs);
                 Ok(Async::Ready(Some(())))
             }
             None => Ok(Async::NotReady),

@@ -7,11 +7,7 @@ use futures::{sync::mpsc::Receiver, Async, AsyncSink, Poll, Sink, Stream};
 use log::{debug, trace, warn};
 use p2p::multiaddr::{Multiaddr, Protocol};
 use p2p::{
-    error::Error,
-    secio::PeerId,
-    service::ServiceControl,
-    utils::{extract_peer_id, multiaddr_to_socketaddr},
-    ProtocolId, SessionId,
+    error::Error, service::ServiceControl, utils::multiaddr_to_socketaddr, ProtocolId, SessionId,
 };
 use tokio::codec::Framed;
 use tokio::io::{AsyncRead, AsyncWrite};
@@ -111,6 +107,7 @@ pub struct SubstreamValue {
     pub(crate) remote_addr: RemoteAddress,
     pub(crate) announce: bool,
     pub(crate) announce_multiaddrs: Vec<Multiaddr>,
+    session_id: SessionId,
     timer_future: Interval,
     received_get_nodes: bool,
     received_nodes: bool,
@@ -125,6 +122,7 @@ impl SubstreamValue {
         remote_addr: Multiaddr,
         listen_port: Option<u16>,
     ) -> SubstreamValue {
+        let session_id = stream.session_id;
         let mut pending_messages = VecDeque::default();
         debug!("direction: {:?}", direction);
         let mut addr_known = AddrKnown::new(max_known);
@@ -150,16 +148,13 @@ impl SubstreamValue {
             pending_messages,
             addr_known,
             remote_addr,
+            session_id,
             announce: false,
             announce_multiaddrs: Vec::new(),
             received_get_nodes: false,
             received_nodes: false,
             remote_closed: false,
         }
-    }
-
-    fn remote_peer_id(&self) -> Option<PeerId> {
-        extract_peer_id(self.remote_addr.to_inner())
     }
 
     fn remote_raw_addr(&self) -> Option<RawAddr> {
@@ -205,15 +200,13 @@ impl SubstreamValue {
             DiscoveryMessage::GetNodes { listen_port, .. } => {
                 if self.received_get_nodes {
                     // TODO: misbehavior
-                    if let Some(peer_id) = self.remote_peer_id() {
-                        if addr_mgr
-                            .misbehave(&peer_id, Misbehavior::DuplicateGetNodes)
-                            .is_disconnect()
-                        {
-                            // TODO: more clear error type
-                            warn!("Already received get nodes");
-                            return Err(io::ErrorKind::Other.into());
-                        }
+                    if addr_mgr
+                        .misbehave(self.session_id, Misbehavior::DuplicateGetNodes)
+                        .is_disconnect()
+                    {
+                        // TODO: more clear error type
+                        warn!("Already received get nodes");
+                        return Err(io::ErrorKind::Other.into());
                     }
                 } else {
                     // change client random outbound port to client listen port
@@ -224,9 +217,8 @@ impl SubstreamValue {
                             self.addr_known.insert(raw_addr);
                         }
                         // add client listen address to manager
-                        if let Some(peer_id) = self.remote_peer_id() {
-                            addr_mgr.add_new_addr(&peer_id, self.remote_addr.clone().into_inner());
-                        }
+                        addr_mgr
+                            .add_new_addr(self.session_id, self.remote_addr.clone().into_inner());
                     }
 
                     // TODO: magic number
@@ -256,11 +248,12 @@ impl SubstreamValue {
                 for item in &nodes.items {
                     if item.addresses.len() > MAX_ADDRS {
                         let misbehavior = Misbehavior::TooManyAddresses(item.addresses.len());
-                        if let Some(peer_id) = self.remote_peer_id() {
-                            if addr_mgr.misbehave(&peer_id, misbehavior).is_disconnect() {
-                                // TODO: more clear error type
-                                return Err(io::ErrorKind::Other.into());
-                            }
+                        if addr_mgr
+                            .misbehave(self.session_id, misbehavior)
+                            .is_disconnect()
+                        {
+                            // TODO: more clear error type
+                            return Err(io::ErrorKind::Other.into());
                         }
                     }
                 }
@@ -273,11 +266,12 @@ impl SubstreamValue {
                             announce: nodes.announce,
                             length: nodes.items.len(),
                         };
-                        if let Some(peer_id) = self.remote_peer_id() {
-                            if addr_mgr.misbehave(&peer_id, misbehavior).is_disconnect() {
-                                // TODO: more clear error type
-                                return Err(io::ErrorKind::Other.into());
-                            }
+                        if addr_mgr
+                            .misbehave(self.session_id, misbehavior)
+                            .is_disconnect()
+                        {
+                            // TODO: more clear error type
+                            return Err(io::ErrorKind::Other.into());
                         }
                     } else {
                         return Ok(Some(nodes));
@@ -285,14 +279,12 @@ impl SubstreamValue {
                 } else if self.received_nodes {
                     warn!("already received Nodes(announce=false) message");
                     // TODO: misbehavior
-                    if let Some(peer_id) = self.remote_peer_id() {
-                        if addr_mgr
-                            .misbehave(&peer_id, Misbehavior::DuplicateFirstNodes)
-                            .is_disconnect()
-                        {
-                            // TODO: more clear error type
-                            return Err(io::ErrorKind::Other.into());
-                        }
+                    if addr_mgr
+                        .misbehave(self.session_id, Misbehavior::DuplicateFirstNodes)
+                        .is_disconnect()
+                    {
+                        // TODO: more clear error type
+                        return Err(io::ErrorKind::Other.into());
                     }
                 } else if nodes.items.len() > MAX_ADDR_TO_SEND {
                     warn!(
@@ -305,11 +297,12 @@ impl SubstreamValue {
                         length: nodes.items.len(),
                     };
 
-                    if let Some(peer_id) = self.remote_peer_id() {
-                        if addr_mgr.misbehave(&peer_id, misbehavior).is_disconnect() {
-                            // TODO: more clear error type
-                            return Err(io::ErrorKind::Other.into());
-                        }
+                    if addr_mgr
+                        .misbehave(self.session_id, misbehavior)
+                        .is_disconnect()
+                    {
+                        // TODO: more clear error type
+                        return Err(io::ErrorKind::Other.into());
                     }
                 } else {
                     self.received_nodes = true;
@@ -323,7 +316,7 @@ impl SubstreamValue {
     pub(crate) fn receive_messages<M: AddressManager>(
         &mut self,
         addr_mgr: &mut M,
-    ) -> Result<Option<(PeerId, Vec<Nodes>)>, io::Error> {
+    ) -> Result<Option<(SessionId, Vec<Nodes>)>, io::Error> {
         if self.remote_closed {
             return Ok(None);
         }
@@ -354,7 +347,7 @@ impl SubstreamValue {
                 }
             }
         }
-        Ok(Some((self.remote_peer_id().unwrap(), nodes_list)))
+        Ok(Some((self.session_id, nodes_list)))
     }
 }
 

@@ -3,7 +3,7 @@ use std::net::{IpAddr, SocketAddr};
 use std::time::Instant;
 
 use fnv::{FnvHashMap, FnvHashSet};
-use p2p::{multiaddr::Multiaddr, secio::PeerId, utils::multiaddr_to_socketaddr};
+use p2p::{multiaddr::Multiaddr, utils::multiaddr_to_socketaddr, SessionId};
 use serde_derive::{Deserialize, Serialize};
 
 // See: bitcoin/netaddress.cpp pchIPv4[12]
@@ -50,9 +50,9 @@ impl MisbehaveResult {
 
 // FIXME: Should be peer store?
 pub trait AddressManager {
-    fn add_new_addr(&mut self, peer: &PeerId, addr: Multiaddr);
-    fn add_new_addrs(&mut self, peer: &PeerId, addrs: Vec<Multiaddr>);
-    fn misbehave(&mut self, peer: &PeerId, kind: Misbehavior) -> MisbehaveResult;
+    fn add_new_addr(&mut self, session_id: SessionId, addr: Multiaddr);
+    fn add_new_addrs(&mut self, session_id: SessionId, addrs: Vec<Multiaddr>);
+    fn misbehave(&mut self, session_id: SessionId, kind: Misbehavior) -> MisbehaveResult;
     fn get_random(&mut self, n: usize) -> Vec<Multiaddr>;
 }
 

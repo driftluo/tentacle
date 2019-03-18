@@ -10,23 +10,19 @@ use tentacle::{
     builder::{MetaBuilder, ServiceBuilder},
     context::ServiceContext,
     multiaddr::Multiaddr,
-    secio::{PeerId, SecioKeyPair},
     service::{DialProtocol, ProtocolHandle, ProtocolMeta, ServiceError, ServiceEvent},
     traits::ServiceHandle,
-    ProtocolId,
+    ProtocolId, SessionId,
 };
 
 use discovery::{AddressManager, Discovery, DiscoveryProtocol, MisbehaveResult, Misbehavior};
 
 fn main() {
     env_logger::init();
-    let key_pair = SecioKeyPair::secp256k1_generated();
-    let peer_id = key_pair.to_peer_id();
-    let meta = create_meta(peer_id, 1, 0);
+    let meta = create_meta(1, 0);
     let mut service = ServiceBuilder::default()
         .insert_protocol(meta)
         .forever(true)
-        .key_pair(key_pair)
         .build(SHandle {});
 
     if std::env::args().nth(1) == Some("server".to_string()) {
@@ -45,12 +41,12 @@ fn main() {
     }
 }
 
-fn create_meta(peer_id: PeerId, id: ProtocolId, start: u16) -> ProtocolMeta {
+fn create_meta(id: ProtocolId, start: u16) -> ProtocolMeta {
     let addrs: HashSet<Multiaddr> = (start..start + 3333)
         .map(|port| format!("/ip4/127.0.0.1/tcp/{}", port).parse().unwrap())
         .collect();
     let mut peers = FnvHashMap::default();
-    peers.insert(peer_id, (100, addrs));
+    peers.insert(0, (100, addrs));
     let addr_mgr = SimpleAddressManager { peers };
     MetaBuilder::default()
         .id(id)
@@ -75,29 +71,26 @@ impl ServiceHandle for SHandle {
 
 #[derive(Default, Clone, Debug)]
 pub struct SimpleAddressManager {
-    pub peers: FnvHashMap<PeerId, (i32, HashSet<Multiaddr>)>,
+    pub peers: FnvHashMap<SessionId, (i32, HashSet<Multiaddr>)>,
 }
 
 impl AddressManager for SimpleAddressManager {
-    fn add_new_addr(&mut self, peer_id: &PeerId, addr: Multiaddr) {
+    fn add_new_addr(&mut self, _session_id: SessionId, addr: Multiaddr) {
         let (_, addrs) = self
             .peers
-            .entry(peer_id.clone())
+            .entry(0)
             .or_insert_with(|| (100, HashSet::default()));
         addrs.insert(addr);
     }
 
-    fn add_new_addrs(&mut self, peer_id: &PeerId, addrs: Vec<Multiaddr>) {
+    fn add_new_addrs(&mut self, session_id: SessionId, addrs: Vec<Multiaddr>) {
         for addr in addrs.into_iter() {
-            self.add_new_addr(peer_id, addr)
+            self.add_new_addr(session_id, addr)
         }
     }
 
-    fn misbehave(&mut self, peer_id: &PeerId, _ty: Misbehavior) -> MisbehaveResult {
-        let (score, _) = self
-            .peers
-            .entry(peer_id.clone())
-            .or_insert((100, HashSet::default()));
+    fn misbehave(&mut self, _session_id: SessionId, _ty: Misbehavior) -> MisbehaveResult {
+        let (score, _) = self.peers.entry(0).or_insert((100, HashSet::default()));
         *score -= 20;
         if *score < 0 {
             MisbehaveResult::Disconnect
