@@ -1,12 +1,11 @@
 use std::collections::VecDeque;
 use std::io;
-use std::net::SocketAddr;
 use std::time::Duration;
 
 use bytes::{BufMut, BytesMut};
 use futures::{sync::mpsc::Receiver, Async, AsyncSink, Poll, Sink, Stream};
 use log::{debug, trace, warn};
-use p2p::multiaddr::{Multiaddr, ToMultiaddr};
+use p2p::multiaddr::{Multiaddr, Protocol};
 use p2p::{
     error::Error, service::ServiceControl, utils::multiaddr_to_socketaddr, ProtocolId, SessionId,
 };
@@ -107,7 +106,8 @@ pub struct SubstreamValue {
     // FIXME: Remote listen address, resolved by id protocol
     pub(crate) remote_addr: RemoteAddress,
     pub(crate) announce: bool,
-    pub(crate) announce_addrs: Vec<RawAddr>,
+    pub(crate) announce_multiaddrs: Vec<Multiaddr>,
+    session_id: SessionId,
     timer_future: Interval,
     received_get_nodes: bool,
     received_nodes: bool,
@@ -119,9 +119,10 @@ impl SubstreamValue {
         direction: Direction,
         stream: StreamHandle,
         max_known: usize,
-        remote_addr: SocketAddr,
+        remote_addr: Multiaddr,
         listen_port: Option<u16>,
     ) -> SubstreamValue {
+        let session_id = stream.session_id;
         let mut pending_messages = VecDeque::default();
         debug!("direction: {:?}", direction);
         let mut addr_known = AddrKnown::new(max_known);
@@ -131,7 +132,9 @@ impl SubstreamValue {
                 count: MAX_ADDR_TO_SEND as u32,
                 listen_port,
             });
-            addr_known.insert(RawAddr::from(remote_addr));
+            addr_known.insert(RawAddr::from(
+                multiaddr_to_socketaddr(&remote_addr).unwrap(),
+            ));
 
             RemoteAddress::Listen(remote_addr)
         } else {
@@ -145,12 +148,17 @@ impl SubstreamValue {
             pending_messages,
             addr_known,
             remote_addr,
+            session_id,
             announce: false,
-            announce_addrs: Vec::new(),
+            announce_multiaddrs: Vec::new(),
             received_get_nodes: false,
             received_nodes: false,
             remote_closed: false,
         }
+    }
+
+    fn remote_raw_addr(&self) -> Option<RawAddr> {
+        multiaddr_to_socketaddr(self.remote_addr.to_inner()).map(RawAddr::from)
     }
 
     pub(crate) fn check_timer(&mut self) -> Result<(), tokio::timer::Error> {
@@ -193,10 +201,7 @@ impl SubstreamValue {
                 if self.received_get_nodes {
                     // TODO: misbehavior
                     if addr_mgr
-                        .misbehave(
-                            self.remote_addr.into_multiaddr(),
-                            Misbehavior::DuplicateGetNodes,
-                        )
+                        .misbehave(self.session_id, Misbehavior::DuplicateGetNodes)
                         .is_disconnect()
                     {
                         // TODO: more clear error type
@@ -207,10 +212,13 @@ impl SubstreamValue {
                     // change client random outbound port to client listen port
                     debug!("listen port: {:?}", listen_port);
                     if let Some(port) = listen_port {
-                        self.remote_addr = self.remote_addr.into_listen(port);
-                        self.addr_known.insert(self.remote_addr.into_inner().into());
+                        self.remote_addr.update_port(port);
+                        if let Some(raw_addr) = self.remote_raw_addr() {
+                            self.addr_known.insert(raw_addr);
+                        }
                         // add client listen address to manager
-                        addr_mgr.add_new(self.remote_addr.into_multiaddr());
+                        addr_mgr
+                            .add_new_addr(self.session_id, self.remote_addr.clone().into_inner());
                     }
 
                     // TODO: magic number
@@ -224,7 +232,7 @@ impl SubstreamValue {
                     let items = items
                         .into_iter()
                         .map(|addr| Node {
-                            addresses: vec![RawAddr::from(multiaddr_to_socketaddr(&addr).unwrap())],
+                            addresses: vec![addr],
                         })
                         .collect::<Vec<_>>();
                     let nodes = Nodes {
@@ -241,7 +249,7 @@ impl SubstreamValue {
                     if item.addresses.len() > MAX_ADDRS {
                         let misbehavior = Misbehavior::TooManyAddresses(item.addresses.len());
                         if addr_mgr
-                            .misbehave(self.remote_addr.into_multiaddr(), misbehavior)
+                            .misbehave(self.session_id, misbehavior)
                             .is_disconnect()
                         {
                             // TODO: more clear error type
@@ -259,7 +267,7 @@ impl SubstreamValue {
                             length: nodes.items.len(),
                         };
                         if addr_mgr
-                            .misbehave(self.remote_addr.into_multiaddr(), misbehavior)
+                            .misbehave(self.session_id, misbehavior)
                             .is_disconnect()
                         {
                             // TODO: more clear error type
@@ -272,10 +280,7 @@ impl SubstreamValue {
                     warn!("already received Nodes(announce=false) message");
                     // TODO: misbehavior
                     if addr_mgr
-                        .misbehave(
-                            self.remote_addr.into_multiaddr(),
-                            Misbehavior::DuplicateFirstNodes,
-                        )
+                        .misbehave(self.session_id, Misbehavior::DuplicateFirstNodes)
                         .is_disconnect()
                     {
                         // TODO: more clear error type
@@ -291,8 +296,9 @@ impl SubstreamValue {
                         announce: nodes.announce,
                         length: nodes.items.len(),
                     };
+
                     if addr_mgr
-                        .misbehave(self.remote_addr.into_multiaddr(), misbehavior)
+                        .misbehave(self.session_id, misbehavior)
                         .is_disconnect()
                     {
                         // TODO: more clear error type
@@ -310,7 +316,7 @@ impl SubstreamValue {
     pub(crate) fn receive_messages<M: AddressManager>(
         &mut self,
         addr_mgr: &mut M,
-    ) -> Result<Option<Vec<Nodes>>, io::Error> {
+    ) -> Result<Option<(SessionId, Vec<Nodes>)>, io::Error> {
         if self.remote_closed {
             return Ok(None);
         }
@@ -324,8 +330,8 @@ impl SubstreamValue {
                         // Add to known address list
                         for node in &nodes.items {
                             for addr in &node.addresses {
-                                trace!("received address: {}", addr.socket_addr());
-                                self.addr_known.insert(*addr);
+                                trace!("received address: {}", addr);
+                                self.addr_known.insert(RawAddr::from(addr.clone()));
                             }
                         }
                         nodes_list.push(nodes);
@@ -341,12 +347,12 @@ impl SubstreamValue {
                 }
             }
         }
-        Ok(Some(nodes_list))
+        Ok(Some((self.session_id, nodes_list)))
     }
 }
 
 pub struct Substream {
-    pub remote_addr: SocketAddr,
+    pub remote_addr: Multiaddr,
     pub direction: Direction,
     pub stream: StreamHandle,
     pub listen_port: Option<u16>,
@@ -354,7 +360,7 @@ pub struct Substream {
 
 impl Substream {
     pub fn new(
-        remote_addr: &Multiaddr,
+        remote_addr: Multiaddr,
         direction: Direction,
         proto_id: ProtocolId,
         session_id: SessionId,
@@ -369,9 +375,11 @@ impl Substream {
             receiver,
             sender,
         };
-        let remote_addr = multiaddr_to_socketaddr(remote_addr).unwrap();
         let listen_port = if direction == Direction::Outbound {
-            let local = remote_addr.ip().is_loopback();
+            let local = multiaddr_to_socketaddr(&remote_addr)
+                .unwrap()
+                .ip()
+                .is_loopback();
 
             listens
                 .iter()
@@ -414,33 +422,40 @@ pub enum Direction {
     Outbound,
 }
 
-#[derive(Eq, PartialEq, Hash, Debug, Clone, Copy)]
+#[derive(Eq, PartialEq, Hash, Debug, Clone)]
 pub(crate) enum RemoteAddress {
     /// Inbound init remote address
-    Init(SocketAddr),
+    Init(Multiaddr),
     /// Outbound init remote address or Inbound listen address
-    Listen(SocketAddr),
+    Listen(Multiaddr),
 }
 
 impl RemoteAddress {
-    pub(crate) fn into_multiaddr(self) -> Multiaddr {
+    fn to_inner(&self) -> &Multiaddr {
         match self {
-            RemoteAddress::Init(addr) | RemoteAddress::Listen(addr) => addr.to_multiaddr().unwrap(),
+            RemoteAddress::Init(ref addr) | RemoteAddress::Listen(ref addr) => addr,
         }
     }
 
-    fn into_inner(self) -> SocketAddr {
+    fn into_inner(self) -> Multiaddr {
         match self {
             RemoteAddress::Init(addr) | RemoteAddress::Listen(addr) => addr,
         }
     }
 
-    fn into_listen(self, port: u16) -> Self {
-        if let RemoteAddress::Init(mut addr) = self {
-            addr.set_port(port);
-            RemoteAddress::Listen(addr)
-        } else {
-            self
+    fn update_port(&mut self, port: u16) {
+        if let RemoteAddress::Init(ref addr) = self {
+            let addr = addr
+                .into_iter()
+                .map(|proto| {
+                    match proto {
+                        // TODO: ohter transport, UDP for example
+                        Protocol::Tcp(_) => Protocol::Tcp(port),
+                        value => value,
+                    }
+                })
+                .collect();
+            *self = RemoteAddress::Listen(addr);
         }
     }
 }

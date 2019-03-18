@@ -2,42 +2,35 @@ use env_logger;
 use log::debug;
 
 use fnv::FnvHashMap;
-use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+use std::collections::HashSet;
 
 use futures::prelude::*;
 
 use tentacle::{
     builder::{MetaBuilder, ServiceBuilder},
     context::ServiceContext,
-    multiaddr::{Multiaddr, ToMultiaddr},
+    multiaddr::Multiaddr,
     service::{DialProtocol, ProtocolHandle, ProtocolMeta, ServiceError, ServiceEvent},
     traits::ServiceHandle,
-    utils::multiaddr_to_socketaddr,
-    ProtocolId,
+    ProtocolId, SessionId,
 };
 
-use discovery::{
-    AddressManager, Discovery, DiscoveryProtocol, MisbehaveResult, Misbehavior, RawAddr,
-};
+use discovery::{AddressManager, Discovery, DiscoveryProtocol, MisbehaveResult, Misbehavior};
 
 fn main() {
     env_logger::init();
+    let meta = create_meta(1, 0);
+    let mut service = ServiceBuilder::default()
+        .insert_protocol(meta)
+        .forever(true)
+        .build(SHandle {});
+
     if std::env::args().nth(1) == Some("server".to_string()) {
         debug!("Starting server ......");
-        let meta = create_meta(1, 0);
-        let mut service = ServiceBuilder::default()
-            .insert_protocol(meta)
-            .forever(true)
-            .build(SHandle {});
         let _ = service.listen("/ip4/127.0.0.1/tcp/1337".parse().unwrap());
         tokio::run(service.for_each(|_| Ok(())))
     } else {
         debug!("Starting client ......");
-        let meta = create_meta(1, 0);
-        let mut service = ServiceBuilder::default()
-            .insert_protocol(meta)
-            .forever(true)
-            .build(SHandle {});
 
         let _ = service.dial(
             "/ip4/127.0.0.1/tcp/1337".parse().unwrap(),
@@ -49,11 +42,12 @@ fn main() {
 }
 
 fn create_meta(id: ProtocolId, start: u16) -> ProtocolMeta {
-    let addrs: FnvHashMap<RawAddr, i32> = (start..start + 3333)
-        .map(|port| SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), port))
-        .map(|addr| (RawAddr::from(addr), 100))
+    let addrs: HashSet<Multiaddr> = (start..start + 3333)
+        .map(|port| format!("/ip4/127.0.0.1/tcp/{}", port).parse().unwrap())
         .collect();
-    let addr_mgr = SimpleAddressManager { addrs };
+    let mut peers = FnvHashMap::default();
+    peers.insert(0, (100, addrs));
+    let addr_mgr = SimpleAddressManager { peers };
     MetaBuilder::default()
         .id(id)
         .service_handle(move || {
@@ -77,23 +71,28 @@ impl ServiceHandle for SHandle {
 
 #[derive(Default, Clone, Debug)]
 pub struct SimpleAddressManager {
-    pub addrs: FnvHashMap<RawAddr, i32>,
+    pub peers: FnvHashMap<SessionId, (i32, HashSet<Multiaddr>)>,
 }
 
 impl AddressManager for SimpleAddressManager {
-    fn add_new(&mut self, addr: Multiaddr) {
-        self.addrs
-            .entry(RawAddr::from(multiaddr_to_socketaddr(&addr).unwrap()))
-            .or_insert(100);
+    fn add_new_addr(&mut self, _session_id: SessionId, addr: Multiaddr) {
+        let (_, addrs) = self
+            .peers
+            .entry(0)
+            .or_insert_with(|| (100, HashSet::default()));
+        addrs.insert(addr);
     }
 
-    fn misbehave(&mut self, addr: Multiaddr, _ty: Misbehavior) -> MisbehaveResult {
-        let value = self
-            .addrs
-            .entry(RawAddr::from(multiaddr_to_socketaddr(&addr).unwrap()))
-            .or_insert(100);
-        *value -= 20;
-        if *value < 0 {
+    fn add_new_addrs(&mut self, session_id: SessionId, addrs: Vec<Multiaddr>) {
+        for addr in addrs.into_iter() {
+            self.add_new_addr(session_id, addr)
+        }
+    }
+
+    fn misbehave(&mut self, _session_id: SessionId, _ty: Misbehavior) -> MisbehaveResult {
+        let (score, _) = self.peers.entry(0).or_insert((100, HashSet::default()));
+        *score -= 20;
+        if *score < 0 {
             MisbehaveResult::Disconnect
         } else {
             MisbehaveResult::Continue
@@ -101,10 +100,11 @@ impl AddressManager for SimpleAddressManager {
     }
 
     fn get_random(&mut self, n: usize) -> Vec<Multiaddr> {
-        self.addrs
-            .keys()
+        self.peers
+            .values()
+            .flat_map(|(_, addrs)| addrs)
             .take(n)
-            .map(|addr| addr.socket_addr().to_multiaddr().unwrap())
+            .cloned()
             .collect()
     }
 }

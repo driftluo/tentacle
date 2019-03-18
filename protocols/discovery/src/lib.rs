@@ -10,7 +10,6 @@ use futures::{
 use log::{debug, warn};
 use p2p::{
     context::{ServiceContext, SessionContext},
-    multiaddr::ToMultiaddr,
     traits::ServiceProtocol,
     yamux::session::SessionType,
     ProtocolId, SessionId,
@@ -89,7 +88,7 @@ impl<M: AddressManager + Send + 'static> ServiceProtocol for DiscoveryProtocol<M
         let (sender, receiver) = channel(8);
         self.discovery_senders.insert(session.id, sender);
         let substream = Substream::new(
-            &session.address,
+            session.address.clone(),
             direction,
             self.id,
             session.id,
@@ -144,7 +143,7 @@ pub struct Discovery<M> {
     addr_mgr: M,
 
     // The Nodes not yet been yield
-    pending_nodes: VecDeque<(SubstreamKey, Nodes)>,
+    pending_nodes: VecDeque<(SubstreamKey, SessionId, Nodes)>,
 
     // For manage those substreams
     substreams: FnvHashMap<SubstreamKey, SubstreamValue>,
@@ -224,7 +223,7 @@ impl<M: AddressManager> Stream for Discovery<M> {
         debug!("Discovery.poll()");
         self.recv_substreams()?;
 
-        let mut announce_addrs = Vec::new();
+        let mut announce_multiaddrs = Vec::new();
         for (key, value) in self.substreams.iter_mut() {
             if let Err(err) = value.check_timer() {
                 debug!("substream {:?} poll timer_future error: {:?}", key, err);
@@ -232,9 +231,10 @@ impl<M: AddressManager> Stream for Discovery<M> {
             }
 
             match value.receive_messages(&mut self.addr_mgr) {
-                Ok(Some(nodes_list)) => {
+                Ok(Some((session_id, nodes_list))) => {
                     for nodes in nodes_list {
-                        self.pending_nodes.push_back((key.clone(), nodes));
+                        self.pending_nodes
+                            .push_back((key.clone(), session_id, nodes));
                     }
                 }
                 Ok(None) => {
@@ -257,8 +257,8 @@ impl<M: AddressManager> Stream for Discovery<M> {
             }
 
             if value.announce {
-                if let RemoteAddress::Listen(addr) = value.remote_addr {
-                    announce_addrs.push(RawAddr::from(addr));
+                if let RemoteAddress::Listen(ref addr) = value.remote_addr {
+                    announce_multiaddrs.push(addr.clone());
                 }
                 value.announce = false;
             }
@@ -270,15 +270,16 @@ impl<M: AddressManager> Stream for Discovery<M> {
 
         let mut rng = rand::thread_rng();
         let mut remain_keys = self.substreams.keys().cloned().collect::<Vec<_>>();
-        for announce_addr in announce_addrs.into_iter() {
+        for announce_multiaddr in announce_multiaddrs.into_iter() {
+            let announce_addr = RawAddr::from(announce_multiaddr.clone());
             remain_keys.shuffle(&mut rng);
             for i in 0..2 {
                 if let Some(key) = remain_keys.get(i) {
                     if let Some(value) = self.substreams.get_mut(key) {
-                        if value.announce_addrs.len() < 10
+                        if value.announce_multiaddrs.len() < 10
                             && !value.addr_known.contains(&announce_addr)
                         {
-                            value.announce_addrs.push(announce_addr);
+                            value.announce_multiaddrs.push(announce_multiaddr.clone());
                             value.addr_known.insert(announce_addr);
                         }
                     }
@@ -287,9 +288,9 @@ impl<M: AddressManager> Stream for Discovery<M> {
         }
 
         for (key, value) in self.substreams.iter_mut() {
-            let announce_addrs = value.announce_addrs.split_off(0);
-            if !announce_addrs.is_empty() {
-                let items = announce_addrs
+            let announce_multiaddrs = value.announce_multiaddrs.split_off(0);
+            if !announce_multiaddrs.is_empty() {
+                let items = announce_multiaddrs
                     .into_iter()
                     .map(|addr| Node {
                         addresses: vec![addr],
@@ -315,13 +316,13 @@ impl<M: AddressManager> Stream for Discovery<M> {
         }
 
         match self.pending_nodes.pop_front() {
-            Some((_key, nodes)) => {
-                for node in nodes.items.into_iter() {
-                    for addr in node.addresses.into_iter() {
-                        self.addr_mgr
-                            .add_new(addr.socket_addr().to_multiaddr().unwrap());
-                    }
-                }
+            Some((_key, session_id, nodes)) => {
+                let addrs = nodes
+                    .items
+                    .into_iter()
+                    .flat_map(|node| node.addresses.into_iter())
+                    .collect::<Vec<_>>();
+                self.addr_mgr.add_new_addrs(session_id, addrs);
                 Ok(Async::Ready(Some(())))
             }
             None => Ok(Async::NotReady),
