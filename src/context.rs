@@ -14,7 +14,7 @@ use crate::{
     error::Error,
     multiaddr::Multiaddr,
     protocol_select::ProtocolInfo,
-    secio::PublicKey,
+    secio::{PublicKey, SecioKeyPair},
     service::{DialProtocol, ServiceControl, ServiceTask},
     session::SessionEvent,
     yamux::session::SessionType,
@@ -44,6 +44,7 @@ pub struct ServiceContext {
     session_notify_senders: HashMap<(SessionId, ProtocolId), Vec<oneshot::Sender<()>>>,
     pub(crate) pending_tasks: VecDeque<ServiceTask>,
     listens: Vec<Multiaddr>,
+    key_pair: Option<SecioKeyPair>,
     inner: ServiceControl,
 }
 
@@ -52,11 +53,13 @@ impl ServiceContext {
     pub(crate) fn new(
         service_task_sender: mpsc::Sender<ServiceTask>,
         proto_infos: HashMap<ProtocolId, ProtocolInfo>,
+        key_pair: Option<SecioKeyPair>,
     ) -> Self {
         ServiceContext {
             inner: ServiceControl::new(service_task_sender, proto_infos),
             session_notify_senders: HashMap::default(),
             pending_tasks: VecDeque::default(),
+            key_pair,
             listens: Vec::new(),
         }
     }
@@ -201,6 +204,12 @@ impl ServiceContext {
         &self.inner.proto_infos
     }
 
+    /// Get the key pair of self
+    #[inline]
+    pub fn key_pair(&self) -> Option<&SecioKeyPair> {
+        self.key_pair.as_ref()
+    }
+
     /// Get service listen address list
     #[inline]
     pub fn listens(&self) -> &Vec<Multiaddr> {
@@ -238,6 +247,7 @@ impl ServiceContext {
             inner: self.inner.clone(),
             session_notify_senders: HashMap::default(),
             pending_tasks: VecDeque::default(),
+            key_pair: self.key_pair.clone(),
             listens: self.listens.clone(),
         }
     }

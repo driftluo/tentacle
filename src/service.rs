@@ -67,8 +67,6 @@ pub struct Service<T> {
 
     next_session: SessionId,
 
-    key_pair: Option<SecioKeyPair>,
-
     /// Can be upgrade to list service level protocols
     handle: T,
 
@@ -124,7 +122,6 @@ where
         Service {
             protocol_configs,
             handle,
-            key_pair,
             sessions: HashMap::default(),
             session_service_protos: HashMap::default(),
             service_proto_handles: HashMap::default(),
@@ -140,7 +137,7 @@ where
             read_session_buf: VecDeque::default(),
             session_event_sender,
             session_event_receiver,
-            service_context: ServiceContext::new(service_task_sender, proto_infos),
+            service_context: ServiceContext::new(service_task_sender, proto_infos, key_pair),
             service_task_receiver,
             notify: None,
         }
@@ -454,8 +451,11 @@ where
 
     /// Handshake
     #[inline]
-    fn handshake(&mut self, socket: TcpStream, ty: SessionType, remote_address: Multiaddr) {
-        if let Some(ref key_pair) = self.key_pair {
+    fn handshake<H>(&mut self, socket: H, ty: SessionType, remote_address: Multiaddr)
+    where
+        H: AsyncRead + AsyncWrite + Send + 'static,
+    {
+        if let Some(key_pair) = self.service_context.key_pair() {
             let key_pair = key_pair.clone();
             let sender = self.session_event_sender.clone();
 
