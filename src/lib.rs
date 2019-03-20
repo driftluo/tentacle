@@ -43,6 +43,8 @@ pub(crate) mod session;
 pub(crate) mod substream;
 /// Useful traits
 pub mod traits;
+/// Underlying transport protocols wrapper
+pub(crate) mod transports;
 /// Some useful functions
 pub mod utils;
 

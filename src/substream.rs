@@ -185,7 +185,7 @@ where
                     self.notify();
                     break;
                 } else {
-                    warn!("proto send to session error: {}, may be kill by remote", e);
+                    debug!("proto send to session error: {}, may be kill by remote", e);
                     return Err(());
                 }
             }
@@ -243,7 +243,7 @@ where
                     })
                 }
                 Ok(Async::Ready(None)) => {
-                    warn!("protocol [{}] close", self.proto_id);
+                    debug!("protocol [{}] close", self.proto_id);
                     self.dead = true;
                     break;
                 }

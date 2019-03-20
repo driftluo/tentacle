@@ -1,23 +1,21 @@
 use futures::{Async, Future, Poll};
-use std::{io, marker::PhantomData, net::ToSocketAddrs};
+use std::{io, net::ToSocketAddrs};
 
 use crate::{
-    error::Error,
     multiaddr::{multihash::Multihash, Multiaddr, Protocol, ToMultiaddr},
     secio::PeerId,
     utils::extract_peer_id,
 };
 
 /// DNS resolver, use on multi-thread tokio runtime
-pub struct DNSResolver<T> {
+pub struct DNSResolver {
     source_address: Multiaddr,
     peer_id: Option<PeerId>,
     port: u16,
     domain: String,
-    phantom: PhantomData<T>,
 }
 
-impl<T> DNSResolver<T> {
+impl DNSResolver {
     /// If address like `/dns4/localhost/tcp/80` or `"/dns6/localhost/tcp/80"`,
     /// it will be return Some, else None
     pub fn new(source_address: Multiaddr) -> Option<Self> {
@@ -51,19 +49,15 @@ impl<T> DNSResolver<T> {
                 domain: domain.to_string(),
                 source_address,
                 port,
-                phantom: PhantomData,
             }),
             _ => None,
         }
     }
 }
 
-impl<T> Future for DNSResolver<T>
-where
-    T: Send + ::std::fmt::Debug,
-{
+impl Future for DNSResolver {
     type Item = Multiaddr;
-    type Error = (Multiaddr, Error<T>);
+    type Error = (Multiaddr, io::Error);
 
     fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
         match tokio_threadpool::blocking(|| (self.domain.as_str(), self.port).to_socket_addrs()) {
@@ -79,16 +73,14 @@ where
                 }
                 None => Err((
                     self.source_address.clone(),
-                    Error::DNSResolverError(io::ErrorKind::InvalidData.into()),
+                    io::ErrorKind::InvalidData.into(),
                 )),
             },
-            Ok(Async::Ready(Err(e))) => {
-                Err((self.source_address.clone(), Error::DNSResolverError(e)))
-            }
+            Ok(Async::Ready(Err(e))) => Err((self.source_address.clone(), e)),
             Ok(Async::NotReady) => Ok(Async::NotReady),
             Err(e) => Err((
                 self.source_address.clone(),
-                Error::DNSResolverError(io::Error::new(io::ErrorKind::Other, e)),
+                io::Error::new(io::ErrorKind::Other, e),
             )),
         }
     }
@@ -103,7 +95,7 @@ mod test {
 
     #[test]
     fn dns_parser() {
-        let future: DNSResolver<()> =
+        let future: DNSResolver =
             DNSResolver::new("/dns4/localhost/tcp/80".parse().unwrap()).unwrap();
         let mut rt = tokio::runtime::Runtime::new().unwrap();
         let addr = rt.block_on(future).unwrap();

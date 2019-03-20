@@ -6,19 +6,12 @@ use futures::{
 use log::{debug, error, trace, warn};
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::{error::Error as ErrorTrait, io};
-use tokio::net::{
-    tcp::{ConnectFuture, Incoming},
-    TcpListener, TcpStream,
-};
-use tokio::{
-    prelude::{AsyncRead, AsyncWrite, FutureExt},
-    timer::Timeout,
-};
+use tokio::prelude::{AsyncRead, AsyncWrite, FutureExt};
 
 use crate::{
     context::{ServiceContext, SessionContext},
     error::Error,
-    multiaddr::{multihash::Multihash, Multiaddr, Protocol, ToMultiaddr},
+    multiaddr::{multihash::Multihash, Multiaddr, Protocol},
     protocol_handle_stream::{
         ServiceProtocolEvent, ServiceProtocolStream, SessionProtocolEvent, SessionProtocolStream,
     },
@@ -27,7 +20,8 @@ use crate::{
     service::config::ServiceConfig,
     session::{Session, SessionEvent, SessionMeta},
     traits::{ServiceHandle, ServiceProtocol, SessionProtocol},
-    utils::{dns::DNSResolver, extract_peer_id, multiaddr_to_socketaddr},
+    transports::{MultiIncoming, MultiTransport, Transport, TransportError},
+    utils::extract_peer_id,
     yamux::{session::SessionType, Config as YamuxConfig},
     ProtocolId, SessionId,
 };
@@ -56,9 +50,10 @@ pub struct Service<T> {
 
     sessions: HashMap<SessionId, SessionContext>,
 
-    listens: Vec<(Multiaddr, Incoming)>,
+    multi_trasport: MultiTransport,
 
-    dial: Vec<(Multiaddr, Timeout<ConnectFuture>)>,
+    listens: Vec<(Multiaddr, MultiIncoming)>,
+
     dial_protocols: HashMap<Multiaddr, DialProtocol>,
     config: ServiceConfig,
     /// Calculate the number of connection requests that need to be sent externally,
@@ -122,12 +117,12 @@ where
         Service {
             protocol_configs,
             handle,
+            multi_trasport: MultiTransport::new(config.timeout),
             sessions: HashMap::default(),
             session_service_protos: HashMap::default(),
             service_proto_handles: HashMap::default(),
             session_proto_handles: HashMap::default(),
             listens: Vec::new(),
-            dial: Vec::new(),
             dial_protocols: HashMap::default(),
             config,
             task_count: if forever { 1 } else { 0 },
@@ -166,45 +161,43 @@ where
     /// Return really listen multiaddr, but if use `/dns4/localhost/tcp/80`,
     /// it will return original value, and create a future task to DNS resolver later.
     pub fn listen(&mut self, address: Multiaddr) -> Result<Multiaddr, io::Error> {
-        let listen_addr = if let Some(socket_address) = multiaddr_to_socketaddr(&address) {
-            let tcp = TcpListener::bind(&socket_address)?;
-            let listen_addr = tcp.local_addr()?.to_multiaddr().unwrap();
-            self.listens.push((listen_addr.clone(), tcp.incoming()));
-            listen_addr
-        } else {
-            let dns = DNSResolver::new(address.clone())
-                .ok_or_else::<io::Error, _>(|| io::ErrorKind::InvalidInput.into())?;
-            let sender = self.session_event_sender.clone();
-            let future_task = dns.then(move |result| match result {
-                Ok(address) => tokio::spawn(
-                    sender
-                        .send(SessionEvent::DNSResolverSuccess {
-                            ty: SessionType::Server,
-                            address,
-                            target: DialProtocol::All,
-                        })
-                        .map(|_| ())
-                        .map_err(|err| {
-                            error!("Listen address success send back error: {:?}", err);
-                        }),
-                ),
-                Err((address, error)) => tokio::spawn(
-                    sender
-                        .send(SessionEvent::ListenError { address, error })
-                        .map(|_| ())
-                        .map_err(|err| {
-                            error!("Listen address fail send back error: {:?}", err);
-                        }),
-                ),
+        let (listen_future, listen_addr) = self
+            .multi_trasport
+            .listen(address.clone())
+            .map_err::<io::Error, _>(|e| e.into())?;
+        let sender = self.session_event_sender.clone();
+        let task = listen_future.then(move |result| match result {
+            Ok(value) => tokio::spawn(
+                sender
+                    .send(SessionEvent::ListenOpen { value })
+                    .map(|_| ())
+                    .map_err(|err| {
+                        error!("Listen address success send back error: {:?}", err);
+                    }),
+            ),
+            Err(err) => {
+                let event = if let TransportError::DNSResolverError((address, error)) = err {
+                    SessionEvent::ListenError {
+                        address,
+                        error: Error::DNSResolverError(error),
+                    }
+                } else {
+                    SessionEvent::ListenError {
+                        address,
+                        error: Error::DNSResolverError(io::ErrorKind::InvalidData.into()),
+                    }
+                };
+                tokio::spawn(sender.send(event).map(|_| ()).map_err(|err| {
+                    error!("Listen address fail send back error: {:?}", err);
+                }))
+            }
+        });
+        self.service_context
+            .pending_tasks
+            .push_back(ServiceTask::FutureTask {
+                task: Box::new(task),
             });
-            self.service_context
-                .pending_tasks
-                .push_back(ServiceTask::FutureTask {
-                    task: Box::new(future_task),
-                });
-            self.task_count += 1;
-            address
-        };
+        self.task_count += 1;
         Ok(listen_addr)
     }
 
@@ -221,45 +214,45 @@ where
     /// Use by inner
     #[inline(always)]
     fn dial_inner(&mut self, address: Multiaddr, target: DialProtocol) -> Result<(), io::Error> {
-        if let Some(socket_address) = multiaddr_to_socketaddr(&address) {
-            let dial = TcpStream::connect(&socket_address).timeout(self.config.timeout);
-            self.dial_protocols.insert(address.clone(), target);
-            self.dial.push((address, dial));
-            self.task_count += 1;
-        } else {
-            let dns = DNSResolver::new(address)
-                .ok_or_else::<io::Error, _>(|| io::ErrorKind::InvalidInput.into())?;
-            let sender = self.session_event_sender.clone();
-            let future_task = dns.then(move |result| match result {
-                Ok(address) => tokio::spawn(
-                    sender
-                        .send(SessionEvent::DNSResolverSuccess {
-                            ty: SessionType::Client,
-                            address,
-                            target,
-                        })
-                        .map(|_| ())
-                        .map_err(|err| {
-                            error!("dial address success send back error: {:?}", err);
-                        }),
-                ),
-                Err((address, error)) => tokio::spawn(
-                    sender
-                        .send(SessionEvent::DialError { address, error })
-                        .map(|_| ())
-                        .map_err(|err| {
-                            error!("dial address fail send back error: {:?}", err);
-                        }),
-                ),
-            });
-            self.service_context
-                .pending_tasks
-                .push_back(ServiceTask::FutureTask {
-                    task: Box::new(future_task),
-                });
-            self.task_count += 1;
-        }
+        self.dial_protocols.insert(address.clone(), target);
+        let dial_future = self
+            .multi_trasport
+            .dial(address.clone())
+            .map_err::<io::Error, _>(|e| e.into())?;
 
+        let sender = self.session_event_sender.clone();
+        let task = dial_future.then(|result| match result {
+            Ok(value) => tokio::spawn(
+                sender
+                    .send(SessionEvent::DialOpen { value })
+                    .map(|_| ())
+                    .map_err(|err| {
+                        error!("dial address success send back error: {:?}", err);
+                    }),
+            ),
+            Err(err) => {
+                let event = match err {
+                    TransportError::DNSResolverError((address, error)) => SessionEvent::DialError {
+                        address,
+                        error: Error::DNSResolverError(error),
+                    },
+                    e => SessionEvent::DialError {
+                        address,
+                        error: Error::IoError(e.into()),
+                    },
+                };
+                tokio::spawn(sender.send(event).map(|_| ()).map_err(|err| {
+                    error!("dial address fail send back error: {:?}", err);
+                }))
+            }
+        });
+
+        self.service_context
+            .pending_tasks
+            .push_back(ServiceTask::FutureTask {
+                task: Box::new(task),
+            });
+        self.task_count += 1;
         Ok(())
     }
 
@@ -1018,21 +1011,6 @@ where
                     )
                 }
             }
-            SessionEvent::DNSResolverSuccess {
-                ty,
-                address,
-                target,
-            } => {
-                self.task_count -= 1;
-                match ty {
-                    SessionType::Server => {
-                        self.handle_service_task(ServiceTask::Listen { address })
-                    }
-                    SessionType::Client => {
-                        self.handle_service_task(ServiceTask::Dial { address, target })
-                    }
-                }
-            }
             SessionEvent::MuxerError { id, error } => {
                 if let Some(session_context) = self.sessions.get(&id) {
                     self.handle.handle_error(
@@ -1043,6 +1021,14 @@ where
                         },
                     )
                 }
+            }
+            SessionEvent::ListenOpen { value } => {
+                self.listens.push(value);
+                self.task_count -= 1;
+                self.listen_poll();
+            }
+            SessionEvent::DialOpen { value } => {
+                self.handshake(value.1, SessionType::Client, value.0)
             }
         }
     }
@@ -1056,7 +1042,7 @@ where
                 data,
             } => self.filter_broadcast(session_ids, proto_id, &data),
             ServiceTask::Dial { address, target } => {
-                if !self.dial.iter().any(|(addr, _)| addr == &address) {
+                if !self.dial_protocols.contains_key(&address) {
                     if let Err(e) = self.dial_inner(address.clone(), target) {
                         self.handle.handle_error(
                             &mut self.service_context,
@@ -1066,9 +1052,6 @@ where
                             },
                         );
                     }
-                }
-                if !self.dial.is_empty() {
-                    self.client_poll();
                 }
             }
             ServiceTask::Listen { address } => {
@@ -1161,55 +1144,23 @@ where
         }
     }
 
-    /// Poll client requests
-    #[inline]
-    fn client_poll(&mut self) {
-        for (address, mut dialer) in self.dial.split_off(0) {
-            match dialer.poll() {
-                Ok(Async::Ready(socket)) => {
-                    self.handshake(socket, SessionType::Client, address);
-                }
-                Ok(Async::NotReady) => {
-                    trace!("client not ready, {}", address);
-                    self.dial.push((address, dialer));
-                }
-                Err(err) => {
-                    self.task_count -= 1;
-                    let error = if err.is_timer() {
-                        // tokio timer error
-                        io::Error::new(io::ErrorKind::Other, err.description())
-                    } else if err.is_elapsed() {
-                        // time out error
-                        io::Error::new(io::ErrorKind::TimedOut, err.description())
-                    } else {
-                        // dialer error
-                        err.into_inner().unwrap()
-                    };
-                    self.handle.handle_error(
-                        &mut self.service_context,
-                        ServiceError::DialerError {
-                            address,
-                            error: error.into(),
-                        },
-                    );
-                }
-            }
-        }
-    }
-
     /// Poll listen connections
     #[inline]
     fn listen_poll(&mut self) {
         let mut update = false;
         for (address, mut listen) in self.listens.split_off(0) {
             match listen.poll() {
-                Ok(Async::Ready(Some(socket))) => {
-                    let remote_address: Multiaddr =
-                        socket.peer_addr().unwrap().to_multiaddr().unwrap();
+                Ok(Async::Ready(Some((remote_address, socket)))) => {
                     self.handshake(socket, SessionType::Server, remote_address);
                     self.listens.push((address, listen));
                 }
-                Ok(Async::Ready(None)) => (),
+                Ok(Async::Ready(None)) => {
+                    update = true;
+                    self.handle.handle_event(
+                        &mut self.service_context,
+                        ServiceEvent::ListenClose { address },
+                    );
+                }
                 Ok(Async::NotReady) => {
                     self.listens.push((address, listen));
                 }
@@ -1218,9 +1169,13 @@ where
                     self.handle.handle_error(
                         &mut self.service_context,
                         ServiceError::ListenError {
-                            address,
+                            address: address.clone(),
                             error: err.into(),
                         },
+                    );
+                    self.handle.handle_event(
+                        &mut self.service_context,
+                        ServiceEvent::ListenClose { address },
                     );
                 }
             }
@@ -1262,8 +1217,6 @@ where
             self.distribute_to_session();
             self.distribute_to_user_level();
         }
-
-        self.client_poll();
 
         self.listen_poll();
 
