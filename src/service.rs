@@ -169,7 +169,10 @@ where
         let task = listen_future.then(move |result| match result {
             Ok(value) => tokio::spawn(
                 sender
-                    .send(SessionEvent::ListenOpen { value })
+                    .send(SessionEvent::ListenStart {
+                        listen_address: value.0,
+                        incoming: value.1,
+                    })
                     .map(|_| ())
                     .map_err(|err| {
                         error!("Listen address success send back error: {:?}", err);
@@ -224,7 +227,10 @@ where
         let task = dial_future.then(|result| match result {
             Ok(value) => tokio::spawn(
                 sender
-                    .send(SessionEvent::DialOpen { value })
+                    .send(SessionEvent::DialOpen {
+                        remote_address: value.0,
+                        stream: value.1,
+                    })
                     .map(|_| ())
                     .map_err(|err| {
                         error!("dial address success send back error: {:?}", err);
@@ -1022,14 +1028,19 @@ where
                     )
                 }
             }
-            SessionEvent::ListenOpen { value } => {
-                self.listens.push(value);
+            SessionEvent::ListenStart {
+                listen_address,
+                incoming,
+            } => {
+                self.listens.push((listen_address, incoming));
                 self.task_count -= 1;
+                self.update_listens();
                 self.listen_poll();
             }
-            SessionEvent::DialOpen { value } => {
-                self.handshake(value.1, SessionType::Client, value.0)
-            }
+            SessionEvent::DialOpen {
+                remote_address,
+                stream,
+            } => self.handshake(stream, SessionType::Client, remote_address),
         }
     }
 

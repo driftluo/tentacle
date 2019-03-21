@@ -36,11 +36,13 @@ pub(crate) enum SessionEvent {
         /// Session id
         id: SessionId,
     },
-    ListenOpen {
-        value: (Multiaddr, MultiIncoming),
+    ListenStart {
+        listen_address: Multiaddr,
+        incoming: MultiIncoming,
     },
     DialOpen {
-        value: (Multiaddr, MultiStream),
+        remote_address: Multiaddr,
+        stream: MultiStream,
     },
     HandshakeSuccess {
         /// Secure handle
