@@ -1,5 +1,5 @@
-use futures::prelude::{Async, Future, Poll};
-use futures::{future::err, task};
+use futures::future::ok;
+use futures::prelude::{Future, Poll};
 use std::{error::Error as _, io, time::Duration};
 use tokio::{
     net::{
@@ -70,18 +70,12 @@ impl Transport for TcpTransport {
                     Ok(address) => bind(address),
                     Err(e) => Err(TransportError::DNSResolverError(e)),
                 });
-                Ok((TcpListenFuture::new(None, task), address))
+                Ok((TcpListenFuture::new(task), address))
             }
             None => {
                 let listen = bind(address)?;
                 let listen_addr = listen.0.clone();
-                Ok((
-                    TcpListenFuture::new(
-                        Some(listen),
-                        err::<_, TransportError>(TransportError::Empty),
-                    ),
-                    listen_addr,
-                ))
+                Ok((TcpListenFuture::new(ok(listen)), listen_addr))
             }
         }
     }
@@ -97,14 +91,11 @@ impl Transport for TcpTransport {
                             // Because here need to save the original address as an index to open the specified protocol.
                             Ok((address, rs.1))
                         });
-                Ok(TcpDialFuture::new(None, task))
+                Ok(TcpDialFuture::new(task))
             }
             None => {
                 let dial = connect(address, self.timeout)?;
-                Ok(TcpDialFuture::new(
-                    Some(dial),
-                    err::<_, TransportError>(TransportError::Empty),
-                ))
+                Ok(TcpDialFuture::new(ok(dial)))
             }
         }
     }
@@ -112,17 +103,15 @@ impl Transport for TcpTransport {
 
 /// Tcp listen future
 pub struct TcpListenFuture {
-    finished: Option<(Multiaddr, Incoming)>,
     executed: Box<dyn Future<Item = (Multiaddr, Incoming), Error = TransportError> + Send>,
 }
 
 impl TcpListenFuture {
-    fn new<T>(finished: Option<(Multiaddr, Incoming)>, executed: T) -> Self
+    fn new<T>(executed: T) -> Self
     where
         T: Future<Item = (Multiaddr, Incoming), Error = TransportError> + 'static + Send,
     {
         TcpListenFuture {
-            finished,
             executed: Box::new(executed),
         }
     }
@@ -133,48 +122,26 @@ impl Future for TcpListenFuture {
     type Error = TransportError;
 
     fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
-        if let Some(r) = self.finished.take() {
-            return Ok(Async::Ready(r));
-        }
-
         self.executed.poll()
     }
 }
 
 /// Tcp dial future
 pub struct TcpDialFuture {
-    finished: Option<(Multiaddr, Timeout<ConnectFuture>)>,
-    executed:
-        Box<dyn Future<Item = (Multiaddr, Timeout<ConnectFuture>), Error = TransportError> + Send>,
+    executed: Box<dyn Future<Item = (Multiaddr, TcpStream), Error = TransportError> + Send>,
 }
 
 impl TcpDialFuture {
-    fn new<T>(finished: Option<(Multiaddr, Timeout<ConnectFuture>)>, executed: T) -> Self
+    fn new<T>(executed: T) -> Self
     where
         T: Future<Item = (Multiaddr, Timeout<ConnectFuture>), Error = TransportError>
             + 'static
             + Send,
     {
-        TcpDialFuture {
-            finished,
-            executed: Box::new(executed),
-        }
-    }
-}
-
-impl Future for TcpDialFuture {
-    type Item = (Multiaddr, TcpStream);
-    type Error = TransportError;
-
-    fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
-        if let Some((address, mut task)) = self.finished.take() {
-            match task.poll() {
-                Ok(Async::Ready(tcp)) => return Ok(Async::Ready((address, tcp))),
-                Ok(Async::NotReady) => {
-                    self.finished = Some((address, task));
-                    return Ok(Async::NotReady);
-                }
-                Err(err) => {
+        let task = executed.and_then(|(address, connect_future)| {
+            connect_future
+                .map(move |tcp| (address, tcp))
+                .map_err(|err| {
                     let error = if err.is_timer() {
                         // tokio timer error
                         io::Error::new(io::ErrorKind::Other, err.description())
@@ -185,21 +152,21 @@ impl Future for TcpDialFuture {
                         // dialer error
                         err.into_inner().unwrap()
                     };
-                    return Err(TransportError::Io(error));
-                }
-            }
-        }
+                    TransportError::Io(error)
+                })
+        });
 
-        match self.executed.poll()? {
-            Async::Ready(r) => {
-                if self.finished.is_none() {
-                    self.finished = Some(r);
-                    task::current().notify();
-                }
-            }
-            Async::NotReady => (),
+        TcpDialFuture {
+            executed: Box::new(task),
         }
+    }
+}
 
-        Ok(Async::NotReady)
+impl Future for TcpDialFuture {
+    type Item = (Multiaddr, TcpStream);
+    type Error = TransportError;
+
+    fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
+        self.executed.poll()
     }
 }

@@ -23,8 +23,6 @@ pub enum TransportError {
     DNSResolverError((Multiaddr, io::Error)),
     /// Io error
     Io(io::Error),
-    /// Placeholders, generally do not appear
-    Empty,
 }
 
 impl Into<io::Error> for TransportError {
