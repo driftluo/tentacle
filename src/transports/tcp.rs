@@ -197,7 +197,7 @@ impl Future for TcpDialFuture {
                     task::current().notify();
                 }
             }
-            Async::NotReady => return Ok(Async::NotReady),
+            Async::NotReady => (),
         }
 
         Ok(Async::NotReady)

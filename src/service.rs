@@ -227,7 +227,7 @@ where
         let task = dial_future.then(|result| match result {
             Ok(value) => tokio::spawn(
                 sender
-                    .send(SessionEvent::DialOpen {
+                    .send(SessionEvent::DialStart {
                         remote_address: value.0,
                         stream: value.1,
                     })
@@ -1032,12 +1032,18 @@ where
                 listen_address,
                 incoming,
             } => {
+                self.handle.handle_event(
+                    &mut self.service_context,
+                    ServiceEvent::ListenStarted {
+                        address: &listen_address,
+                    },
+                );
                 self.listens.push((listen_address, incoming));
                 self.task_count -= 1;
                 self.update_listens();
                 self.listen_poll();
             }
-            SessionEvent::DialOpen {
+            SessionEvent::DialStart {
                 remote_address,
                 stream,
             } => self.handshake(stream, SessionType::Client, remote_address),
