@@ -21,8 +21,9 @@ use crate::{
     multiaddr::Multiaddr,
     protocol_select::{client_select, server_select, ProtocolInfo},
     secio::{codec::stream_handle::StreamHandle as SecureHandle, PublicKey},
-    service::{config::Meta, DialProtocol, ServiceTask},
+    service::{config::Meta, ServiceTask},
     substream::{ProtocolEvent, SubStream},
+    transports::{MultiIncoming, MultiStream},
     yamux::{session::SessionType, Config, Session as YamuxSession, StreamHandle},
     ProtocolId, SessionId, StreamId,
 };
@@ -35,13 +36,13 @@ pub(crate) enum SessionEvent {
         /// Session id
         id: SessionId,
     },
-    DNSResolverSuccess {
-        /// DNS type
-        ty: SessionType,
-        /// address
-        address: Multiaddr,
-        /// dial protocol
-        target: DialProtocol,
+    ListenStart {
+        listen_address: Multiaddr,
+        incoming: MultiIncoming,
+    },
+    DialStart {
+        remote_address: Multiaddr,
+        stream: MultiStream,
     },
     HandshakeSuccess {
         /// Secure handle
@@ -571,7 +572,7 @@ where
                 }
                 Ok(Async::NotReady) => break,
                 Err(err) => {
-                    warn!("receive proto event error: {:?}", err);
+                    debug!("receive proto event error: {:?}", err);
                     break;
                 }
             }
