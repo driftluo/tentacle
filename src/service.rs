@@ -1007,10 +1007,13 @@ where
                     ServiceError::DialerError { address, error },
                 )
             }
-            SessionEvent::ListenError { address, error } => self.handle.handle_error(
-                &mut self.service_context,
-                ServiceError::ListenError { address, error },
-            ),
+            SessionEvent::ListenError { address, error } => {
+                self.task_count -= 1;
+                self.handle.handle_error(
+                    &mut self.service_context,
+                    ServiceError::ListenError { address, error },
+                )
+            }
             SessionEvent::SessionTimeout { id } => {
                 if let Some(session_context) = self.sessions.get(&id) {
                     self.handle.handle_error(
