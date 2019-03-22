@@ -158,7 +158,6 @@ impl<T: AddrManager> ServiceProtocol for IdentifyProtocol<T> {
         let listen_addrs: HashSet<Multiaddr> = self
             .observed_addrs
             .values()
-            .chain(self.listen_addrs.iter())
             .take(MAX_ADDRS)
             .cloned()
             .collect();
@@ -236,6 +235,7 @@ impl<T: AddrManager> ServiceProtocol for IdentifyProtocol<T> {
                 } else {
                     trace!("received observed address: {}", addr);
 
+                    // TODO: this address shoulde be reachable
                     // Add transform observed address to local listen address list
                     if let Some(socket_addr) = multiaddr_to_socketaddr(&addr) {
                         let observed_ip = socket_addr.ip();
@@ -267,8 +267,8 @@ impl<T: AddrManager> ServiceProtocol for IdentifyProtocol<T> {
                                         .collect()
                                 })
                             {
-                                self.listen_addrs.push(new_listen_addr);
                                 // TODO how can we trust this address?
+                                self.listen_addrs.push(new_listen_addr);
                                 if self
                                     .addr_mgr
                                     .add_observed_addr(&info.peer_id, addr.clone())
