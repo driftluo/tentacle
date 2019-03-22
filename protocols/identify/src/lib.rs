@@ -14,9 +14,10 @@ use std::time::{Duration, Instant};
 use log::{debug, error, trace};
 use p2p::{
     context::{ProtocolContext, ProtocolContextMutRef, SessionContext},
-    multiaddr::Multiaddr,
+    multiaddr::{Multiaddr, Protocol},
     secio::PeerId,
     traits::ServiceProtocol,
+    utils::multiaddr_to_socketaddr,
     ProtocolId, SessionId,
 };
 
@@ -67,6 +68,8 @@ impl MisbehaveResult {
 
 /// The trait to communicate with underlying peer storage
 pub trait AddrManager: Clone + Send {
+    /// Add init listen address
+    fn init_listen_addrs(&mut self, addrs: Vec<Multiaddr>);
     /// Add remote peer's listen addresses
     fn add_listen_addrs(&mut self, peer: &PeerId, addrs: Vec<Multiaddr>);
     /// Add our address observed by remote peer
@@ -101,11 +104,7 @@ impl<T: AddrManager> IdentifyProtocol<T> {
 pub(crate) struct RemoteInfo {
     peer_id: PeerId,
 
-    // TODO: for future usage
-    #[allow(dead_code)]
     session: SessionContext,
-    #[allow(dead_code)]
-    version: String,
 
     connected_at: Instant,
     timeout: Duration,
@@ -114,7 +113,7 @@ pub(crate) struct RemoteInfo {
 }
 
 impl RemoteInfo {
-    fn new(session: SessionContext, version: &str, timeout: Duration) -> RemoteInfo {
+    fn new(session: SessionContext, timeout: Duration) -> RemoteInfo {
         let peer_id = session
             .remote_pubkey
             .as_ref()
@@ -123,7 +122,6 @@ impl RemoteInfo {
         RemoteInfo {
             peer_id,
             session,
-            version: version.to_string(),
             connected_at: Instant::now(),
             timeout,
             listen_addrs: None,
@@ -134,7 +132,8 @@ impl RemoteInfo {
 
 impl<T: AddrManager> ServiceProtocol for IdentifyProtocol<T> {
     fn init(&mut self, service: &mut ProtocolContext) {
-        self.listen_addrs = service.listens().clone();
+        self.listen_addrs = service.listens().iter().cloned().collect();
+        self.addr_mgr.init_listen_addrs(self.listen_addrs.clone());
 
         service.set_service_notify(
             self.id,
@@ -143,7 +142,7 @@ impl<T: AddrManager> ServiceProtocol for IdentifyProtocol<T> {
         );
     }
 
-    fn connected(&mut self, mut service: ProtocolContextMutRef, version: &str) {
+    fn connected(&mut self, mut service: ProtocolContextMutRef, _version: &str) {
         let session = service.session;
         if session.remote_pubkey.is_none() {
             error!("IdentifyProtocol require secio enabled!");
@@ -152,11 +151,7 @@ impl<T: AddrManager> ServiceProtocol for IdentifyProtocol<T> {
             return;
         }
 
-        let remote_info = RemoteInfo::new(
-            session.clone(),
-            version,
-            Duration::from_secs(DEFAULT_TIMEOUT),
-        );
+        let remote_info = RemoteInfo::new(session.clone(), Duration::from_secs(DEFAULT_TIMEOUT));
         trace!("IdentifyProtocol sconnected from {:?}", remote_info.peer_id);
         self.remote_infos.insert(session.id, remote_info);
 
@@ -169,7 +164,16 @@ impl<T: AddrManager> ServiceProtocol for IdentifyProtocol<T> {
             .collect();
         let data = IdentifyMessage::ListenAddrs(listen_addrs.into_iter().collect()).encode();
         service.send_message(data);
-        let data = IdentifyMessage::ObservedAddr(session.address.clone()).encode();
+
+        let observed_addr = session
+            .address
+            .iter()
+            .filter(|proto| match proto {
+                Protocol::P2p(_) => false,
+                _ => true,
+            })
+            .collect::<Multiaddr>();
+        let data = IdentifyMessage::ObservedAddr(observed_addr).encode();
         service.send_message(data);
     }
 
@@ -231,15 +235,51 @@ impl<T: AddrManager> ServiceProtocol for IdentifyProtocol<T> {
                     }
                 } else {
                     trace!("received observed address: {}", addr);
-                    info.observed_addr = Some(addr.clone());
-                    // TODO how can we trust this address?
-                    if self
-                        .addr_mgr
-                        .add_observed_addr(&info.peer_id, addr.clone())
-                        .is_disconnect()
-                    {
-                        service.disconnect(session.id);
+
+                    // Add transform observed address to local listen address list
+                    if let Some(socket_addr) = multiaddr_to_socketaddr(&addr) {
+                        let observed_ip = socket_addr.ip();
+
+                        // replace observed address's port part
+                        if self
+                            .listen_addrs
+                            .iter()
+                            .filter_map(|listen_addr| multiaddr_to_socketaddr(listen_addr))
+                            .map(|socket_addr| socket_addr.ip())
+                            .all(|listen_ip| listen_ip != observed_ip)
+                        {
+                            // TODO: Choose a random port from current local listen addresses
+                            if let Some(new_listen_addr) = self
+                                .listen_addrs
+                                .iter()
+                                .next()
+                                .and_then(|listen_addr| multiaddr_to_socketaddr(listen_addr))
+                                .map(|socket_addr| socket_addr.port())
+                                .map(|listen_port| {
+                                    addr.iter()
+                                        .map(|proto| match proto {
+                                            Protocol::Tcp(_) if info.session.ty.is_outbound() => {
+                                                // Replace only it's an outbound connnection
+                                                Protocol::Tcp(listen_port)
+                                            }
+                                            value => value,
+                                        })
+                                        .collect()
+                                })
+                            {
+                                self.listen_addrs.push(new_listen_addr);
+                                // TODO how can we trust this address?
+                                if self
+                                    .addr_mgr
+                                    .add_observed_addr(&info.peer_id, addr.clone())
+                                    .is_disconnect()
+                                {
+                                    service.disconnect(session.id);
+                                }
+                            }
+                        }
                     }
+                    info.observed_addr = Some(addr.clone());
                     self.observed_addrs.insert(info.peer_id.clone(), addr);
                 }
             }

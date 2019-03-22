@@ -54,6 +54,7 @@ fn main() {
 struct SimpleAddrManager {}
 
 impl AddrManager for SimpleAddrManager {
+    fn init_listen_addrs(&mut self, _addrs: Vec<Multiaddr>) {}
     /// Add remote peer's listen addresses
     fn add_listen_addrs(&mut self, _peer: &PeerId, _addrs: Vec<Multiaddr>) {}
     /// Add our address observed by remote peer
