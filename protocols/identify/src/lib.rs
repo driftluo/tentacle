@@ -150,8 +150,17 @@ impl<T: AddrManager> ServiceProtocol for IdentifyProtocol<T> {
         trace!("IdentifyProtocol sconnected from {:?}", remote_info.peer_id);
         self.remote_infos.insert(session.id, remote_info);
 
-        let listen_addrs: Vec<Multiaddr> =
-            self.listen_addrs.iter().take(MAX_ADDRS).cloned().collect();
+        let listen_addrs: Vec<Multiaddr> = self
+            .listen_addrs
+            .iter()
+            .filter(|addr| {
+                multiaddr_to_socketaddr(addr)
+                    .map(|socket_addr| !socket_addr.ip().is_unspecified())
+                    .unwrap_or(true)
+            })
+            .take(MAX_ADDRS)
+            .cloned()
+            .collect();
         let data = IdentifyMessage::ListenAddrs(listen_addrs).encode();
         service.send_message(session.id, self.id, data);
 
@@ -252,8 +261,8 @@ impl<T: AddrManager> ServiceProtocol for IdentifyProtocol<T> {
                                 .map(|listen_port| {
                                     addr.iter()
                                         .map(|proto| match proto {
-                                            Protocol::Tcp(_) if info.session.ty.is_server() => {
-                                                // Replace only it's an outbound connnection
+                                            Protocol::Tcp(_) if info.session.ty.is_client() => {
+                                                // Replace only when it is an inbound connnection
                                                 Protocol::Tcp(listen_port)
                                             }
                                             value => value,
