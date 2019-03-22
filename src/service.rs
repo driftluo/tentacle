@@ -507,9 +507,6 @@ where
             tokio::spawn(task);
         } else {
             self.session_open(socket, None, remote_address, ty);
-            if ty == SessionType::Client {
-                self.task_count -= 1;
-            }
         }
     }
 
@@ -524,6 +521,9 @@ where
     ) where
         H: AsyncRead + AsyncWrite + Send + 'static,
     {
+        if ty == SessionType::Client {
+            self.task_count -= 1;
+        }
         let target = self
             .dial_protocols
             .remove(&address)
@@ -954,16 +954,14 @@ where
                 ty,
             } => {
                 self.session_open(handle, Some(public_key), address, ty);
-                if ty == SessionType::Client {
-                    self.task_count -= 1;
-                }
             }
             SessionEvent::HandshakeFail { ty, error, address } => {
                 if ty == SessionType::Client {
                     self.task_count -= 1;
+                    self.dial_protocols.remove(&address);
                     self.handle.handle_error(
                         &mut self.service_context,
-                        ServiceError::DialerError { error, address },
+                        ServiceError::DialerError { address, error },
                     )
                 }
             }
@@ -1001,14 +999,21 @@ where
                     error,
                 },
             ),
-            SessionEvent::DialError { address, error } => self.handle.handle_error(
-                &mut self.service_context,
-                ServiceError::DialerError { address, error },
-            ),
-            SessionEvent::ListenError { address, error } => self.handle.handle_error(
-                &mut self.service_context,
-                ServiceError::ListenError { address, error },
-            ),
+            SessionEvent::DialError { address, error } => {
+                self.task_count -= 1;
+                self.dial_protocols.remove(&address);
+                self.handle.handle_error(
+                    &mut self.service_context,
+                    ServiceError::DialerError { address, error },
+                )
+            }
+            SessionEvent::ListenError { address, error } => {
+                self.task_count -= 1;
+                self.handle.handle_error(
+                    &mut self.service_context,
+                    ServiceError::ListenError { address, error },
+                )
+            }
             SessionEvent::SessionTimeout { id } => {
                 if let Some(session_context) = self.sessions.get(&id) {
                     self.handle.handle_error(
