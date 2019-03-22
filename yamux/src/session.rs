@@ -81,6 +81,18 @@ pub enum SessionType {
     Server,
 }
 
+impl SessionType {
+    /// If this is a client type (inbound connection)
+    pub fn is_client(self) -> bool {
+        self == SessionType::Client
+    }
+
+    /// If this is a server type (outbound connection)
+    pub fn is_server(self) -> bool {
+        self == SessionType::Server
+    }
+}
+
 impl<T> Session<T>
 where
     T: AsyncRead + AsyncWrite,
@@ -459,8 +471,6 @@ where
     type Error = io::Error;
 
     fn poll(&mut self) -> Poll<Option<Self::Item>, Self::Error> {
-        debug!(">> [{:?}] Session::poll()", self.ty);
-
         if self.is_dead() {
             return Ok(Async::Ready(None));
         }
@@ -483,13 +493,8 @@ where
             }
         }
 
-        if self.recv_frames()? == Async::NotReady {
-            debug!("[{:?}] recv_frames NotReady", self.ty);
-        }
-
-        if self.recv_events()? == Async::NotReady {
-            debug!("[{:?}] recv_events NotReady", self.ty);
-        }
+        self.recv_frames()?;
+        self.recv_events()?;
 
         if let Some(stream) = self.pending_streams.pop_front() {
             debug!("[{:?}] A stream is ready", self.ty);
