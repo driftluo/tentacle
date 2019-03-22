@@ -8,7 +8,7 @@ mod protocol_generated_verifier;
 
 mod protocol;
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
 use log::{debug, error, trace};
@@ -155,13 +155,9 @@ impl<T: AddrManager> ServiceProtocol for IdentifyProtocol<T> {
         trace!("IdentifyProtocol sconnected from {:?}", remote_info.peer_id);
         self.remote_infos.insert(session.id, remote_info);
 
-        let listen_addrs: HashSet<Multiaddr> = self
-            .observed_addrs
-            .values()
-            .take(MAX_ADDRS)
-            .cloned()
-            .collect();
-        let data = IdentifyMessage::ListenAddrs(listen_addrs.into_iter().collect()).encode();
+        let listen_addrs: Vec<Multiaddr> =
+            self.listen_addrs.iter().take(MAX_ADDRS).cloned().collect();
+        let data = IdentifyMessage::ListenAddrs(listen_addrs).encode();
         service.send_message(data);
 
         let observed_addr = session
