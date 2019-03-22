@@ -1,5 +1,8 @@
 use futures::prelude::Stream;
-use std::{thread, time::Duration};
+use std::{
+    thread,
+    time::{Duration, Instant},
+};
 use tentacle::{
     builder::{MetaBuilder, ServiceBuilder},
     context::{ServiceContext, SessionContext},
@@ -29,68 +32,68 @@ where
     }
 }
 
+#[derive(Clone, Copy, Debug)]
+enum ServiceErrorType {
+    Dialer,
+    Listen,
+}
+
 #[derive(Clone)]
 struct EmptySHandle {
-    sender: crossbeam_channel::Sender<usize>,
+    sender: crossbeam_channel::Sender<ServiceErrorType>,
     secio: bool,
-    error_count: usize,
 }
 
 impl ServiceHandle for EmptySHandle {
     fn handle_error(&mut self, _env: &mut ServiceContext, error: ServiceError) {
         use std::io;
-        self.error_count += 1;
 
-        if let ServiceError::DialerError { error, .. } = error {
+        let error_type = if let ServiceError::DialerError { error, .. } = error {
             match error {
                 Error::IoError(e) => assert_eq!(e.kind(), io::ErrorKind::ConnectionRefused),
                 e => panic!("test fail {}", e),
             }
+            ServiceErrorType::Dialer
         } else {
             panic!("test fail {:?}", error);
-        }
-        if self.error_count > 8 {
-            let _ = self.sender.try_send(self.error_count);
-        }
+        };
+        let _ = self.sender.try_send(error_type);
     }
 }
 
 #[derive(Clone)]
 pub struct SHandle {
-    sender: crossbeam_channel::Sender<usize>,
+    sender: crossbeam_channel::Sender<ServiceErrorType>,
     secio: bool,
-    error_count: usize,
     session_id: SessionId,
     kind: SessionType,
 }
 
 impl ServiceHandle for SHandle {
     fn handle_error(&mut self, _env: &mut ServiceContext, error: ServiceError) {
-        self.error_count += 1;
-
-        match error {
+        let error_type = match error {
             ServiceError::DialerError { error, .. } => {
                 if self.kind == SessionType::Server {
                     match error {
                         Error::ConnectSelf => (),
-                        _ => panic!("server test fail"),
+                        _ => panic!("server test fail: {:?}", error),
                     }
                 } else {
                     match error {
                         Error::RepeatedConnection(id) => assert_eq!(id, self.session_id),
-                        _ => panic!("client test fail"),
+                        _ => panic!("client test fail: {:?}", error),
                     }
                 }
+                ServiceErrorType::Dialer
             }
             ServiceError::ListenError { error, .. } => {
-                assert_eq!(error, Error::RepeatedConnection(self.session_id))
+                assert_eq!(error, Error::RepeatedConnection(self.session_id));
+                ServiceErrorType::Listen
             }
             _ => panic!("test fail"),
-        }
+        };
 
-        if self.error_count > 8 {
-            let _ = self.sender.try_send(self.error_count);
-        }
+        let _ = self.sender.try_send(error_type);
     }
 
     fn handle_event(&mut self, _env: &mut ServiceContext, event: ServiceEvent) {
@@ -144,7 +147,8 @@ impl ServiceProtocol for PHandle {
 }
 
 fn create_meta(id: ProtocolId) -> (ProtocolMeta, crossbeam_channel::Receiver<usize>) {
-    let (sender, receiver) = crossbeam_channel::bounded(1);
+    // NOTE: channel size must large, otherwise send will failed.
+    let (sender, receiver) = crossbeam_channel::unbounded();
 
     let meta = MetaBuilder::new()
         .id(id)
@@ -172,31 +176,44 @@ fn create_shandle(
     empty: bool,
 ) -> (
     Box<dyn ServiceHandle + Send>,
-    crossbeam_channel::Receiver<usize>,
+    crossbeam_channel::Receiver<ServiceErrorType>,
 ) {
-    let (sender, receiver) = crossbeam_channel::bounded(2);
+    // NOTE: channel size must large, otherwise send will failed.
+    let (sender, receiver) = crossbeam_channel::unbounded();
 
     if empty {
-        (
-            Box::new(EmptySHandle {
-                sender,
-                secio,
-                error_count: 0,
-            }),
-            receiver,
-        )
+        (Box::new(EmptySHandle { sender, secio }), receiver)
     } else {
         (
             Box::new(SHandle {
                 sender,
                 secio,
-                error_count: 0,
                 session_id: 0,
                 kind: SessionType::Server,
             }),
             receiver,
         )
     }
+}
+
+fn check_dial_errors(
+    receiver: crossbeam_channel::Receiver<ServiceErrorType>,
+    timeout: Duration,
+    expected: usize,
+) -> usize {
+    let now = Instant::now();
+    for i in 0..expected {
+        loop {
+            if receiver.try_recv().is_ok() {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(100));
+            if now.elapsed() > timeout {
+                return i;
+            }
+        }
+    }
+    expected
 }
 
 fn test_repeated_dial(secio: bool) {
@@ -212,7 +229,6 @@ fn test_repeated_dial(secio: bool) {
     thread::spawn(|| tokio::run(service.for_each(|_| Ok(()))));
 
     let (shandle, error_receiver_2) = create_shandle(secio, false);
-
     let mut service = create(secio, meta_2, shandle);
     service.dial(listen_addr, DialProtocol::All).unwrap();
     thread::spawn(|| tokio::run(service.for_each(|_| Ok(()))));
@@ -220,8 +236,14 @@ fn test_repeated_dial(secio: bool) {
     if secio {
         assert_eq!(receiver_1.recv(), Ok(1));
         assert_eq!(receiver_2.recv(), Ok(1));
-        assert!(error_receiver_1.recv().unwrap() > 8);
-        assert!(error_receiver_2.recv().unwrap() > 8);
+        assert_eq!(
+            check_dial_errors(error_receiver_1, Duration::from_secs(30), 10),
+            10
+        );
+        assert_eq!(
+            check_dial_errors(error_receiver_2, Duration::from_secs(30), 10),
+            10
+        );
     } else {
         assert_ne!(receiver_1.recv(), Ok(1));
         assert_ne!(receiver_2.recv(), Ok(1));
@@ -237,11 +259,17 @@ fn test_dial_with_no_notify(secio: bool) {
     let mut control = service.control().clone();
     thread::spawn(|| tokio::run(service.for_each(|_| Ok(()))));
     // macOs can't dial 0 port
-    (1..11).for_each(|i| {
-        let addr = format!("/ip4/127.0.0.1/tcp/{}", i).parse().unwrap();
-        control.dial(addr, DialProtocol::All).unwrap();
-    });
-    assert_eq!(error_receiver.recv(), Ok(9));
+    for _ in 0..2 {
+        for i in 1..6 {
+            let addr = format!("/ip4/127.0.0.1/tcp/{}", i).parse().unwrap();
+            control.dial(addr, DialProtocol::All).unwrap();
+        }
+        std::thread::sleep(Duration::from_secs(3));
+    }
+    assert_eq!(
+        check_dial_errors(error_receiver, Duration::from_secs(15), 10),
+        10
+    );
 }
 
 #[test]
