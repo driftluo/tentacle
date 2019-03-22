@@ -82,6 +82,8 @@ pub trait AddrManager: Clone + Send {
 pub struct IdentifyProtocol<T> {
     id: ProtocolId,
     addr_mgr: T,
+    // Store last ServiceContext.listens().len() value
+    listens_length: usize,
     listen_addrs: Vec<Multiaddr>,
     observed_addrs: HashMap<PeerId, Multiaddr>,
     remote_infos: HashMap<SessionId, RemoteInfo>,
@@ -93,6 +95,7 @@ impl<T: AddrManager> IdentifyProtocol<T> {
         IdentifyProtocol {
             id,
             addr_mgr,
+            listens_length: 0,
             listen_addrs: Vec::new(),
             observed_addrs: HashMap::default(),
             remote_infos: HashMap::default(),
@@ -103,9 +106,7 @@ impl<T: AddrManager> IdentifyProtocol<T> {
 
 pub(crate) struct RemoteInfo {
     peer_id: PeerId,
-
     session: SessionContext,
-
     connected_at: Instant,
     timeout: Duration,
     listen_addrs: Option<Vec<Multiaddr>>,
@@ -133,6 +134,7 @@ impl RemoteInfo {
 impl<T: AddrManager> ServiceProtocol for IdentifyProtocol<T> {
     fn init(&mut self, service: &mut ProtocolContext) {
         self.listen_addrs = service.listens().to_vec();
+        self.listens_length = self.listen_addrs.len();
         self.addr_mgr.init_listen_addrs(self.listen_addrs.clone());
 
         service.set_service_notify(
@@ -149,6 +151,15 @@ impl<T: AddrManager> ServiceProtocol for IdentifyProtocol<T> {
             service.disconnect(session.id);
             self.secio_enabled = false;
             return;
+        }
+
+        // Update listen address added after current protocol init.
+        let listens = service.listens();
+        if listens.len() > self.listens_length {
+            for addr in listens.iter().skip(self.listens_length) {
+                self.listen_addrs.insert(0, addr.clone());
+            }
+            self.listens_length = listens.len();
         }
 
         let remote_info = RemoteInfo::new(session.clone(), Duration::from_secs(DEFAULT_TIMEOUT));
