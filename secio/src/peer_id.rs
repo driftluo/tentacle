@@ -1,6 +1,7 @@
 /// Most of the code for this module comes from `rust-libp2p`.
 use std::fmt;
 
+use rand::{thread_rng, Rng};
 use sha2::digest::Digest;
 use unsigned_varint::{decode, encode};
 
@@ -22,21 +23,7 @@ impl PeerId {
     #[inline]
     pub fn from_public_key(public_key: &PublicKey) -> Self {
         let key_inner = public_key.inner_ref();
-        let mut buf = encode::u16_buffer();
-        let code = encode::u16(SHA256_CODE, &mut buf);
-
-        let header_len = code.len() + 1;
-
-        let mut inner = Vec::new();
-        inner.resize(header_len + SHA256_SIZE as usize, 0);
-        inner[..code.len()].copy_from_slice(code);
-        inner[code.len()] = SHA256_SIZE;
-
-        let mut hasher = sha2::Sha256::default();
-        hasher.input(key_inner);
-        inner[header_len..].copy_from_slice(hasher.result().as_ref());
-
-        PeerId { inner }
+        Self::from_seed(&key_inner)
     }
 
     /// If data is a valid `PeerId`, return `PeerId`, else return error
@@ -60,6 +47,31 @@ impl PeerId {
         }
 
         Ok(PeerId { inner: data })
+    }
+
+    /// Return a random `PeerId`
+    pub fn random() -> Self {
+        let mut seed = [0u8; 20];
+        thread_rng().fill(&mut seed[..]);
+        Self::from_seed(&seed)
+    }
+
+    /// Return `PeerId` which used hashed seed as inner.
+    fn from_seed(seed: &[u8]) -> Self {
+        let mut buf = encode::u16_buffer();
+        let code = encode::u16(SHA256_CODE, &mut buf);
+
+        let header_len = code.len() + 1;
+
+        let mut inner = Vec::new();
+        inner.resize(header_len + SHA256_SIZE as usize, 0);
+        inner[..code.len()].copy_from_slice(code);
+        inner[code.len()] = SHA256_SIZE;
+
+        let mut hasher = sha2::Sha256::default();
+        hasher.input(seed);
+        inner[header_len..].copy_from_slice(hasher.result().as_ref());
+        PeerId { inner }
     }
 
     /// Return raw bytes representation of this peer id
@@ -140,5 +152,12 @@ mod tests {
         let peer_id = SecioKeyPair::secp256k1_generated().to_peer_id();
         let second: PeerId = peer_id.to_base58().parse().unwrap();
         assert_eq!(peer_id, second);
+    }
+
+    #[test]
+    fn peer_id_randomness() {
+        let peer_id = PeerId::random();
+        let second: PeerId = PeerId::random();
+        assert_ne!(peer_id, second);
     }
 }
