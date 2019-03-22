@@ -132,7 +132,7 @@ impl RemoteInfo {
 
 impl<T: AddrManager> ServiceProtocol for IdentifyProtocol<T> {
     fn init(&mut self, service: &mut ProtocolContext) {
-        self.listen_addrs = service.listens().iter().cloned().collect();
+        self.listen_addrs = service.listens().to_vec();
         self.addr_mgr.init_listen_addrs(self.listen_addrs.clone());
 
         service.set_service_notify(
@@ -155,8 +155,17 @@ impl<T: AddrManager> ServiceProtocol for IdentifyProtocol<T> {
         trace!("IdentifyProtocol sconnected from {:?}", remote_info.peer_id);
         self.remote_infos.insert(session.id, remote_info);
 
-        let listen_addrs: Vec<Multiaddr> =
-            self.listen_addrs.iter().take(MAX_ADDRS).cloned().collect();
+        let listen_addrs: Vec<Multiaddr> = self
+            .listen_addrs
+            .iter()
+            .filter(|addr| {
+                multiaddr_to_socketaddr(addr)
+                    .map(|socket_addr| !socket_addr.ip().is_unspecified())
+                    .unwrap_or(true)
+            })
+            .take(MAX_ADDRS)
+            .cloned()
+            .collect();
         let data = IdentifyMessage::ListenAddrs(listen_addrs).encode();
         service.send_message(data);
 
