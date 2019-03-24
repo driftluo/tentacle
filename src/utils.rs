@@ -2,10 +2,58 @@ use crate::{
     multiaddr::{Multiaddr, Protocol},
     secio::PeerId,
 };
-use std::net::SocketAddr;
+use std::net::{IpAddr, SocketAddr};
 
 /// This module create a `DNSResolver` future task to DNS resolver
 pub mod dns;
+
+/// Check if the ip address is reachable.
+/// Copy from std::net::IpAddr::is_global
+pub fn is_reachable(ip: IpAddr) -> bool {
+    match ip {
+        IpAddr::V4(ipv4) => {
+            !ipv4.is_private()
+                && !ipv4.is_loopback()
+                && !ipv4.is_link_local()
+                && !ipv4.is_broadcast()
+                && !ipv4.is_documentation()
+                && !ipv4.is_unspecified()
+        }
+        IpAddr::V6(ipv6) => {
+            let scope = if ipv6.is_multicast() {
+                match ipv6.segments()[0] & 0x000f {
+                    1 => Some(false),
+                    2 => Some(false),
+                    3 => Some(false),
+                    4 => Some(false),
+                    5 => Some(false),
+                    8 => Some(false),
+                    14 => Some(true),
+                    _ => None,
+                }
+            } else {
+                None
+            };
+            match scope {
+                Some(true) => true,
+                None => {
+                    !(ipv6.is_multicast()
+                      || ipv6.is_loopback()
+                      // && !ipv6.is_unicast_link_local()
+                      || ((ipv6.segments()[0] & 0xffc0) == 0xfe80)
+                      // && !ipv6.is_unicast_site_local()
+                      || ((ipv6.segments()[0] & 0xffc0) == 0xfec0)
+                      // && !ipv6.is_unique_local()
+                      || ((ipv6.segments()[0] & 0xfe00) == 0xfc00)
+                      || ipv6.is_unspecified()
+                      // && !ipv6.is_documentation()
+                      || ((ipv6.segments()[0] == 0x2001) && (ipv6.segments()[1] == 0xdb8)))
+                }
+                _ => false,
+            }
+        }
+    }
+}
 
 /// Change multiaddr to socketaddr
 pub fn multiaddr_to_socketaddr(addr: &Multiaddr) -> Option<SocketAddr> {

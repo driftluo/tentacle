@@ -17,7 +17,7 @@ use p2p::{
     multiaddr::{Multiaddr, Protocol},
     secio::PeerId,
     traits::ServiceProtocol,
-    utils::multiaddr_to_socketaddr,
+    utils::{is_reachable, multiaddr_to_socketaddr},
     ProtocolId, SessionId,
 };
 
@@ -85,7 +85,6 @@ pub struct IdentifyProtocol<T> {
     // Store last ServiceContext.listens().len() value
     listens_length: usize,
     listen_addrs: Vec<Multiaddr>,
-    observed_addrs: HashMap<PeerId, Multiaddr>,
     remote_infos: HashMap<SessionId, RemoteInfo>,
     secio_enabled: bool,
 }
@@ -97,7 +96,6 @@ impl<T: AddrManager> IdentifyProtocol<T> {
             addr_mgr,
             listens_length: 0,
             listen_addrs: Vec::new(),
-            observed_addrs: HashMap::default(),
             remote_infos: HashMap::default(),
             secio_enabled: true,
         }
@@ -171,7 +169,7 @@ impl<T: AddrManager> ServiceProtocol for IdentifyProtocol<T> {
             .iter()
             .filter(|addr| {
                 multiaddr_to_socketaddr(addr)
-                    .map(|socket_addr| !socket_addr.ip().is_unspecified())
+                    .map(|socket_addr| !is_reachable(socket_addr.ip()))
                     .unwrap_or(true)
             })
             .take(MAX_ADDRS)
@@ -251,11 +249,11 @@ impl<T: AddrManager> ServiceProtocol for IdentifyProtocol<T> {
                 } else {
                     trace!("received observed address: {}", addr);
 
-                    // TODO: this address shoulde be reachable
                     // Add transform observed address to local listen address list
-                    if let Some(socket_addr) = multiaddr_to_socketaddr(&addr) {
-                        let observed_ip = socket_addr.ip();
-
+                    if let Some(observed_ip) = multiaddr_to_socketaddr(&addr)
+                        .map(|socket_addr| socket_addr.ip())
+                        .filter(|ip_addr| is_reachable(*ip_addr))
+                    {
                         // replace observed address's port part
                         if self
                             .listen_addrs
@@ -264,12 +262,13 @@ impl<T: AddrManager> ServiceProtocol for IdentifyProtocol<T> {
                             .map(|socket_addr| socket_addr.ip())
                             .all(|listen_ip| listen_ip != observed_ip)
                         {
-                            // TODO: Choose a random port from current local listen addresses
-                            if let Some(new_listen_addr) = self
+                            // NOTE: may transform too many addresses.
+                            for new_listen_addr in self
                                 .listen_addrs
-                                .iter()
-                                .next()
-                                .and_then(|listen_addr| multiaddr_to_socketaddr(listen_addr))
+                                .clone()
+                                .into_iter()
+                                .filter_map(|listen_addr| multiaddr_to_socketaddr(&listen_addr))
+                                .filter(|socket_addr| is_reachable(socket_addr.ip()))
                                 .map(|socket_addr| socket_addr.port())
                                 .map(|listen_port| {
                                     addr.iter()
@@ -283,7 +282,7 @@ impl<T: AddrManager> ServiceProtocol for IdentifyProtocol<T> {
                                         .collect()
                                 })
                             {
-                                // TODO how can we trust this address?
+                                // TODO: how can we trust this address?
                                 self.listen_addrs.push(new_listen_addr);
                                 if self
                                     .addr_mgr
@@ -296,7 +295,6 @@ impl<T: AddrManager> ServiceProtocol for IdentifyProtocol<T> {
                         }
                     }
                     info.observed_addr = Some(addr.clone());
-                    self.observed_addrs.insert(info.peer_id.clone(), addr);
                 }
             }
             None => {

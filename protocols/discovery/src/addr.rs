@@ -3,7 +3,11 @@ use std::net::{IpAddr, SocketAddr};
 use std::time::Instant;
 
 use fnv::{FnvHashMap, FnvHashSet};
-use p2p::{multiaddr::Multiaddr, utils::multiaddr_to_socketaddr, SessionId};
+use p2p::{
+    multiaddr::Multiaddr,
+    utils::{is_reachable, multiaddr_to_socketaddr},
+    SessionId,
+};
 use serde_derive::{Deserialize, Serialize};
 
 // See: bitcoin/netaddress.cpp pchIPv4[12]
@@ -170,48 +174,6 @@ impl RawAddr {
 
     // Copy from std::net::IpAddr::is_global
     pub fn is_reachable(&self) -> bool {
-        match self.socket_addr().ip() {
-            IpAddr::V4(ipv4) => {
-                !ipv4.is_private()
-                    && !ipv4.is_loopback()
-                    && !ipv4.is_link_local()
-                    && !ipv4.is_broadcast()
-                    && !ipv4.is_documentation()
-                    && !ipv4.is_unspecified()
-            }
-            IpAddr::V6(ipv6) => {
-                let scope = if ipv6.is_multicast() {
-                    match ipv6.segments()[0] & 0x000f {
-                        1 => Some(false),
-                        2 => Some(false),
-                        3 => Some(false),
-                        4 => Some(false),
-                        5 => Some(false),
-                        8 => Some(false),
-                        14 => Some(true),
-                        _ => None,
-                    }
-                } else {
-                    None
-                };
-                match scope {
-                    Some(true) => true,
-                    None => {
-                        !(ipv6.is_multicast()
-                          || ipv6.is_loopback()
-                          // && !ipv6.is_unicast_link_local()
-                          || ((ipv6.segments()[0] & 0xffc0) == 0xfe80)
-                          // && !ipv6.is_unicast_site_local()
-                          || ((ipv6.segments()[0] & 0xffc0) == 0xfec0)
-                          // && !ipv6.is_unique_local()
-                          || ((ipv6.segments()[0] & 0xfe00) == 0xfc00)
-                          || ipv6.is_unspecified()
-                          // && !ipv6.is_documentation()
-                          || ((ipv6.segments()[0] == 0x2001) && (ipv6.segments()[1] == 0xdb8)))
-                    }
-                    _ => false,
-                }
-            }
-        }
+        is_reachable(self.socket_addr().ip())
     }
 }
