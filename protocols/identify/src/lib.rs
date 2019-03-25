@@ -18,6 +18,7 @@ use p2p::{
     secio::PeerId,
     traits::ServiceProtocol,
     utils::{is_reachable, multiaddr_to_socketaddr},
+    service::{DialProtocol},
     ProtocolId, SessionId,
 };
 
@@ -68,14 +69,14 @@ impl MisbehaveResult {
 
 /// The trait to communicate with underlying peer storage
 pub trait Callback: Clone + Send {
-    /// Add local init listen address
-    fn init_local_listen_addrs(&mut self, addrs: Vec<Multiaddr>);
     /// Add local listen address
     fn add_local_listen_addr(&mut self, addr: Multiaddr);
     /// Get local listen addresses
     fn local_listen_addrs(&mut self) -> Vec<Multiaddr>;
     /// Add remote peer's listen addresses
     fn add_remote_listen_addrs(&mut self, peer: &PeerId, addrs: Vec<Multiaddr>);
+    /// Add transformed observed address
+    fn add_transformed_addr(&mut self, addr: Multiaddr);
     /// Add our address observed by remote peer
     fn add_observed_addr(&mut self, peer: &PeerId, addr: Multiaddr) -> MisbehaveResult;
     /// Report misbehavior
@@ -90,16 +91,20 @@ pub struct IdentifyProtocol<T> {
     listens_length: usize,
     remote_infos: HashMap<SessionId, RemoteInfo>,
     secio_enabled: bool,
+
+    // Indicate if dial transformed observed address
+    dial_transformed_addr: bool,
 }
 
 impl<T: Callback> IdentifyProtocol<T> {
-    pub fn new(id: ProtocolId, callback: T) -> IdentifyProtocol<T> {
+    pub fn new(id: ProtocolId, callback: T, dial_transformed_addr: bool) -> IdentifyProtocol<T> {
         IdentifyProtocol {
             id,
             callback,
             listens_length: 0,
             remote_infos: HashMap::default(),
             secio_enabled: true,
+            dial_transformed_addr,
         }
     }
 }
@@ -135,7 +140,9 @@ impl<T: Callback> ServiceProtocol for IdentifyProtocol<T> {
     fn init(&mut self, service: &mut ProtocolContext) {
         let local_listen_addrs = service.listens().to_vec();
         self.listens_length = local_listen_addrs.len();
-        self.callback.init_local_listen_addrs(local_listen_addrs);
+        for addr in local_listen_addrs {
+            self.callback.add_local_listen_addr(addr.clone());
+        }
 
         service.set_service_notify(
             self.id,
@@ -274,8 +281,17 @@ impl<T: Callback> ServiceProtocol for IdentifyProtocol<T> {
                             .map(|socket_addr| socket_addr.ip())
                             .all(|listen_ip| listen_ip != observed_ip)
                         {
+                            if self
+                                .callback
+                                .add_observed_addr(&info.peer_id, addr.clone())
+                                .is_disconnect()
+                            {
+                                service.disconnect(session.id);
+                                return;
+                            }
+
                             // NOTE: may transform too many addresses.
-                            for new_listen_addr in local_listen_addrs
+                            for new_transformed_addr in local_listen_addrs
                                 .into_iter()
                                 .filter_map(|listen_addr| multiaddr_to_socketaddr(&listen_addr))
                                 .filter(|socket_addr| is_reachable(socket_addr.ip()))
@@ -289,18 +305,14 @@ impl<T: Callback> ServiceProtocol for IdentifyProtocol<T> {
                                             }
                                             value => value,
                                         })
-                                        .collect()
+                                        .collect::<Multiaddr>()
                                 })
                             {
-                                // TODO: how can we trust this address?
-                                self.callback.add_local_listen_addr(new_listen_addr);
-                                if self
-                                    .callback
-                                    .add_observed_addr(&info.peer_id, addr.clone())
-                                    .is_disconnect()
-                                {
-                                    service.disconnect(session.id);
+                                // NOTE: We trust this address by dialing it, and receive ConnectSelf error
+                                if self.dial_transformed_addr {
+                                    service.dial(new_transformed_addr.clone(), DialProtocol::Multi(Vec::new()));
                                 }
+                                self.callback.add_transformed_addr(new_transformed_addr);
                             }
                         }
                     }
