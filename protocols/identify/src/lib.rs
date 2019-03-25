@@ -235,9 +235,17 @@ impl<T: Callback> ServiceProtocol for IdentifyProtocol<T> {
                     }
                 } else {
                     trace!("received listen addresses: {:?}", addrs);
+                    let reachable_addrs = addrs
+                        .into_iter()
+                        .filter(|addr| {
+                            multiaddr_to_socketaddr(addr)
+                                .map(|socket_addr| is_reachable(socket_addr.ip()))
+                                .unwrap_or(false)
+                        })
+                        .collect::<Vec<_>>();
                     self.callback
-                        .add_remote_listen_addrs(&info.peer_id, addrs.clone());
-                    info.listen_addrs = Some(addrs);
+                        .add_remote_listen_addrs(&info.peer_id, reachable_addrs.clone());
+                    info.listen_addrs = Some(reachable_addrs);
                 }
             }
             Some(IdentifyMessage::ObservedAddr(addr)) => {
