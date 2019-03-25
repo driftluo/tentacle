@@ -67,11 +67,15 @@ impl MisbehaveResult {
 }
 
 /// The trait to communicate with underlying peer storage
-pub trait AddrManager: Clone + Send {
-    /// Add init listen address
-    fn init_listen_addrs(&mut self, addrs: Vec<Multiaddr>);
+pub trait Callback: Clone + Send {
+    /// Add local init listen address
+    fn init_local_listen_addrs(&mut self, addrs: Vec<Multiaddr>);
+    /// Add local listen address
+    fn add_local_listen_addr(&mut self, addr: Multiaddr);
+    /// Get local listen addresses
+    fn local_listen_addrs(&mut self) -> &[Multiaddr];
     /// Add remote peer's listen addresses
-    fn add_listen_addrs(&mut self, peer: &PeerId, addrs: Vec<Multiaddr>);
+    fn add_remote_listen_addrs(&mut self, peer: &PeerId, addrs: Vec<Multiaddr>);
     /// Add our address observed by remote peer
     fn add_observed_addr(&mut self, peer: &PeerId, addr: Multiaddr) -> MisbehaveResult;
     /// Report misbehavior
@@ -81,21 +85,19 @@ pub trait AddrManager: Clone + Send {
 /// Identify protocol
 pub struct IdentifyProtocol<T> {
     id: ProtocolId,
-    addr_mgr: T,
+    callback: T,
     // Store last ServiceContext.listens().len() value
     listens_length: usize,
-    listen_addrs: Vec<Multiaddr>,
     remote_infos: HashMap<SessionId, RemoteInfo>,
     secio_enabled: bool,
 }
 
-impl<T: AddrManager> IdentifyProtocol<T> {
-    pub fn new(id: ProtocolId, addr_mgr: T) -> IdentifyProtocol<T> {
+impl<T: Callback> IdentifyProtocol<T> {
+    pub fn new(id: ProtocolId, callback: T) -> IdentifyProtocol<T> {
         IdentifyProtocol {
             id,
-            addr_mgr,
+            callback,
             listens_length: 0,
-            listen_addrs: Vec::new(),
             remote_infos: HashMap::default(),
             secio_enabled: true,
         }
@@ -129,11 +131,11 @@ impl RemoteInfo {
     }
 }
 
-impl<T: AddrManager> ServiceProtocol for IdentifyProtocol<T> {
+impl<T: Callback> ServiceProtocol for IdentifyProtocol<T> {
     fn init(&mut self, service: &mut ProtocolContext) {
-        self.listen_addrs = service.listens().to_vec();
-        self.listens_length = self.listen_addrs.len();
-        self.addr_mgr.init_listen_addrs(self.listen_addrs.clone());
+        let local_listen_addrs = service.listens().to_vec();
+        self.listens_length = local_listen_addrs.len();
+        self.callback.init_local_listen_addrs(local_listen_addrs);
 
         service.set_service_notify(
             self.id,
@@ -155,7 +157,7 @@ impl<T: AddrManager> ServiceProtocol for IdentifyProtocol<T> {
         let listens = service.listens();
         if listens.len() > self.listens_length {
             for addr in listens.iter().skip(self.listens_length) {
-                self.listen_addrs.insert(0, addr.clone());
+                self.callback.add_local_listen_addr(addr.clone());
             }
             self.listens_length = listens.len();
         }
@@ -165,7 +167,8 @@ impl<T: AddrManager> ServiceProtocol for IdentifyProtocol<T> {
         self.remote_infos.insert(session.id, remote_info);
 
         let listen_addrs: Vec<Multiaddr> = self
-            .listen_addrs
+            .callback
+            .local_listen_addrs()
             .iter()
             .filter(|addr| {
                 multiaddr_to_socketaddr(addr)
@@ -216,7 +219,7 @@ impl<T: AddrManager> ServiceProtocol for IdentifyProtocol<T> {
                 if info.listen_addrs.is_some() {
                     debug!("remote({:?}) repeat send observed address", info.peer_id);
                     if self
-                        .addr_mgr
+                        .callback
                         .misbehave(&info.peer_id, Misbehavior::DuplicateListenAddrs)
                         .is_disconnect()
                     {
@@ -224,7 +227,7 @@ impl<T: AddrManager> ServiceProtocol for IdentifyProtocol<T> {
                     }
                 } else if addrs.len() > MAX_ADDRS {
                     if self
-                        .addr_mgr
+                        .callback
                         .misbehave(&info.peer_id, Misbehavior::TooManyAddresses(addrs.len()))
                         .is_disconnect()
                     {
@@ -232,7 +235,8 @@ impl<T: AddrManager> ServiceProtocol for IdentifyProtocol<T> {
                     }
                 } else {
                     trace!("received listen addresses: {:?}", addrs);
-                    self.addr_mgr.add_listen_addrs(&info.peer_id, addrs.clone());
+                    self.callback
+                        .add_remote_listen_addrs(&info.peer_id, addrs.clone());
                     info.listen_addrs = Some(addrs);
                 }
             }
@@ -240,7 +244,7 @@ impl<T: AddrManager> ServiceProtocol for IdentifyProtocol<T> {
                 if info.observed_addr.is_some() {
                     debug!("remote({:?}) repeat send listen addresses", info.peer_id);
                     if self
-                        .addr_mgr
+                        .callback
                         .misbehave(&info.peer_id, Misbehavior::DuplicateObservedAddr)
                         .is_disconnect()
                     {
@@ -256,7 +260,8 @@ impl<T: AddrManager> ServiceProtocol for IdentifyProtocol<T> {
                     {
                         // replace observed address's port part
                         if self
-                            .listen_addrs
+                            .callback
+                            .local_listen_addrs()
                             .iter()
                             .filter_map(|listen_addr| multiaddr_to_socketaddr(listen_addr))
                             .map(|socket_addr| socket_addr.ip())
@@ -264,8 +269,9 @@ impl<T: AddrManager> ServiceProtocol for IdentifyProtocol<T> {
                         {
                             // NOTE: may transform too many addresses.
                             for new_listen_addr in self
-                                .listen_addrs
-                                .clone()
+                                .callback
+                                .local_listen_addrs()
+                                .to_vec()
                                 .into_iter()
                                 .filter_map(|listen_addr| multiaddr_to_socketaddr(&listen_addr))
                                 .filter(|socket_addr| is_reachable(socket_addr.ip()))
@@ -283,9 +289,9 @@ impl<T: AddrManager> ServiceProtocol for IdentifyProtocol<T> {
                                 })
                             {
                                 // TODO: how can we trust this address?
-                                self.listen_addrs.push(new_listen_addr);
+                                self.callback.add_local_listen_addr(new_listen_addr);
                                 if self
-                                    .addr_mgr
+                                    .callback
                                     .add_observed_addr(&info.peer_id, addr.clone())
                                     .is_disconnect()
                                 {
@@ -303,7 +309,7 @@ impl<T: AddrManager> ServiceProtocol for IdentifyProtocol<T> {
                     info.peer_id
                 );
                 if self
-                    .addr_mgr
+                    .callback
                     .misbehave(&info.peer_id, Misbehavior::InvalidData)
                     .is_disconnect()
                 {
@@ -325,7 +331,7 @@ impl<T: AddrManager> ServiceProtocol for IdentifyProtocol<T> {
             {
                 debug!("{:?} receive identify message timeout", info.peer_id);
                 if self
-                    .addr_mgr
+                    .callback
                     .misbehave(&info.peer_id, Misbehavior::Timeout)
                     .is_disconnect()
                 {

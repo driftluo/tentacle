@@ -2,7 +2,7 @@ use env_logger;
 use log::debug;
 
 use futures::{future::lazy, prelude::*};
-use identify::{AddrManager, IdentifyProtocol, MisbehaveResult, Misbehavior};
+use identify::{Callback, IdentifyProtocol, MisbehaveResult, Misbehavior};
 use tentacle::{
     builder::{MetaBuilder, ServiceBuilder},
     context::ServiceContext,
@@ -14,7 +14,9 @@ use tentacle::{
 
 fn main() {
     env_logger::init();
-    let addr_mgr = SimpleAddrManager {};
+    let addr_mgr = SimpleAddrManager {
+        local_listen_addrs: Vec::new(),
+    };
     let protocol = MetaBuilder::default()
         .id(1)
         .service_handle(move || {
@@ -51,12 +53,25 @@ fn main() {
 }
 
 #[derive(Clone)]
-struct SimpleAddrManager {}
+struct SimpleAddrManager {
+    local_listen_addrs: Vec<Multiaddr>,
+}
 
-impl AddrManager for SimpleAddrManager {
-    fn init_listen_addrs(&mut self, _addrs: Vec<Multiaddr>) {}
+impl Callback for SimpleAddrManager {
+    /// Add local init listen address
+    fn init_local_listen_addrs(&mut self, addrs: Vec<Multiaddr>) {
+        self.local_listen_addrs = addrs;
+    }
+    /// Add local listen address
+    fn add_local_listen_addr(&mut self, addr: Multiaddr) {
+        self.local_listen_addrs.insert(0, addr);
+    }
+    /// Get local listen addresses
+    fn local_listen_addrs(&mut self) -> &[Multiaddr] {
+        &self.local_listen_addrs
+    }
     /// Add remote peer's listen addresses
-    fn add_listen_addrs(&mut self, _peer: &PeerId, _addrs: Vec<Multiaddr>) {}
+    fn add_remote_listen_addrs(&mut self, _peer: &PeerId, _addrs: Vec<Multiaddr>) {}
     /// Add our address observed by remote peer
     fn add_observed_addr(&mut self, _peer: &PeerId, _addr: Multiaddr) -> MisbehaveResult {
         MisbehaveResult::Continue
