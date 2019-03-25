@@ -73,7 +73,7 @@ pub trait Callback: Clone + Send {
     /// Add local listen address
     fn add_local_listen_addr(&mut self, addr: Multiaddr);
     /// Get local listen addresses
-    fn local_listen_addrs(&mut self) -> &[Multiaddr];
+    fn local_listen_addrs(&mut self) -> Vec<Multiaddr>;
     /// Add remote peer's listen addresses
     fn add_remote_listen_addrs(&mut self, peer: &PeerId, addrs: Vec<Multiaddr>);
     /// Add our address observed by remote peer
@@ -258,20 +258,16 @@ impl<T: Callback> ServiceProtocol for IdentifyProtocol<T> {
                         .map(|socket_addr| socket_addr.ip())
                         .filter(|ip_addr| is_reachable(*ip_addr))
                     {
+                        let local_listen_addrs = self.callback.local_listen_addrs();
                         // replace observed address's port part
-                        if self
-                            .callback
-                            .local_listen_addrs()
+                        if local_listen_addrs
                             .iter()
                             .filter_map(|listen_addr| multiaddr_to_socketaddr(listen_addr))
                             .map(|socket_addr| socket_addr.ip())
                             .all(|listen_ip| listen_ip != observed_ip)
                         {
                             // NOTE: may transform too many addresses.
-                            for new_listen_addr in self
-                                .callback
-                                .local_listen_addrs()
-                                .to_vec()
+                            for new_listen_addr in local_listen_addrs
                                 .into_iter()
                                 .filter_map(|listen_addr| multiaddr_to_socketaddr(&listen_addr))
                                 .filter(|socket_addr| is_reachable(socket_addr.ip()))

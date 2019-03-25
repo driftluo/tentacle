@@ -67,8 +67,8 @@ impl Callback for SimpleAddrManager {
         self.local_listen_addrs.insert(0, addr);
     }
     /// Get local listen addresses
-    fn local_listen_addrs(&mut self) -> &[Multiaddr] {
-        &self.local_listen_addrs
+    fn local_listen_addrs(&mut self) -> Vec<Multiaddr> {
+        self.local_listen_addrs.clone()
     }
     /// Add remote peer's listen addresses
     fn add_remote_listen_addrs(&mut self, _peer: &PeerId, _addrs: Vec<Multiaddr>) {}
