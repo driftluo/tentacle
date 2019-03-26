@@ -8,7 +8,7 @@ use std::{
 };
 use tentacle::{
     builder::{MetaBuilder, ServiceBuilder},
-    context::{ServiceContext, SessionContext},
+    context::{ProtocolContext, ProtocolContextMutRef, ServiceContext},
     secio::SecioKeyPair,
     service::{DialProtocol, ProtocolHandle, ProtocolMeta, Service, ServiceError, ServiceEvent},
     traits::{ServiceHandle, ServiceProtocol},
@@ -42,13 +42,14 @@ struct PHandle {
 }
 
 impl ServiceProtocol for PHandle {
-    fn init(&mut self, control: &mut ServiceContext) {
+    fn init(&mut self, control: &mut ProtocolContext) {
         if self.proto_id == 0 {
             control.set_service_notify(0, Duration::from_secs(5), 3);
         }
     }
 
-    fn connected(&mut self, control: &mut ServiceContext, session: &SessionContext, version: &str) {
+    fn connected(&mut self, mut control: ProtocolContextMutRef, version: &str) {
+        let session = control.session;
         self.connected_session_ids.push(session.id);
         info!(
             "proto id [{}] open on session [{}], address: [{}], type: [{:?}], version: {}",
@@ -83,42 +84,37 @@ impl ServiceProtocol for PHandle {
         control.future_task(interval_task);
     }
 
-    fn disconnected(&mut self, _control: &mut ServiceContext, session: &SessionContext) {
+    fn disconnected(&mut self, control: ProtocolContextMutRef) {
         let new_list = self
             .connected_session_ids
             .iter()
-            .filter(|&id| id != &session.id)
+            .filter(|&id| id != &control.session.id)
             .cloned()
             .collect();
         self.connected_session_ids = new_list;
 
-        if let Some(handle) = self.clear_handle.remove(&session.id) {
+        if let Some(handle) = self.clear_handle.remove(&control.session.id) {
             let _ = handle.send(());
         }
 
         info!(
             "proto id [{}] close on session [{}]",
-            self.proto_id, session.id
+            self.proto_id, control.session.id
         );
     }
 
-    fn received(
-        &mut self,
-        _env: &mut ServiceContext,
-        session: &SessionContext,
-        data: bytes::Bytes,
-    ) {
+    fn received(&mut self, env: ProtocolContextMutRef, data: bytes::Bytes) {
         self.count += 1;
         info!(
             "received from [{}]: proto [{}] data {:?}, message count: {}",
-            session.id,
+            env.session.id,
             self.proto_id,
             str::from_utf8(data.as_ref()).unwrap(),
             self.count
         );
     }
 
-    fn notify(&mut self, _control: &mut ServiceContext, token: u64) {
+    fn notify(&mut self, _control: &mut ProtocolContext, token: u64) {
         info!("proto [{}] received notify token: {}", self.proto_id, token);
     }
 }

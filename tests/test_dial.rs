@@ -5,7 +5,7 @@ use std::{
 };
 use tentacle::{
     builder::{MetaBuilder, ServiceBuilder},
-    context::{ServiceContext, SessionContext},
+    context::{ProtocolContext, ProtocolContextMutRef, ServiceContext},
     error::Error,
     multiaddr::Multiaddr,
     secio::SecioKeyPair,
@@ -113,31 +113,26 @@ struct PHandle {
 }
 
 impl ServiceProtocol for PHandle {
-    fn init(&mut self, control: &mut ServiceContext) {
+    fn init(&mut self, control: &mut ProtocolContext) {
         control.set_service_notify(self.proto_id, Duration::from_secs(1), 3);
     }
 
-    fn connected(
-        &mut self,
-        control: &mut ServiceContext,
-        session: &SessionContext,
-        _version: &str,
-    ) {
-        if session.ty == SessionType::Server {
+    fn connected(&mut self, control: ProtocolContextMutRef, _version: &str) {
+        if control.session.ty == SessionType::Server {
             // if server, dial itself
             self.dial_addr = Some(control.listens()[0].clone());
         } else {
             // if client, dial server
-            self.dial_addr = Some(session.address.clone());
+            self.dial_addr = Some(control.session.address.clone());
         }
         self.connected_count += 1;
     }
 
-    fn disconnected(&mut self, _control: &mut ServiceContext, _session: &SessionContext) {
+    fn disconnected(&mut self, _control: ProtocolContextMutRef) {
         self.connected_count -= 1;
     }
 
-    fn notify(&mut self, control: &mut ServiceContext, _token: u64) {
+    fn notify(&mut self, control: &mut ProtocolContext, _token: u64) {
         control.dial(self.dial_addr.as_ref().unwrap().clone(), DialProtocol::All);
         self.dial_count += 1;
         if self.dial_count == 10 {

@@ -9,7 +9,7 @@ use std::{error::Error as ErrorTrait, io};
 use tokio::prelude::{AsyncRead, AsyncWrite, FutureExt};
 
 use crate::{
-    context::{ServiceContext, SessionContext},
+    context::{ServiceContext, SessionContext, SessionControl},
     error::Error,
     multiaddr::{multihash::Multihash, Multiaddr, Protocol},
     protocol_handle_stream::{
@@ -48,7 +48,7 @@ pub(crate) enum InnerProtocolHandle {
 pub struct Service<T> {
     protocol_configs: HashMap<String, ProtocolMeta>,
 
-    sessions: HashMap<SessionId, SessionContext>,
+    sessions: HashMap<SessionId, SessionControl>,
 
     multi_trasport: MultiTransport,
 
@@ -534,7 +534,7 @@ where
             match self
                 .sessions
                 .values()
-                .find(|&context| context.remote_pubkey.as_ref() == Some(key))
+                .find(|&context| context.inner.remote_pubkey.as_ref() == Some(key))
             {
                 Some(context) => {
                     trace!("Connected to the connected node");
@@ -543,7 +543,7 @@ where
                         self.handle.handle_error(
                             &mut self.service_context,
                             ServiceError::DialerError {
-                                error: Error::RepeatedConnection(context.id),
+                                error: Error::RepeatedConnection(context.inner.id),
                                 address,
                             },
                         );
@@ -551,7 +551,7 @@ where
                         self.handle.handle_error(
                             &mut self.service_context,
                             ServiceError::ListenError {
-                                error: Error::RepeatedConnection(context.id),
+                                error: Error::RepeatedConnection(context.inner.id),
                                 address,
                             },
                         );
@@ -587,12 +587,14 @@ where
         }
 
         let (service_event_sender, service_event_receiver) = mpsc::channel(32);
-        let session_context = SessionContext {
+        let session_control = SessionControl {
             event_sender: service_event_sender,
-            id: self.next_session,
-            address,
-            ty,
-            remote_pubkey,
+            inner: SessionContext {
+                id: self.next_session,
+                address,
+                ty,
+                remote_pubkey,
+            },
         };
 
         let meta = SessionMeta::new(self.next_session, ty, self.config.timeout)
@@ -640,11 +642,12 @@ where
         self.handle.handle_event(
             &mut self.service_context,
             ServiceEvent::SessionOpen {
-                session_context: &session_context,
+                session_context: &session_control.inner,
             },
         );
 
-        self.sessions.insert(session_context.id, session_context);
+        self.sessions
+            .insert(session_control.inner.id, session_control);
     }
 
     /// Close the specified session, clean up the handle
@@ -668,11 +671,13 @@ where
             self.protocol_close(id, proto_id, Source::Internal);
         });
 
-        if let Some(session_context) = self.sessions.remove(&id) {
+        if let Some(session_control) = self.sessions.remove(&id) {
             // Service handle processing flow
             self.handle.handle_event(
                 &mut self.service_context,
-                ServiceEvent::SessionClose { session_context },
+                ServiceEvent::SessionClose {
+                    session_context: session_control.inner,
+                },
             );
         }
     }
@@ -701,7 +706,7 @@ where
         }
 
         debug!("service session [{}] proto [{}] open", id, proto_id);
-        let session_context = self
+        let session_control = self
             .sessions
             .get(&id)
             .expect("Protocol open without session open");
@@ -718,7 +723,7 @@ where
             self.handle.handle_proto(
                 &mut self.service_context,
                 ProtocolEvent::Connected {
-                    session_context,
+                    session_context: &session_control.inner,
                     proto_id,
                     version: version.clone(),
                 },
@@ -751,7 +756,7 @@ where
             self.read_service_buf.push_back((
                 proto_id,
                 ServiceProtocolEvent::Connected {
-                    session: session_context.clone(),
+                    session: session_control.inner.clone(),
                     version: version.clone(),
                 },
             ));
@@ -764,7 +769,7 @@ where
             let stream = SessionProtocolStream::new(
                 handle,
                 self.service_context.clone_self(),
-                session_context.clone(),
+                session_control.inner.clone(),
                 receiver,
                 proto_id,
             );
@@ -801,12 +806,12 @@ where
         );
 
         if self.config.event.contains(&proto_id) {
-            if let Some(session_context) = self.sessions.get(&session_id) {
+            if let Some(session_control) = self.sessions.get(&session_id) {
                 // event output
                 self.handle.handle_proto(
                     &mut self.service_context,
                     ProtocolEvent::Received {
-                        session_context,
+                        session_context: &session_control.inner,
                         proto_id,
                         data: data.clone(),
                     },
@@ -863,12 +868,12 @@ where
         );
 
         if self.config.event.contains(&proto_id) {
-            if let Some(session_context) = self.sessions.get(&session_id) {
+            if let Some(session_control) = self.sessions.get(&session_id) {
                 self.handle.handle_proto(
                     &mut self.service_context,
                     ProtocolEvent::DisConnected {
                         proto_id,
-                        session_context,
+                        session_context: &session_control.inner,
                     },
                 )
             }
@@ -977,12 +982,12 @@ where
                 self.protocol_close(id, proto_id, Source::Internal)
             }
             SessionEvent::ProtocolSelectError { id, proto_name } => {
-                if let Some(session_context) = self.sessions.get(&id) {
+                if let Some(session_control) = self.sessions.get(&id) {
                     self.handle.handle_error(
                         &mut self.service_context,
                         ServiceError::ProtocolSelectError {
                             proto_name,
-                            session_context,
+                            session_context: &session_control.inner,
                         },
                     )
                 }
@@ -1015,19 +1020,21 @@ where
                 )
             }
             SessionEvent::SessionTimeout { id } => {
-                if let Some(session_context) = self.sessions.get(&id) {
+                if let Some(session_control) = self.sessions.get(&id) {
                     self.handle.handle_error(
                         &mut self.service_context,
-                        ServiceError::SessionTimeout { session_context },
+                        ServiceError::SessionTimeout {
+                            session_context: &session_control.inner,
+                        },
                     )
                 }
             }
             SessionEvent::MuxerError { id, error } => {
-                if let Some(session_context) = self.sessions.get(&id) {
+                if let Some(session_control) = self.sessions.get(&id) {
                     self.handle.handle_error(
                         &mut self.service_context,
                         ServiceError::MuxerError {
-                            session_context,
+                            session_context: &session_control.inner,
                             error,
                         },
                     )
@@ -1127,13 +1134,13 @@ where
                     .unwrap_or_else(|| false)
                 {
                     if self.config.event.contains(&proto_id) {
-                        if let Some(session_context) = self.sessions.get(&session_id) {
+                        if let Some(session_control) = self.sessions.get(&session_id) {
                             // event output
                             self.handle.handle_proto(
                                 &mut self.service_context,
                                 ProtocolEvent::ProtocolSessionNotify {
                                     proto_id,
-                                    session_context,
+                                    session_context: &session_control.inner,
                                     token,
                                 },
                             )

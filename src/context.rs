@@ -5,6 +5,7 @@ use futures::{
 use log::{debug, warn};
 use std::{
     collections::{HashMap, VecDeque},
+    ops::{Deref, DerefMut},
     sync::Arc,
     time::{Duration, Instant},
 };
@@ -21,10 +22,14 @@ use crate::{
     ProtocolId, SessionId,
 };
 
+pub(crate) struct SessionControl {
+    pub(crate) inner: SessionContext,
+    pub(crate) event_sender: mpsc::Sender<SessionEvent>,
+}
+
 /// Session context, contains basic information about the current connection
 #[derive(Clone, Debug)]
 pub struct SessionContext {
-    pub(crate) event_sender: mpsc::Sender<SessionEvent>,
     /// Session's ID
     pub id: SessionId,
     /// Remote socket address
@@ -250,5 +255,89 @@ impl ServiceContext {
             key_pair: self.key_pair.clone(),
             listens: self.listens.clone(),
         }
+    }
+}
+
+/// Protocol handle context
+pub struct ProtocolContext {
+    inner: ServiceContext,
+    /// Protocol id
+    pub proto_id: ProtocolId,
+}
+
+impl ProtocolContext {
+    pub(crate) fn new(service_context: ServiceContext, proto_id: ProtocolId) -> Self {
+        ProtocolContext {
+            inner: service_context,
+            proto_id,
+        }
+    }
+
+    #[inline]
+    pub(crate) fn as_mut<'a, 'b: 'a>(
+        &'b mut self,
+        session: &'a SessionContext,
+    ) -> ProtocolContextMutRef<'a> {
+        ProtocolContextMutRef {
+            inner: &mut self.inner,
+            proto_id: self.proto_id,
+            session,
+        }
+    }
+
+    #[inline]
+    pub(crate) fn remove_session_notify_senders(&mut self, session_id: SessionId) {
+        self.inner
+            .remove_session_notify_senders(session_id, self.proto_id)
+    }
+}
+
+/// Protocol handle context contain session context
+pub struct ProtocolContextMutRef<'a> {
+    inner: &'a mut ServiceContext,
+    /// Protocol id
+    pub proto_id: ProtocolId,
+    /// Session context
+    pub session: &'a SessionContext,
+}
+
+impl<'a> ProtocolContextMutRef<'a> {
+    /// Send message to current protocol current session
+    #[inline]
+    pub fn send_message(&mut self, data: Vec<u8>) {
+        self.inner
+            .send_message(self.session.id, self.proto_id, data)
+    }
+}
+
+impl Deref for ProtocolContext {
+    type Target = ServiceContext;
+
+    #[inline]
+    fn deref(&self) -> &Self::Target {
+        &self.inner
+    }
+}
+
+impl DerefMut for ProtocolContext {
+    #[inline]
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.inner
+    }
+}
+
+impl<'a> Deref for ProtocolContextMutRef<'a> {
+    type Target = ServiceContext;
+
+    #[inline]
+    fn deref(&self) -> &Self::Target {
+        &self.inner
+    }
+}
+
+impl<'a> DerefMut for ProtocolContextMutRef<'a> {
+    #[inline]
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.inner
     }
 }
