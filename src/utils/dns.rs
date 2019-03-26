@@ -4,13 +4,14 @@ use std::{io, net::ToSocketAddrs};
 use crate::{
     multiaddr::{multihash::Multihash, Multiaddr, Protocol, ToMultiaddr},
     secio::PeerId,
-    utils::extract_peer_id,
+    utils::{extract_peer_id, is_ws},
 };
 
 /// DNS resolver, use on multi-thread tokio runtime
 pub struct DNSResolver {
     source_address: Multiaddr,
     peer_id: Option<PeerId>,
+    ws: bool,
     port: u16,
     domain: String,
 }
@@ -46,6 +47,7 @@ impl DNSResolver {
         match (domain, port) {
             (Some(domain), Some(port)) => Some(DNSResolver {
                 peer_id: extract_peer_id(&source_address),
+                ws: is_ws(&source_address),
                 domain: domain.to_string(),
                 source_address,
                 port,
@@ -64,6 +66,10 @@ impl Future for DNSResolver {
             Ok(Async::Ready(Ok(mut iter))) => match iter.next() {
                 Some(address) => {
                     let mut address = address.to_multiaddr().unwrap();
+
+                    if self.ws {
+                        address.append(Protocol::Ws);
+                    }
                     if let Some(peer_id) = self.peer_id.take() {
                         address.append(Protocol::P2p(
                             Multihash::from_bytes(peer_id.into_bytes()).expect("Invalid peer id"),

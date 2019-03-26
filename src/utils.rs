@@ -50,12 +50,19 @@ pub fn extract_peer_id(addr: &Multiaddr) -> Option<PeerId> {
     })
 }
 
+/// Determine if it is a WebSocket protocol
+pub fn is_ws(addr: &Multiaddr) -> bool {
+    let mut iter = addr.iter();
+
+    iter.any(|proto| proto == Protocol::Ws || proto == Protocol::Wss)
+}
+
 #[cfg(test)]
 mod test {
     use crate::{
         multiaddr::Multiaddr,
         secio::SecioKeyPair,
-        utils::{extract_peer_id, multiaddr_to_socketaddr},
+        utils::{extract_peer_id, is_ws, multiaddr_to_socketaddr},
     };
 
     #[test]
@@ -99,5 +106,15 @@ mod test {
             .parse()
             .unwrap();
         multiaddr_to_socketaddr(&addr).unwrap();
+    }
+
+    #[test]
+    fn test_ws_judgment() {
+        let addr_1 = "/ip4/127.0.0.1/tcp/1337/ws".parse().unwrap();
+        let addr_2 = "/ip4/127.0.0.1/tcp/1337/wss".parse().unwrap();
+        let addr_3 = "/ip4/127.0.0.1/tcp/1337".parse().unwrap();
+        assert_eq!(is_ws(&addr_1), true);
+        assert_eq!(is_ws(&addr_2), true);
+        assert_eq!(is_ws(&addr_3), false);
     }
 }
