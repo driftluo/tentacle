@@ -8,7 +8,7 @@ use std::{thread, time::Duration};
 use systemstat::{Platform, System};
 use tentacle::{
     builder::{MetaBuilder, ServiceBuilder},
-    context::{ServiceContext, SessionContext},
+    context::{HandleContext, HandleContextMutRef},
     secio::SecioKeyPair,
     service::{DialProtocol, ProtocolHandle, ProtocolMeta, Service},
     traits::{ServiceHandle, ServiceProtocol},
@@ -60,30 +60,20 @@ struct PHandle {
 }
 
 impl ServiceProtocol for PHandle {
-    fn init(&mut self, _control: &mut ServiceContext) {}
+    fn init(&mut self, _control: &mut HandleContext) {}
 
-    fn connected(
-        &mut self,
-        _control: &mut ServiceContext,
-        session: &SessionContext,
-        _version: &str,
-    ) {
+    fn connected(&mut self, control: HandleContextMutRef, _version: &str) {
         self.connected_count += 1;
-        assert_eq!(self.proto_id, session.id);
+        assert_eq!(self.proto_id, control.session_context.id);
         assert_eq!(self.sender.send(()), Ok(()));
     }
 
-    fn disconnected(&mut self, _control: &mut ServiceContext, _session: &SessionContext) {
+    fn disconnected(&mut self, _control: HandleContextMutRef) {
         self.connected_count -= 1;
         assert_eq!(self.sender.send(()), Ok(()));
     }
 
-    fn received(
-        &mut self,
-        env: &mut ServiceContext,
-        _session: &SessionContext,
-        data: bytes::Bytes,
-    ) {
+    fn received(&mut self, mut env: HandleContextMutRef, data: bytes::Bytes) {
         env.filter_broadcast(None, self.proto_id, data.to_vec());
     }
 }

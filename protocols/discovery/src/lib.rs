@@ -9,7 +9,7 @@ use futures::{
 };
 use log::{debug, warn};
 use p2p::{
-    context::{ServiceContext, SessionContext},
+    context::{HandleContext, HandleContextMutRef},
     traits::ServiceProtocol,
     yamux::session::SessionType,
     ProtocolId, SessionId,
@@ -52,7 +52,7 @@ impl<M: AddressManager> DiscoveryProtocol<M> {
 }
 
 impl<M: AddressManager + Send + 'static> ServiceProtocol for DiscoveryProtocol<M> {
-    fn init(&mut self, control: &mut ServiceContext) {
+    fn init(&mut self, control: &mut HandleContext) {
         debug!("protocol [discovery({})]: init", self.id);
 
         let discovery_task = self
@@ -74,7 +74,8 @@ impl<M: AddressManager + Send + 'static> ServiceProtocol for DiscoveryProtocol<M
         control.future_task(discovery_task);
     }
 
-    fn connected(&mut self, control: &mut ServiceContext, session: &SessionContext, _: &str) {
+    fn connected(&mut self, mut control: HandleContextMutRef, _: &str) {
+        let session = control.session_context;
         debug!(
             "protocol [discovery] open on session [{}], address: [{}], type: [{:?}]",
             session.id, session.address, session.ty
@@ -107,20 +108,18 @@ impl<M: AddressManager + Send + 'static> ServiceProtocol for DiscoveryProtocol<M
         }
     }
 
-    fn disconnected(&mut self, _control: &mut ServiceContext, session: &SessionContext) {
-        self.discovery_senders.remove(&session.id);
-        debug!("protocol [discovery] close on session [{}]", session.id);
+    fn disconnected(&mut self, control: HandleContextMutRef) {
+        self.discovery_senders.remove(&control.session_context.id);
+        debug!(
+            "protocol [discovery] close on session [{}]",
+            control.session_context.id
+        );
     }
 
-    fn received(
-        &mut self,
-        _control: &mut ServiceContext,
-        session: &SessionContext,
-        data: bytes::Bytes,
-    ) {
+    fn received(&mut self, control: HandleContextMutRef, data: bytes::Bytes) {
         debug!("[received message]: length={}", data.len());
 
-        if let Some(ref mut sender) = self.discovery_senders.get_mut(&session.id) {
+        if let Some(ref mut sender) = self.discovery_senders.get_mut(&control.session_context.id) {
             // TODO: handle channel is full (wait for poll API?)
             if let Err(err) = sender.try_send(data.to_vec()) {
                 if err.is_full() {

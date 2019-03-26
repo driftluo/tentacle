@@ -2,7 +2,7 @@ use futures::prelude::Stream;
 use std::thread;
 use tentacle::{
     builder::{MetaBuilder, ServiceBuilder},
-    context::ServiceContext,
+    context::{HandleContext, ServiceContext},
     error::Error,
     multiaddr::{multihash::Multihash, Protocol as MultiProtocol},
     secio::SecioKeyPair,
@@ -25,7 +25,7 @@ where
 struct PHandle;
 
 impl ServiceProtocol for PHandle {
-    fn init(&mut self, _control: &mut ServiceContext) {}
+    fn init(&mut self, _control: &mut HandleContext) {}
 }
 
 #[derive(Clone)]

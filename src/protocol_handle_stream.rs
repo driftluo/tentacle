@@ -3,7 +3,7 @@ use log::warn;
 use std::collections::HashMap;
 
 use crate::{
-    context::{ServiceContext, SessionContext},
+    context::{HandleContext, ServiceContext, SessionContext},
     multiaddr::Multiaddr,
     traits::{ServiceProtocol, SessionProtocol},
     ProtocolId, SessionId,
@@ -36,9 +36,8 @@ pub enum ServiceProtocolEvent {
 
 pub struct ServiceProtocolStream {
     handle: Box<dyn ServiceProtocol + Send + 'static>,
-    proto_id: ProtocolId,
     /// External event is passed in from this
-    service_context: ServiceContext,
+    handle_context: HandleContext,
     sessions: HashMap<SessionId, SessionContext>,
     receiver: mpsc::Receiver<ServiceProtocolEvent>,
 }
@@ -52,8 +51,7 @@ impl ServiceProtocolStream {
     ) -> Self {
         ServiceProtocolStream {
             handle,
-            proto_id,
-            service_context,
+            handle_context: HandleContext::new(service_context, proto_id),
             sessions: HashMap::default(),
             receiver,
         }
@@ -63,31 +61,32 @@ impl ServiceProtocolStream {
     fn handle_event(&mut self, event: ServiceProtocolEvent) {
         use self::ServiceProtocolEvent::*;
         match event {
-            Init => self.handle.init(&mut self.service_context),
+            Init => self.handle.init(&mut self.handle_context),
             Connected { session, version } => {
                 self.handle
-                    .connected(&mut self.service_context, &session, &version);
+                    .connected(self.handle_context.as_mut(&session), &version);
                 self.sessions.insert(session.id, session);
             }
             Disconnected { id } => {
                 if let Some(session) = self.sessions.remove(&id) {
                     self.handle
-                        .disconnected(&mut self.service_context, &session);
+                        .disconnected(self.handle_context.as_mut(&session));
                 }
-                self.service_context
-                    .remove_session_notify_senders(id, self.proto_id);
+                self.handle_context.remove_session_notify_senders(id);
             }
             Received { id, data } => {
                 if let Some(session) = self.sessions.get(&id) {
                     self.handle
-                        .received(&mut self.service_context, session, data);
+                        .received(self.handle_context.as_mut(&session), data);
                 }
             }
             Notify { token } => {
-                self.handle.notify(&mut self.service_context, token);
+                self.handle.notify(&mut self.handle_context, token);
             }
             Update { listen_addrs } => {
-                self.service_context.update_listens(listen_addrs);
+                self.handle_context
+                    .service_mut()
+                    .update_listens(listen_addrs);
             }
         }
     }
@@ -103,8 +102,7 @@ impl Stream for ServiceProtocolStream {
                 Ok(Async::Ready(Some(event))) => self.handle_event(event),
                 Ok(Async::Ready(None)) => {
                     for id in self.sessions.keys() {
-                        self.service_context
-                            .remove_session_notify_senders(*id, self.proto_id);
+                        self.handle_context.remove_session_notify_senders(*id);
                     }
                     return Ok(Async::Ready(None));
                 }
@@ -112,20 +110,20 @@ impl Stream for ServiceProtocolStream {
                 Err(err) => {
                     warn!(
                         "service proto [{}] handle receive message error: {:?}",
-                        self.proto_id, err
+                        self.handle_context.proto_id, err
                     );
                     return Err(());
                 }
             }
         }
 
-        self.handle.poll(&mut self.service_context);
+        self.handle.poll(&mut self.handle_context);
 
-        for task in self.service_context.pending_tasks.split_off(0) {
-            self.service_context.send(task);
+        for task in self.handle_context.service_mut().pending_tasks.split_off(0) {
+            self.handle_context.service_mut().send(task);
         }
 
-        if !self.service_context.pending_tasks.is_empty() {
+        if !self.handle_context.service_mut().pending_tasks.is_empty() {
             task::current().notify();
         }
 
@@ -155,9 +153,8 @@ pub enum SessionProtocolEvent {
 pub struct SessionProtocolStream {
     handle: Box<dyn SessionProtocol + Send + 'static>,
     /// External event is passed in from this
-    service_context: ServiceContext,
+    handle_context: HandleContext,
     context: SessionContext,
-    proto_id: ProtocolId,
     receiver: mpsc::Receiver<SessionProtocolEvent>,
 }
 
@@ -171,8 +168,7 @@ impl SessionProtocolStream {
     ) -> Self {
         SessionProtocolStream {
             handle,
-            proto_id,
-            service_context,
+            handle_context: HandleContext::new(service_context, proto_id),
             receiver,
             context,
         }
@@ -184,31 +180,33 @@ impl SessionProtocolStream {
         match event {
             Connected { version } => {
                 self.handle
-                    .connected(&mut self.service_context, &self.context, &version);
+                    .connected(self.handle_context.as_mut(&self.context), &version);
             }
             Disconnected => {
                 self.handle
-                    .disconnected(&mut self.service_context, &self.context);
+                    .disconnected(self.handle_context.as_mut(&self.context));
                 self.close();
             }
             Received { data } => {
                 self.handle
-                    .received(&mut self.service_context, &self.context, data);
+                    .received(self.handle_context.as_mut(&self.context), data);
             }
             Notify { token } => {
                 self.handle
-                    .notify(&mut self.service_context, &self.context, token);
+                    .notify(self.handle_context.as_mut(&self.context), token);
             }
             Update { listen_addrs } => {
-                self.service_context.update_listens(listen_addrs);
+                self.handle_context
+                    .service_mut()
+                    .update_listens(listen_addrs);
             }
         }
     }
 
     #[inline(always)]
     fn close(&mut self) {
-        self.service_context
-            .remove_session_notify_senders(self.context.id, self.proto_id);
+        self.handle_context
+            .remove_session_notify_senders(self.context.id);
         self.receiver.close();
     }
 }
@@ -229,20 +227,20 @@ impl Stream for SessionProtocolStream {
                 Err(err) => {
                     warn!(
                         "session proto [{}] handle receive message error: {:?}",
-                        self.proto_id, err
+                        self.handle_context.proto_id, err
                     );
                     return Err(());
                 }
             }
         }
 
-        self.handle.poll(&mut self.service_context, &self.context);
+        self.handle.poll(self.handle_context.as_mut(&self.context));
 
-        for task in self.service_context.pending_tasks.split_off(0) {
-            self.service_context.send(task);
+        for task in self.handle_context.service_mut().pending_tasks.split_off(0) {
+            self.handle_context.service_mut().send(task);
         }
 
-        if !self.service_context.pending_tasks.is_empty() {
+        if !self.handle_context.service_mut().pending_tasks.is_empty() {
             task::current().notify();
         }
 
