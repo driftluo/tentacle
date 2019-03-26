@@ -9,7 +9,7 @@ use fnv::FnvHashMap;
 use generic_channel::Sender;
 use log::{debug, error};
 use p2p::{
-    context::{HandleContext, HandleContextMutRef},
+    context::{ProtocolContext, ProtocolContextMutRef},
     secio::PeerId,
     traits::ServiceProtocol,
     ProtocolId, SessionId,
@@ -99,14 +99,14 @@ impl<S> ServiceProtocol for PingHandler<S>
 where
     S: Sender<Event>,
 {
-    fn init(&mut self, control: &mut HandleContext) {
+    fn init(&mut self, control: &mut ProtocolContext) {
         // periodicly send ping to peers
         control.set_service_notify(self.id, self.interval, SEND_PING_TOKEN);
         control.set_service_notify(self.id, self.timeout, CHECK_TIMEOUT_TOKEN);
     }
 
-    fn connected(&mut self, mut control: HandleContextMutRef, version: &str) {
-        let session = control.session_context;
+    fn connected(&mut self, mut control: ProtocolContextMutRef, version: &str) {
+        let session = control.session;
         match session.remote_pubkey {
             Some(ref pubkey) => {
                 let peer_id = pubkey.peer_id();
@@ -129,14 +129,14 @@ where
         }
     }
 
-    fn disconnected(&mut self, control: HandleContextMutRef) {
-        let session = control.session_context;
+    fn disconnected(&mut self, control: ProtocolContextMutRef) {
+        let session = control.session;
         self.connected_session_ids.remove(&session.id);
         debug!("proto id [{}] close on session [{}]", self.id, session.id);
     }
 
-    fn received(&mut self, mut control: HandleContextMutRef, data: bytes::Bytes) {
-        let session = control.session_context;
+    fn received(&mut self, mut control: ProtocolContextMutRef, data: bytes::Bytes) {
+        let session = control.session;
         if let Some(peer_id) = self
             .connected_session_ids
             .get(&session.id)
@@ -182,7 +182,7 @@ where
         }
     }
 
-    fn notify(&mut self, control: &mut HandleContext, token: u64) {
+    fn notify(&mut self, control: &mut ProtocolContext, token: u64) {
         match token {
             SEND_PING_TOKEN => {
                 debug!("proto [{}] start ping peers", self.id);

@@ -259,15 +259,15 @@ impl ServiceContext {
 }
 
 /// Protocol handle context
-pub struct HandleContext {
+pub struct ProtocolContext {
     inner: ServiceContext,
     /// Protocol id
     pub proto_id: ProtocolId,
 }
 
-impl HandleContext {
+impl ProtocolContext {
     pub(crate) fn new(service_context: ServiceContext, proto_id: ProtocolId) -> Self {
-        HandleContext {
+        ProtocolContext {
             inner: service_context,
             proto_id,
         }
@@ -276,19 +276,13 @@ impl HandleContext {
     #[inline]
     pub(crate) fn as_mut<'a, 'b: 'a>(
         &'b mut self,
-        session_context: &'a SessionContext,
-    ) -> HandleContextMutRef<'a> {
-        HandleContextMutRef {
+        session: &'a SessionContext,
+    ) -> ProtocolContextMutRef<'a> {
+        ProtocolContextMutRef {
             inner: &mut self.inner,
             proto_id: self.proto_id,
-            session_context,
+            session,
         }
-    }
-
-    /// Get ServiceContext
-    #[inline]
-    pub fn service_mut(&mut self) -> &mut ServiceContext {
-        &mut self.inner
     }
 
     #[inline]
@@ -299,30 +293,24 @@ impl HandleContext {
 }
 
 /// Protocol handle context contain session context
-pub struct HandleContextMutRef<'a> {
+pub struct ProtocolContextMutRef<'a> {
     inner: &'a mut ServiceContext,
     /// Protocol id
     pub proto_id: ProtocolId,
     /// Session context
-    pub session_context: &'a SessionContext,
+    pub session: &'a SessionContext,
 }
 
-impl<'a> HandleContextMutRef<'a> {
-    /// Get service context
-    #[inline]
-    pub fn service_mut(&mut self) -> &mut ServiceContext {
-        &mut self.inner
-    }
-
+impl<'a> ProtocolContextMutRef<'a> {
     /// Send message to current protocol current session
     #[inline]
     pub fn send_message(&mut self, data: Vec<u8>) {
         self.inner
-            .send_message(self.session_context.id, self.proto_id, data)
+            .send_message(self.session.id, self.proto_id, data)
     }
 }
 
-impl Deref for HandleContext {
+impl Deref for ProtocolContext {
     type Target = ServiceContext;
 
     #[inline]
@@ -331,14 +319,14 @@ impl Deref for HandleContext {
     }
 }
 
-impl DerefMut for HandleContext {
+impl DerefMut for ProtocolContext {
     #[inline]
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.inner
     }
 }
 
-impl<'a> Deref for HandleContextMutRef<'a> {
+impl<'a> Deref for ProtocolContextMutRef<'a> {
     type Target = ServiceContext;
 
     #[inline]
@@ -347,7 +335,7 @@ impl<'a> Deref for HandleContextMutRef<'a> {
     }
 }
 
-impl<'a> DerefMut for HandleContextMutRef<'a> {
+impl<'a> DerefMut for ProtocolContextMutRef<'a> {
     #[inline]
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.inner

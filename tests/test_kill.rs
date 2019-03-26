@@ -8,7 +8,7 @@ use std::{thread, time::Duration};
 use systemstat::{Platform, System};
 use tentacle::{
     builder::{MetaBuilder, ServiceBuilder},
-    context::{HandleContext, HandleContextMutRef},
+    context::{ProtocolContext, ProtocolContextMutRef},
     secio::SecioKeyPair,
     service::{DialProtocol, ProtocolHandle, ProtocolMeta, Service},
     traits::{ServiceHandle, ServiceProtocol},
@@ -60,20 +60,20 @@ struct PHandle {
 }
 
 impl ServiceProtocol for PHandle {
-    fn init(&mut self, _control: &mut HandleContext) {}
+    fn init(&mut self, _control: &mut ProtocolContext) {}
 
-    fn connected(&mut self, control: HandleContextMutRef, _version: &str) {
+    fn connected(&mut self, control: ProtocolContextMutRef, _version: &str) {
         self.connected_count += 1;
-        assert_eq!(self.proto_id, control.session_context.id);
+        assert_eq!(self.proto_id, control.session.id);
         assert_eq!(self.sender.send(()), Ok(()));
     }
 
-    fn disconnected(&mut self, _control: HandleContextMutRef) {
+    fn disconnected(&mut self, _control: ProtocolContextMutRef) {
         self.connected_count -= 1;
         assert_eq!(self.sender.send(()), Ok(()));
     }
 
-    fn received(&mut self, mut env: HandleContextMutRef, data: bytes::Bytes) {
+    fn received(&mut self, mut env: ProtocolContextMutRef, data: bytes::Bytes) {
         env.filter_broadcast(None, self.proto_id, data.to_vec());
     }
 }

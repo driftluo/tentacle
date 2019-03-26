@@ -9,7 +9,7 @@ use std::time::{Duration, Instant};
 
 use log::{debug, error, trace};
 use p2p::{
-    context::{HandleContext, HandleContextMutRef, SessionContext},
+    context::{ProtocolContext, ProtocolContextMutRef, SessionContext},
     multiaddr::Multiaddr,
     secio::PeerId,
     traits::ServiceProtocol,
@@ -129,7 +129,7 @@ impl RemoteInfo {
 }
 
 impl<T: AddrManager> ServiceProtocol for IdentifyProtocol<T> {
-    fn init(&mut self, service: &mut HandleContext) {
+    fn init(&mut self, service: &mut ProtocolContext) {
         self.listen_addrs = service.listens().clone();
 
         service.set_service_notify(
@@ -139,8 +139,8 @@ impl<T: AddrManager> ServiceProtocol for IdentifyProtocol<T> {
         );
     }
 
-    fn connected(&mut self, mut service: HandleContextMutRef, version: &str) {
-        let session = service.session_context;
+    fn connected(&mut self, mut service: ProtocolContextMutRef, version: &str) {
+        let session = service.session;
         if session.remote_pubkey.is_none() {
             error!("IdentifyProtocol require secio enabled!");
             service.disconnect(session.id);
@@ -169,22 +169,22 @@ impl<T: AddrManager> ServiceProtocol for IdentifyProtocol<T> {
         service.send_message(data);
     }
 
-    fn disconnected(&mut self, service: HandleContextMutRef) {
+    fn disconnected(&mut self, service: ProtocolContextMutRef) {
         if self.secio_enabled {
             let info = self
                 .remote_infos
-                .remove(&service.session_context.id)
+                .remove(&service.session.id)
                 .expect("RemoteInfo must exists");
             trace!("IdentifyProtocol disconnected from {:?}", info.peer_id);
         }
     }
 
-    fn received(&mut self, mut service: HandleContextMutRef, data: bytes::Bytes) {
+    fn received(&mut self, mut service: ProtocolContextMutRef, data: bytes::Bytes) {
         if !self.secio_enabled {
             return;
         }
 
-        let session = service.session_context;
+        let session = service.session;
 
         let info = self
             .remote_infos
@@ -255,7 +255,7 @@ impl<T: AddrManager> ServiceProtocol for IdentifyProtocol<T> {
         }
     }
 
-    fn notify(&mut self, service: &mut HandleContext, _token: u64) {
+    fn notify(&mut self, service: &mut ProtocolContext, _token: u64) {
         if !self.secio_enabled {
             return;
         }

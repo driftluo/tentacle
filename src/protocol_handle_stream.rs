@@ -3,7 +3,7 @@ use log::warn;
 use std::collections::HashMap;
 
 use crate::{
-    context::{HandleContext, ServiceContext, SessionContext},
+    context::{ProtocolContext, ServiceContext, SessionContext},
     multiaddr::Multiaddr,
     traits::{ServiceProtocol, SessionProtocol},
     ProtocolId, SessionId,
@@ -37,7 +37,7 @@ pub enum ServiceProtocolEvent {
 pub struct ServiceProtocolStream {
     handle: Box<dyn ServiceProtocol + Send + 'static>,
     /// External event is passed in from this
-    handle_context: HandleContext,
+    handle_context: ProtocolContext,
     sessions: HashMap<SessionId, SessionContext>,
     receiver: mpsc::Receiver<ServiceProtocolEvent>,
 }
@@ -51,7 +51,7 @@ impl ServiceProtocolStream {
     ) -> Self {
         ServiceProtocolStream {
             handle,
-            handle_context: HandleContext::new(service_context, proto_id),
+            handle_context: ProtocolContext::new(service_context, proto_id),
             sessions: HashMap::default(),
             receiver,
         }
@@ -84,9 +84,7 @@ impl ServiceProtocolStream {
                 self.handle.notify(&mut self.handle_context, token);
             }
             Update { listen_addrs } => {
-                self.handle_context
-                    .service_mut()
-                    .update_listens(listen_addrs);
+                self.handle_context.update_listens(listen_addrs);
             }
         }
     }
@@ -119,11 +117,11 @@ impl Stream for ServiceProtocolStream {
 
         self.handle.poll(&mut self.handle_context);
 
-        for task in self.handle_context.service_mut().pending_tasks.split_off(0) {
-            self.handle_context.service_mut().send(task);
+        for task in self.handle_context.pending_tasks.split_off(0) {
+            self.handle_context.send(task);
         }
 
-        if !self.handle_context.service_mut().pending_tasks.is_empty() {
+        if !self.handle_context.pending_tasks.is_empty() {
             task::current().notify();
         }
 
@@ -153,7 +151,7 @@ pub enum SessionProtocolEvent {
 pub struct SessionProtocolStream {
     handle: Box<dyn SessionProtocol + Send + 'static>,
     /// External event is passed in from this
-    handle_context: HandleContext,
+    handle_context: ProtocolContext,
     context: SessionContext,
     receiver: mpsc::Receiver<SessionProtocolEvent>,
 }
@@ -168,7 +166,7 @@ impl SessionProtocolStream {
     ) -> Self {
         SessionProtocolStream {
             handle,
-            handle_context: HandleContext::new(service_context, proto_id),
+            handle_context: ProtocolContext::new(service_context, proto_id),
             receiver,
             context,
         }
@@ -196,9 +194,7 @@ impl SessionProtocolStream {
                     .notify(self.handle_context.as_mut(&self.context), token);
             }
             Update { listen_addrs } => {
-                self.handle_context
-                    .service_mut()
-                    .update_listens(listen_addrs);
+                self.handle_context.update_listens(listen_addrs);
             }
         }
     }
@@ -236,11 +232,11 @@ impl Stream for SessionProtocolStream {
 
         self.handle.poll(self.handle_context.as_mut(&self.context));
 
-        for task in self.handle_context.service_mut().pending_tasks.split_off(0) {
-            self.handle_context.service_mut().send(task);
+        for task in self.handle_context.pending_tasks.split_off(0) {
+            self.handle_context.send(task);
         }
 
-        if !self.handle_context.service_mut().pending_tasks.is_empty() {
+        if !self.handle_context.pending_tasks.is_empty() {
             task::current().notify();
         }
 

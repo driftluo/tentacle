@@ -2,7 +2,7 @@ use std::io;
 use tokio::codec::{Decoder, Encoder};
 
 use crate::{
-    context::{HandleContext, HandleContextMutRef, ServiceContext},
+    context::{ProtocolContext, ProtocolContextMutRef, ServiceContext},
     service::{ProtocolEvent, ServiceError, ServiceEvent},
 };
 
@@ -61,33 +61,33 @@ pub trait ServiceProtocol {
     /// This function is called when the protocol is opened.
     ///
     /// The service handle will only be called once
-    fn init(&mut self, service: &mut HandleContext);
+    fn init(&mut self, context: &mut ProtocolContext);
     /// Called when opening protocol
-    fn connected(&mut self, _service: HandleContextMutRef, _version: &str) {}
+    fn connected(&mut self, _context: ProtocolContextMutRef, _version: &str) {}
     /// Called when closing protocol
-    fn disconnected(&mut self, _service: HandleContextMutRef) {}
+    fn disconnected(&mut self, _context: ProtocolContextMutRef) {}
     /// Called when the corresponding protocol message is received
-    fn received(&mut self, _service: HandleContextMutRef, _data: bytes::Bytes) {}
+    fn received(&mut self, _context: ProtocolContextMutRef, _data: bytes::Bytes) {}
     /// Called when the Service receives the notify task
-    fn notify(&mut self, _service: &mut HandleContext, _token: u64) {}
+    fn notify(&mut self, _context: &mut ProtocolContext, _token: u64) {}
     /// Behave like `Stream::poll`, but nothing output
     #[inline]
-    fn poll(&mut self, _service: &mut HandleContext) {}
+    fn poll(&mut self, _context: &mut ProtocolContext) {}
 }
 
 /// Session level protocol handle
 pub trait SessionProtocol {
     /// Called when opening protocol
-    fn connected(&mut self, _service: HandleContextMutRef, _version: &str) {}
+    fn connected(&mut self, _context: ProtocolContextMutRef, _version: &str) {}
     /// Called when closing protocol
-    fn disconnected(&mut self, _service: HandleContextMutRef) {}
+    fn disconnected(&mut self, _context: ProtocolContextMutRef) {}
     /// Called when the corresponding protocol message is received
-    fn received(&mut self, _service: HandleContextMutRef, _data: bytes::Bytes) {}
+    fn received(&mut self, _context: ProtocolContextMutRef, _data: bytes::Bytes) {}
     /// Called when the session receives the notify task
-    fn notify(&mut self, _service: HandleContextMutRef, _token: u64) {}
+    fn notify(&mut self, _context: ProtocolContextMutRef, _token: u64) {}
     /// Behave like `Stream::poll`, but nothing output, shutdown when session close
     #[inline]
-    fn poll(&mut self, _service: HandleContextMutRef) {}
+    fn poll(&mut self, _context: ProtocolContextMutRef) {}
 }
 
 /// A trait can define codec, just wrapper `Decoder` and `Encoder`
