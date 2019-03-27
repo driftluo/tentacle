@@ -1,10 +1,13 @@
-mod protocol_builder;
 #[rustfmt::skip]
 #[allow(clippy::all)]
 mod protocol_generated;
+#[rustfmt::skip]
+#[allow(clippy::all)]
+#[allow(dead_code)]
+mod protocol_generated_verifier;
 
-use crate::protocol_generated::p2p::ping::*;
-use flatbuffers::{get_root, FlatBufferBuilder};
+use crate::{protocol_generated::p2p::ping::*, protocol_generated_verifier::get_root};
+use flatbuffers::{FlatBufferBuilder, WIPOffset};
 use fnv::FnvHashMap;
 use generic_channel::Sender;
 use log::{debug, error};
@@ -142,7 +145,14 @@ where
             .get(&session.id)
             .map(|ps| ps.peer_id.clone())
         {
-            let msg = get_root::<PingMessage>(data.as_ref());
+            let msg = match get_root::<PingMessage>(data.as_ref()) {
+                Ok(msg) => msg,
+                Err(e) => {
+                    error!("decode message error: {:?}", e);
+                    self.send_event(Event::UnexpectedError(peer_id));
+                    return;
+                }
+            };
             match msg.payload_type() {
                 PingPayload::Ping => {
                     let ping_msg = msg.payload_as_ping().unwrap();
@@ -226,5 +236,37 @@ where
             }
             _ => panic!("unknown token {}", token),
         }
+    }
+}
+
+impl<'a> PingMessage<'a> {
+    pub fn build_ping<'b>(
+        fbb: &mut FlatBufferBuilder<'b>,
+        nonce: u32,
+    ) -> WIPOffset<PingMessage<'b>> {
+        let ping = {
+            let mut ping = PingBuilder::new(fbb);
+            ping.add_nonce(nonce);
+            ping.finish()
+        };
+        let mut builder = PingMessageBuilder::new(fbb);
+        builder.add_payload_type(PingPayload::Ping);
+        builder.add_payload(ping.as_union_value());
+        builder.finish()
+    }
+
+    pub fn build_pong<'b>(
+        fbb: &mut FlatBufferBuilder<'b>,
+        nonce: u32,
+    ) -> WIPOffset<PingMessage<'b>> {
+        let pong = {
+            let mut pong = PongBuilder::new(fbb);
+            pong.add_nonce(nonce);
+            pong.finish()
+        };
+        let mut builder = PingMessageBuilder::new(fbb);
+        builder.add_payload_type(PingPayload::Pong);
+        builder.add_payload(pong.as_union_value());
+        builder.finish()
     }
 }

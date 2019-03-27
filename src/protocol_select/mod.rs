@@ -1,9 +1,12 @@
-use crate::protocol_select::protocol_select_generated::p2p::protocol_select::{
-    ProtocolInfo as FBSProtocolInfo, ProtocolInfoBuilder,
+use crate::protocol_select::{
+    protocol_select_generated::p2p::protocol_select::{
+        ProtocolInfo as FBSProtocolInfo, ProtocolInfoBuilder,
+    },
+    protocol_select_generated_verifier::get_root,
 };
 
 use bytes::Bytes;
-use flatbuffers::{get_root, FlatBufferBuilder};
+use flatbuffers::FlatBufferBuilder;
 use futures::{future, prelude::*};
 use log::debug;
 use std::cmp::Ordering;
@@ -14,6 +17,10 @@ use tokio::prelude::{AsyncRead, AsyncWrite};
 #[rustfmt::skip]
 #[allow(clippy::all)]
 mod protocol_select_generated;
+#[rustfmt::skip]
+#[allow(clippy::all)]
+#[allow(dead_code)]
+mod protocol_select_generated_verifier;
 
 /// Protocol Info
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
@@ -54,8 +61,8 @@ impl ProtocolInfo {
     }
 
     /// Decode from flatbuffer
-    pub fn decode(data: &[u8]) -> Result<Self, ()> {
-        let fbs_protocol_info = get_root::<FBSProtocolInfo>(data);
+    pub fn decode(data: &[u8]) -> Option<Self> {
+        let fbs_protocol_info = get_root::<FBSProtocolInfo>(data).ok()?;
         match (
             fbs_protocol_info.name(),
             fbs_protocol_info.support_versions(),
@@ -65,12 +72,12 @@ impl ProtocolInfo {
                 for i in 0..fbs_versions.len() {
                     versions.push(fbs_versions.get(i).to_owned());
                 }
-                Ok(ProtocolInfo {
+                Some(ProtocolInfo {
                     name: name.to_owned(),
                     support_versions: versions,
                 })
             }
-            _ => Err(()),
+            _ => None,
         }
     }
 }
@@ -102,8 +109,8 @@ pub(crate) fn client_select<T: AsyncWrite + AsyncRead + Send>(
                 .and_then(|(raw_remote_info, socket)| {
                     let remote_info = match raw_remote_info {
                         Some(info) => match ProtocolInfo::decode(&info) {
-                            Ok(info) => info,
-                            Err(_) => return Err(io::ErrorKind::InvalidData.into()),
+                            Some(info) => info,
+                            None => return Err(io::ErrorKind::InvalidData.into()),
                         },
                         None => {
                             let err =
@@ -148,8 +155,8 @@ pub(crate) fn server_select<T: AsyncWrite + AsyncRead + Send>(
                 .and_then(move |(raw_remote_info, socket)| {
                     let remote_info = match raw_remote_info {
                         Some(info) => match ProtocolInfo::decode(&info) {
-                            Ok(info) => info,
-                            Err(_) => return Err(io::ErrorKind::InvalidData.into()),
+                            Some(info) => info,
+                            None => return Err(io::ErrorKind::InvalidData.into()),
                         },
                         None => {
                             let err =

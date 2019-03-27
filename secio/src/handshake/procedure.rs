@@ -162,9 +162,9 @@ where
                     };
 
                     let remote_exchanges = match Exchange::decode(&raw_exchanges) {
-                        Ok(e) => e,
-                        Err(err) => {
-                            debug!("failed to parse remote's exchange; {:?}", err);
+                        Some(e) => e,
+                        None => {
+                            debug!("failed to parse remote's exchange");
                             return Err(SecioError::HandshakeParsingFailure);
                         }
                     };

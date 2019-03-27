@@ -133,8 +133,8 @@ impl HandshakeContext<Local> {
         remote_bytes: BytesMut,
     ) -> Result<HandshakeContext<Remote>, SecioError> {
         let propose = match Propose::decode(&remote_bytes) {
-            Ok(prop) => prop,
-            Err(_) => {
+            Some(prop) => prop,
+            None => {
                 debug!("failed to parse remote's proposition flatbuffer message");
                 return Err(SecioError::HandshakeParsingFailure);
             }
@@ -144,8 +144,8 @@ impl HandshakeContext<Local> {
         let nonce = propose.rand;
 
         let public_key = match PublicKey::decode(&propose.pubkey) {
-            Ok(pubkey) => pubkey,
-            Err(_) => {
+            Some(pubkey) => pubkey,
+            None => {
                 debug!("failed to parse remote's public key flatbuffer message");
                 return Err(SecioError::HandshakeParsingFailure);
             }

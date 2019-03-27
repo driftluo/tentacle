@@ -22,6 +22,10 @@ mod substream;
 #[rustfmt::skip]
 #[allow(clippy::all)]
 mod protocol_generated;
+#[rustfmt::skip]
+#[allow(clippy::all)]
+#[allow(dead_code)]
+mod protocol_generated_verifier;
 
 pub use crate::{
     addr::{AddrKnown, AddressManager, MisbehaveResult, Misbehavior, RawAddr},

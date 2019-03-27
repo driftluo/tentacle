@@ -12,6 +12,10 @@ mod handshake_context;
 #[rustfmt::skip]
 #[allow(clippy::all)]
 mod handshake_generated;
+#[rustfmt::skip]
+#[allow(clippy::all)]
+#[allow(dead_code)]
+mod handshake_generated_verifier;
 pub(crate) mod handshake_struct;
 mod procedure;
 
