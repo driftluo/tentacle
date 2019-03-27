@@ -16,9 +16,8 @@ use crate::{
     multiaddr::Multiaddr,
     protocol_select::ProtocolInfo,
     secio::{PublicKey, SecioKeyPair},
-    service::{DialProtocol, ServiceControl, ServiceTask},
+    service::{DialProtocol, ServiceControl, ServiceTask, SessionType},
     session::SessionEvent,
-    yamux::session::SessionType,
     ProtocolId, SessionId,
 };
 

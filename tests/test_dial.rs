@@ -9,9 +9,11 @@ use tentacle::{
     error::Error,
     multiaddr::Multiaddr,
     secio::SecioKeyPair,
-    service::{DialProtocol, ProtocolHandle, ProtocolMeta, Service, ServiceError, ServiceEvent},
+    service::{
+        DialProtocol, ProtocolHandle, ProtocolMeta, Service, ServiceError, ServiceEvent,
+        SessionType,
+    },
     traits::{ServiceHandle, ServiceProtocol},
-    yamux::session::SessionType,
     ProtocolId, SessionId,
 };
 
@@ -73,7 +75,7 @@ impl ServiceHandle for SHandle {
     fn handle_error(&mut self, _env: &mut ServiceContext, error: ServiceError) {
         let error_type = match error {
             ServiceError::DialerError { error, .. } => {
-                if self.kind == SessionType::Server {
+                if self.kind.is_inbound() {
                     match error {
                         Error::ConnectSelf => (),
                         _ => panic!("server test fail: {:?}", error),
@@ -118,7 +120,7 @@ impl ServiceProtocol for PHandle {
     }
 
     fn connected(&mut self, control: ProtocolContextMutRef, _version: &str) {
-        if control.session.ty == SessionType::Server {
+        if control.session.ty.is_inbound() {
             // if server, dial itself
             self.dial_addr = Some(control.listens()[0].clone());
         } else {
@@ -184,7 +186,7 @@ fn create_shandle(
                 sender,
                 secio,
                 session_id: 0,
-                kind: SessionType::Server,
+                kind: SessionType::Inbound,
             }),
             receiver,
         )

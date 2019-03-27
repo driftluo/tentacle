@@ -7,7 +7,10 @@ use futures::{sync::mpsc::Receiver, Async, AsyncSink, Poll, Sink, Stream};
 use log::{debug, trace, warn};
 use p2p::multiaddr::{Multiaddr, Protocol};
 use p2p::{
-    error::Error, service::ServiceControl, utils::multiaddr_to_socketaddr, ProtocolId, SessionId,
+    error::Error,
+    service::{ServiceControl, SessionType},
+    utils::multiaddr_to_socketaddr,
+    ProtocolId, SessionId,
 };
 use tokio::codec::Framed;
 use tokio::io::{AsyncRead, AsyncWrite};
@@ -29,7 +32,7 @@ const MAX_ADDRS: usize = 3;
 
 #[derive(Eq, PartialEq, Hash, Debug, Clone)]
 pub struct SubstreamKey {
-    pub(crate) direction: Direction,
+    pub(crate) direction: SessionType,
     pub(crate) session_id: SessionId,
     pub(crate) proto_id: ProtocolId,
 }
@@ -116,7 +119,7 @@ pub struct SubstreamValue {
 
 impl SubstreamValue {
     pub(crate) fn new(
-        direction: Direction,
+        direction: SessionType,
         stream: StreamHandle,
         max_known: usize,
         remote_addr: Multiaddr,
@@ -126,7 +129,7 @@ impl SubstreamValue {
         let mut pending_messages = VecDeque::default();
         debug!("direction: {:?}", direction);
         let mut addr_known = AddrKnown::new(max_known);
-        let remote_addr = if direction == Direction::Outbound {
+        let remote_addr = if direction.is_outbound() {
             pending_messages.push_back(DiscoveryMessage::GetNodes {
                 version: VERSION,
                 count: MAX_ADDR_TO_SEND as u32,
@@ -353,7 +356,7 @@ impl SubstreamValue {
 
 pub struct Substream {
     pub remote_addr: Multiaddr,
-    pub direction: Direction,
+    pub direction: SessionType,
     pub stream: StreamHandle,
     pub listen_port: Option<u16>,
 }
@@ -361,7 +364,7 @@ pub struct Substream {
 impl Substream {
     pub fn new(
         remote_addr: Multiaddr,
-        direction: Direction,
+        direction: SessionType,
         proto_id: ProtocolId,
         session_id: SessionId,
         receiver: Receiver<Vec<u8>>,
@@ -375,7 +378,7 @@ impl Substream {
             receiver,
             sender,
         };
-        let listen_port = if direction == Direction::Outbound {
+        let listen_port = if direction.is_outbound() {
             let local = multiaddr_to_socketaddr(&remote_addr)
                 .unwrap()
                 .ip()
@@ -412,14 +415,6 @@ impl Substream {
             proto_id: self.stream.proto_id,
         }
     }
-}
-
-#[derive(Eq, PartialEq, Hash, Debug, Clone, Copy)]
-pub enum Direction {
-    // The connection(session) is open by other peer
-    Inbound,
-    // The connection(session) is open by current peer
-    Outbound,
 }
 
 #[derive(Eq, PartialEq, Hash, Debug, Clone)]

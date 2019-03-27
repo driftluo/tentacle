@@ -11,7 +11,6 @@ use log::{debug, warn};
 use p2p::{
     context::{ProtocolContext, ProtocolContextMutRef},
     traits::ServiceProtocol,
-    yamux::session::SessionType,
     ProtocolId, SessionId,
 };
 use rand::seq::SliceRandom;
@@ -27,7 +26,7 @@ mod protocol_generated;
 pub use crate::{
     addr::{AddrKnown, AddressManager, MisbehaveResult, Misbehavior, RawAddr},
     protocol::{DiscoveryMessage, Node, Nodes},
-    substream::{Direction, Substream, SubstreamKey, SubstreamValue},
+    substream::{Substream, SubstreamKey, SubstreamValue},
 };
 
 use crate::{addr::DEFAULT_MAX_KNOWN, substream::RemoteAddress};
@@ -81,16 +80,11 @@ impl<M: AddressManager + Send + 'static> ServiceProtocol for DiscoveryProtocol<M
             session.id, session.address, session.ty
         );
 
-        let direction = if session.ty == SessionType::Server {
-            Direction::Inbound
-        } else {
-            Direction::Outbound
-        };
         let (sender, receiver) = channel(8);
         self.discovery_senders.insert(session.id, sender);
         let substream = Substream::new(
             session.address.clone(),
-            direction,
+            session.ty,
             self.id,
             session.id,
             receiver,
