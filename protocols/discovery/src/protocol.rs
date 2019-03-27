@@ -1,16 +1,19 @@
 use std::io;
 
 use bytes::{Bytes, BytesMut};
-use flatbuffers::{get_root, FlatBufferBuilder};
+use flatbuffers::FlatBufferBuilder;
 use log::debug;
 use p2p::multiaddr::Multiaddr;
 use tokio::codec::length_delimited::LengthDelimitedCodec;
 use tokio::codec::{Decoder, Encoder};
 
-use crate::protocol_generated::p2p::discovery::{
-    BytesBuilder, DiscoveryMessage as FbsDiscoveryMessage, DiscoveryMessageBuilder,
-    DiscoveryPayload as FbsDiscoveryPayload, GetNodes as FbsGetNodes, GetNodesBuilder, NodeBuilder,
-    Nodes as FbsNodes, NodesBuilder,
+use crate::{
+    protocol_generated::p2p::discovery::{
+        BytesBuilder, DiscoveryMessage as FbsDiscoveryMessage, DiscoveryMessageBuilder,
+        DiscoveryPayload as FbsDiscoveryPayload, GetNodes as FbsGetNodes, GetNodesBuilder,
+        NodeBuilder, Nodes as FbsNodes, NodesBuilder,
+    },
+    protocol_generated_verifier::get_root,
 };
 
 pub(crate) struct DiscoveryCodec {
@@ -122,7 +125,7 @@ impl DiscoveryMessage {
     }
 
     pub fn decode(data: &[u8]) -> Option<Self> {
-        let fbs_message = get_root::<FbsDiscoveryMessage>(data);
+        let fbs_message = get_root::<FbsDiscoveryMessage>(data).ok()?;
         let payload = fbs_message.payload()?;
         match fbs_message.payload_type() {
             FbsDiscoveryPayload::GetNodes => {

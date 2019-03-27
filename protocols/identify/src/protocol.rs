@@ -1,9 +1,13 @@
-use flatbuffers::{get_root, FlatBufferBuilder, WIPOffset};
+use flatbuffers::{FlatBufferBuilder, WIPOffset};
 
-use crate::protocol_generated::p2p::identify::{
-    Address as FbsAddress, AddressBuilder, IdentifyMessage as FbsIdentifyMessage,
-    IdentifyMessageBuilder, IdentifyPayload as FbsIdentifyPayload, ListenAddrs as FbsListenAddrs,
-    ListenAddrsBuilder, ObservedAddr as FbsObservedAddr, ObservedAddrBuilder,
+use crate::{
+    protocol_generated::p2p::identify::{
+        Address as FbsAddress, AddressBuilder, IdentifyMessage as FbsIdentifyMessage,
+        IdentifyMessageBuilder, IdentifyPayload as FbsIdentifyPayload,
+        ListenAddrs as FbsListenAddrs, ListenAddrsBuilder, ObservedAddr as FbsObservedAddr,
+        ObservedAddrBuilder,
+    },
+    protocol_generated_verifier::get_root,
 };
 use p2p::multiaddr::Multiaddr;
 
@@ -49,7 +53,7 @@ impl IdentifyMessage {
     }
 
     pub(crate) fn decode(data: &[u8]) -> Option<Self> {
-        let fbs_message = get_root::<FbsIdentifyMessage>(data);
+        let fbs_message = get_root::<FbsIdentifyMessage>(data).ok()?;
         let payload = fbs_message.payload()?;
         match fbs_message.payload_type() {
             FbsIdentifyPayload::ListenAddrs => {

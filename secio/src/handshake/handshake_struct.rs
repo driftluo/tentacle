@@ -1,10 +1,13 @@
-use crate::handshake::handshake_generated::p2p::handshake::{
-    Exchange as FBSExchange, ExchangeBuilder, Propose as FBSPropose, ProposeBuilder,
-    PublicKey as FBSPublicKey, PublicKeyBuilder, Type,
+use crate::handshake::{
+    handshake_generated::p2p::handshake::{
+        Exchange as FBSExchange, ExchangeBuilder, Propose as FBSPropose, ProposeBuilder,
+        PublicKey as FBSPublicKey, PublicKeyBuilder, Type,
+    },
+    handshake_generated_verifier::get_root,
 };
 use crate::peer_id::PeerId;
 
-use flatbuffers::{get_root, FlatBufferBuilder};
+use flatbuffers::FlatBufferBuilder;
 
 #[derive(Clone, Default, PartialEq, Ord, PartialOrd, Eq, Debug)]
 pub struct Propose {
@@ -43,8 +46,8 @@ impl Propose {
     }
 
     /// Decode with Flatbuffer
-    pub fn decode(data: &[u8]) -> Result<Self, ()> {
-        let fbs_propose = get_root::<FBSPropose>(data);
+    pub fn decode(data: &[u8]) -> Option<Self> {
+        let fbs_propose = get_root::<FBSPropose>(data).ok()?;
         match (
             fbs_propose.rand(),
             fbs_propose.pubkey(),
@@ -53,7 +56,7 @@ impl Propose {
             fbs_propose.hashes(),
         ) {
             (Some(rand), Some(pubkey), Some(exchange), Some(ciphers), Some(hashes)) => {
-                Ok(Propose {
+                Some(Propose {
                     rand: rand.to_owned(),
                     pubkey: pubkey.to_owned(),
                     exchange: exchange.to_owned(),
@@ -61,7 +64,7 @@ impl Propose {
                     hashes: hashes.to_owned(),
                 })
             }
-            _ => Err(()),
+            _ => None,
         }
     }
 }
@@ -93,14 +96,14 @@ impl Exchange {
     }
 
     /// Decode with Flatbuffer
-    pub fn decode(data: &[u8]) -> Result<Self, ()> {
-        let fbs_exchange = get_root::<FBSExchange>(data);
+    pub fn decode(data: &[u8]) -> Option<Self> {
+        let fbs_exchange = get_root::<FBSExchange>(data).ok()?;
         match (fbs_exchange.epubkey(), fbs_exchange.signature()) {
-            (Some(epubkey), Some(signature)) => Ok(Exchange {
+            (Some(epubkey), Some(signature)) => Some(Exchange {
                 epubkey: epubkey.to_owned(),
                 signature: signature.to_owned(),
             }),
-            _ => Err(()),
+            _ => None,
         }
     }
 }
@@ -136,13 +139,13 @@ impl PublicKey {
     }
 
     /// Decode with Flatbuffer
-    pub fn decode(data: &[u8]) -> Result<Self, ()> {
-        let pubkey = get_root::<FBSPublicKey>(data);
+    pub fn decode(data: &[u8]) -> Option<Self> {
+        let pubkey = get_root::<FBSPublicKey>(data).ok()?;
         match pubkey.pubkey() {
             Some(pub_key) => match pubkey.key_type() {
-                Type::Secp256k1 => Ok(PublicKey::Secp256k1(pub_key.to_owned())),
+                Type::Secp256k1 => Some(PublicKey::Secp256k1(pub_key.to_owned())),
             },
-            None => Err(()),
+            None => None,
         }
     }
 
