@@ -22,7 +22,7 @@ use crate::{
     traits::{ServiceHandle, ServiceProtocol, SessionProtocol},
     transports::{MultiIncoming, MultiTransport, Transport, TransportError},
     utils::extract_peer_id,
-    yamux::{session::SessionType, Config as YamuxConfig},
+    yamux::{session::SessionType as YamuxType, Config as YamuxConfig},
     ProtocolId, SessionId,
 };
 
@@ -521,7 +521,7 @@ where
     ) where
         H: AsyncRead + AsyncWrite + Send + 'static,
     {
-        if ty == SessionType::Client {
+        if ty.is_outbound() {
             self.task_count -= 1;
         }
         let target = self
@@ -539,7 +539,7 @@ where
                 Some(context) => {
                     trace!("Connected to the connected node");
                     let _ = handle.shutdown();
-                    if ty == SessionType::Client {
+                    if ty.is_outbound() {
                         self.handle.handle_error(
                             &mut self.service_context,
                             ServiceError::DialerError {
@@ -613,7 +613,7 @@ where
             meta,
         );
 
-        if ty == SessionType::Client {
+        if ty.is_outbound() {
             match target {
                 DialProtocol::All => {
                     self.protocol_configs
@@ -961,7 +961,7 @@ where
                 self.session_open(handle, Some(public_key), address, ty);
             }
             SessionEvent::HandshakeFail { ty, error, address } => {
-                if ty == SessionType::Client {
+                if ty.is_outbound() {
                     self.task_count -= 1;
                     self.dial_protocols.remove(&address);
                     self.handle.handle_error(
@@ -1058,7 +1058,7 @@ where
             SessionEvent::DialStart {
                 remote_address,
                 stream,
-            } => self.handshake(stream, SessionType::Client, remote_address),
+            } => self.handshake(stream, SessionType::Outbound, remote_address),
         }
     }
 
@@ -1180,7 +1180,7 @@ where
         for (address, mut listen) in self.listens.split_off(0) {
             match listen.poll() {
                 Ok(Async::Ready(Some((remote_address, socket)))) => {
-                    self.handshake(socket, SessionType::Server, remote_address);
+                    self.handshake(socket, SessionType::Inbound, remote_address);
                     self.listens.push((address, listen));
                 }
                 Ok(Async::Ready(None)) => {
@@ -1303,4 +1303,50 @@ enum Source {
     External,
     /// Event from session
     Internal,
+}
+
+/// Indicates the session type
+#[derive(Copy, Clone, Debug, Eq, PartialEq, Hash)]
+pub enum SessionType {
+    /// Representing yourself as the active party means that you are the client side
+    Outbound,
+    /// Representing yourself as a passive recipient means that you are the server side
+    Inbound,
+}
+
+impl SessionType {
+    /// is outbound
+    #[inline]
+    pub fn is_outbound(self) -> bool {
+        match self {
+            SessionType::Outbound => true,
+            SessionType::Inbound => false,
+        }
+    }
+
+    /// is inbound
+    #[inline]
+    pub fn is_inbound(self) -> bool {
+        !self.is_outbound()
+    }
+}
+
+impl From<YamuxType> for SessionType {
+    #[inline]
+    fn from(ty: YamuxType) -> Self {
+        match ty {
+            YamuxType::Client => SessionType::Outbound,
+            YamuxType::Server => SessionType::Inbound,
+        }
+    }
+}
+
+impl Into<YamuxType> for SessionType {
+    #[inline]
+    fn into(self) -> YamuxType {
+        match self {
+            SessionType::Outbound => YamuxType::Client,
+            SessionType::Inbound => YamuxType::Server,
+        }
+    }
 }

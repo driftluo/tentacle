@@ -21,10 +21,10 @@ use crate::{
     multiaddr::Multiaddr,
     protocol_select::{client_select, server_select, ProtocolInfo},
     secio::{codec::stream_handle::StreamHandle as SecureHandle, PublicKey},
-    service::{config::Meta, ServiceTask},
+    service::{config::Meta, ServiceTask, SessionType},
     substream::{ProtocolEvent, SubStream},
     transports::{MultiIncoming, MultiStream},
-    yamux::{session::SessionType, Config, Session as YamuxSession, StreamHandle},
+    yamux::{Config, Session as YamuxSession, StreamHandle},
     ProtocolId, SessionId, StreamId,
 };
 
@@ -175,7 +175,7 @@ where
         service_receiver: mpsc::Receiver<SessionEvent>,
         meta: SessionMeta,
     ) -> Self {
-        let socket = YamuxSession::new(socket, meta.config, meta.ty);
+        let socket = YamuxSession::new(socket, meta.config, meta.ty.into());
         let (proto_event_sender, proto_event_receiver) = mpsc::channel(256);
         Session {
             socket,
