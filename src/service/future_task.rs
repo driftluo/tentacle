@@ -1,7 +1,6 @@
 use futures::{
     prelude::*,
     sync::{mpsc, oneshot},
-    try_ready,
 };
 use log::{debug, trace};
 use std::collections::HashMap;
@@ -9,7 +8,8 @@ use std::collections::HashMap;
 pub(crate) type FutureTaskId = u64;
 pub(crate) type BoxedFutureTask = Box<dyn Future<Item = (), Error = ()> + 'static + Send>;
 
-pub struct FutureTaskManager {
+/// A future task manager
+pub(crate) struct FutureTaskManager {
     signals: HashMap<FutureTaskId, oneshot::Sender<()>>,
     next_id: FutureTaskId,
     id_sender: mpsc::Sender<FutureTaskId>,
@@ -59,22 +59,28 @@ impl Stream for FutureTaskManager {
     type Error = ();
 
     fn poll(&mut self) -> Poll<Option<Self::Item>, Self::Error> {
-        match self.task_receiver.poll()? {
-            Async::Ready(Some(task)) => self.add_task(task),
-            Async::Ready(None) => {
-                debug!("future task receiver finished");
-                return Ok(Async::Ready(None));
+        loop {
+            match self.task_receiver.poll()? {
+                Async::Ready(Some(task)) => self.add_task(task),
+                Async::Ready(None) => {
+                    debug!("future task receiver finished");
+                    return Ok(Async::Ready(None));
+                }
+                Async::NotReady => break,
             }
-            Async::NotReady => {}
         }
 
-        match try_ready!(self.id_receiver.poll()) {
-            Some(id) => self.remove_task(id),
-            None => {
-                debug!("future task id receiver finished");
-                return Ok(Async::Ready(None));
+        loop {
+            match self.id_receiver.poll()? {
+                Async::Ready(Some(id)) => self.remove_task(id),
+                Async::Ready(None) => {
+                    debug!("future task id receiver finished");
+                    return Ok(Async::Ready(None));
+                }
+                Async::NotReady => break,
             }
         }
-        Ok(Async::Ready(Some(())))
+
+        Ok(Async::NotReady)
     }
 }

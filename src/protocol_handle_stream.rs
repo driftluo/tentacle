@@ -72,7 +72,6 @@ impl ServiceProtocolStream {
                     self.handle
                         .disconnected(self.handle_context.as_mut(&session));
                 }
-                self.handle_context.remove_session_notify_senders(id);
             }
             Received { id, data } => {
                 if let Some(session) = self.sessions.get(&id) {
@@ -99,9 +98,6 @@ impl Stream for ServiceProtocolStream {
             match self.receiver.poll() {
                 Ok(Async::Ready(Some(event))) => self.handle_event(event),
                 Ok(Async::Ready(None)) => {
-                    for id in self.sessions.keys() {
-                        self.handle_context.remove_session_notify_senders(*id);
-                    }
                     return Ok(Async::Ready(None));
                 }
                 Ok(Async::NotReady) => break,
@@ -201,8 +197,6 @@ impl SessionProtocolStream {
 
     #[inline(always)]
     fn close(&mut self) {
-        self.handle_context
-            .remove_session_notify_senders(self.context.id);
         self.receiver.close();
     }
 }

@@ -1,5 +1,6 @@
 use futures::Future;
 use std::fmt;
+use std::time::Duration;
 
 use crate::{
     context::SessionContext, error::Error, multiaddr::Multiaddr, service::DialProtocol, ProtocolId,
@@ -170,6 +171,42 @@ pub enum ServiceTask {
         /// Notify token
         token: u64,
     },
+    /// Set service notify task
+    SetProtocolNotify {
+        /// Protocol id
+        proto_id: ProtocolId,
+        /// Timer interval
+        interval: Duration,
+        /// The timer token
+        token: u64,
+    },
+    /// Remove serivce notify task
+    RemoveProtocolNotify {
+        /// Protocol id
+        proto_id: ProtocolId,
+        /// The timer token
+        token: u64,
+    },
+    /// Set service notify task
+    SetProtocolSessionNotify {
+        /// Session id
+        session_id: SessionId,
+        /// Protocol id
+        proto_id: ProtocolId,
+        /// Timer interval
+        interval: Duration,
+        /// The timer token
+        token: u64,
+    },
+    /// Remove serivce notify task
+    RemoveProtocolSessionNotify {
+        /// Session id
+        session_id: SessionId,
+        /// Protocol id
+        proto_id: ProtocolId,
+        /// The timer token
+        token: u64,
+    },
     /// Future task
     FutureTask {
         /// Future
@@ -207,6 +244,31 @@ impl fmt::Debug for ServiceTask {
                 f,
                 "id: {:?}, protoid: {}, message: {:?}",
                 session_ids, proto_id, data
+            ),
+            SetProtocolNotify {
+                proto_id, token, ..
+            } => write!(f, "set protocol({}) notify({})", proto_id, token),
+            RemoveProtocolNotify { proto_id, token } => {
+                write!(f, "remove protocol({}) notify({})", proto_id, token)
+            }
+            SetProtocolSessionNotify {
+                session_id,
+                proto_id,
+                token,
+                ..
+            } => write!(
+                f,
+                "set protocol({}) session({}) notify({})",
+                proto_id, session_id, token
+            ),
+            RemoveProtocolSessionNotify {
+                session_id,
+                proto_id,
+                token,
+            } => write!(
+                f,
+                "remove protocol({}) session({}) notify({})",
+                proto_id, session_id, token
             ),
             ProtocolNotify { proto_id, token } => {
                 write!(f, "protocol id: {}, token: {}", proto_id, token)

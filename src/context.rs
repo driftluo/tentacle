@@ -22,6 +22,7 @@ use crate::{
 
 pub(crate) struct SessionControl {
     pub(crate) inner: SessionContext,
+    pub(crate) notify_signals: HashMap<ProtocolId, HashMap<u64, oneshot::Sender<()>>>,
     pub(crate) event_sender: mpsc::Sender<SessionEvent>,
 }
 
@@ -43,9 +44,6 @@ pub struct SessionContext {
 /// This is the sending channel.
 // TODO: Need to maintain the network topology map here?
 pub struct ServiceContext {
-    service_notify_senders: HashMap<ProtocolId, HashMap<u64, oneshot::Sender<()>>>,
-    // For tell notify finished
-    session_notify_senders: HashMap<(SessionId, ProtocolId), HashMap<u64, oneshot::Sender<()>>>,
     pub(crate) pending_tasks: VecDeque<ServiceTask>,
     listens: Vec<Multiaddr>,
     key_pair: Option<SecioKeyPair>,
@@ -61,8 +59,6 @@ impl ServiceContext {
     ) -> Self {
         ServiceContext {
             inner: ServiceControl::new(service_task_sender, proto_infos),
-            service_notify_senders: HashMap::default(),
-            session_notify_senders: HashMap::default(),
             pending_tasks: VecDeque::default(),
             key_pair,
             listens: Vec::new(),
@@ -186,17 +182,9 @@ impl ServiceContext {
 
     /// Set a service notify token
     pub fn set_service_notify(&mut self, proto_id: ProtocolId, interval: Duration, token: u64) {
-        match self.inner.set_service_notify(proto_id, interval, token) {
-            Ok(signal_sender) => {
-                self.service_notify_senders
-                    .entry(proto_id)
-                    .or_default()
-                    .insert(token, signal_sender);
-            }
-            Err(Error::TaskFull(task)) => {
-                self.pending_tasks.push_back(task);
-            }
-            _ => {}
+        if let Err(Error::TaskFull(task)) = self.inner.set_service_notify(proto_id, interval, token)
+        {
+            self.pending_tasks.push_back(task);
         }
     }
 
@@ -208,69 +196,39 @@ impl ServiceContext {
         interval: Duration,
         token: u64,
     ) {
-        match self
+        if let Err(Error::TaskFull(task)) = self
             .inner
             .set_session_notify(session_id, proto_id, interval, token)
         {
-            Ok(signal_sender) => {
-                self.session_notify_senders
-                    .entry((session_id, proto_id))
-                    .or_default()
-                    .insert(token, signal_sender);
-            }
-            Err(Error::TaskFull(task)) => {
-                self.pending_tasks.push_back(task);
-            }
-            _ => {}
+            self.pending_tasks.push_back(task);
         }
     }
 
     /// Remove a service timer by a token
-    pub fn remove_service_notify_sender(&mut self, proto_id: ProtocolId, token: u64) {
-        if let Some(senders) = self.service_notify_senders.get_mut(&proto_id) {
-            if let Some(sender) = senders.remove(&token) {
-                let _ = sender.send(());
-            }
-            if senders.is_empty() {
-                self.service_notify_senders.remove(&proto_id);
-            }
+    pub fn remove_service_notify(&mut self, proto_id: ProtocolId, token: u64) {
+        if let Err(Error::TaskFull(task)) = self.inner.remove_service_notify(proto_id, token) {
+            self.pending_tasks.push_back(task);
         }
     }
 
     /// Remove a session timer by a token
-    pub fn remove_session_notify_sender(
+    pub fn remove_session_notify(
         &mut self,
         session_id: SessionId,
         proto_id: ProtocolId,
         token: u64,
     ) {
-        if let Some(senders) = self.session_notify_senders.get_mut(&(session_id, proto_id)) {
-            if let Some(sender) = senders.remove(&token) {
-                let _ = sender.send(());
-            }
-            if senders.is_empty() {
-                self.session_notify_senders.remove(&(session_id, proto_id));
-            }
-        }
-    }
-
-    pub(crate) fn remove_session_notify_senders(
-        &mut self,
-        session_id: SessionId,
-        proto_id: ProtocolId,
-    ) {
-        if let Some(senders) = self.session_notify_senders.remove(&(session_id, proto_id)) {
-            for (_token, sender) in senders {
-                let _ = sender.send(());
-            }
+        if let Err(Error::TaskFull(task)) = self
+            .inner
+            .remove_session_notify(session_id, proto_id, token)
+        {
+            self.pending_tasks.push_back(task);
         }
     }
 
     pub(crate) fn clone_self(&self) -> Self {
         ServiceContext {
             inner: self.inner.clone(),
-            service_notify_senders: HashMap::default(),
-            session_notify_senders: HashMap::default(),
             pending_tasks: VecDeque::default(),
             key_pair: self.key_pair.clone(),
             listens: self.listens.clone(),
@@ -303,12 +261,6 @@ impl ProtocolContext {
             proto_id: self.proto_id,
             session,
         }
-    }
-
-    #[inline]
-    pub(crate) fn remove_session_notify_senders(&mut self, session_id: SessionId) {
-        self.inner
-            .remove_session_notify_senders(session_id, self.proto_id)
     }
 }
 
