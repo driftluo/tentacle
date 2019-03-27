@@ -42,14 +42,14 @@ struct PHandle {
 }
 
 impl ServiceProtocol for PHandle {
-    fn init(&mut self, control: &mut ProtocolContext) {
+    fn init(&mut self, context: &mut ProtocolContext) {
         if self.proto_id == 0 {
-            control.set_service_notify(0, Duration::from_secs(5), 3);
+            context.set_service_notify(0, Duration::from_secs(5), 3);
         }
     }
 
-    fn connected(&mut self, mut control: ProtocolContextMutRef, version: &str) {
-        let session = control.session;
+    fn connected(&mut self, mut context: ProtocolContextMutRef, version: &str) {
+        let session = context.session;
         self.connected_session_ids.push(session.id);
         info!(
             "proto id [{}] open on session [{}], address: [{}], type: [{:?}], version: {}",
@@ -66,7 +66,7 @@ impl ServiceProtocol for PHandle {
         let (sender, mut receiver) = oneshot();
         self.clear_handle.insert(session.id, sender);
         let session_id = session.id;
-        let mut interval_sender = control.control().clone();
+        let mut interval_sender = context.control().clone();
         let interval_task = Interval::new(Instant::now(), Duration::from_secs(5))
             .for_each(move |_| {
                 let _ = interval_sender.send_message(
@@ -81,40 +81,40 @@ impl ServiceProtocol for PHandle {
                 }
             })
             .map_err(|err| info!("{}", err));
-        control.future_task(interval_task);
+        context.future_task(interval_task);
     }
 
-    fn disconnected(&mut self, control: ProtocolContextMutRef) {
+    fn disconnected(&mut self, context: ProtocolContextMutRef) {
         let new_list = self
             .connected_session_ids
             .iter()
-            .filter(|&id| id != &control.session.id)
+            .filter(|&id| id != &context.session.id)
             .cloned()
             .collect();
         self.connected_session_ids = new_list;
 
-        if let Some(handle) = self.clear_handle.remove(&control.session.id) {
+        if let Some(handle) = self.clear_handle.remove(&context.session.id) {
             let _ = handle.send(());
         }
 
         info!(
             "proto id [{}] close on session [{}]",
-            self.proto_id, control.session.id
+            self.proto_id, context.session.id
         );
     }
 
-    fn received(&mut self, env: ProtocolContextMutRef, data: bytes::Bytes) {
+    fn received(&mut self, context: ProtocolContextMutRef, data: bytes::Bytes) {
         self.count += 1;
         info!(
             "received from [{}]: proto [{}] data {:?}, message count: {}",
-            env.session.id,
+            context.session.id,
             self.proto_id,
             str::from_utf8(data.as_ref()).unwrap(),
             self.count
         );
     }
 
-    fn notify(&mut self, _control: &mut ProtocolContext, token: u64) {
+    fn notify(&mut self, _context: &mut ProtocolContext, token: u64) {
         info!("proto [{}] received notify token: {}", self.proto_id, token);
     }
 }
@@ -122,13 +122,13 @@ impl ServiceProtocol for PHandle {
 struct SHandle;
 
 impl ServiceHandle for SHandle {
-    fn handle_error(&mut self, _env: &mut ServiceContext, error: ServiceError) {
+    fn handle_error(&mut self, _context: &mut ServiceContext, error: ServiceError) {
         info!("service error: {:?}", error);
     }
-    fn handle_event(&mut self, env: &mut ServiceContext, event: ServiceEvent) {
+    fn handle_event(&mut self, context: &mut ServiceContext, event: ServiceEvent) {
         info!("service event: {:?}", event);
         if let ServiceEvent::SessionOpen { .. } = event {
-            let mut delay_sender = env.control().clone();
+            let mut delay_sender = context.control().clone();
 
             let delay_task = Delay::new(Instant::now() + Duration::from_secs(3))
                 .and_then(move |_| {
@@ -138,7 +138,7 @@ impl ServiceHandle for SHandle {
                 })
                 .map_err(|err| info!("{}", err));
 
-            env.future_task(Box::new(delay_task));
+            context.future_task(Box::new(delay_task));
         }
     }
 }
