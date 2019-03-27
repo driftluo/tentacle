@@ -17,7 +17,10 @@ use crate::{
     },
     protocol_select::ProtocolInfo,
     secio::{handshake::Config, PublicKey, SecioKeyPair},
-    service::config::ServiceConfig,
+    service::{
+        config::ServiceConfig,
+        future_task::{BoxedFutureTask, FutureTaskManager},
+    },
     session::{Session, SessionEvent, SessionMeta},
     traits::{ServiceHandle, ServiceProtocol, SessionProtocol},
     transports::{MultiIncoming, MultiTransport, Transport, TransportError},
@@ -29,6 +32,7 @@ use crate::{
 pub(crate) mod config;
 mod control;
 mod event;
+pub(crate) mod future_task;
 
 pub use crate::service::{
     config::{DialProtocol, ProtocolHandle, ProtocolMeta},
@@ -72,6 +76,12 @@ pub struct Service<T> {
     /// The buffer which will distribute to session protocol handle
     read_session_buf: VecDeque<(SessionId, ProtocolId, SessionProtocolEvent)>,
 
+    // Future task manager
+    future_task_manager: Option<FutureTaskManager>,
+    // To add a future task
+    // TODO: use this to spawn every task
+    future_task_sender: mpsc::Sender<BoxedFutureTask>,
+
     // The service protocols open with the session
     session_service_protos: HashMap<SessionId, HashSet<ProtocolId>>,
 
@@ -113,11 +123,14 @@ where
                 (meta.id(), proto_info)
             })
             .collect();
+        let (future_task_sender, future_task_receiver) = mpsc::channel(128);
 
         Service {
             protocol_configs,
             handle,
             multi_trasport: MultiTransport::new(config.timeout),
+            future_task_sender,
+            future_task_manager: Some(FutureTaskManager::new(future_task_receiver)),
             sessions: HashMap::default(),
             session_service_protos: HashMap::default(),
             service_proto_handles: HashMap::default(),
@@ -1106,7 +1119,14 @@ where
                 self.session_close(session_id, Source::External)
             }
             ServiceTask::FutureTask { task } => {
-                tokio::spawn(task);
+                if let Err(err) = self.future_task_sender.try_send(task) {
+                    if err.is_full() {
+                        let task = ServiceTask::FutureTask {
+                            task: err.into_inner(),
+                        };
+                        self.service_context.pending_tasks.push_back(task);
+                    }
+                }
             }
             ServiceTask::ProtocolNotify { proto_id, token } => {
                 if self.config.event.contains(&proto_id) {
@@ -1237,6 +1257,10 @@ where
             && self.service_context.pending_tasks.is_empty()
         {
             return Ok(Async::Ready(None));
+        }
+
+        if let Some(stream) = self.future_task_manager.take() {
+            tokio::spawn(stream.for_each(|_| Ok(())));
         }
 
         if !self.write_buf.is_empty()
