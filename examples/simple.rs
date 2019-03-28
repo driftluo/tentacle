@@ -10,7 +10,10 @@ use tentacle::{
     builder::{MetaBuilder, ServiceBuilder},
     context::{ProtocolContext, ProtocolContextMutRef, ServiceContext},
     secio::SecioKeyPair,
-    service::{DialProtocol, ProtocolHandle, ProtocolMeta, Service, ServiceError, ServiceEvent},
+    service::{
+        DialProtocol, ProtocolHandle, ProtocolMeta, Service, ServiceError, ServiceEvent,
+        TargetSession,
+    },
     traits::{ServiceHandle, ServiceProtocol},
     ProtocolId, SessionId,
 };
@@ -132,8 +135,11 @@ impl ServiceHandle for SHandle {
 
             let delay_task = Delay::new(Instant::now() + Duration::from_secs(3))
                 .and_then(move |_| {
-                    let _ =
-                        delay_sender.filter_broadcast(None, 0, b"I am a delayed message".to_vec());
+                    let _ = delay_sender.filter_broadcast(
+                        TargetSession::All,
+                        0,
+                        b"I am a delayed message".to_vec(),
+                    );
                     Ok(())
                 })
                 .map_err(|err| info!("{}", err));

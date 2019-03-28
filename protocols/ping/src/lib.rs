@@ -14,6 +14,7 @@ use log::{debug, error};
 use p2p::{
     context::{ProtocolContext, ProtocolContextMutRef},
     secio::PeerId,
+    service::TargetSession,
     traits::ServiceProtocol,
     ProtocolId, SessionId,
 };
@@ -218,7 +219,11 @@ where
                         .into_iter()
                         .map(|(session_id, _)| session_id)
                         .collect();
-                    control.filter_broadcast(Some(peer_ids), self.id, fbb.finished_data().to_vec());
+                    control.filter_broadcast(
+                        TargetSession::Multi(peer_ids),
+                        self.id,
+                        fbb.finished_data().to_vec(),
+                    );
                 }
             }
             CHECK_TIMEOUT_TOKEN => {

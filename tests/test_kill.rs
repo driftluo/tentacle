@@ -10,7 +10,7 @@ use tentacle::{
     builder::{MetaBuilder, ServiceBuilder},
     context::{ProtocolContext, ProtocolContextMutRef},
     secio::SecioKeyPair,
-    service::{DialProtocol, ProtocolHandle, ProtocolMeta, Service},
+    service::{DialProtocol, ProtocolHandle, ProtocolMeta, Service, TargetSession},
     traits::{ServiceHandle, ServiceProtocol},
     ProtocolId,
 };
@@ -74,7 +74,7 @@ impl ServiceProtocol for PHandle {
     }
 
     fn received(&mut self, mut env: ProtocolContextMutRef, data: bytes::Bytes) {
-        env.filter_broadcast(None, self.proto_id, data.to_vec());
+        env.filter_broadcast(TargetSession::All, self.proto_id, data.to_vec());
     }
 }
 
@@ -118,7 +118,7 @@ fn test_kill(secio: bool) {
             // wait connected
             assert_eq!(receiver.recv(), Ok(()));
 
-            let _ = control.filter_broadcast(None, 1, b"hello world".to_vec());
+            let _ = control.filter_broadcast(TargetSession::All, 1, b"hello world".to_vec());
             let mem_start = current_used_memory().unwrap();
             let cpu_start = current_used_cpu().unwrap();
 
