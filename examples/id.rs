@@ -19,9 +19,7 @@ fn main() {
     };
     let protocol = MetaBuilder::default()
         .id(1)
-        .service_handle(move || {
-            ProtocolHandle::Callback(Box::new(IdentifyProtocol::new(1, addr_mgr, true)))
-        })
+        .service_handle(move || ProtocolHandle::Callback(Box::new(IdentifyProtocol::new(addr_mgr))))
         .build();
     if std::env::args().nth(1) == Some("server".to_string()) {
         debug!("Starting server ......");
@@ -58,19 +56,12 @@ struct SimpleAddrManager {
 }
 
 impl Callback for SimpleAddrManager {
-    /// Add local listen address
-    fn add_local_listen_addr(&mut self, addr: Multiaddr) {
-        self.local_listen_addrs.insert(0, addr);
-    }
     /// Get local listen addresses
     fn local_listen_addrs(&mut self) -> Vec<Multiaddr> {
         self.local_listen_addrs.clone()
     }
     /// Add remote peer's listen addresses
     fn add_remote_listen_addrs(&mut self, _peer: &PeerId, _addrs: Vec<Multiaddr>) {}
-    /// Add transformed observed address
-    fn add_transformed_addr(&mut self, _addr: Multiaddr) {
-    }
     /// Add our address observed by remote peer
     fn add_observed_addr(&mut self, _peer: &PeerId, _addr: Multiaddr) -> MisbehaveResult {
         MisbehaveResult::Continue

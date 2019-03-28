@@ -243,15 +243,13 @@ impl<T: Callback> ServiceProtocol for IdentifyProtocol<T> {
                         .map(|socket_addr| socket_addr.ip())
                         .filter(|ip_addr| is_reachable(*ip_addr))
                         .is_some()
-                    {
-                        if self
+                        && self
                             .callback
                             .add_observed_addr(&info.peer_id, addr.clone())
                             .is_disconnect()
-                        {
-                            context.disconnect(session.id);
-                            return;
-                        }
+                    {
+                        context.disconnect(session.id);
+                        return;
                     }
                     info.observed_addr = Some(addr.clone());
                 }
