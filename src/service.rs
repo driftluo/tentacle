@@ -1134,30 +1134,33 @@ where
                 interval,
                 token,
             } => {
-                let (signal_sender, mut signal_receiver) = oneshot::channel::<()>();
-                let mut interval_sender =
-                    self.service_context.control().service_task_sender.clone();
-                let fut = Interval::new(Instant::now(), interval)
-                    .for_each(move |_| {
-                        if signal_receiver.poll() == Ok(Async::NotReady) {
-                            interval_sender
-                                .try_send(ServiceTask::ProtocolNotify { proto_id, token })
-                                .map_err(|err| {
-                                    debug!("interval error: {:?}", err);
-                                    timer::Error::shutdown()
-                                })
-                        } else {
-                            Err(timer::Error::shutdown())
-                        }
-                    })
-                    .map_err(|err| warn!("{}", err));
+                // TODO: if not contains should call handle_error let user know
+                if self.service_proto_handles.contains_key(&proto_id) {
+                    let (signal_sender, mut signal_receiver) = oneshot::channel::<()>();
+                    let mut interval_sender =
+                        self.service_context.control().service_task_sender.clone();
+                    let fut = Interval::new(Instant::now(), interval)
+                        .for_each(move |_| {
+                            if signal_receiver.poll() == Ok(Async::NotReady) {
+                                interval_sender
+                                    .try_send(ServiceTask::ProtocolNotify { proto_id, token })
+                                    .map_err(|err| {
+                                        debug!("interval error: {:?}", err);
+                                        timer::Error::shutdown()
+                                    })
+                            } else {
+                                Err(timer::Error::shutdown())
+                            }
+                        })
+                        .map_err(|err| warn!("{}", err));
 
-                // If set more than once, the older task will stop when sender dropped
-                self.service_notify_signals
-                    .entry(proto_id)
-                    .or_default()
-                    .insert(token, signal_sender);
-                self.send_future_task(Box::new(fut));
+                    // If set more than once, the older task will stop when sender dropped
+                    self.service_notify_signals
+                        .entry(proto_id)
+                        .or_default()
+                        .insert(token, signal_sender);
+                    self.send_future_task(Box::new(fut));
+                }
             }
             ServiceTask::RemoveProtocolNotify { proto_id, token } => {
                 if let Some(signals) = self.service_notify_signals.get_mut(&proto_id) {
@@ -1175,37 +1178,43 @@ where
                 interval,
                 token,
             } => {
-                let (signal_sender, mut signal_receiver) = oneshot::channel::<()>();
-                let mut interval_sender =
-                    self.service_context.control().service_task_sender.clone();
-                let fut = Interval::new(Instant::now(), interval)
-                    .for_each(move |_| {
-                        if signal_receiver.poll() == Ok(Async::NotReady) {
-                            interval_sender
-                                .try_send(ServiceTask::ProtocolSessionNotify {
-                                    session_id,
-                                    proto_id,
-                                    token,
-                                })
-                                .map_err(|err| {
-                                    debug!("interval error: {:?}", err);
-                                    timer::Error::shutdown()
-                                })
-                        } else {
-                            Err(timer::Error::shutdown())
-                        }
-                    })
-                    .map_err(|err| warn!("{}", err));
+                // TODO: if not contains should call handle_error let user know
+                if self
+                    .session_proto_handles
+                    .contains_key(&(session_id, proto_id))
+                {
+                    let (signal_sender, mut signal_receiver) = oneshot::channel::<()>();
+                    let mut interval_sender =
+                        self.service_context.control().service_task_sender.clone();
+                    let fut = Interval::new(Instant::now(), interval)
+                        .for_each(move |_| {
+                            if signal_receiver.poll() == Ok(Async::NotReady) {
+                                interval_sender
+                                    .try_send(ServiceTask::ProtocolSessionNotify {
+                                        session_id,
+                                        proto_id,
+                                        token,
+                                    })
+                                    .map_err(|err| {
+                                        debug!("interval error: {:?}", err);
+                                        timer::Error::shutdown()
+                                    })
+                            } else {
+                                Err(timer::Error::shutdown())
+                            }
+                        })
+                        .map_err(|err| warn!("{}", err));
 
-                // If set more than once, the older task will stop when sender dropped
-                if let Some(session) = self.sessions.get_mut(&session_id) {
-                    session
-                        .notify_signals
-                        .entry(proto_id)
-                        .or_default()
-                        .insert(token, signal_sender);
+                    // If set more than once, the older task will stop when sender dropped
+                    if let Some(session) = self.sessions.get_mut(&session_id) {
+                        session
+                            .notify_signals
+                            .entry(proto_id)
+                            .or_default()
+                            .insert(token, signal_sender);
+                    }
+                    self.send_future_task(Box::new(fut));
                 }
-                self.send_future_task(Box::new(fut));
             }
             ServiceTask::RemoveProtocolSessionNotify {
                 session_id,
