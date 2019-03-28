@@ -73,7 +73,12 @@ pub trait Callback: Clone + Send {
     /// Add remote peer's listen addresses
     fn add_remote_listen_addrs(&mut self, peer: &PeerId, addrs: Vec<Multiaddr>);
     /// Add our address observed by remote peer
-    fn add_observed_addr(&mut self, peer: &PeerId, addr: Multiaddr) -> MisbehaveResult;
+    fn add_observed_addr(
+        &mut self,
+        peer: &PeerId,
+        addr: Multiaddr,
+        outbound: bool,
+    ) -> MisbehaveResult;
     /// Report misbehavior
     fn misbehave(&mut self, peer: &PeerId, kind: Misbehavior) -> MisbehaveResult;
 }
@@ -151,8 +156,8 @@ impl<T: Callback> ServiceProtocol for IdentifyProtocol<T> {
             .iter()
             .filter(|addr| {
                 multiaddr_to_socketaddr(addr)
-                    .map(|socket_addr| !is_reachable(socket_addr.ip()))
-                    .unwrap_or(true)
+                    .map(|socket_addr| is_reachable(socket_addr.ip()))
+                    .unwrap_or(false)
             })
             .take(MAX_ADDRS)
             .cloned()
@@ -244,10 +249,13 @@ impl<T: Callback> ServiceProtocol for IdentifyProtocol<T> {
                         .map(|socket_addr| socket_addr.ip())
                         .filter(|ip_addr| is_reachable(*ip_addr))
                         .is_some()
-                        && info.session.ty.is_outbound()
                         && self
                             .callback
-                            .add_observed_addr(&info.peer_id, addr.clone())
+                            .add_observed_addr(
+                                &info.peer_id,
+                                addr.clone(),
+                                info.session.ty.is_outbound(),
+                            )
                             .is_disconnect()
                     {
                         context.disconnect(session.id);
