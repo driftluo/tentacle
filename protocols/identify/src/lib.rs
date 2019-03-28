@@ -18,8 +18,7 @@ use p2p::{
     secio::PeerId,
     traits::ServiceProtocol,
     utils::{is_reachable, multiaddr_to_socketaddr},
-    service::{DialProtocol},
-    ProtocolId, SessionId,
+    SessionId,
 };
 
 use protocol::IdentifyMessage;
@@ -69,14 +68,10 @@ impl MisbehaveResult {
 
 /// The trait to communicate with underlying peer storage
 pub trait Callback: Clone + Send {
-    /// Add local listen address
-    fn add_local_listen_addr(&mut self, addr: Multiaddr);
     /// Get local listen addresses
     fn local_listen_addrs(&mut self) -> Vec<Multiaddr>;
     /// Add remote peer's listen addresses
     fn add_remote_listen_addrs(&mut self, peer: &PeerId, addrs: Vec<Multiaddr>);
-    /// Add transformed observed address
-    fn add_transformed_addr(&mut self, addr: Multiaddr);
     /// Add our address observed by remote peer
     fn add_observed_addr(&mut self, peer: &PeerId, addr: Multiaddr) -> MisbehaveResult;
     /// Report misbehavior
@@ -85,33 +80,23 @@ pub trait Callback: Clone + Send {
 
 /// Identify protocol
 pub struct IdentifyProtocol<T> {
-    id: ProtocolId,
     callback: T,
-    // Store last ServiceContext.listens().len() value
-    listens_length: usize,
     remote_infos: HashMap<SessionId, RemoteInfo>,
     secio_enabled: bool,
-
-    // Indicate if dial transformed observed address
-    dial_transformed_addr: bool,
 }
 
 impl<T: Callback> IdentifyProtocol<T> {
-    pub fn new(id: ProtocolId, callback: T, dial_transformed_addr: bool) -> IdentifyProtocol<T> {
+    pub fn new(callback: T) -> IdentifyProtocol<T> {
         IdentifyProtocol {
-            id,
             callback,
-            listens_length: 0,
             remote_infos: HashMap::default(),
             secio_enabled: true,
-            dial_transformed_addr,
         }
     }
 }
 
 pub(crate) struct RemoteInfo {
     peer_id: PeerId,
-    session: SessionContext,
     connected_at: Instant,
     timeout: Duration,
     listen_addrs: Option<Vec<Multiaddr>>,
@@ -127,7 +112,6 @@ impl RemoteInfo {
             .expect("secio must enabled!");
         RemoteInfo {
             peer_id,
-            session,
             connected_at: Instant::now(),
             timeout,
             listen_addrs: None,
@@ -137,36 +121,22 @@ impl RemoteInfo {
 }
 
 impl<T: Callback> ServiceProtocol for IdentifyProtocol<T> {
-    fn init(&mut self, service: &mut ProtocolContext) {
-        let local_listen_addrs = service.listens().to_vec();
-        self.listens_length = local_listen_addrs.len();
-        for addr in local_listen_addrs {
-            self.callback.add_local_listen_addr(addr.clone());
-        }
-
-        service.set_service_notify(
-            self.id,
+    fn init(&mut self, context: &mut ProtocolContext) {
+        let proto_id = context.proto_id;
+        context.set_service_notify(
+            proto_id,
             Duration::from_secs(CHECK_TIMEOUT_INTERVAL),
             CHECK_TIMEOUT_TOKEN,
         );
     }
 
-    fn connected(&mut self, mut service: ProtocolContextMutRef, _version: &str) {
-        let session = service.session;
+    fn connected(&mut self, mut context: ProtocolContextMutRef, _version: &str) {
+        let session = context.session;
         if session.remote_pubkey.is_none() {
             error!("IdentifyProtocol require secio enabled!");
-            service.disconnect(session.id);
+            context.disconnect(session.id);
             self.secio_enabled = false;
             return;
-        }
-
-        // Update listen address added after current protocol init.
-        let listens = service.listens();
-        if listens.len() > self.listens_length {
-            for addr in listens.iter().skip(self.listens_length) {
-                self.callback.add_local_listen_addr(addr.clone());
-            }
-            self.listens_length = listens.len();
         }
 
         let remote_info = RemoteInfo::new(session.clone(), Duration::from_secs(DEFAULT_TIMEOUT));
@@ -186,7 +156,7 @@ impl<T: Callback> ServiceProtocol for IdentifyProtocol<T> {
             .cloned()
             .collect();
         let data = IdentifyMessage::ListenAddrs(listen_addrs).encode();
-        service.send_message(data);
+        context.send_message(data);
 
         let observed_addr = session
             .address
@@ -197,25 +167,25 @@ impl<T: Callback> ServiceProtocol for IdentifyProtocol<T> {
             })
             .collect::<Multiaddr>();
         let data = IdentifyMessage::ObservedAddr(observed_addr).encode();
-        service.send_message(data);
+        context.send_message(data);
     }
 
-    fn disconnected(&mut self, service: ProtocolContextMutRef) {
+    fn disconnected(&mut self, context: ProtocolContextMutRef) {
         if self.secio_enabled {
             let info = self
                 .remote_infos
-                .remove(&service.session.id)
+                .remove(&context.session.id)
                 .expect("RemoteInfo must exists");
             trace!("IdentifyProtocol disconnected from {:?}", info.peer_id);
         }
     }
 
-    fn received(&mut self, mut service: ProtocolContextMutRef, data: bytes::Bytes) {
+    fn received(&mut self, mut context: ProtocolContextMutRef, data: bytes::Bytes) {
         if !self.secio_enabled {
             return;
         }
 
-        let session = service.session;
+        let session = context.session;
 
         let info = self
             .remote_infos
@@ -230,7 +200,7 @@ impl<T: Callback> ServiceProtocol for IdentifyProtocol<T> {
                         .misbehave(&info.peer_id, Misbehavior::DuplicateListenAddrs)
                         .is_disconnect()
                     {
-                        service.disconnect(session.id);
+                        context.disconnect(session.id);
                     }
                 } else if addrs.len() > MAX_ADDRS {
                     if self
@@ -238,7 +208,7 @@ impl<T: Callback> ServiceProtocol for IdentifyProtocol<T> {
                         .misbehave(&info.peer_id, Misbehavior::TooManyAddresses(addrs.len()))
                         .is_disconnect()
                     {
-                        service.disconnect(session.id);
+                        context.disconnect(session.id);
                     }
                 } else {
                     trace!("received listen addresses: {:?}", addrs);
@@ -263,57 +233,24 @@ impl<T: Callback> ServiceProtocol for IdentifyProtocol<T> {
                         .misbehave(&info.peer_id, Misbehavior::DuplicateObservedAddr)
                         .is_disconnect()
                     {
-                        service.disconnect(session.id);
+                        context.disconnect(session.id);
                     }
                 } else {
                     trace!("received observed address: {}", addr);
 
                     // Add transform observed address to local listen address list
-                    if let Some(observed_ip) = multiaddr_to_socketaddr(&addr)
+                    if multiaddr_to_socketaddr(&addr)
                         .map(|socket_addr| socket_addr.ip())
                         .filter(|ip_addr| is_reachable(*ip_addr))
+                        .is_some()
                     {
-                        let local_listen_addrs = self.callback.local_listen_addrs();
-                        // replace observed address's port part
-                        if local_listen_addrs
-                            .iter()
-                            .filter_map(|listen_addr| multiaddr_to_socketaddr(listen_addr))
-                            .map(|socket_addr| socket_addr.ip())
-                            .all(|listen_ip| listen_ip != observed_ip)
+                        if self
+                            .callback
+                            .add_observed_addr(&info.peer_id, addr.clone())
+                            .is_disconnect()
                         {
-                            if self
-                                .callback
-                                .add_observed_addr(&info.peer_id, addr.clone())
-                                .is_disconnect()
-                            {
-                                service.disconnect(session.id);
-                                return;
-                            }
-
-                            // NOTE: may transform too many addresses.
-                            for new_transformed_addr in local_listen_addrs
-                                .into_iter()
-                                .filter_map(|listen_addr| multiaddr_to_socketaddr(&listen_addr))
-                                .filter(|socket_addr| is_reachable(socket_addr.ip()))
-                                .map(|socket_addr| socket_addr.port())
-                                .map(|listen_port| {
-                                    addr.iter()
-                                        .map(|proto| match proto {
-                                            Protocol::Tcp(_) if info.session.ty.is_outbound() => {
-                                                // Replace only it's an outbound connnection
-                                                Protocol::Tcp(listen_port)
-                                            }
-                                            value => value,
-                                        })
-                                        .collect::<Multiaddr>()
-                                })
-                            {
-                                // NOTE: We trust this address by dialing it, and receive ConnectSelf error
-                                if self.dial_transformed_addr {
-                                    service.dial(new_transformed_addr.clone(), DialProtocol::Multi(Vec::new()));
-                                }
-                                self.callback.add_transformed_addr(new_transformed_addr);
-                            }
+                            context.disconnect(session.id);
+                            return;
                         }
                     }
                     info.observed_addr = Some(addr.clone());
@@ -329,13 +266,13 @@ impl<T: Callback> ServiceProtocol for IdentifyProtocol<T> {
                     .misbehave(&info.peer_id, Misbehavior::InvalidData)
                     .is_disconnect()
                 {
-                    service.disconnect(session.id);
+                    context.disconnect(session.id);
                 }
             }
         }
     }
 
-    fn notify(&mut self, service: &mut ProtocolContext, _token: u64) {
+    fn notify(&mut self, context: &mut ProtocolContext, _token: u64) {
         if !self.secio_enabled {
             return;
         }
@@ -351,7 +288,7 @@ impl<T: Callback> ServiceProtocol for IdentifyProtocol<T> {
                     .misbehave(&info.peer_id, Misbehavior::Timeout)
                     .is_disconnect()
                 {
-                    service.disconnect(*session_id);
+                    context.disconnect(*session_id);
                 }
             }
         }
