@@ -14,7 +14,7 @@ use crate::{
     multiaddr::Multiaddr,
     protocol_select::ProtocolInfo,
     secio::{PublicKey, SecioKeyPair},
-    service::{DialProtocol, ServiceControl, ServiceTask, SessionType},
+    service::{DialProtocol, ServiceControl, ServiceTask, SessionType, TargetSession},
     session::SessionEvent,
     ProtocolId, SessionId,
 };
@@ -100,7 +100,7 @@ impl ServiceContext {
     #[inline]
     pub fn filter_broadcast(
         &mut self,
-        session_ids: Option<Vec<SessionId>>,
+        session_ids: TargetSession,
         proto_id: ProtocolId,
         data: Vec<u8>,
     ) {

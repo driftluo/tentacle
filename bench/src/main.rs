@@ -4,7 +4,7 @@ use p2p::{
     builder::{MetaBuilder, ServiceBuilder},
     context::{ProtocolContext, ProtocolContextMutRef},
     secio::SecioKeyPair,
-    service::{DialProtocol, ProtocolHandle, ProtocolMeta, Service, ServiceControl},
+    service::{DialProtocol, ProtocolHandle, ProtocolMeta, Service, ServiceControl, TargetSession},
     traits::{ServiceHandle, ServiceProtocol},
     ProtocolId,
 };
@@ -146,7 +146,7 @@ fn secio_and_send_data(data: &[u8]) {
     unsafe {
         SECIO_CONTROL
             .as_mut()
-            .map(|control| control.filter_broadcast(None, 1, data.to_vec()));
+            .map(|control| control.filter_broadcast(TargetSession::All, 1, data.to_vec()));
         if let Some(rev) = SECIO_RECV.as_ref() {
             assert_eq!(rev.recv(), Ok(Notify::Message(bytes::Bytes::from(data))))
         }
@@ -157,7 +157,7 @@ fn no_secio_and_send_data(data: &[u8]) {
     unsafe {
         NO_SECIO_CONTROL
             .as_mut()
-            .map(|control| control.filter_broadcast(None, 1, data.to_vec()));
+            .map(|control| control.filter_broadcast(TargetSession::All, 1, data.to_vec()));
 
         if let Some(rev) = NO_SECIO_RECV.as_ref() {
             assert_eq!(rev.recv(), Ok(Notify::Message(bytes::Bytes::from(data))))

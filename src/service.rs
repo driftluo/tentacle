@@ -37,7 +37,7 @@ mod event;
 pub(crate) mod future_task;
 
 pub use crate::service::{
-    config::{DialProtocol, ProtocolHandle, ProtocolMeta},
+    config::{DialProtocol, ProtocolHandle, ProtocolMeta, TargetSession},
     control::ServiceControl,
     event::{ProtocolEvent, ServiceError, ServiceEvent, ServiceTask},
 };
@@ -56,7 +56,7 @@ pub struct Service<T> {
 
     sessions: HashMap<SessionId, SessionControl>,
 
-    multi_trasport: MultiTransport,
+    multi_transport: MultiTransport,
 
     listens: Vec<(Multiaddr, MultiIncoming)>,
 
@@ -132,7 +132,7 @@ where
         Service {
             protocol_configs,
             handle,
-            multi_trasport: MultiTransport::new(config.timeout),
+            multi_transport: MultiTransport::new(config.timeout),
             future_task_sender,
             future_task_manager: Some(FutureTaskManager::new(future_task_receiver)),
             service_notify_signals: HashMap::default(),
@@ -180,7 +180,7 @@ where
     /// it will return original value, and create a future task to DNS resolver later.
     pub fn listen(&mut self, address: Multiaddr) -> Result<Multiaddr, io::Error> {
         let (listen_future, listen_addr) = self
-            .multi_trasport
+            .multi_transport
             .listen(address.clone())
             .map_err::<io::Error, _>(|e| e.into())?;
         let sender = self.session_event_sender.clone();
@@ -237,7 +237,7 @@ where
     fn dial_inner(&mut self, address: Multiaddr, target: DialProtocol) -> Result<(), io::Error> {
         self.dial_protocols.insert(address.clone(), target);
         let dial_future = self
-            .multi_trasport
+            .multi_transport
             .dial(address.clone())
             .map_err::<io::Error, _>(|e| e.into())?;
 
@@ -372,37 +372,27 @@ where
     ///
     /// Valid after Service starts
     #[inline]
-    pub fn filter_broadcast(
-        &mut self,
-        ids: Option<Vec<SessionId>>,
-        proto_id: ProtocolId,
-        data: &[u8],
-    ) {
-        match ids {
-            None => self.broadcast(proto_id, data),
-            Some(ids) => {
-                let data: bytes::Bytes = data.into();
-                for id in self.sessions.keys() {
-                    if ids.contains(id) {
-                        debug!(
-                            "send message to session [{}], proto [{}], data len: {}",
-                            id,
-                            proto_id,
-                            data.len()
-                        );
-                        self.write_buf.push_back((
-                            *id,
-                            SessionEvent::ProtocolMessage {
-                                id: *id,
-                                proto_id,
-                                data: data.clone(),
-                            },
-                        ));
-                    }
-                }
-                self.distribute_to_session();
+    pub fn filter_broadcast(&mut self, ids: Vec<SessionId>, proto_id: ProtocolId, data: &[u8]) {
+        let data: bytes::Bytes = data.into();
+        for id in self.sessions.keys() {
+            if ids.contains(id) {
+                debug!(
+                    "send message to session [{}], proto [{}], data len: {}",
+                    id,
+                    proto_id,
+                    data.len()
+                );
+                self.write_buf.push_back((
+                    *id,
+                    SessionEvent::ProtocolMessage {
+                        id: *id,
+                        proto_id,
+                        data: data.clone(),
+                    },
+                ));
             }
         }
+        self.distribute_to_session();
     }
 
     /// Broadcast data for a specified protocol.
@@ -1093,10 +1083,14 @@ where
     fn handle_service_task(&mut self, event: ServiceTask) {
         match event {
             ServiceTask::ProtocolMessage {
-                session_ids,
+                target,
                 proto_id,
                 data,
-            } => self.filter_broadcast(session_ids, proto_id, &data),
+            } => match target {
+                TargetSession::Single(id) => self.send_message(id, proto_id, &data),
+                TargetSession::Multi(ids) => self.filter_broadcast(ids, proto_id, &data),
+                TargetSession::All => self.broadcast(proto_id, &data),
+            },
             ServiceTask::Dial { address, target } => {
                 if !self.dial_protocols.contains_key(&address) {
                     if let Err(e) = self.dial_inner(address.clone(), target) {

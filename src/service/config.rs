@@ -2,7 +2,7 @@ use crate::{
     builder::{CodecFn, NameFn, SessionHandleFn},
     traits::{Codec, ServiceProtocol, SessionProtocol},
     yamux::config::Config as YamuxConfig,
-    ProtocolId,
+    ProtocolId, SessionId,
 };
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -36,6 +36,17 @@ pub enum DialProtocol {
     Single(ProtocolId),
     /// Try open some protocol
     Multi(Vec<ProtocolId>),
+}
+
+/// When sending a message, select the specified session
+#[derive(Debug, Clone, Eq, PartialEq, Ord, PartialOrd)]
+pub enum TargetSession {
+    /// Try broadcast
+    All,
+    /// Try send to only one
+    Single(SessionId),
+    /// Try send to some session
+    Multi(Vec<SessionId>),
 }
 
 /// Define the minimum data required for a custom protocol

@@ -7,7 +7,7 @@ use crate::{
     error::Error,
     multiaddr::Multiaddr,
     protocol_select::ProtocolInfo,
-    service::{DialProtocol, ServiceTask},
+    service::{DialProtocol, ServiceTask, TargetSession},
     ProtocolId, SessionId,
 };
 
@@ -74,19 +74,19 @@ impl ServiceControl {
         proto_id: ProtocolId,
         data: Vec<u8>,
     ) -> Result<(), Error<ServiceTask>> {
-        self.filter_broadcast(Some(vec![session_id]), proto_id, data)
+        self.filter_broadcast(TargetSession::Single(session_id), proto_id, data)
     }
 
     /// Send data to the specified protocol for the specified sessions.
     #[inline]
     pub fn filter_broadcast(
         &mut self,
-        session_ids: Option<Vec<SessionId>>,
+        target: TargetSession,
         proto_id: ProtocolId,
         data: Vec<u8>,
     ) -> Result<(), Error<ServiceTask>> {
         self.send(ServiceTask::ProtocolMessage {
-            session_ids,
+            target,
             proto_id,
             data,
         })
