@@ -1,12 +1,14 @@
 use futures::{
     prelude::*,
-    sync::mpsc,
+    sync::{mpsc, oneshot},
     task::{self, Task},
 };
 use log::{debug, error, trace, warn};
 use std::collections::{HashMap, HashSet, VecDeque};
+use std::time::Instant;
 use std::{error::Error as ErrorTrait, io};
 use tokio::prelude::{AsyncRead, AsyncWrite, FutureExt};
+use tokio::timer::{self, Interval};
 
 use crate::{
     context::{ServiceContext, SessionContext, SessionControl},
@@ -17,7 +19,10 @@ use crate::{
     },
     protocol_select::ProtocolInfo,
     secio::{handshake::Config, PublicKey, SecioKeyPair},
-    service::config::ServiceConfig,
+    service::{
+        config::ServiceConfig,
+        future_task::{BoxedFutureTask, FutureTaskManager},
+    },
     session::{Session, SessionEvent, SessionMeta},
     traits::{ServiceHandle, ServiceProtocol, SessionProtocol},
     transports::{MultiIncoming, MultiTransport, Transport, TransportError},
@@ -29,6 +34,7 @@ use crate::{
 pub(crate) mod config;
 mod control;
 mod event;
+pub(crate) mod future_task;
 
 pub use crate::service::{
     config::{DialProtocol, ProtocolHandle, ProtocolMeta},
@@ -72,6 +78,14 @@ pub struct Service<T> {
     /// The buffer which will distribute to session protocol handle
     read_session_buf: VecDeque<(SessionId, ProtocolId, SessionProtocolEvent)>,
 
+    // Future task manager
+    future_task_manager: Option<FutureTaskManager>,
+    // To add a future task
+    // TODO: use this to spawn every task
+    future_task_sender: mpsc::Sender<BoxedFutureTask>,
+
+    service_notify_signals: HashMap<ProtocolId, HashMap<u64, oneshot::Sender<()>>>,
+
     // The service protocols open with the session
     session_service_protos: HashMap<SessionId, HashSet<ProtocolId>>,
 
@@ -113,11 +127,15 @@ where
                 (meta.id(), proto_info)
             })
             .collect();
+        let (future_task_sender, future_task_receiver) = mpsc::channel(128);
 
         Service {
             protocol_configs,
             handle,
             multi_trasport: MultiTransport::new(config.timeout),
+            future_task_sender,
+            future_task_manager: Some(FutureTaskManager::new(future_task_receiver)),
+            service_notify_signals: HashMap::default(),
             sessions: HashMap::default(),
             session_service_protos: HashMap::default(),
             service_proto_handles: HashMap::default(),
@@ -588,6 +606,7 @@ where
 
         let (service_event_sender, service_event_receiver) = mpsc::channel(32);
         let session_control = SessionControl {
+            notify_signals: HashMap::default(),
             event_sender: service_event_sender,
             inner: SessionContext {
                 id: self.next_session,
@@ -903,16 +922,24 @@ where
         if let Some(infos) = self.session_service_protos.get_mut(&session_id) {
             infos.remove(&proto_id);
         }
-
-        // Close notify sender
-        self.service_context
-            .remove_session_notify_senders(session_id, proto_id);
     }
 
     #[inline(always)]
     fn send_pending_task(&mut self) {
         while let Some(task) = self.service_context.pending_tasks.pop_front() {
             self.handle_service_task(task);
+        }
+    }
+
+    #[inline]
+    fn send_future_task(&mut self, task: BoxedFutureTask) {
+        if let Err(err) = self.future_task_sender.try_send(task) {
+            if err.is_full() {
+                let task = ServiceTask::FutureTask {
+                    task: err.into_inner(),
+                };
+                self.service_context.pending_tasks.push_back(task);
+            }
         }
     }
 
@@ -1106,7 +1133,101 @@ where
                 self.session_close(session_id, Source::External)
             }
             ServiceTask::FutureTask { task } => {
-                tokio::spawn(task);
+                self.send_future_task(task);
+            }
+            ServiceTask::SetProtocolNotify {
+                proto_id,
+                interval,
+                token,
+            } => {
+                let (signal_sender, mut signal_receiver) = oneshot::channel::<()>();
+                let mut interval_sender =
+                    self.service_context.control().service_task_sender.clone();
+                let fut = Interval::new(Instant::now(), interval)
+                    .for_each(move |_| {
+                        if signal_receiver.poll() == Ok(Async::NotReady) {
+                            interval_sender
+                                .try_send(ServiceTask::ProtocolNotify { proto_id, token })
+                                .map_err(|err| {
+                                    debug!("interval error: {:?}", err);
+                                    timer::Error::shutdown()
+                                })
+                        } else {
+                            Err(timer::Error::shutdown())
+                        }
+                    })
+                    .map_err(|err| warn!("{}", err));
+
+                // If set more than once, the older task will stop when sender dropped
+                self.service_notify_signals
+                    .entry(proto_id)
+                    .or_default()
+                    .insert(token, signal_sender);
+                self.send_future_task(Box::new(fut));
+            }
+            ServiceTask::RemoveProtocolNotify { proto_id, token } => {
+                if let Some(signals) = self.service_notify_signals.get_mut(&proto_id) {
+                    if let Some(signal) = signals.remove(&token) {
+                        let _ = signal.send(());
+                    }
+                    if signals.is_empty() {
+                        self.service_notify_signals.remove(&proto_id);
+                    }
+                }
+            }
+            ServiceTask::SetProtocolSessionNotify {
+                session_id,
+                proto_id,
+                interval,
+                token,
+            } => {
+                let (signal_sender, mut signal_receiver) = oneshot::channel::<()>();
+                let mut interval_sender =
+                    self.service_context.control().service_task_sender.clone();
+                let fut = Interval::new(Instant::now(), interval)
+                    .for_each(move |_| {
+                        if signal_receiver.poll() == Ok(Async::NotReady) {
+                            interval_sender
+                                .try_send(ServiceTask::ProtocolSessionNotify {
+                                    session_id,
+                                    proto_id,
+                                    token,
+                                })
+                                .map_err(|err| {
+                                    debug!("interval error: {:?}", err);
+                                    timer::Error::shutdown()
+                                })
+                        } else {
+                            Err(timer::Error::shutdown())
+                        }
+                    })
+                    .map_err(|err| warn!("{}", err));
+
+                // If set more than once, the older task will stop when sender dropped
+                if let Some(session) = self.sessions.get_mut(&session_id) {
+                    session
+                        .notify_signals
+                        .entry(proto_id)
+                        .or_default()
+                        .insert(token, signal_sender);
+                }
+                self.send_future_task(Box::new(fut));
+            }
+            ServiceTask::RemoveProtocolSessionNotify {
+                session_id,
+                proto_id,
+                token,
+            } => {
+                if let Some(session) = self.sessions.get_mut(&session_id) {
+                    if let Some(signals) = session.notify_signals.get_mut(&proto_id) {
+                        if let Some(signal) = signals.remove(&token) {
+                            let _ = signal.send(());
+                        }
+                        if signals.is_empty() {
+                            session.notify_signals.remove(&proto_id);
+                        }
+                    }
+                }
             }
             ServiceTask::ProtocolNotify { proto_id, token } => {
                 if self.config.event.contains(&proto_id) {
@@ -1157,9 +1278,6 @@ where
                         ));
                         self.distribute_to_user_level();
                     }
-                } else {
-                    self.service_context
-                        .remove_session_notify_senders(session_id, proto_id);
                 }
             }
             ServiceTask::ProtocolOpen {
@@ -1237,6 +1355,10 @@ where
             && self.service_context.pending_tasks.is_empty()
         {
             return Ok(Async::Ready(None));
+        }
+
+        if let Some(stream) = self.future_task_manager.take() {
+            tokio::spawn(stream.for_each(|_| Ok(())));
         }
 
         if !self.write_buf.is_empty()

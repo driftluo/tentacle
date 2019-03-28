@@ -1,5 +1,6 @@
 use futures::{prelude::*, sync::mpsc};
 
+use std::time::Duration;
 use std::{collections::HashMap, sync::Arc};
 
 use crate::{
@@ -129,6 +130,59 @@ impl ServiceControl {
         self.send(ServiceTask::ProtocolClose {
             session_id,
             proto_id,
+        })
+    }
+
+    /// Set a service notify token
+    pub fn set_service_notify(
+        &mut self,
+        proto_id: ProtocolId,
+        interval: Duration,
+        token: u64,
+    ) -> Result<(), Error<ServiceTask>> {
+        self.send(ServiceTask::SetProtocolNotify {
+            proto_id,
+            interval,
+            token,
+        })
+    }
+
+    /// remove a service notify token
+    pub fn remove_service_notify(
+        &mut self,
+        proto_id: ProtocolId,
+        token: u64,
+    ) -> Result<(), Error<ServiceTask>> {
+        self.send(ServiceTask::RemoveProtocolNotify { proto_id, token })
+    }
+
+    /// Set a session notify token
+    pub fn set_session_notify(
+        &mut self,
+        session_id: SessionId,
+        proto_id: ProtocolId,
+        interval: Duration,
+        token: u64,
+    ) -> Result<(), Error<ServiceTask>> {
+        self.send(ServiceTask::SetProtocolSessionNotify {
+            session_id,
+            proto_id,
+            interval,
+            token,
+        })
+    }
+
+    /// Remove a session notify token
+    pub fn remove_session_notify(
+        &mut self,
+        session_id: SessionId,
+        proto_id: ProtocolId,
+        token: u64,
+    ) -> Result<(), Error<ServiceTask>> {
+        self.send(ServiceTask::RemoveProtocolSessionNotify {
+            session_id,
+            proto_id,
+            token,
         })
     }
 }
