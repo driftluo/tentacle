@@ -97,6 +97,7 @@ impl<T: Callback> IdentifyProtocol<T> {
 
 pub(crate) struct RemoteInfo {
     peer_id: PeerId,
+    session: SessionContext,
     connected_at: Instant,
     timeout: Duration,
     listen_addrs: Option<Vec<Multiaddr>>,
@@ -112,6 +113,7 @@ impl RemoteInfo {
             .expect("secio must enabled!");
         RemoteInfo {
             peer_id,
+            session,
             connected_at: Instant::now(),
             timeout,
             listen_addrs: None,
@@ -238,11 +240,11 @@ impl<T: Callback> ServiceProtocol for IdentifyProtocol<T> {
                 } else {
                     trace!("received observed address: {}", addr);
 
-                    // Add transform observed address to local listen address list
                     if multiaddr_to_socketaddr(&addr)
                         .map(|socket_addr| socket_addr.ip())
                         .filter(|ip_addr| is_reachable(*ip_addr))
                         .is_some()
+                        && info.session.ty.is_outbound()
                         && self
                             .callback
                             .add_observed_addr(&info.peer_id, addr.clone())
