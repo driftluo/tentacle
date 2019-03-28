@@ -14,12 +14,12 @@ use tentacle::{
 
 fn main() {
     env_logger::init();
-    let addr_mgr = SimpleAddrManager {
+    let callback = IdentifyCallback {
         local_listen_addrs: Vec::new(),
     };
     let protocol = MetaBuilder::default()
         .id(1)
-        .service_handle(move || ProtocolHandle::Callback(Box::new(IdentifyProtocol::new(addr_mgr))))
+        .service_handle(move || ProtocolHandle::Callback(Box::new(IdentifyProtocol::new(callback))))
         .build();
     if std::env::args().nth(1) == Some("server".to_string()) {
         debug!("Starting server ......");
@@ -51,11 +51,11 @@ fn main() {
 }
 
 #[derive(Clone)]
-struct SimpleAddrManager {
+struct IdentifyCallback {
     local_listen_addrs: Vec<Multiaddr>,
 }
 
-impl Callback for SimpleAddrManager {
+impl Callback for IdentifyCallback {
     /// Get local listen addresses
     fn local_listen_addrs(&mut self) -> Vec<Multiaddr> {
         self.local_listen_addrs.clone()
@@ -75,11 +75,11 @@ impl Callback for SimpleAddrManager {
 struct SimpleHandler {}
 
 impl ServiceHandle for SimpleHandler {
-    fn handle_error(&mut self, _env: &mut ServiceContext, error: ServiceError) {
+    fn handle_error(&mut self, _context: &mut ServiceContext, error: ServiceError) {
         debug!("service error: {:?}", error);
     }
 
-    fn handle_event(&mut self, _env: &mut ServiceContext, event: ServiceEvent) {
+    fn handle_event(&mut self, _context: &mut ServiceContext, event: ServiceEvent) {
         debug!("service event: {:?}", event);
     }
 }
