@@ -8,7 +8,7 @@ use tentacle::{
     context::ServiceContext,
     multiaddr::Multiaddr,
     secio::{PeerId, SecioKeyPair},
-    service::{DialProtocol, ProtocolHandle, ServiceError, ServiceEvent},
+    service::{DialProtocol, ProtocolHandle, ServiceError, ServiceEvent, SessionType},
     traits::ServiceHandle,
 };
 
@@ -63,7 +63,12 @@ impl Callback for IdentifyCallback {
     /// Add remote peer's listen addresses
     fn add_remote_listen_addrs(&mut self, _peer: &PeerId, _addrs: Vec<Multiaddr>) {}
     /// Add our address observed by remote peer
-    fn add_observed_addr(&mut self, _peer: &PeerId, _addr: Multiaddr, _: bool) -> MisbehaveResult {
+    fn add_observed_addr(
+        &mut self,
+        _peer: &PeerId,
+        _addr: Multiaddr,
+        _: SessionType,
+    ) -> MisbehaveResult {
         MisbehaveResult::Continue
     }
     /// Report misbehavior

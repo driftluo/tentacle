@@ -16,6 +16,7 @@ use p2p::{
     context::{ProtocolContext, ProtocolContextMutRef, SessionContext},
     multiaddr::{Multiaddr, Protocol},
     secio::PeerId,
+    service::SessionType,
     traits::ServiceProtocol,
     utils::{is_reachable, multiaddr_to_socketaddr},
     SessionId,
@@ -77,7 +78,7 @@ pub trait Callback: Clone + Send {
         &mut self,
         peer: &PeerId,
         addr: Multiaddr,
-        outbound: bool,
+        ty: SessionType,
     ) -> MisbehaveResult;
     /// Report misbehavior
     fn misbehave(&mut self, peer: &PeerId, kind: Misbehavior) -> MisbehaveResult;
@@ -251,11 +252,7 @@ impl<T: Callback> ServiceProtocol for IdentifyProtocol<T> {
                         .is_some()
                         && self
                             .callback
-                            .add_observed_addr(
-                                &info.peer_id,
-                                addr.clone(),
-                                info.session.ty.is_outbound(),
-                            )
+                            .add_observed_addr(&info.peer_id, addr.clone(), info.session.ty)
                             .is_disconnect()
                     {
                         context.disconnect(session.id);
