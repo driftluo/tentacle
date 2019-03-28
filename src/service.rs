@@ -1140,6 +1140,7 @@ where
                 interval,
                 token,
             } => {
+                // TODO: if not contains should call handle_error let user know
                 if self.service_proto_handles.contains_key(&proto_id) {
                     let (signal_sender, mut signal_receiver) = oneshot::channel::<()>();
                     let mut interval_sender =
@@ -1183,6 +1184,7 @@ where
                 interval,
                 token,
             } => {
+                // TODO: if not contains should call handle_error let user know
                 if self
                     .session_proto_handles
                     .contains_key(&(session_id, proto_id))
