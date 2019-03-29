@@ -109,7 +109,7 @@ impl Exchange {
 }
 
 /// Public Key
-#[derive(Clone, Debug, PartialEq, Ord, PartialOrd, Eq)]
+#[derive(Clone, Debug, PartialEq, Ord, PartialOrd, Eq, Hash)]
 pub enum PublicKey {
     /// Secp256k1
     Secp256k1(Vec<u8>),

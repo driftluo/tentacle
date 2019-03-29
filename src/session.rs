@@ -134,7 +134,7 @@ pub(crate) struct Session<T> {
     timeout: Duration,
     timeout_check: Option<Delay>,
 
-    dead: bool,
+    state: SessionState,
 
     // NOTE: Not used yet, may useful later
     // remote_address: ::std::net::SocketAddr,
@@ -194,7 +194,7 @@ where
             service_sender,
             service_receiver,
             notify: None,
-            dead: false,
+            state: SessionState::Normal,
         }
     }
 
@@ -434,12 +434,8 @@ where
                     // if no proto open, just close session
                     self.close_session();
                 } else {
-                    for (proto_id, stream_id) in self.proto_streams.iter() {
-                        self.write_buf.push_back(ProtocolEvent::Close {
-                            id: *stream_id,
-                            proto_id: *proto_id,
-                        });
-                    }
+                    self.state = SessionState::LocalClose;
+                    self.close_all_proto();
                 }
             }
             SessionEvent::ProtocolOpen { proto_id, .. } => {
@@ -472,6 +468,17 @@ where
             _ => (),
         }
         self.distribute_to_substream();
+    }
+
+    /// Try close all protocol
+    #[inline]
+    fn close_all_proto(&mut self) {
+        for (proto_id, stream_id) in self.proto_streams.iter() {
+            self.write_buf.push_back(ProtocolEvent::Close {
+                id: *stream_id,
+                proto_id: *proto_id,
+            });
+        }
     }
 
     /// Close session
@@ -524,7 +531,7 @@ where
                 Ok(Async::Ready(_)) => {
                     if self.sub_streams.is_empty() {
                         self.event_output(SessionEvent::SessionTimeout { id: self.id });
-                        self.dead = true;
+                        self.state = SessionState::LocalClose;
                     }
                 }
                 Ok(Async::NotReady) => self.timeout_check = Some(check),
@@ -533,16 +540,19 @@ where
         }
 
         loop {
+            if !self.state.is_normal() {
+                break;
+            }
             match self.socket.poll() {
                 Ok(Async::Ready(Some(sub_stream))) => self.handle_sub_stream(sub_stream),
                 Ok(Async::Ready(None)) => {
-                    self.dead = true;
+                    self.state = SessionState::RemoteClose;
                     break;
                 }
                 Ok(Async::NotReady) => break,
                 Err(err) => {
-                    warn!("session poll error: {:?}", err);
-                    self.dead = true;
+                    debug!("session poll error: {:?}", err);
+                    self.state = SessionState::RemoteClose;
 
                     match err.kind() {
                         ErrorKind::BrokenPipe
@@ -564,6 +574,11 @@ where
         }
 
         loop {
+            // Local close means user doesn't want any message from this session
+            // But when remote close, we should try my best to accept all data as much as possible
+            if self.state.is_local_close() {
+                break;
+            }
             match self.proto_event_receiver.poll() {
                 Ok(Async::Ready(Some(event))) => self.handle_stream_event(event),
                 Ok(Async::Ready(None)) => {
@@ -579,11 +594,14 @@ where
         }
 
         loop {
+            if !self.state.is_normal() {
+                break;
+            }
             match self.service_receiver.poll() {
                 Ok(Async::Ready(Some(event))) => self.handle_session_event(event),
                 Ok(Async::Ready(None)) => {
                     // Must drop by service
-                    self.dead = true;
+                    self.state = SessionState::LocalClose;
                     break;
                 }
                 Ok(Async::NotReady) => break,
@@ -594,9 +612,21 @@ where
             }
         }
 
-        if self.dead {
-            self.close_session();
-            return Ok(Async::Ready(None));
+        match self.state {
+            SessionState::LocalClose => {
+                self.close_session();
+                return Ok(Async::Ready(None));
+            }
+            SessionState::RemoteClose => {
+                // try close all protocol stream, and then close session
+                if self.proto_streams.is_empty() {
+                    self.close_session();
+                    return Ok(Async::Ready(None));
+                } else {
+                    self.close_all_proto();
+                }
+            }
+            SessionState::Normal => (),
         }
 
         self.notify = Some(task::current());
@@ -633,5 +663,34 @@ impl SessionMeta {
     pub fn config(mut self, config: Config) -> Self {
         self.config = config;
         self
+    }
+}
+
+/// Session state
+#[derive(Copy, Clone, Debug, Eq, PartialEq, Hash)]
+enum SessionState {
+    /// Close by remote, accept all data as much as possible
+    RemoteClose,
+    /// Close by self, don't receive any more
+    LocalClose,
+    /// Normal communication
+    Normal,
+}
+
+impl SessionState {
+    #[inline]
+    fn is_local_close(self) -> bool {
+        match self {
+            SessionState::LocalClose => true,
+            _ => false,
+        }
+    }
+
+    #[inline]
+    fn is_normal(self) -> bool {
+        match self {
+            SessionState::Normal => true,
+            _ => false,
+        }
     }
 }

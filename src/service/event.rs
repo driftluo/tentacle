@@ -106,7 +106,7 @@ pub enum ProtocolEvent<'a> {
         data: bytes::Bytes,
     },
     /// Protocol close event
-    DisConnected {
+    Disconnected {
         /// Protocol id
         proto_id: ProtocolId,
         /// session context

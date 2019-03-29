@@ -396,7 +396,7 @@ where
                     return Ok(Async::NotReady);
                 }
                 Err(err) => {
-                    warn!("[{:?}] Session recv_frames error: {:?}", self.ty, err);
+                    debug!("[{:?}] Session recv_frames error: {:?}", self.ty, err);
                     return Err(err);
                 }
             }

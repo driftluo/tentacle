@@ -249,7 +249,7 @@ where
                 }
                 Ok(Async::NotReady) => break,
                 Err(err) => {
-                    warn!("sub stream codec error: {:?}", err);
+                    debug!("sub stream codec error: {:?}", err);
                     match err.kind() {
                         ErrorKind::BrokenPipe
                         | ErrorKind::ConnectionAborted

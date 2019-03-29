@@ -9,7 +9,6 @@ use tokio::codec::{Decoder, Encoder};
 
 use crate::{StreamId, HEADER_SIZE, PROTOCOL_VERSION, RESERVED_STREAM_ID};
 
-// TODO remove Clone later
 /// The base message type is frame
 #[derive(Debug)]
 pub struct Frame {
@@ -153,7 +152,7 @@ impl Type {
 }
 
 /// The frame flag
-#[derive(Copy, Clone, Debug)]
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
 #[repr(u16)]
 pub enum Flag {
     /// SYN - Signals the start of a new stream.
@@ -182,7 +181,7 @@ impl From<Flag> for Flags {
 }
 
 /// Represent all flags of a frame
-#[derive(Copy, Clone, Debug, Default)]
+#[derive(Copy, Clone, Debug, Default, Eq, PartialEq)]
 pub struct Flags(u16);
 
 impl Flags {
@@ -323,5 +322,36 @@ impl Encoder for FrameCodec {
         }
         trace!("encode item: length={}", dst.len());
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::{Flags, Frame, FrameCodec, Type, HEADER_SIZE};
+    use bytes::{Bytes, BytesMut};
+    use tokio::codec::{Decoder, Encoder};
+
+    #[test]
+    fn test_decode_encode() {
+        let rand_data = Bytes::from((0..512).map(|_| rand::random::<u8>()).collect::<Vec<_>>());
+        let frame = Frame::new_data(Flags(1), 1, rand_data.clone());
+        let mut data = BytesMut::default();
+
+        let mut codec = FrameCodec {
+            unused_data_header: None,
+        };
+
+        codec.encode(frame, &mut data).unwrap();
+
+        let decode_frame = codec.decode(&mut data).unwrap().unwrap();
+
+        assert_eq!(decode_frame.flags(), Flags(1));
+        assert_eq!(decode_frame.stream_id(), 1);
+        assert_eq!(decode_frame.ty(), Type::Data);
+        assert_eq!(decode_frame.size(), 512 + HEADER_SIZE);
+
+        let (_, data) = decode_frame.into_parts();
+
+        assert_eq!(data.unwrap(), rand_data)
     }
 }
