@@ -1,13 +1,10 @@
 use flatbuffers::{FlatBufferBuilder, WIPOffset};
+use flatbuffers_verifier::get_root;
 
-use crate::{
-    protocol_generated::p2p::identify::{
-        Address as FbsAddress, AddressBuilder, IdentifyMessage as FbsIdentifyMessage,
-        IdentifyMessageBuilder, IdentifyPayload as FbsIdentifyPayload,
-        ListenAddrs as FbsListenAddrs, ListenAddrsBuilder, ObservedAddr as FbsObservedAddr,
-        ObservedAddrBuilder,
-    },
-    protocol_generated_verifier::get_root,
+use crate::protocol_generated::p2p::identify::{
+    Address as FbsAddress, AddressBuilder, IdentifyMessage as FbsIdentifyMessage,
+    IdentifyMessageBuilder, IdentifyPayload as FbsIdentifyPayload, ListenAddrs as FbsListenAddrs,
+    ListenAddrsBuilder, ObservedAddr as FbsObservedAddr, ObservedAddrBuilder,
 };
 use p2p::multiaddr::Multiaddr;
 

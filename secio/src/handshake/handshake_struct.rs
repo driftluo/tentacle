@@ -1,13 +1,11 @@
-use crate::handshake::{
-    handshake_generated::p2p::handshake::{
-        Exchange as FBSExchange, ExchangeBuilder, Propose as FBSPropose, ProposeBuilder,
-        PublicKey as FBSPublicKey, PublicKeyBuilder, Type,
-    },
-    handshake_generated_verifier::get_root,
+use crate::handshake::handshake_generated::p2p::handshake::{
+    Exchange as FBSExchange, ExchangeBuilder, Propose as FBSPropose, ProposeBuilder,
+    PublicKey as FBSPublicKey, PublicKeyBuilder, Type,
 };
 use crate::peer_id::PeerId;
 
 use flatbuffers::FlatBufferBuilder;
+use flatbuffers_verifier::get_root;
 
 #[derive(Clone, Default, PartialEq, Ord, PartialOrd, Eq, Debug)]
 pub struct Propose {
