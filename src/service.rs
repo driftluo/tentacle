@@ -1152,7 +1152,7 @@ where
                                 Err(timer::Error::shutdown())
                             }
                         })
-                        .map_err(|err| warn!("{}", err));
+                        .map_err(|err| debug!("notify close by: {}", err));
 
                     // If set more than once, the older task will stop when sender dropped
                     self.service_notify_signals
@@ -1203,7 +1203,7 @@ where
                                 Err(timer::Error::shutdown())
                             }
                         })
-                        .map_err(|err| warn!("{}", err));
+                        .map_err(|err| debug!("session notify close by: {}", err));
 
                     // If set more than once, the older task will stop when sender dropped
                     if let Some(session) = self.sessions.get_mut(&session_id) {
