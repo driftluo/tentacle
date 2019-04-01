@@ -149,3 +149,103 @@ impl ServiceHandle for Box<dyn ServiceHandle + Send + Sync + 'static> {
 }
 
 impl ServiceHandle for () {}
+
+impl ServiceProtocol for Box<dyn ServiceProtocol + Send + 'static> {
+    fn init(&mut self, context: &mut ProtocolContext) {
+        (&mut **self).init(context)
+    }
+
+    fn connected(&mut self, context: ProtocolContextMutRef, version: &str) {
+        (&mut **self).connected(context, version)
+    }
+
+    fn disconnected(&mut self, context: ProtocolContextMutRef) {
+        (&mut **self).disconnected(context)
+    }
+
+    fn received(&mut self, context: ProtocolContextMutRef, data: bytes::Bytes) {
+        (&mut **self).received(context, data)
+    }
+
+    fn notify(&mut self, context: &mut ProtocolContext, token: u64) {
+        (&mut **self).notify(context, token)
+    }
+
+    #[inline]
+    fn poll(&mut self, context: &mut ProtocolContext) {
+        (&mut **self).poll(context)
+    }
+}
+
+impl ServiceProtocol for Box<dyn ServiceProtocol + Send + Sync + 'static> {
+    fn init(&mut self, context: &mut ProtocolContext) {
+        (&mut **self).init(context)
+    }
+
+    fn connected(&mut self, context: ProtocolContextMutRef, version: &str) {
+        (&mut **self).connected(context, version)
+    }
+
+    fn disconnected(&mut self, context: ProtocolContextMutRef) {
+        (&mut **self).disconnected(context)
+    }
+
+    fn received(&mut self, context: ProtocolContextMutRef, data: bytes::Bytes) {
+        (&mut **self).received(context, data)
+    }
+
+    fn notify(&mut self, context: &mut ProtocolContext, token: u64) {
+        (&mut **self).notify(context, token)
+    }
+
+    #[inline]
+    fn poll(&mut self, context: &mut ProtocolContext) {
+        (&mut **self).poll(context)
+    }
+}
+
+impl SessionProtocol for Box<dyn SessionProtocol + Send + 'static> {
+    fn connected(&mut self, context: ProtocolContextMutRef, version: &str) {
+        (&mut **self).connected(context, version)
+    }
+
+    fn disconnected(&mut self, context: ProtocolContextMutRef) {
+        (&mut **self).disconnected(context)
+    }
+
+    fn received(&mut self, context: ProtocolContextMutRef, data: bytes::Bytes) {
+        (&mut **self).received(context, data)
+    }
+
+    fn notify(&mut self, context: ProtocolContextMutRef, token: u64) {
+        (&mut **self).notify(context, token)
+    }
+
+    #[inline]
+    fn poll(&mut self, context: ProtocolContextMutRef) {
+        (&mut **self).poll(context)
+    }
+}
+
+impl SessionProtocol for Box<dyn SessionProtocol + Send + Sync + 'static> {
+    fn connected(&mut self, context: ProtocolContextMutRef, version: &str) {
+        (&mut **self).connected(context, version)
+    }
+
+    fn disconnected(&mut self, context: ProtocolContextMutRef) {
+        (&mut **self).disconnected(context)
+    }
+
+    fn received(&mut self, context: ProtocolContextMutRef, data: bytes::Bytes) {
+        (&mut **self).received(context, data)
+    }
+
+    fn notify(&mut self, context: ProtocolContextMutRef, token: u64) {
+        (&mut **self).notify(context, token)
+    }
+
+    #[inline]
+    fn poll(&mut self, context: ProtocolContextMutRef) {
+        (&mut **self).poll(context)
+    }
+}
