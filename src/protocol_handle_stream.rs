@@ -34,17 +34,20 @@ pub enum ServiceProtocolEvent {
     },
 }
 
-pub struct ServiceProtocolStream {
-    handle: Box<dyn ServiceProtocol + Send + 'static>,
+pub struct ServiceProtocolStream<T> {
+    handle: T,
     /// External event is passed in from this
     handle_context: ProtocolContext,
     sessions: HashMap<SessionId, SessionContext>,
     receiver: mpsc::Receiver<ServiceProtocolEvent>,
 }
 
-impl ServiceProtocolStream {
+impl<T> ServiceProtocolStream<T>
+where
+    T: ServiceProtocol + Send,
+{
     pub fn new(
-        handle: Box<dyn ServiceProtocol + Send + 'static>,
+        handle: T,
         service_context: ServiceContext,
         receiver: mpsc::Receiver<ServiceProtocolEvent>,
         proto_id: ProtocolId,
@@ -89,7 +92,10 @@ impl ServiceProtocolStream {
     }
 }
 
-impl Stream for ServiceProtocolStream {
+impl<T> Stream for ServiceProtocolStream<T>
+where
+    T: ServiceProtocol + Send,
+{
     type Item = ();
     type Error = ();
 
@@ -144,17 +150,20 @@ pub enum SessionProtocolEvent {
     },
 }
 
-pub struct SessionProtocolStream {
-    handle: Box<dyn SessionProtocol + Send + 'static>,
+pub struct SessionProtocolStream<T> {
+    handle: T,
     /// External event is passed in from this
     handle_context: ProtocolContext,
     context: SessionContext,
     receiver: mpsc::Receiver<SessionProtocolEvent>,
 }
 
-impl SessionProtocolStream {
+impl<T> SessionProtocolStream<T>
+where
+    T: SessionProtocol + Send,
+{
     pub fn new(
-        handle: Box<dyn SessionProtocol + Send + 'static>,
+        handle: T,
         service_context: ServiceContext,
         context: SessionContext,
         receiver: mpsc::Receiver<SessionProtocolEvent>,
@@ -201,7 +210,10 @@ impl SessionProtocolStream {
     }
 }
 
-impl Stream for SessionProtocolStream {
+impl<T> Stream for SessionProtocolStream<T>
+where
+    T: SessionProtocol + Send,
+{
     type Item = ();
     type Error = ();
 
