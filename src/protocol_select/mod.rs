@@ -68,7 +68,7 @@ impl ProtocolInfo {
             fbs_protocol_info.support_versions(),
         ) {
             (Some(name), Some(fbs_versions)) => {
-                let mut versions: Vec<String> = Vec::new();
+                let mut versions: Vec<String> = Vec::with_capacity(fbs_versions.len() + 1);
                 for i in 0..fbs_versions.len() {
                     versions.push(fbs_versions.get(i).to_owned());
                 }

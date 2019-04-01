@@ -880,7 +880,7 @@ where
             if let Some(session_control) = self.sessions.get(&session_id) {
                 self.handle.handle_proto(
                     &mut self.service_context,
-                    ProtocolEvent::DisConnected {
+                    ProtocolEvent::Disconnected {
                         proto_id,
                         session_context: &session_control.inner,
                     },

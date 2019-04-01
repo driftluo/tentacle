@@ -161,8 +161,8 @@ impl ServiceContext {
 
     /// Get service listen address list
     #[inline]
-    pub fn listens(&self) -> &Vec<Multiaddr> {
-        &self.listens
+    pub fn listens(&self) -> &[Multiaddr] {
+        self.listens.as_ref()
     }
 
     /// Send raw event

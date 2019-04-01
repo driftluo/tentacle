@@ -316,7 +316,7 @@ where
                                 self.notify();
                                 false
                             } else {
-                                warn!("send to stream error: {:?}", err);
+                                debug!("send to stream error: {:?}", err);
                                 true
                             }
                         }
@@ -327,7 +327,7 @@ where
                 }
             };
             if disconnected {
-                warn!("[{:?}] !!!!! remove a stream id={}", self.ty, stream_id);
+                debug!("[{:?}] remove a stream id={}", self.ty, stream_id);
                 self.streams.remove(&stream_id);
             }
         }
@@ -396,7 +396,7 @@ where
                     return Ok(Async::NotReady);
                 }
                 Err(err) => {
-                    warn!("[{:?}] Session recv_frames error: {:?}", self.ty, err);
+                    debug!("[{:?}] Session recv_frames error: {:?}", self.ty, err);
                     return Err(err);
                 }
             }
