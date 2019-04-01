@@ -223,7 +223,7 @@ where
                             version,
                         });
                         tokio::spawn(send_task.map(|_| ()).map_err(|err| {
-                            error!("stream send back error: {:?}", err);
+                            debug!("stream send back error: {:?}", err);
                         }));
                     }
                     None => {
@@ -232,7 +232,7 @@ where
                             proto_name: Some(name),
                         });
                         tokio::spawn(send_task.map(|_| ()).map_err(|err| {
-                            error!("select error send back error: {:?}", err);
+                            debug!("select error send back error: {:?}", err);
                         }));
                     }
                 },
@@ -241,7 +241,7 @@ where
                     let send_task =
                         event_sender.send(ProtocolEvent::SelectError { proto_name: None });
                     tokio::spawn(send_task.map(|_| ()).map_err(|err| {
-                        error!("select error send back error: {:?}", err);
+                        debug!("select error send back error: {:?}", err);
                     }));
                 }
             }
@@ -298,7 +298,7 @@ where
                                 self.write_buf.push_back(e.into_inner());
                                 self.notify();
                             } else {
-                                error!("session send to sub stream error: {}", e);
+                                debug!("session send to sub stream error: {}", e);
                             }
                         }
                     };
@@ -310,7 +310,7 @@ where
                                 self.write_buf.push_back(e.into_inner());
                                 self.notify();
                             } else {
-                                error!("session send to sub stream error: {}", e);
+                                debug!("session send to sub stream error: {}", e);
                             }
                         }
                     };
@@ -483,9 +483,14 @@ where
 
     /// Close session
     fn close_session(&mut self) {
-        let _ = self
-            .service_sender
-            .try_send(SessionEvent::SessionClose { id: self.id });
+        tokio::spawn(
+            self.service_sender
+                .clone()
+                .send(SessionEvent::SessionClose { id: self.id })
+                .map(|_| ())
+                .map_err(|e| error!("session close event send to service error: {:?}", e)),
+        );
+
         self.sub_streams.clear();
         self.service_receiver.close();
         self.proto_event_receiver.close();

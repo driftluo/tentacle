@@ -135,10 +135,16 @@ where
     fn close_proto_stream(&mut self) {
         self.event_receiver.close();
         let _ = self.sub_stream.get_mut().shutdown();
-        self.output_event(ProtocolEvent::Close {
-            id: self.id,
-            proto_id: self.proto_id,
-        });
+        tokio::spawn(
+            self.event_sender
+                .clone()
+                .send(ProtocolEvent::Close {
+                    id: self.id,
+                    proto_id: self.proto_id,
+                })
+                .map(|_| ())
+                .map_err(|e| debug!("stream close event send to session error: {:?}", e)),
+        );
     }
 
     /// Handling commands send by session
@@ -152,7 +158,7 @@ where
                         // Whether it is a read send error or a flush error,
                         // the most essential problem is that there is a problem with the external network.
                         // Close the protocol stream directly.
-                        warn!(
+                        debug!(
                             "protocol [{}] close because of extern network",
                             self.proto_id
                         );
