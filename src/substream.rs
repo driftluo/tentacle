@@ -104,14 +104,14 @@ where
     }
 
     /// Send data to the lower `yamux` sub stream
-    fn send_data(&mut self) -> Poll<(), io::Error> {
+    fn send_data(&mut self) -> Result<(), io::Error> {
         while let Some(frame) = self.write_buf.pop_front() {
             match self.sub_stream.start_send(frame) {
                 Ok(AsyncSink::NotReady(frame)) => {
                     debug!("framed_stream NotReady, frame: {:?}", frame);
                     self.write_buf.push_front(frame);
                     self.notify();
-                    return Ok(Async::NotReady);
+                    return Ok(());
                 }
                 Ok(AsyncSink::Ready) => {}
                 Err(err) => {
@@ -121,7 +121,7 @@ where
             }
         }
         match self.sub_stream.poll_complete() {
-            Ok(Async::NotReady) => return Ok(Async::NotReady),
+            Ok(Async::NotReady) => return Ok(()),
             Ok(Async::Ready(_)) => (),
             Err(err) => {
                 debug!("poll complete error: {:?}", err);
@@ -129,7 +129,7 @@ where
             }
         };
         debug!("send success, proto_id: {}", self.proto_id);
-        Ok(Async::Ready(()))
+        Ok(())
     }
 
     /// Close protocol sub stream
@@ -169,24 +169,20 @@ where
             ProtocolEvent::Message { data, .. } => {
                 debug!("proto [{}] send data: {}", self.proto_id, data.len());
                 self.write_buf.push_back(data);
-                match self.send_data() {
-                    Err(err) => {
-                        // Whether it is a read send error or a flush error,
-                        // the most essential problem is that there is a problem with the external network.
-                        // Close the protocol stream directly.
-                        debug!(
-                            "protocol [{}] close because of extern network",
-                            self.proto_id
-                        );
-                        self.output_event(ProtocolEvent::Error {
-                            id: self.id,
-                            proto_id: self.proto_id,
-                            error: err.into(),
-                        });
-                        self.dead = true;
-                    }
-                    Ok(Async::NotReady) => (),
-                    Ok(Async::Ready(_)) => (),
+                if let Err(err) = self.send_data() {
+                    // Whether it is a read send error or a flush error,
+                    // the most essential problem is that there is a problem with the external network.
+                    // Close the protocol stream directly.
+                    debug!(
+                        "protocol [{}] close because of extern network",
+                        self.proto_id
+                    );
+                    self.output_event(ProtocolEvent::Error {
+                        id: self.id,
+                        proto_id: self.proto_id,
+                        error: err.into(),
+                    });
+                    self.dead = true;
                 }
             }
             ProtocolEvent::Close { .. } => {
@@ -232,12 +228,9 @@ where
         self.output();
 
         match self.send_data() {
-            Ok(Async::Ready(_)) => (),
-            Ok(Async::NotReady) => (),
-            Err(err) => return Err(err),
+            Ok(()) => Ok(()),
+            Err(err) => Err(err),
         }
-
-        Ok(())
     }
 }
 
