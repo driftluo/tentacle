@@ -1,5 +1,6 @@
 use futures::{
     prelude::*,
+    stream::iter_ok,
     sync::mpsc,
     task::{self, Task},
 };
@@ -483,10 +484,14 @@ where
 
     /// Close session
     fn close_session(&mut self) {
+        self.read_buf
+            .push_back(SessionEvent::SessionClose { id: self.id });
+        let events = self.read_buf.split_off(0);
+
         tokio::spawn(
             self.service_sender
                 .clone()
-                .send(SessionEvent::SessionClose { id: self.id })
+                .send_all(iter_ok(events))
                 .map(|_| ())
                 .map_err(|e| error!("session close event send to service error: {:?}", e)),
         );
