@@ -21,6 +21,7 @@ use crate::{
     secio::{handshake::Config, PublicKey, SecioKeyPair},
     service::{
         config::ServiceConfig,
+        event::ServiceTask,
         future_task::{BoxedFutureTask, FutureTaskManager},
     },
     session::{Session, SessionEvent, SessionMeta},
@@ -33,13 +34,13 @@ use crate::{
 
 pub(crate) mod config;
 mod control;
-mod event;
+pub(crate) mod event;
 pub(crate) mod future_task;
 
 pub use crate::service::{
     config::{DialProtocol, ProtocolHandle, ProtocolMeta, TargetSession},
     control::ServiceControl,
-    event::{ProtocolEvent, ServiceError, ServiceEvent, ServiceTask},
+    event::{ProtocolEvent, ServiceError, ServiceEvent},
 };
 
 /// Protocol handle value
@@ -101,7 +102,9 @@ pub struct Service<T> {
     /// External event is passed in from this
     service_context: ServiceContext,
     /// External event receiver
-    service_task_receiver: mpsc::Receiver<ServiceTask>,
+    service_task_receiver: mpsc::UnboundedReceiver<ServiceTask>,
+
+    pending_tasks: VecDeque<ServiceTask>,
 
     notify: Option<Task>,
 }
@@ -119,7 +122,7 @@ where
         config: ServiceConfig,
     ) -> Self {
         let (session_event_sender, session_event_receiver) = mpsc::channel(256);
-        let (service_task_sender, service_task_receiver) = mpsc::channel(256);
+        let (service_task_sender, service_task_receiver) = mpsc::unbounded();
         let proto_infos = protocol_configs
             .values()
             .map(|meta| {
@@ -152,6 +155,7 @@ where
             session_event_receiver,
             service_context: ServiceContext::new(service_task_sender, proto_infos, key_pair),
             service_task_receiver,
+            pending_tasks: VecDeque::default(),
             notify: None,
         }
     }
@@ -213,11 +217,9 @@ where
                 }))
             }
         });
-        self.service_context
-            .pending_tasks
-            .push_back(ServiceTask::FutureTask {
-                task: Box::new(task),
-            });
+        self.pending_tasks.push_back(ServiceTask::FutureTask {
+            task: Box::new(task),
+        });
         self.task_count += 1;
         Ok(listen_addr)
     }
@@ -271,11 +273,9 @@ where
             }
         });
 
-        self.service_context
-            .pending_tasks
-            .push_back(ServiceTask::FutureTask {
-                task: Box::new(task),
-            });
+        self.pending_tasks.push_back(ServiceTask::FutureTask {
+            task: Box::new(task),
+        });
         self.task_count += 1;
         Ok(())
     }
@@ -916,7 +916,7 @@ where
 
     #[inline(always)]
     fn send_pending_task(&mut self) {
-        while let Some(task) = self.service_context.pending_tasks.pop_front() {
+        while let Some(task) = self.pending_tasks.pop_front() {
             self.handle_service_task(task);
         }
     }
@@ -928,7 +928,7 @@ where
                 let task = ServiceTask::FutureTask {
                     task: err.into_inner(),
                 };
-                self.service_context.pending_tasks.push_back(task);
+                self.pending_tasks.push_back(task);
             }
         }
     }
@@ -1137,13 +1137,13 @@ where
                 // TODO: if not contains should call handle_error let user know
                 if self.service_proto_handles.contains_key(&proto_id) {
                     let (signal_sender, mut signal_receiver) = oneshot::channel::<()>();
-                    let mut interval_sender =
+                    let interval_sender =
                         self.service_context.control().service_task_sender.clone();
                     let fut = Interval::new(Instant::now(), interval)
                         .for_each(move |_| {
                             if signal_receiver.poll() == Ok(Async::NotReady) {
                                 interval_sender
-                                    .try_send(ServiceTask::ProtocolNotify { proto_id, token })
+                                    .unbounded_send(ServiceTask::ProtocolNotify { proto_id, token })
                                     .map_err(|err| {
                                         debug!("interval error: {:?}", err);
                                         timer::Error::shutdown()
@@ -1184,13 +1184,13 @@ where
                     .contains_key(&(session_id, proto_id))
                 {
                     let (signal_sender, mut signal_receiver) = oneshot::channel::<()>();
-                    let mut interval_sender =
+                    let interval_sender =
                         self.service_context.control().service_task_sender.clone();
                     let fut = Interval::new(Instant::now(), interval)
                         .for_each(move |_| {
                             if signal_receiver.poll() == Ok(Async::NotReady) {
                                 interval_sender
-                                    .try_send(ServiceTask::ProtocolSessionNotify {
+                                    .unbounded_send(ServiceTask::ProtocolSessionNotify {
                                         session_id,
                                         proto_id,
                                         token,
@@ -1355,7 +1355,7 @@ where
         if self.listens.is_empty()
             && self.task_count == 0
             && self.sessions.is_empty()
-            && self.service_context.pending_tasks.is_empty()
+            && self.pending_tasks.is_empty()
         {
             return Ok(Async::Ready(None));
         }
@@ -1386,7 +1386,7 @@ where
             }
         }
 
-        loop {
+        for _ in 0..256 {
             match self.service_task_receiver.poll() {
                 Ok(Async::Ready(Some(task))) => self.handle_service_task(task),
                 Ok(Async::Ready(None)) => unreachable!(),
@@ -1405,7 +1405,7 @@ where
         if self.listens.is_empty()
             && self.task_count == 0
             && self.sessions.is_empty()
-            && self.service_context.pending_tasks.is_empty()
+            && self.pending_tasks.is_empty()
         {
             return Ok(Async::Ready(None));
         }
@@ -1414,7 +1414,7 @@ where
             self.listens.len(),
             self.task_count,
             self.sessions.len(),
-            self.service_context.pending_tasks.len(),
+            self.pending_tasks.len(),
         );
 
         self.notify = Some(task::current());

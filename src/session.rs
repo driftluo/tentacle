@@ -22,7 +22,7 @@ use crate::{
     multiaddr::Multiaddr,
     protocol_select::{client_select, server_select, ProtocolInfo},
     secio::{codec::stream_handle::StreamHandle as SecureHandle, PublicKey},
-    service::{config::Meta, ServiceTask, SessionType},
+    service::{config::Meta, SessionType},
     substream::{ProtocolEvent, SubStream},
     transports::{MultiIncoming, MultiStream},
     yamux::{Config, Session as YamuxSession, StreamHandle},
@@ -61,19 +61,19 @@ pub(crate) enum SessionEvent {
         /// Session type
         ty: SessionType,
         /// error
-        error: Error<ServiceTask>,
+        error: Error,
     },
     DialError {
         /// remote address
         address: Multiaddr,
         /// error
-        error: Error<ServiceTask>,
+        error: Error,
     },
     ListenError {
         /// listen address
         address: Multiaddr,
         /// error
-        error: Error<ServiceTask>,
+        error: Error,
     },
     /// Protocol data
     ProtocolMessage {
@@ -117,11 +117,11 @@ pub(crate) enum SessionEvent {
         /// Protocol id
         proto_id: ProtocolId,
         /// Codec error
-        error: Error<ServiceTask>,
+        error: Error,
     },
     MuxerError {
         id: SessionId,
-        error: Error<ServiceTask>,
+        error: Error,
     },
 }
 

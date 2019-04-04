@@ -3,18 +3,17 @@ use futures::{
     sync::{mpsc, oneshot},
 };
 use std::{
-    collections::{HashMap, VecDeque},
+    collections::HashMap,
     ops::{Deref, DerefMut},
     sync::Arc,
     time::Duration,
 };
 
 use crate::{
-    error::Error,
     multiaddr::Multiaddr,
     protocol_select::ProtocolInfo,
     secio::{PublicKey, SecioKeyPair},
-    service::{DialProtocol, ServiceControl, ServiceTask, SessionType, TargetSession},
+    service::{event::ServiceTask, DialProtocol, ServiceControl, SessionType, TargetSession},
     session::SessionEvent,
     ProtocolId, SessionId,
 };
@@ -43,7 +42,6 @@ pub struct SessionContext {
 /// This is the sending channel.
 // TODO: Need to maintain the network topology map here?
 pub struct ServiceContext {
-    pub(crate) pending_tasks: VecDeque<ServiceTask>,
     listens: Vec<Multiaddr>,
     key_pair: Option<SecioKeyPair>,
     inner: ServiceControl,
@@ -52,13 +50,12 @@ pub struct ServiceContext {
 impl ServiceContext {
     /// New
     pub(crate) fn new(
-        service_task_sender: mpsc::Sender<ServiceTask>,
+        service_task_sender: mpsc::UnboundedSender<ServiceTask>,
         proto_infos: HashMap<ProtocolId, ProtocolInfo>,
         key_pair: Option<SecioKeyPair>,
     ) -> Self {
         ServiceContext {
             inner: ServiceControl::new(service_task_sender, proto_infos),
-            pending_tasks: VecDeque::default(),
             key_pair,
             listens: Vec::new(),
         }
@@ -67,33 +64,33 @@ impl ServiceContext {
     /// Create a new listener
     #[inline]
     pub fn listen(&mut self, address: Multiaddr) {
-        if let Err(Error::TaskFull(task)) = self.inner.listen(address) {
-            self.pending_tasks.push_back(task);
-        }
+        self.inner
+            .listen(address)
+            .expect("Service is abnormally closed")
     }
 
     /// Initiate a connection request to address
     #[inline]
     pub fn dial(&mut self, address: Multiaddr, target: DialProtocol) {
-        if let Err(Error::TaskFull(task)) = self.inner.dial(address, target) {
-            self.pending_tasks.push_back(task);
-        }
+        self.inner
+            .dial(address, target)
+            .expect("Service is abnormally closed")
     }
 
     /// Disconnect a connection
     #[inline]
     pub fn disconnect(&mut self, session_id: SessionId) {
-        if let Err(Error::TaskFull(task)) = self.inner.disconnect(session_id) {
-            self.pending_tasks.push_back(task);
-        }
+        self.inner
+            .disconnect(session_id)
+            .expect("Service is abnormally closed")
     }
 
     /// Send message
     #[inline]
     pub fn send_message(&mut self, session_id: SessionId, proto_id: ProtocolId, data: Vec<u8>) {
-        if let Err(Error::TaskFull(task)) = self.inner.send_message(session_id, proto_id, data) {
-            self.pending_tasks.push_back(task);
-        }
+        self.inner
+            .send_message(session_id, proto_id, data)
+            .expect("Service is abnormally closed")
     }
 
     /// Send data to the specified protocol for the specified sessions.
@@ -104,10 +101,9 @@ impl ServiceContext {
         proto_id: ProtocolId,
         data: Vec<u8>,
     ) {
-        if let Err(Error::TaskFull(task)) = self.inner.filter_broadcast(session_ids, proto_id, data)
-        {
-            self.pending_tasks.push_back(task);
-        }
+        self.inner
+            .filter_broadcast(session_ids, proto_id, data)
+            .expect("Service is abnormally closed")
     }
 
     /// Send a future task
@@ -116,9 +112,9 @@ impl ServiceContext {
     where
         T: Future<Item = (), Error = ()> + 'static + Send,
     {
-        if let Err(Error::TaskFull(task)) = self.inner.future_task(task) {
-            self.pending_tasks.push_back(task);
-        }
+        self.inner
+            .future_task(task)
+            .expect("Service is abnormally closed")
     }
 
     /// Try open a protocol
@@ -126,9 +122,9 @@ impl ServiceContext {
     /// If the protocol has been open, do nothing
     #[inline]
     pub fn open_protocol(&mut self, session_id: SessionId, proto_id: ProtocolId) {
-        if let Err(Error::TaskFull(task)) = self.inner.open_protocol(session_id, proto_id) {
-            self.pending_tasks.push_back(task);
-        }
+        self.inner
+            .open_protocol(session_id, proto_id)
+            .expect("Service is abnormally closed")
     }
 
     /// Try close a protocol
@@ -136,9 +132,9 @@ impl ServiceContext {
     /// If the protocol has been closed, do nothing
     #[inline]
     pub fn close_protocol(&mut self, session_id: SessionId, proto_id: ProtocolId) {
-        if let Err(Error::TaskFull(task)) = self.inner.close_protocol(session_id, proto_id) {
-            self.pending_tasks.push_back(task);
-        }
+        self.inner
+            .close_protocol(session_id, proto_id)
+            .expect("Service is abnormally closed")
     }
 
     /// Get the internal channel sender side handle
@@ -165,14 +161,6 @@ impl ServiceContext {
         self.listens.as_ref()
     }
 
-    /// Send raw event
-    #[inline]
-    pub fn send(&mut self, event: ServiceTask) {
-        if let Err(Error::TaskFull(task)) = self.inner.send(event) {
-            self.pending_tasks.push_back(task);
-        }
-    }
-
     /// Update listen list
     #[inline]
     pub(crate) fn update_listens(&mut self, address_list: Vec<Multiaddr>) {
@@ -181,10 +169,9 @@ impl ServiceContext {
 
     /// Set a service notify token
     pub fn set_service_notify(&mut self, proto_id: ProtocolId, interval: Duration, token: u64) {
-        if let Err(Error::TaskFull(task)) = self.inner.set_service_notify(proto_id, interval, token)
-        {
-            self.pending_tasks.push_back(task);
-        }
+        self.inner
+            .set_service_notify(proto_id, interval, token)
+            .expect("Service is abnormally closed")
     }
 
     /// Set a session notify token
@@ -195,19 +182,16 @@ impl ServiceContext {
         interval: Duration,
         token: u64,
     ) {
-        if let Err(Error::TaskFull(task)) = self
-            .inner
+        self.inner
             .set_session_notify(session_id, proto_id, interval, token)
-        {
-            self.pending_tasks.push_back(task);
-        }
+            .expect("Service is abnormally closed")
     }
 
     /// Remove a service timer by a token
     pub fn remove_service_notify(&mut self, proto_id: ProtocolId, token: u64) {
-        if let Err(Error::TaskFull(task)) = self.inner.remove_service_notify(proto_id, token) {
-            self.pending_tasks.push_back(task);
-        }
+        self.inner
+            .remove_service_notify(proto_id, token)
+            .expect("Service is abnormally closed")
     }
 
     /// Remove a session timer by a token
@@ -217,18 +201,14 @@ impl ServiceContext {
         proto_id: ProtocolId,
         token: u64,
     ) {
-        if let Err(Error::TaskFull(task)) = self
-            .inner
+        self.inner
             .remove_session_notify(session_id, proto_id, token)
-        {
-            self.pending_tasks.push_back(task);
-        }
+            .expect("Service is abnormally closed")
     }
 
     pub(crate) fn clone_self(&self) -> Self {
         ServiceContext {
             inner: self.inner.clone(),
-            pending_tasks: VecDeque::default(),
             key_pair: self.key_pair.clone(),
             listens: self.listens.clone(),
         }

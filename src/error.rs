@@ -4,11 +4,9 @@ use std::{error, fmt, io};
 
 /// Error from p2p framework
 #[derive(Debug)]
-pub enum Error<T: fmt::Debug> {
+pub enum Error {
     /// IO error
     IoError(io::Error),
-    /// Service Task channel full
-    TaskFull(T),
     /// Service Task channel has been dropped
     TaskDisconnect,
     /// Connect self
@@ -23,11 +21,8 @@ pub enum Error<T: fmt::Debug> {
     DNSResolverError(io::Error),
 }
 
-impl<T> PartialEq for Error<T>
-where
-    T: fmt::Debug,
-{
-    fn eq(&self, other: &Error<T>) -> bool {
+impl PartialEq for Error {
+    fn eq(&self, other: &Error) -> bool {
         use self::Error::*;
         match (self, other) {
             (TaskDisconnect, TaskDisconnect)
@@ -40,36 +35,23 @@ where
     }
 }
 
-impl<T> From<io::Error> for Error<T>
-where
-    T: fmt::Debug,
-{
+impl From<io::Error> for Error {
     #[inline]
-    fn from(err: io::Error) -> Error<T> {
+    fn from(err: io::Error) -> Error {
         Error::IoError(err)
     }
 }
 
-impl<T> From<mpsc::TrySendError<T>> for Error<T>
-where
-    T: fmt::Debug,
-{
+impl<T> From<mpsc::SendError<T>> for Error {
     #[inline]
-    fn from(err: mpsc::TrySendError<T>) -> Error<T> {
-        if err.is_full() {
-            Error::TaskFull(err.into_inner())
-        } else {
-            Error::TaskDisconnect
-        }
+    fn from(_err: mpsc::SendError<T>) -> Error {
+        Error::TaskDisconnect
     }
 }
 
-impl<T> From<SecioError> for Error<T>
-where
-    T: fmt::Debug,
-{
+impl From<SecioError> for Error {
     #[inline]
-    fn from(err: SecioError) -> Error<T> {
+    fn from(err: SecioError) -> Error {
         match err {
             SecioError::ConnectSelf => Error::ConnectSelf,
             error => Error::HandshakeError(error),
@@ -77,14 +59,10 @@ where
     }
 }
 
-impl<T> error::Error for Error<T>
-where
-    T: fmt::Debug,
-{
+impl error::Error for Error {
     fn description(&self) -> &str {
         match self {
             Error::IoError(e) => error::Error::description(e),
-            Error::TaskFull(_) => "Service Task channel is full",
             Error::TaskDisconnect => "Service Task channel has been dropped",
             Error::ConnectSelf => "Connect self",
             Error::RepeatedConnection(_) => "Connected to the connected peer",
@@ -95,14 +73,10 @@ where
     }
 }
 
-impl<T> fmt::Display for Error<T>
-where
-    T: fmt::Debug,
-{
+impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             Error::IoError(e) => fmt::Display::fmt(e, f),
-            Error::TaskFull(_) => write!(f, "Service Task channel is full"),
             Error::TaskDisconnect => write!(f, "Service Task channel has been dropped"),
             Error::ConnectSelf => write!(f, "Connect self"),
             Error::RepeatedConnection(id) => {

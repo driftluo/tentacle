@@ -1,4 +1,4 @@
-use futures::{prelude::*, sync::mpsc, task};
+use futures::{prelude::*, sync::mpsc};
 use log::warn;
 use std::collections::HashMap;
 
@@ -119,14 +119,6 @@ where
 
         self.handle.poll(&mut self.handle_context);
 
-        for task in self.handle_context.pending_tasks.split_off(0) {
-            self.handle_context.send(task);
-        }
-
-        if !self.handle_context.pending_tasks.is_empty() {
-            task::current().notify();
-        }
-
         Ok(Async::NotReady)
     }
 }
@@ -237,14 +229,6 @@ where
         }
 
         self.handle.poll(self.handle_context.as_mut(&self.context));
-
-        for task in self.handle_context.pending_tasks.split_off(0) {
-            self.handle_context.send(task);
-        }
-
-        if !self.handle_context.pending_tasks.is_empty() {
-            task::current().notify();
-        }
 
         Ok(Async::NotReady)
     }
