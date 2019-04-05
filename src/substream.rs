@@ -106,9 +106,8 @@ where
         while let Some(frame) = self.write_buf.pop_front() {
             match self.sub_stream.start_send(frame) {
                 Ok(AsyncSink::NotReady(frame)) => {
-                    debug!("framed_stream NotReady, frame: {:?}", frame);
+                    debug!("framed_stream NotReady, frame len: {:?}", frame.len());
                     self.write_buf.push_front(frame);
-                    self.notify();
                     return Ok(());
                 }
                 Ok(AsyncSink::Ready) => {}

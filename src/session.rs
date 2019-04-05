@@ -480,6 +480,7 @@ where
                 proto_id: *proto_id,
             });
         }
+        self.distribute_to_substream();
     }
 
     /// Close session
