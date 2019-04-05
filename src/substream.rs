@@ -12,9 +12,7 @@ use tokio::{
     prelude::AsyncWrite,
 };
 
-use crate::{
-    error::Error, service::ServiceTask, traits::Codec, yamux::StreamHandle, ProtocolId, StreamId,
-};
+use crate::{error::Error, traits::Codec, yamux::StreamHandle, ProtocolId, StreamId};
 
 /// Event generated/received by the protocol stream
 #[derive(Debug)]
@@ -54,7 +52,7 @@ pub(crate) enum ProtocolEvent {
         /// Protocol id
         proto_id: ProtocolId,
         /// Codec error
-        error: Error<ServiceTask>,
+        error: Error,
     },
 }
 
@@ -108,9 +106,8 @@ where
         while let Some(frame) = self.write_buf.pop_front() {
             match self.sub_stream.start_send(frame) {
                 Ok(AsyncSink::NotReady(frame)) => {
-                    debug!("framed_stream NotReady, frame: {:?}", frame);
+                    debug!("framed_stream NotReady, frame len: {:?}", frame.len());
                     self.write_buf.push_front(frame);
-                    self.notify();
                     return Ok(());
                 }
                 Ok(AsyncSink::Ready) => {}

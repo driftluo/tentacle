@@ -8,7 +8,7 @@ use std::{
 use bytes::{Bytes, BytesMut};
 use futures::{
     sync::mpsc::{Receiver, Sender},
-    Async, Poll, Stream,
+    task, Async, Poll, Stream,
 };
 use log::debug;
 use tokio::prelude::{AsyncRead, AsyncWrite};
@@ -241,6 +241,8 @@ impl StreamHandle {
         if n != 0 {
             let b = self.write_buf.split_to(n);
             let _ = self.write(&b);
+        } else {
+            task::current().notify();
         }
         Ok(())
     }

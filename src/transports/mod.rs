@@ -1,6 +1,7 @@
 use crate::multiaddr::{Multiaddr, ToMultiaddr};
 
 use futures::prelude::{Async, Future, Poll, Stream};
+use log::debug;
 use std::{
     fmt,
     io::{self, Read, Write},
@@ -174,14 +175,21 @@ impl Stream for MultiIncoming {
     fn poll(&mut self) -> Poll<Option<Self::Item>, Self::Error> {
         match self {
             MultiIncoming::Tcp(inner) => match inner.poll()? {
-                Async::Ready(Some(stream)) => {
-                    let remote_address: Multiaddr =
-                        stream.peer_addr().unwrap().to_multiaddr().unwrap();
-                    Ok(Async::Ready(Some((
-                        remote_address,
+                // Why can't get the peer address of the connected stream ?
+                // Error will be "Transport endpoint is not connected",
+                // so why incoming will appear unconnected stream ?
+                Async::Ready(Some(stream)) => match stream.peer_addr() {
+                    Ok(remote_address) => Ok(Async::Ready(Some((
+                        remote_address
+                            .to_multiaddr()
+                            .expect("socket address to multiaddr fail"),
                         MultiStream::Tcp(stream),
-                    ))))
-                }
+                    )))),
+                    Err(err) => {
+                        debug!("stream get peer address error: {:?}", err);
+                        Ok(Async::NotReady)
+                    }
+                },
                 Async::Ready(None) => Ok(Async::Ready(None)),
                 Async::NotReady => Ok(Async::NotReady),
             },

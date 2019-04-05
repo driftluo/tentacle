@@ -14,14 +14,14 @@ use crate::{
 /// Service control, used to send commands externally at runtime
 #[derive(Clone)]
 pub struct ServiceControl {
-    pub(crate) service_task_sender: mpsc::Sender<ServiceTask>,
+    pub(crate) service_task_sender: mpsc::UnboundedSender<ServiceTask>,
     pub(crate) proto_infos: Arc<HashMap<ProtocolId, ProtocolInfo>>,
 }
 
 impl ServiceControl {
     /// New
     pub(crate) fn new(
-        service_task_sender: mpsc::Sender<ServiceTask>,
+        service_task_sender: mpsc::UnboundedSender<ServiceTask>,
         proto_infos: HashMap<ProtocolId, ProtocolInfo>,
     ) -> Self {
         ServiceControl {
@@ -32,9 +32,9 @@ impl ServiceControl {
 
     /// Send raw event
     #[inline]
-    pub fn send(&mut self, event: ServiceTask) -> Result<(), Error<ServiceTask>> {
+    fn send(&mut self, event: ServiceTask) -> Result<(), Error> {
         self.service_task_sender
-            .try_send(event)
+            .unbounded_send(event)
             .map_err(|e| e.into())
     }
 
@@ -46,23 +46,19 @@ impl ServiceControl {
 
     /// Create a new listener
     #[inline]
-    pub fn listen(&mut self, address: Multiaddr) -> Result<(), Error<ServiceTask>> {
+    pub fn listen(&mut self, address: Multiaddr) -> Result<(), Error> {
         self.send(ServiceTask::Listen { address })
     }
 
     /// Initiate a connection request to address
     #[inline]
-    pub fn dial(
-        &mut self,
-        address: Multiaddr,
-        target: DialProtocol,
-    ) -> Result<(), Error<ServiceTask>> {
+    pub fn dial(&mut self, address: Multiaddr, target: DialProtocol) -> Result<(), Error> {
         self.send(ServiceTask::Dial { address, target })
     }
 
     /// Disconnect a connection
     #[inline]
-    pub fn disconnect(&mut self, session_id: SessionId) -> Result<(), Error<ServiceTask>> {
+    pub fn disconnect(&mut self, session_id: SessionId) -> Result<(), Error> {
         self.send(ServiceTask::Disconnect { session_id })
     }
 
@@ -73,7 +69,7 @@ impl ServiceControl {
         session_id: SessionId,
         proto_id: ProtocolId,
         data: Vec<u8>,
-    ) -> Result<(), Error<ServiceTask>> {
+    ) -> Result<(), Error> {
         self.filter_broadcast(TargetSession::Single(session_id), proto_id, data)
     }
 
@@ -84,7 +80,7 @@ impl ServiceControl {
         target: TargetSession,
         proto_id: ProtocolId,
         data: Vec<u8>,
-    ) -> Result<(), Error<ServiceTask>> {
+    ) -> Result<(), Error> {
         self.send(ServiceTask::ProtocolMessage {
             target,
             proto_id,
@@ -94,7 +90,7 @@ impl ServiceControl {
 
     /// Send a future task
     #[inline]
-    pub fn future_task<T>(&mut self, task: T) -> Result<(), Error<ServiceTask>>
+    pub fn future_task<T>(&mut self, task: T) -> Result<(), Error>
     where
         T: Future<Item = (), Error = ()> + 'static + Send,
     {
@@ -111,7 +107,7 @@ impl ServiceControl {
         &mut self,
         session_id: SessionId,
         proto_id: ProtocolId,
-    ) -> Result<(), Error<ServiceTask>> {
+    ) -> Result<(), Error> {
         self.send(ServiceTask::ProtocolOpen {
             session_id,
             proto_id,
@@ -126,7 +122,7 @@ impl ServiceControl {
         &mut self,
         session_id: SessionId,
         proto_id: ProtocolId,
-    ) -> Result<(), Error<ServiceTask>> {
+    ) -> Result<(), Error> {
         self.send(ServiceTask::ProtocolClose {
             session_id,
             proto_id,
@@ -139,7 +135,7 @@ impl ServiceControl {
         proto_id: ProtocolId,
         interval: Duration,
         token: u64,
-    ) -> Result<(), Error<ServiceTask>> {
+    ) -> Result<(), Error> {
         self.send(ServiceTask::SetProtocolNotify {
             proto_id,
             interval,
@@ -148,11 +144,7 @@ impl ServiceControl {
     }
 
     /// remove a service notify token
-    pub fn remove_service_notify(
-        &mut self,
-        proto_id: ProtocolId,
-        token: u64,
-    ) -> Result<(), Error<ServiceTask>> {
+    pub fn remove_service_notify(&mut self, proto_id: ProtocolId, token: u64) -> Result<(), Error> {
         self.send(ServiceTask::RemoveProtocolNotify { proto_id, token })
     }
 
@@ -163,7 +155,7 @@ impl ServiceControl {
         proto_id: ProtocolId,
         interval: Duration,
         token: u64,
-    ) -> Result<(), Error<ServiceTask>> {
+    ) -> Result<(), Error> {
         self.send(ServiceTask::SetProtocolSessionNotify {
             session_id,
             proto_id,
@@ -178,7 +170,7 @@ impl ServiceControl {
         session_id: SessionId,
         proto_id: ProtocolId,
         token: u64,
-    ) -> Result<(), Error<ServiceTask>> {
+    ) -> Result<(), Error> {
         self.send(ServiceTask::RemoveProtocolSessionNotify {
             session_id,
             proto_id,

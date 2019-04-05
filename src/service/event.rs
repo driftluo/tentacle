@@ -18,14 +18,14 @@ pub enum ServiceError<'a> {
         /// Remote address
         address: Multiaddr,
         /// error
-        error: Error<ServiceTask>,
+        error: Error,
     },
     /// When listen error
     ListenError {
         /// Listen address
         address: Multiaddr,
         /// error
-        error: Error<ServiceTask>,
+        error: Error,
     },
     /// Protocol select fail
     ProtocolSelectError {
@@ -42,7 +42,7 @@ pub enum ServiceError<'a> {
         /// Protocol id
         proto_id: ProtocolId,
         /// Codec error
-        error: Error<ServiceTask>,
+        error: Error,
     },
     /// After initializing the connection, the session does not open any protocol,
     /// suspected fd attack
@@ -55,7 +55,7 @@ pub enum ServiceError<'a> {
         /// Session context
         session_context: &'a SessionContext,
         /// error, such as `InvalidData`
-        error: Error<ServiceTask>,
+        error: Error,
     },
 }
 
@@ -133,7 +133,7 @@ pub enum ProtocolEvent<'a> {
 /// Task received by the Service.
 ///
 /// An instruction that the outside world can send to the service
-pub enum ServiceTask {
+pub(crate) enum ServiceTask {
     /// Send protocol data task
     ProtocolMessage {
         /// Specify which sessions to send to,

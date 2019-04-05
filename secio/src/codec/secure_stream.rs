@@ -5,7 +5,7 @@ use futures::{
     sink::Sink,
     task::{self, Task},
 };
-use log::{debug, trace, warn};
+use log::{debug, trace};
 use tokio::codec::{length_delimited::LengthDelimitedCodec, Framed};
 use tokio::prelude::{AsyncRead, AsyncWrite};
 
@@ -273,7 +273,7 @@ where
             match self.event_receiver.poll() {
                 Ok(Async::Ready(Some(event))) => {
                     if let Err(err) = self.handle_event(event) {
-                        warn!("send message error: {:?}", err);
+                        debug!("send message error: {:?}", err);
                         break;
                     }
                 }
@@ -283,7 +283,7 @@ where
                     break;
                 }
                 Err(err) => {
-                    warn!("receive event error: {:?}", err);
+                    debug!("receive event error: {:?}", err);
                     break;
                 }
             }

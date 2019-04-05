@@ -7,7 +7,6 @@ use futures::{sync::mpsc::Receiver, Async, AsyncSink, Poll, Sink, Stream};
 use log::{debug, trace, warn};
 use p2p::multiaddr::{Multiaddr, Protocol};
 use p2p::{
-    error::Error,
     service::{ServiceControl, SessionType},
     utils::multiaddr_to_socketaddr,
     ProtocolId, SessionId,
@@ -81,13 +80,7 @@ impl io::Write for StreamHandle {
         self.sender
             .send_message(self.session_id, self.proto_id, buf.to_vec())
             .map(|()| buf.len())
-            .map_err(|err| {
-                if let Error::TaskFull(_) = err {
-                    io::ErrorKind::WouldBlock.into()
-                } else {
-                    io::ErrorKind::BrokenPipe.into()
-                }
-            })
+            .map_err(|_| io::ErrorKind::BrokenPipe.into())
     }
 
     fn flush(&mut self) -> io::Result<()> {
