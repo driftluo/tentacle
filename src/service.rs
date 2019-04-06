@@ -374,16 +374,16 @@ where
     /// When proto handle channel is full, call here
     #[inline]
     fn proto_handle_error(&mut self, proto_id: ProtocolId, session_id: Option<SessionId>) {
-        let score = self
+        let error_count = self
             .handles_error_count
             .entry((proto_id, session_id))
             .or_default();
-        *score += 1;
+        *error_count += 1;
 
-        match session_id {
-            Some(session_id) => {
-                if *score > 100 {
-                    *score = 0;
+        if *error_count > 100 {
+            *error_count = 0;
+            match session_id {
+                Some(session_id) => {
                     self.handle.handle_error(
                         &mut self.service_context,
                         ServiceError::ProtocolHandleError {
@@ -391,13 +391,8 @@ where
                             error: Error::SessionProtoHandleBlock(session_id),
                         },
                     );
-                } else if *score < 10 {
-                    self.notify();
                 }
-            }
-            None => {
-                if *score > 100 {
-                    *score = 0;
+                None => {
                     self.handle.handle_error(
                         &mut self.service_context,
                         ServiceError::ProtocolHandleError {
@@ -405,10 +400,10 @@ where
                             error: Error::ServiceProtoHandleBlock,
                         },
                     );
-                } else if *score < 10 {
-                    self.notify();
                 }
             }
+        } else if *error_count < 10 {
+            self.notify();
         }
     }
 
