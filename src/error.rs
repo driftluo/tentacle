@@ -19,6 +19,14 @@ pub enum Error {
     HandshakeError(SecioError),
     /// DNS resolver error
     DNSResolverError(io::Error),
+    /// Service protocol handle block, may be user's protocol handle implementation problem
+    ServiceProtoHandleBlock,
+    /// Service protocol handle abnormally closed, may be user's protocol handle implementation problem
+    ServiceProtoHandleAbnormallyClosed,
+    /// Session protocol handle block, may be user's protocol handle implementation problem
+    SessionProtoHandleBlock(SessionId),
+    /// Session protocol handle abnormally closed, may be user's protocol handle implementation problem
+    SessionProtoHandleAbnormallyClosed(SessionId),
 }
 
 impl PartialEq for Error {
@@ -69,6 +77,14 @@ impl error::Error for Error {
             Error::PeerIdNotMatch => "When dial remote, peer id does not match",
             Error::HandshakeError(e) => error::Error::description(e),
             Error::DNSResolverError(_) => "DNS resolver error",
+            Error::ServiceProtoHandleBlock => "Service protocol handle block",
+            Error::ServiceProtoHandleAbnormallyClosed => {
+                "Service protocol handle abnormally closed"
+            }
+            Error::SessionProtoHandleBlock(_) => "Session protocol handle block",
+            Error::SessionProtoHandleAbnormallyClosed(_) => {
+                "Session protocol handle abnormally closed"
+            }
         }
     }
 }
@@ -85,6 +101,16 @@ impl fmt::Display for Error {
             Error::PeerIdNotMatch => write!(f, "When dial remote, peer id does not match"),
             Error::HandshakeError(e) => fmt::Display::fmt(e, f),
             Error::DNSResolverError(e) => write!(f, "DNs resolver error: {:?}", e),
+            Error::ServiceProtoHandleBlock => write!(f, "Service protocol handle block"),
+            Error::ServiceProtoHandleAbnormallyClosed => {
+                write!(f, "Service protocol handle abnormally closed")
+            }
+            Error::SessionProtoHandleBlock(id) => {
+                write!(f, "Session [{}] protocol handle block", id)
+            }
+            Error::SessionProtoHandleAbnormallyClosed(id) => {
+                write!(f, "Session [{}] protocol handle abnormally closed", id)
+            }
         }
     }
 }

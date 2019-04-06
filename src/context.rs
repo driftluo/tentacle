@@ -2,6 +2,7 @@ use futures::{
     prelude::*,
     sync::{mpsc, oneshot},
 };
+use log::warn;
 use std::{
     collections::HashMap,
     ops::{Deref, DerefMut},
@@ -64,33 +65,33 @@ impl ServiceContext {
     /// Create a new listener
     #[inline]
     pub fn listen(&mut self, address: Multiaddr) {
-        self.inner
-            .listen(address)
-            .expect("Service is abnormally closed")
+        if self.inner.listen(address).is_err() {
+            warn!("Service is abnormally closed")
+        }
     }
 
     /// Initiate a connection request to address
     #[inline]
     pub fn dial(&mut self, address: Multiaddr, target: DialProtocol) {
-        self.inner
-            .dial(address, target)
-            .expect("Service is abnormally closed")
+        if self.inner.dial(address, target).is_err() {
+            warn!("Service is abnormally closed")
+        }
     }
 
     /// Disconnect a connection
     #[inline]
     pub fn disconnect(&mut self, session_id: SessionId) {
-        self.inner
-            .disconnect(session_id)
-            .expect("Service is abnormally closed")
+        if self.inner.disconnect(session_id).is_err() {
+            warn!("Service is abnormally closed")
+        }
     }
 
     /// Send message
     #[inline]
     pub fn send_message(&mut self, session_id: SessionId, proto_id: ProtocolId, data: Vec<u8>) {
-        self.inner
-            .send_message(session_id, proto_id, data)
-            .expect("Service is abnormally closed")
+        if self.inner.send_message(session_id, proto_id, data).is_err() {
+            warn!("Service is abnormally closed")
+        }
     }
 
     /// Send data to the specified protocol for the specified sessions.
@@ -101,9 +102,13 @@ impl ServiceContext {
         proto_id: ProtocolId,
         data: Vec<u8>,
     ) {
-        self.inner
+        if self
+            .inner
             .filter_broadcast(session_ids, proto_id, data)
-            .expect("Service is abnormally closed")
+            .is_err()
+        {
+            warn!("Service is abnormally closed")
+        }
     }
 
     /// Send a future task
@@ -112,9 +117,9 @@ impl ServiceContext {
     where
         T: Future<Item = (), Error = ()> + 'static + Send,
     {
-        self.inner
-            .future_task(task)
-            .expect("Service is abnormally closed")
+        if self.inner.future_task(task).is_err() {
+            warn!("Service is abnormally closed")
+        }
     }
 
     /// Try open a protocol
@@ -122,9 +127,9 @@ impl ServiceContext {
     /// If the protocol has been open, do nothing
     #[inline]
     pub fn open_protocol(&mut self, session_id: SessionId, proto_id: ProtocolId) {
-        self.inner
-            .open_protocol(session_id, proto_id)
-            .expect("Service is abnormally closed")
+        if self.inner.open_protocol(session_id, proto_id).is_err() {
+            warn!("Service is abnormally closed")
+        }
     }
 
     /// Try close a protocol
@@ -132,9 +137,9 @@ impl ServiceContext {
     /// If the protocol has been closed, do nothing
     #[inline]
     pub fn close_protocol(&mut self, session_id: SessionId, proto_id: ProtocolId) {
-        self.inner
-            .close_protocol(session_id, proto_id)
-            .expect("Service is abnormally closed")
+        if self.inner.close_protocol(session_id, proto_id).is_err() {
+            warn!("Service is abnormally closed")
+        }
     }
 
     /// Get the internal channel sender side handle
@@ -169,9 +174,13 @@ impl ServiceContext {
 
     /// Set a service notify token
     pub fn set_service_notify(&mut self, proto_id: ProtocolId, interval: Duration, token: u64) {
-        self.inner
+        if self
+            .inner
             .set_service_notify(proto_id, interval, token)
-            .expect("Service is abnormally closed")
+            .is_err()
+        {
+            warn!("Service is abnormally closed")
+        }
     }
 
     /// Set a session notify token
@@ -182,16 +191,20 @@ impl ServiceContext {
         interval: Duration,
         token: u64,
     ) {
-        self.inner
+        if self
+            .inner
             .set_session_notify(session_id, proto_id, interval, token)
-            .expect("Service is abnormally closed")
+            .is_err()
+        {
+            warn!("Service is abnormally closed")
+        }
     }
 
     /// Remove a service timer by a token
     pub fn remove_service_notify(&mut self, proto_id: ProtocolId, token: u64) {
-        self.inner
-            .remove_service_notify(proto_id, token)
-            .expect("Service is abnormally closed")
+        if self.inner.remove_service_notify(proto_id, token).is_err() {
+            warn!("Service is abnormally closed")
+        }
     }
 
     /// Remove a session timer by a token
@@ -201,9 +214,13 @@ impl ServiceContext {
         proto_id: ProtocolId,
         token: u64,
     ) {
-        self.inner
+        if self
+            .inner
             .remove_session_notify(session_id, proto_id, token)
-            .expect("Service is abnormally closed")
+            .is_err()
+        {
+            warn!("Service is abnormally closed")
+        }
     }
 
     pub(crate) fn clone_self(&self) -> Self {
