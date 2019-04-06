@@ -105,6 +105,10 @@ pub struct Service<T> {
     service_task_receiver: mpsc::UnboundedReceiver<ServiceTask>,
 
     pending_tasks: VecDeque<ServiceTask>,
+    /// When handle channel full, count + 1,
+    /// if error count > 100, back to 0, and output an error event
+    /// if error count > 10, don't try notify
+    handles_error_count: HashMap<(ProtocolId, Option<SessionId>), u8>,
 
     notify: Option<Task>,
 }
@@ -156,6 +160,7 @@ where
             service_context: ServiceContext::new(service_task_sender, proto_infos, key_pair),
             service_task_receiver,
             pending_tasks: VecDeque::default(),
+            handles_error_count: HashMap::default(),
             notify: None,
         }
     }
@@ -319,12 +324,19 @@ where
                     if e.is_full() {
                         debug!("service proto [{}] handle is full", proto_id);
                         self.read_service_buf.push_back((proto_id, e.into_inner()));
-                        self.notify();
+                        self.proto_handle_error(proto_id, None);
                     } else {
                         error!(
                             "channel shutdown, proto [{}] message can't send to user",
                             proto_id
-                        )
+                        );
+                        self.handle.handle_error(
+                            &mut self.service_context,
+                            ServiceError::ProtocolHandleError {
+                                proto_id,
+                                error: Error::ServiceProtoHandleAbnormallyClosed,
+                            },
+                        );
                     }
                 }
             }
@@ -340,15 +352,46 @@ where
                         );
                         self.read_session_buf
                             .push_back((session_id, proto_id, e.into_inner()));
-                        self.notify();
+                        self.proto_handle_error(proto_id, Some(session_id))
                     } else {
                         error!(
                             "channel shutdown, proto [{}] session [{}] message can't send to user",
                             proto_id, session_id
+                        );
+                        self.handle.handle_error(
+                            &mut self.service_context,
+                            ServiceError::ProtocolHandleError {
+                                proto_id,
+                                error: Error::SessionProtoHandleAbnormallyClosed(session_id),
+                            },
                         )
                     }
                 }
             }
+        }
+    }
+
+    /// When proto handle channel is full, call here
+    #[inline]
+    fn proto_handle_error(&mut self, proto_id: ProtocolId, session_id: Option<SessionId>) {
+        let error_count = self
+            .handles_error_count
+            .entry((proto_id, session_id))
+            .or_default();
+        *error_count += 1;
+
+        let error = session_id
+            .map(Error::SessionProtoHandleBlock)
+            .unwrap_or(Error::ServiceProtoHandleBlock);
+
+        if *error_count > 100 {
+            *error_count = 0;
+            self.handle.handle_error(
+                &mut self.service_context,
+                ServiceError::ProtocolHandleError { proto_id, error },
+            );
+        } else if *error_count < 10 {
+            self.notify();
         }
     }
 
@@ -912,6 +955,10 @@ where
         if let Some(infos) = self.session_service_protos.get_mut(&session_id) {
             infos.remove(&proto_id);
         }
+
+        // remove handle error count
+        self.handles_error_count
+            .remove(&(proto_id, Some(session_id)));
     }
 
     #[inline(always)]

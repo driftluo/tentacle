@@ -22,7 +22,7 @@ bytes = "0.4"
 tokio-threadpool = "0.1"
 
 flatbuffers = "0.5.0"
-multiaddr = { package = "parity-multiaddr", version = "0.2.0" }
+multiaddr = { package = "parity-multiaddr", version = "0.3.0" }
 
 [dev-dependencies]
 env_logger = "0.6.0"
