@@ -380,28 +380,16 @@ where
             .or_default();
         *error_count += 1;
 
+        let error = session_id
+            .map(Error::SessionProtoHandleBlock)
+            .unwrap_or(Error::ServiceProtoHandleBlock);
+
         if *error_count > 100 {
             *error_count = 0;
-            match session_id {
-                Some(session_id) => {
-                    self.handle.handle_error(
-                        &mut self.service_context,
-                        ServiceError::ProtocolHandleError {
-                            proto_id,
-                            error: Error::SessionProtoHandleBlock(session_id),
-                        },
-                    );
-                }
-                None => {
-                    self.handle.handle_error(
-                        &mut self.service_context,
-                        ServiceError::ProtocolHandleError {
-                            proto_id,
-                            error: Error::ServiceProtoHandleBlock,
-                        },
-                    );
-                }
-            }
+            self.handle.handle_error(
+                &mut self.service_context,
+                ServiceError::ProtocolHandleError { proto_id, error },
+            );
         } else if *error_count < 10 {
             self.notify();
         }
