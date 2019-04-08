@@ -22,6 +22,9 @@ mod protocol_select_generated;
 #[allow(dead_code)]
 mod protocol_select_generated_verifier;
 
+/// Function for protocol version select
+pub type SelectFn<T> = Box<dyn Fn(&[T], &[T]) -> Option<T> + Send + 'static>;
+
 /// Protocol Info
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct ProtocolInfo {
@@ -140,7 +143,7 @@ pub(crate) fn client_select<T: AsyncWrite + AsyncRead + Send>(
 /// plus the protocol name, plus the version option.
 pub(crate) fn server_select<T: AsyncWrite + AsyncRead + Send>(
     handle: T,
-    proto_infos: HashMap<String, ProtocolInfo>,
+    proto_infos: HashMap<String, (ProtocolInfo, Option<SelectFn<String>>)>,
 ) -> impl Future<Item = (Framed<T, LengthDelimitedCodec>, String, Option<String>), Error = io::Error>
 {
     let socket = Framed::new(handle, LengthDelimitedCodec::new());
@@ -167,14 +170,24 @@ pub(crate) fn server_select<T: AsyncWrite + AsyncRead + Send>(
                             return Err(err);
                         }
                     };
-                    let version = proto_infos
-                        .remove(&remote_info.name)
-                        .and_then(|local_info| {
-                            select_version(
-                                &local_info.support_versions,
-                                &remote_info.support_versions,
-                            )
-                        });
+                    let version =
+                        proto_infos
+                            .remove(&remote_info.name)
+                            .and_then(|(local_info, select)| {
+                                select
+                                    .map(|f| {
+                                        f(
+                                            &local_info.support_versions,
+                                            &remote_info.support_versions,
+                                        )
+                                    })
+                                    .unwrap_or_else(|| {
+                                        select_version(
+                                            &local_info.support_versions,
+                                            &remote_info.support_versions,
+                                        )
+                                    })
+                            });
                     Ok((socket, remote_info.name, version))
                 })
         })
@@ -195,7 +208,7 @@ pub(crate) fn server_select<T: AsyncWrite + AsyncRead + Send>(
 
 /// Choose the highest version of the two sides, assume that slices are sorted
 #[inline]
-fn select_version<T: Ord + Clone>(local: &[T], remote: &[T]) -> Option<T> {
+pub fn select_version<T: Ord + Clone>(local: &[T], remote: &[T]) -> Option<T> {
     let (mut local_iter, mut remote_iter) = (local.iter().rev(), remote.iter().rev());
     let (mut local, mut remote) = (local_iter.next(), remote_iter.next());
     while let (Some(l), Some(r)) = (local, remote) {
@@ -263,7 +276,7 @@ mod tests {
                 message.name = "test".to_owned();
                 message.support_versions = server;
                 let mut messages = HashMap::new();
-                messages.insert("test".to_owned(), message);
+                messages.insert("test".to_owned(), (message, None));
 
                 let task = server_select(connect.unwrap(), messages)
                     .map(|(_, _, a)| {

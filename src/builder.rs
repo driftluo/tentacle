@@ -4,6 +4,7 @@ use std::time::Duration;
 use tokio::codec::LengthDelimitedCodec;
 
 use crate::{
+    protocol_select::SelectFn,
     secio::SecioKeyPair,
     service::{
         config::{Meta, ServiceConfig},
@@ -109,6 +110,7 @@ pub(crate) type NameFn = Box<Fn(ProtocolId) -> String + Send + Sync>;
 pub(crate) type CodecFn = Box<Fn() -> Box<dyn Codec + Send + 'static> + Send + Sync>;
 pub(crate) type SessionHandleFn =
     Box<Fn(ProtocolId) -> ProtocolHandle<Box<dyn SessionProtocol + Send + 'static>> + Send>;
+pub(crate) type SelectVersionFn = Box<dyn Fn() -> Option<SelectFn<String>> + Send + Sync + 'static>;
 
 /// Builder for protocol meta
 pub struct MetaBuilder {
@@ -118,6 +120,7 @@ pub struct MetaBuilder {
     codec: CodecFn,
     service_handle: ProtocolHandle<Box<dyn ServiceProtocol + Send + 'static>>,
     session_handle: SessionHandleFn,
+    select_version: SelectVersionFn,
 }
 
 impl MetaBuilder {
@@ -191,6 +194,15 @@ impl MetaBuilder {
         self
     }
 
+    /// Protocol version selection rule, default is [select_version](../protocol_select/fn.select_version.html)
+    pub fn select_version<T>(mut self, f: T) -> Self
+    where
+        T: Fn() -> Option<SelectFn<String>> + Send + Sync + 'static,
+    {
+        self.select_version = Box::new(f);
+        self
+    }
+
     /// Combine the configuration of this builder to create a ProtocolMeta
     pub fn build(self) -> ProtocolMeta {
         let meta = Meta {
@@ -198,6 +210,7 @@ impl MetaBuilder {
             name: self.name,
             support_versions: self.support_versions,
             codec: self.codec,
+            select_version: self.select_version,
         };
         ProtocolMeta {
             inner: Arc::new(meta),
@@ -216,6 +229,7 @@ impl Default for MetaBuilder {
             codec: Box::new(|| Box::new(LengthDelimitedCodec::new())),
             service_handle: ProtocolHandle::Neither,
             session_handle: Box::new(|_| ProtocolHandle::Neither),
+            select_version: Box::new(|| None),
         }
     }
 }
