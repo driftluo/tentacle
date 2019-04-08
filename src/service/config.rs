@@ -1,5 +1,5 @@
 use crate::{
-    builder::{CodecFn, NameFn, SessionHandleFn},
+    builder::{CodecFn, NameFn, SelectVersionFn, SessionHandleFn},
     traits::{Codec, ServiceProtocol, SessionProtocol},
     yamux::config::Config as YamuxConfig,
     ProtocolId, SessionId,
@@ -120,6 +120,7 @@ pub(crate) struct Meta {
     pub(crate) name: NameFn,
     pub(crate) support_versions: Vec<String>,
     pub(crate) codec: CodecFn,
+    pub(crate) select_version: SelectVersionFn,
 }
 
 /// Protocol handle

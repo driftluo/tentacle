@@ -329,7 +329,8 @@ where
             .map(|proto_meta| {
                 let name = (proto_meta.name)(proto_meta.id);
                 let proto_info = ProtocolInfo::new(&name, proto_meta.support_versions.clone());
-                (name, proto_info)
+                let select_fn = (proto_meta.select_version)();
+                (name, (proto_info, select_fn))
             })
             .collect();
 
