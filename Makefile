@@ -26,7 +26,10 @@ examples:
 ci: fmt clippy test examples
 	git diff --exit-code Cargo.lock
 
-%_generated_verifier.rs: %.fbs
+check-cfbc-version:
+	test "$$($(CFBC) --version)" = 0.1.9
+
+%_generated_verifier.rs: %.fbs check-cfbc-version
 	$(FLATC) -b --schema -o $(shell dirname $@) $<
 	$(CFBC) -o $(shell dirname $@) $*.bfbs
 	rm -f $*_builder.rs $*.bfbs
@@ -40,5 +43,4 @@ clean-fb:
 	rm -f $(FLATC_RUST_FILES) $(FLATBUFFERS_VERIFIER_FILES)
 
 
-
-.PHONY: fmt clippy test examples ci gen-fb clean-fb
+.PHONY: fmt clippy test examples ci gen-fb clean-fb check-cfbc-version
