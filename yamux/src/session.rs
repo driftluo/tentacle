@@ -287,6 +287,7 @@ where
 
     /// Try send buffer to all sub streams
     fn distribute_to_substream(&mut self) -> Result<(), io::Error> {
+        let mut need_shrink = false;
         for frame in self.read_pending_frames.split_off(0) {
             let stream_id = frame.stream_id();
             if frame.flags().contains(Flag::Syn) {
@@ -312,6 +313,7 @@ where
                         Ok(_) => false,
                         Err(err) => {
                             if err.is_full() {
+                                need_shrink = true;
                                 self.read_pending_frames.push_back(err.into_inner());
                                 self.notify();
                                 false
@@ -331,6 +333,11 @@ where
                 self.streams.remove(&stream_id);
             }
         }
+
+        if need_shrink {
+            self.read_pending_frames.shrink_to_fit();
+        }
+
         Ok(())
     }
 

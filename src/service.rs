@@ -298,12 +298,14 @@ where
     /// Distribute event to sessions
     #[inline]
     fn distribute_to_session(&mut self) {
+        let mut need_shrink = false;
         for (id, event) in self.write_buf.split_off(0) {
             if let Some(session) = self.sessions.get_mut(&id) {
                 if let Err(e) = session.event_sender.try_send(event) {
                     if e.is_full() {
                         debug!("session [{}] is full", id);
                         self.write_buf.push_back((id, e.into_inner()));
+                        need_shrink = true;
                         self.notify();
                     } else {
                         error!("channel shutdown, message can't send")
@@ -313,11 +315,16 @@ where
                 debug!("Can't find session {} to send data", id);
             }
         }
+
+        if need_shrink {
+            self.write_buf.shrink_to_fit();
+        }
     }
 
     /// Distribute event to user level
     #[inline(always)]
     fn distribute_to_user_level(&mut self) {
+        let mut need_shrink = false;
         for (proto_id, event) in self.read_service_buf.split_off(0) {
             if let Some(sender) = self.service_proto_handles.get_mut(&proto_id) {
                 if let Err(e) = sender.try_send(event) {
@@ -325,6 +332,7 @@ where
                         debug!("service proto [{}] handle is full", proto_id);
                         self.read_service_buf.push_back((proto_id, e.into_inner()));
                         self.proto_handle_error(proto_id, None);
+                        need_shrink = true;
                     } else {
                         error!(
                             "channel shutdown, proto [{}] message can't send to user",
@@ -352,7 +360,8 @@ where
                         );
                         self.read_session_buf
                             .push_back((session_id, proto_id, e.into_inner()));
-                        self.proto_handle_error(proto_id, Some(session_id))
+                        self.proto_handle_error(proto_id, Some(session_id));
+                        need_shrink = true;
                     } else {
                         error!(
                             "channel shutdown, proto [{}] session [{}] message can't send to user",
@@ -368,6 +377,11 @@ where
                     }
                 }
             }
+        }
+
+        if need_shrink {
+            self.read_session_buf.shrink_to_fit();
+            self.read_service_buf.shrink_to_fit();
         }
     }
 
