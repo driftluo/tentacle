@@ -459,7 +459,10 @@ where
                     proto_id,
                 );
 
-                self.service_proto_handles.insert(proto_id, sender);
+                self.service_proto_handles
+                    .entry(proto_id)
+                    .and_modify(|old| *old = sender.clone())
+                    .or_insert(sender);
 
                 if reopen {
                     let sessions = self
@@ -502,6 +505,7 @@ where
 
                     self.session_proto_handles
                         .entry((id, proto_id))
+                        .and_modify(|old| *old = sender.clone())
                         .or_insert(sender);
                 }
             }

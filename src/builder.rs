@@ -95,8 +95,8 @@ impl ServiceBuilder {
     /// reopen(just like the Erlang virtual machine) the handle that has been panic,
     /// and the environment inside the framework will automatically restore to the state that before the panic.
     ///
-    /// But the handle is recreated, and then call `init` again, but the `connected` can't call again,
-    /// and then continue to receive unreceived messages/event.
+    /// But in this case, the handle is recreated(not the old one), and then call `init` again,
+    /// the `connected` event can't be traced back(don't call again), and then continue to receive unreceived messages/event.
     pub fn reopen(mut self, reopen: bool) -> Self {
         self.config.reopen = reopen;
         self
