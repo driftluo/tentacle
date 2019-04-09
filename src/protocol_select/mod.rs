@@ -1,12 +1,10 @@
-use crate::protocol_select::{
-    protocol_select_generated::p2p::protocol_select::{
-        ProtocolInfo as FBSProtocolInfo, ProtocolInfoBuilder,
-    },
-    protocol_select_generated_verifier::get_root,
+use crate::protocol_select::protocol_select_generated::p2p::protocol_select::{
+    ProtocolInfo as FBSProtocolInfo, ProtocolInfoBuilder,
 };
 
 use bytes::Bytes;
 use flatbuffers::FlatBufferBuilder;
+use flatbuffers_verifier::get_root;
 use futures::{future, prelude::*};
 use log::debug;
 use std::cmp::Ordering;

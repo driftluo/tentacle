@@ -6,8 +6,9 @@ mod protocol_generated;
 #[allow(dead_code)]
 mod protocol_generated_verifier;
 
-use crate::{protocol_generated::p2p::ping::*, protocol_generated_verifier::get_root};
+use crate::protocol_generated::p2p::ping::*;
 use flatbuffers::{FlatBufferBuilder, WIPOffset};
+use flatbuffers_verifier::get_root;
 use fnv::FnvHashMap;
 use generic_channel::Sender;
 use log::{debug, error};

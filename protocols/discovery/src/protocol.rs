@@ -2,18 +2,16 @@ use std::io;
 
 use bytes::{Bytes, BytesMut};
 use flatbuffers::FlatBufferBuilder;
+use flatbuffers_verifier::get_root;
 use log::debug;
 use p2p::multiaddr::Multiaddr;
 use tokio::codec::length_delimited::LengthDelimitedCodec;
 use tokio::codec::{Decoder, Encoder};
 
-use crate::{
-    protocol_generated::p2p::discovery::{
-        BytesBuilder, DiscoveryMessage as FbsDiscoveryMessage, DiscoveryMessageBuilder,
-        DiscoveryPayload as FbsDiscoveryPayload, GetNodes as FbsGetNodes, GetNodesBuilder,
-        NodeBuilder, Nodes as FbsNodes, NodesBuilder,
-    },
-    protocol_generated_verifier::get_root,
+use crate::protocol_generated::p2p::discovery::{
+    BytesBuilder, DiscoveryMessage as FbsDiscoveryMessage, DiscoveryMessageBuilder,
+    DiscoveryPayload as FbsDiscoveryPayload, GetNodes as FbsGetNodes, GetNodesBuilder, NodeBuilder,
+    Nodes as FbsNodes, NodesBuilder,
 };
 
 pub(crate) struct DiscoveryCodec {
