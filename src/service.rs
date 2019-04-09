@@ -43,6 +43,8 @@ pub use crate::service::{
     event::{ProtocolEvent, ServiceError, ServiceEvent},
 };
 
+pub(crate) const BUF_SHRINK_THRESHOLD: usize = u8::max_value() as usize;
+
 /// Protocol handle value
 pub(crate) enum InnerProtocolHandle {
     /// Service level protocol
@@ -313,6 +315,10 @@ where
                 debug!("Can't find session {} to send data", id);
             }
         }
+
+        if self.write_buf.capacity() > BUF_SHRINK_THRESHOLD {
+            self.write_buf.shrink_to_fit();
+        }
     }
 
     /// Distribute event to user level
@@ -352,7 +358,7 @@ where
                         );
                         self.read_session_buf
                             .push_back((session_id, proto_id, e.into_inner()));
-                        self.proto_handle_error(proto_id, Some(session_id))
+                        self.proto_handle_error(proto_id, Some(session_id));
                     } else {
                         error!(
                             "channel shutdown, proto [{}] session [{}] message can't send to user",
@@ -368,6 +374,14 @@ where
                     }
                 }
             }
+        }
+
+        if self.read_service_buf.capacity() > BUF_SHRINK_THRESHOLD {
+            self.read_service_buf.shrink_to_fit();
+        }
+
+        if self.read_session_buf.capacity() > BUF_SHRINK_THRESHOLD {
+            self.read_session_buf.shrink_to_fit();
         }
     }
 

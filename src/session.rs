@@ -22,7 +22,7 @@ use crate::{
     multiaddr::Multiaddr,
     protocol_select::{client_select, server_select, ProtocolInfo},
     secio::{codec::stream_handle::StreamHandle as SecureHandle, PublicKey},
-    service::{config::Meta, SessionType},
+    service::{config::Meta, SessionType, BUF_SHRINK_THRESHOLD},
     substream::{ProtocolEvent, SubStream},
     transports::{MultiIncoming, MultiStream},
     yamux::{Config, Session as YamuxSession, StreamHandle},
@@ -318,6 +318,10 @@ where
                 }
                 _ => (),
             }
+        }
+
+        if self.write_buf.capacity() > BUF_SHRINK_THRESHOLD {
+            self.write_buf.shrink_to_fit();
         }
     }
 

@@ -23,6 +23,8 @@ use crate::{
     StreamId,
 };
 
+const BUF_SHRINK_THRESHOLD: usize = u8::max_value() as usize;
+
 /// The session
 pub struct Session<T> {
     // Framed low level raw stream
@@ -331,6 +333,11 @@ where
                 self.streams.remove(&stream_id);
             }
         }
+
+        if self.read_pending_frames.capacity() > BUF_SHRINK_THRESHOLD {
+            self.read_pending_frames.shrink_to_fit();
+        }
+
         Ok(())
     }
 
