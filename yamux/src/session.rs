@@ -23,6 +23,8 @@ use crate::{
     StreamId,
 };
 
+const BUF_SHRINK_THRESHOLD: usize = u8::max_value() as usize;
+
 /// The session
 pub struct Session<T> {
     // Framed low level raw stream
@@ -287,7 +289,6 @@ where
 
     /// Try send buffer to all sub streams
     fn distribute_to_substream(&mut self) -> Result<(), io::Error> {
-        let mut need_shrink = false;
         for frame in self.read_pending_frames.split_off(0) {
             let stream_id = frame.stream_id();
             if frame.flags().contains(Flag::Syn) {
@@ -313,7 +314,6 @@ where
                         Ok(_) => false,
                         Err(err) => {
                             if err.is_full() {
-                                need_shrink = true;
                                 self.read_pending_frames.push_back(err.into_inner());
                                 self.notify();
                                 false
@@ -334,7 +334,7 @@ where
             }
         }
 
-        if need_shrink {
+        if self.read_pending_frames.capacity() > BUF_SHRINK_THRESHOLD {
             self.read_pending_frames.shrink_to_fit();
         }
 

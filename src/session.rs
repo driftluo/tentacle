@@ -22,7 +22,7 @@ use crate::{
     multiaddr::Multiaddr,
     protocol_select::{client_select, server_select, ProtocolInfo},
     secio::{codec::stream_handle::StreamHandle as SecureHandle, PublicKey},
-    service::{config::Meta, SessionType},
+    service::{config::Meta, SessionType, BUF_SHRINK_THRESHOLD},
     substream::{ProtocolEvent, SubStream},
     transports::{MultiIncoming, MultiStream},
     yamux::{Config, Session as YamuxSession, StreamHandle},
@@ -288,7 +288,6 @@ where
 
     #[inline]
     fn distribute_to_substream(&mut self) {
-        let mut need_shrink = false;
         for event in self.write_buf.split_off(0) {
             match event {
                 ProtocolEvent::Message { id, proto_id, data } => {
@@ -298,7 +297,6 @@ where
                         {
                             if e.is_full() {
                                 self.write_buf.push_back(e.into_inner());
-                                need_shrink = true;
                                 self.notify();
                             } else {
                                 debug!("session send to sub stream error: {}", e);
@@ -322,7 +320,7 @@ where
             }
         }
 
-        if need_shrink {
+        if self.write_buf.capacity() > BUF_SHRINK_THRESHOLD {
             self.write_buf.shrink_to_fit();
         }
     }
