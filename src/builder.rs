@@ -38,8 +38,8 @@ impl ServiceBuilder {
     }
 
     /// Insert a custom protocol
-    pub fn insert_protocol(mut self, protocol: ProtocolMeta) -> Self {
-        if protocol.session_handle().has_event() || protocol.service_handle.has_event() {
+    pub fn insert_protocol(mut self, mut protocol: ProtocolMeta) -> Self {
+        if protocol.session_handle().has_event() || protocol.service_handle().has_event() {
             self.config.event.insert(protocol.id());
         }
 
@@ -88,6 +88,20 @@ impl ServiceBuilder {
         self
     }
 
+    /// Whether to allow the handle to be reopened, default is false.
+    ///
+    /// Sometimes, because the user's protocol handle implements may panic, but it's state is not
+    /// stored on the handle. In this case, the framework can be allowed to try to
+    /// reopen(just like the Erlang virtual machine) the handle that has been panic,
+    /// and the environment inside the framework will automatically restore to the state that before the panic.
+    ///
+    /// But the handle is recreated, and then call `init` again, but the `connected` can't call again,
+    /// and then continue to receive unreceived messages/event.
+    pub fn reopen(mut self, reopen: bool) -> Self {
+        self.config.reopen = reopen;
+        self
+    }
+
     /// Clear all protocols
     pub fn clear(&mut self) {
         self.inner.clear();
@@ -108,8 +122,10 @@ impl Default for ServiceBuilder {
 
 pub(crate) type NameFn = Box<Fn(ProtocolId) -> String + Send + Sync>;
 pub(crate) type CodecFn = Box<Fn() -> Box<dyn Codec + Send + 'static> + Send + Sync>;
+pub(crate) type ServiceHandleFn =
+    Box<FnMut() -> ProtocolHandle<Box<dyn ServiceProtocol + Send + 'static>> + Send>;
 pub(crate) type SessionHandleFn =
-    Box<Fn(ProtocolId) -> ProtocolHandle<Box<dyn SessionProtocol + Send + 'static>> + Send>;
+    Box<FnMut() -> ProtocolHandle<Box<dyn SessionProtocol + Send + 'static>> + Send>;
 pub(crate) type SelectVersionFn = Box<dyn Fn() -> Option<SelectFn<String>> + Send + Sync + 'static>;
 
 /// Builder for protocol meta
@@ -118,7 +134,7 @@ pub struct MetaBuilder {
     name: NameFn,
     support_versions: Vec<String>,
     codec: CodecFn,
-    service_handle: ProtocolHandle<Box<dyn ServiceProtocol + Send + 'static>>,
+    service_handle: ServiceHandleFn,
     session_handle: SessionHandleFn,
     select_version: SelectVersionFn,
 }
@@ -172,20 +188,18 @@ impl MetaBuilder {
 
     /// Define protocol service handle, default is neither
     pub fn service_handle<
-        T: FnOnce() -> ProtocolHandle<Box<dyn ServiceProtocol + Send + 'static>>,
+        T: FnMut() -> ProtocolHandle<Box<dyn ServiceProtocol + Send + 'static>> + Send + 'static,
     >(
         mut self,
         service_handle: T,
     ) -> Self {
-        self.service_handle = service_handle();
+        self.service_handle = Box::new(service_handle);
         self
     }
 
     /// Define protocol session handle, default is neither
     pub fn session_handle<
-        T: Fn(ProtocolId) -> ProtocolHandle<Box<dyn SessionProtocol + Send + 'static>>
-            + Send
-            + 'static,
+        T: FnMut() -> ProtocolHandle<Box<dyn SessionProtocol + Send + 'static>> + Send + 'static,
     >(
         mut self,
         session_handle: T,
@@ -227,8 +241,8 @@ impl Default for MetaBuilder {
             name: Box::new(|id| format!("/p2p/{}", id)),
             support_versions: vec!["0.0.1".to_owned()],
             codec: Box::new(|| Box::new(LengthDelimitedCodec::new())),
-            service_handle: ProtocolHandle::Neither,
-            session_handle: Box::new(|_| ProtocolHandle::Neither),
+            service_handle: Box::new(|| ProtocolHandle::Neither),
+            session_handle: Box::new(|| ProtocolHandle::Neither),
             select_version: Box::new(|| None),
         }
     }

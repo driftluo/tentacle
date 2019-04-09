@@ -51,7 +51,7 @@ fn create_meta(id: ProtocolId, start: u16) -> ProtocolMeta {
     MetaBuilder::default()
         .id(id)
         .service_handle(move || {
-            let discovery = Discovery::new(addr_mgr);
+            let discovery = Discovery::new(addr_mgr.clone());
             ProtocolHandle::Callback(Box::new(DiscoveryProtocol::new(id, discovery)))
         })
         .build()

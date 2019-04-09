@@ -60,8 +60,13 @@ where
         }
     }
 
+    /// Replace sessions context
+    pub fn sessions(&mut self, sessions: HashMap<SessionId, SessionContext>) {
+        self.sessions = sessions;
+    }
+
     #[inline]
-    fn handle_event(&mut self, event: ServiceProtocolEvent) {
+    pub fn handle_event(&mut self, event: ServiceProtocolEvent) {
         use self::ServiceProtocolEvent::*;
         match event {
             Init => self.handle.init(&mut self.handle_context),
