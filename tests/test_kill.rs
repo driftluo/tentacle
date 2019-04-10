@@ -90,7 +90,7 @@ fn create_meta(id: ProtocolId) -> (ProtocolMeta, crossbeam_channel::Receiver<()>
                 let handle = Box::new(PHandle {
                     proto_id: id,
                     connected_count: 0,
-                    sender,
+                    sender: sender.clone(),
                 });
                 ProtocolHandle::Callback(handle)
             }

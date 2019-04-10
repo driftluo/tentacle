@@ -324,6 +324,8 @@ where
     /// Distribute event to user level
     #[inline(always)]
     fn distribute_to_user_level(&mut self) {
+        let mut abnormally_close_handle = Vec::default();
+
         for (proto_id, event) in self.read_service_buf.split_off(0) {
             if let Some(sender) = self.service_proto_handles.get_mut(&proto_id) {
                 if let Err(e) = sender.try_send(event) {
@@ -336,6 +338,12 @@ where
                             "channel shutdown, proto [{}] message can't send to user",
                             proto_id
                         );
+
+                        if self.config.reopen {
+                            self.read_service_buf.push_back((proto_id, e.into_inner()));
+                            abnormally_close_handle.push((proto_id, None));
+                        }
+
                         self.handle.handle_error(
                             &mut self.service_context,
                             ServiceError::ProtocolHandleError {
@@ -364,6 +372,13 @@ where
                             "channel shutdown, proto [{}] session [{}] message can't send to user",
                             proto_id, session_id
                         );
+
+                        if self.config.reopen {
+                            self.read_session_buf
+                                .push_back((session_id, proto_id, e.into_inner()));
+                            abnormally_close_handle.push((proto_id, Some(session_id)));
+                        }
+
                         self.handle.handle_error(
                             &mut self.service_context,
                             ServiceError::ProtocolHandleError {
@@ -383,6 +398,8 @@ where
         if self.read_session_buf.capacity() > BUF_SHRINK_THRESHOLD {
             self.read_session_buf.shrink_to_fit();
         }
+
+        self.reopen_handle(abnormally_close_handle.into_iter());
     }
 
     /// When proto handle channel is full, call here
@@ -406,6 +423,92 @@ where
             );
         } else if *error_count < 10 {
             self.notify();
+        }
+    }
+
+    /// When handle dead, restart them
+    #[inline]
+    fn reopen_handle(
+        &mut self,
+        dead_handles: impl Iterator<Item = (ProtocolId, Option<SessionId>)>,
+    ) {
+        for (proto_id, session_id) in dead_handles {
+            if let Some(handle) = self.proto_handle(session_id.is_some(), proto_id) {
+                self.handle_open(handle, proto_id, session_id, true)
+            }
+        }
+    }
+
+    /// Spawn protocol handle
+    #[inline]
+    fn handle_open(
+        &mut self,
+        handle: InnerProtocolHandle,
+        proto_id: ProtocolId,
+        id: Option<SessionId>,
+        reopen: bool,
+    ) {
+        match handle {
+            InnerProtocolHandle::Service(handle) => {
+                debug!("init service level [{}] proto handle", proto_id);
+                let (sender, receiver) = mpsc::channel(32);
+                let mut stream = ServiceProtocolStream::new(
+                    handle,
+                    self.service_context.clone_self(),
+                    receiver,
+                    proto_id,
+                );
+
+                self.service_proto_handles
+                    .entry(proto_id)
+                    .and_modify(|old| *old = sender.clone())
+                    .or_insert(sender);
+
+                if reopen {
+                    let sessions = self
+                        .session_service_protos
+                        .iter()
+                        .filter(|(_session_id, protos)| protos.contains(&proto_id))
+                        .map(|(session_id, _)| {
+                            (
+                                *session_id,
+                                self.sessions
+                                    .get(&session_id)
+                                    .expect("can't find session context on connected sessions")
+                                    .inner
+                                    .clone(),
+                            )
+                        })
+                        .collect();
+                    stream.sessions(sessions)
+                }
+
+                stream.handle_event(ServiceProtocolEvent::Init);
+
+                tokio::spawn(stream.for_each(|_| Ok(())).map_err(|_| ()));
+            }
+
+            InnerProtocolHandle::Session(handle) => {
+                let id = id.unwrap();
+                if let Some(session_control) = self.sessions.get(&id) {
+                    debug!("init session [{}] level proto [{}] handle", id, proto_id);
+                    let (sender, receiver) = mpsc::channel(32);
+                    let stream = SessionProtocolStream::new(
+                        handle,
+                        self.service_context.clone_self(),
+                        session_control.inner.clone(),
+                        receiver,
+                        proto_id,
+                    );
+
+                    tokio::spawn(stream.for_each(|_| Ok(())).map_err(|_| ()));
+
+                    self.session_proto_handles
+                        .entry((id, proto_id))
+                        .and_modify(|old| *old = sender.clone())
+                        .or_insert(sender);
+                }
+            }
         }
     }
 
@@ -479,8 +582,8 @@ where
 
     /// Get the callback handle of the specified protocol
     #[inline]
-    fn proto_handle(&self, session: bool, proto_id: ProtocolId) -> Option<InnerProtocolHandle> {
-        let handle = self.protocol_configs.values().find_map(|proto| {
+    fn proto_handle(&mut self, session: bool, proto_id: ProtocolId) -> Option<InnerProtocolHandle> {
+        let handle = self.protocol_configs.values_mut().find_map(|proto| {
             if proto.id() == proto_id {
                 if session {
                     match proto.session_handle() {
@@ -772,10 +875,6 @@ where
         }
 
         debug!("service session [{}] proto [{}] open", id, proto_id);
-        let session_control = self
-            .sessions
-            .get(&id)
-            .expect("Protocol open without session open");
 
         // Regardless of the existence of the session level handle,
         // you **must record** which protocols are opened for each session.
@@ -785,66 +884,42 @@ where
             .insert(proto_id);
 
         if self.config.event.contains(&proto_id) {
-            // event output
-            self.handle.handle_proto(
-                &mut self.service_context,
-                ProtocolEvent::Connected {
-                    session_context: &session_control.inner,
-                    proto_id,
-                    version: version.clone(),
-                },
-            );
+            if let Some(session_control) = self.sessions.get(&id) {
+                // event output
+                self.handle.handle_proto(
+                    &mut self.service_context,
+                    ProtocolEvent::Connected {
+                        session_context: &session_control.inner,
+                        proto_id,
+                        version: version.clone(),
+                    },
+                );
+            }
         }
 
         // callback output
         // Service proto handle processing flow
         if !self.service_proto_handles.contains_key(&proto_id) {
-            if let Some(InnerProtocolHandle::Service(handle)) = self.proto_handle(false, proto_id) {
-                debug!("init service level [{}] proto handle", proto_id);
-                let (sender, receiver) = mpsc::channel(32);
-                let stream = ServiceProtocolStream::new(
-                    handle,
-                    self.service_context.clone_self(),
-                    receiver,
-                    proto_id,
-                );
-
-                self.service_proto_handles.insert(proto_id, sender);
-
-                tokio::spawn(stream.for_each(|_| Ok(())).map_err(|_| ()));
-
-                self.read_service_buf
-                    .push_back((proto_id, ServiceProtocolEvent::Init));
+            if let Some(handle) = self.proto_handle(false, proto_id) {
+                self.handle_open(handle, proto_id, None, false)
             }
         }
 
         if self.service_proto_handles.contains_key(&proto_id) {
-            self.read_service_buf.push_back((
-                proto_id,
-                ServiceProtocolEvent::Connected {
-                    session: session_control.inner.clone(),
-                    version: version.clone(),
-                },
-            ));
+            if let Some(session_control) = self.sessions.get(&id) {
+                self.read_service_buf.push_back((
+                    proto_id,
+                    ServiceProtocolEvent::Connected {
+                        session: session_control.inner.clone(),
+                        version: version.clone(),
+                    },
+                ));
+            }
         }
 
         // Session proto handle processing flow
-        if let Some(InnerProtocolHandle::Session(handle)) = self.proto_handle(true, proto_id) {
-            debug!("init session [{}] level proto [{}] handle", id, proto_id);
-            let (sender, receiver) = mpsc::channel(32);
-            let stream = SessionProtocolStream::new(
-                handle,
-                self.service_context.clone_self(),
-                session_control.inner.clone(),
-                receiver,
-                proto_id,
-            );
-
-            tokio::spawn(stream.for_each(|_| Ok(())).map_err(|_| ()));
-
-            self.session_proto_handles
-                .entry((id, proto_id))
-                .or_insert(sender);
+        if let Some(handle) = self.proto_handle(true, proto_id) {
+            self.handle_open(handle, proto_id, Some(id), false);
 
             self.read_session_buf.push_back((
                 id,
