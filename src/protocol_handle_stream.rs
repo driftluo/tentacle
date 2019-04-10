@@ -1,6 +1,7 @@
 use futures::{prelude::*, sync::mpsc};
 use log::warn;
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use crate::{
     context::{ProtocolContext, ServiceContext, SessionContext},
@@ -12,7 +13,7 @@ use crate::{
 pub enum ServiceProtocolEvent {
     Init,
     Connected {
-        session: SessionContext,
+        session: Arc<SessionContext>,
         version: String,
     },
     Disconnected {
@@ -38,7 +39,7 @@ pub struct ServiceProtocolStream<T> {
     handle: T,
     /// External event is passed in from this
     handle_context: ProtocolContext,
-    sessions: HashMap<SessionId, SessionContext>,
+    sessions: HashMap<SessionId, Arc<SessionContext>>,
     receiver: mpsc::Receiver<ServiceProtocolEvent>,
 }
 
@@ -61,7 +62,7 @@ where
     }
 
     /// Replace sessions context
-    pub fn sessions(&mut self, sessions: HashMap<SessionId, SessionContext>) {
+    pub fn sessions(&mut self, sessions: HashMap<SessionId, Arc<SessionContext>>) {
         self.sessions = sessions;
     }
 
@@ -151,7 +152,7 @@ pub struct SessionProtocolStream<T> {
     handle: T,
     /// External event is passed in from this
     handle_context: ProtocolContext,
-    context: SessionContext,
+    context: Arc<SessionContext>,
     receiver: mpsc::Receiver<SessionProtocolEvent>,
 }
 
@@ -162,7 +163,7 @@ where
     pub fn new(
         handle: T,
         service_context: ServiceContext,
-        context: SessionContext,
+        context: Arc<SessionContext>,
         receiver: mpsc::Receiver<SessionProtocolEvent>,
         proto_id: ProtocolId,
     ) -> Self {

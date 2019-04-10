@@ -5,6 +5,7 @@ use futures::{
 };
 use log::{debug, error, trace, warn};
 use std::collections::{HashMap, HashSet, VecDeque};
+use std::sync::Arc;
 use std::time::Instant;
 use std::{error::Error as ErrorTrait, io};
 use tokio::prelude::{AsyncRead, AsyncWrite, FutureExt};
@@ -472,11 +473,13 @@ where
                         .map(|(session_id, _)| {
                             (
                                 *session_id,
-                                self.sessions
-                                    .get(&session_id)
-                                    .expect("can't find session context on connected sessions")
-                                    .inner
-                                    .clone(),
+                                Arc::clone(
+                                    &self
+                                        .sessions
+                                        .get(&session_id)
+                                        .expect("can't find session context on connected sessions")
+                                        .inner,
+                                ),
                             )
                         })
                         .collect();
@@ -496,7 +499,7 @@ where
                     let stream = SessionProtocolStream::new(
                         handle,
                         self.service_context.clone_self(),
-                        session_control.inner.clone(),
+                        Arc::clone(&session_control.inner),
                         receiver,
                         proto_id,
                     );
@@ -758,12 +761,12 @@ where
         let session_control = SessionControl {
             notify_signals: HashMap::default(),
             event_sender: service_event_sender,
-            inner: SessionContext {
+            inner: Arc::new(SessionContext {
                 id: self.next_session,
                 address,
                 ty,
                 remote_pubkey,
-            },
+            }),
         };
 
         let meta = SessionMeta::new(self.next_session, ty, self.config.timeout)
@@ -811,7 +814,7 @@ where
         self.handle.handle_event(
             &mut self.service_context,
             ServiceEvent::SessionOpen {
-                session_context: &session_control.inner,
+                session_context: Arc::clone(&session_control.inner),
             },
         );
 
@@ -889,7 +892,7 @@ where
                 self.handle.handle_proto(
                     &mut self.service_context,
                     ProtocolEvent::Connected {
-                        session_context: &session_control.inner,
+                        session_context: Arc::clone(&session_control.inner),
                         proto_id,
                         version: version.clone(),
                     },
@@ -910,7 +913,7 @@ where
                 self.read_service_buf.push_back((
                     proto_id,
                     ServiceProtocolEvent::Connected {
-                        session: session_control.inner.clone(),
+                        session: Arc::clone(&session_control.inner),
                         version: version.clone(),
                     },
                 ));
@@ -952,7 +955,7 @@ where
                 self.handle.handle_proto(
                     &mut self.service_context,
                     ProtocolEvent::Received {
-                        session_context: &session_control.inner,
+                        session_context: Arc::clone(&session_control.inner),
                         proto_id,
                         data: data.clone(),
                     },
@@ -1014,7 +1017,7 @@ where
                     &mut self.service_context,
                     ProtocolEvent::Disconnected {
                         proto_id,
-                        session_context: &session_control.inner,
+                        session_context: Arc::clone(&session_control.inner),
                     },
                 )
             }
@@ -1140,7 +1143,7 @@ where
                         &mut self.service_context,
                         ServiceError::ProtocolSelectError {
                             proto_name,
-                            session_context: &session_control.inner,
+                            session_context: Arc::clone(&session_control.inner),
                         },
                     )
                 }
@@ -1177,7 +1180,7 @@ where
                     self.handle.handle_error(
                         &mut self.service_context,
                         ServiceError::SessionTimeout {
-                            session_context: &session_control.inner,
+                            session_context: Arc::clone(&session_control.inner),
                         },
                     )
                 }
@@ -1187,7 +1190,7 @@ where
                     self.handle.handle_error(
                         &mut self.service_context,
                         ServiceError::MuxerError {
-                            session_context: &session_control.inner,
+                            session_context: Arc::clone(&session_control.inner),
                             error,
                         },
                     )
@@ -1200,7 +1203,7 @@ where
                 self.handle.handle_event(
                     &mut self.service_context,
                     ServiceEvent::ListenStarted {
-                        address: &listen_address,
+                        address: listen_address.clone(),
                     },
                 );
                 self.listens.push((listen_address, incoming));
@@ -1400,7 +1403,7 @@ where
                                 &mut self.service_context,
                                 ProtocolEvent::ProtocolSessionNotify {
                                     proto_id,
-                                    session_context: &session_control.inner,
+                                    session_context: Arc::clone(&session_control.inner),
                                     token,
                                 },
                             )
