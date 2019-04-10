@@ -7,6 +7,7 @@ use futures::{sync::mpsc::Receiver, Async, AsyncSink, Poll, Sink, Stream};
 use log::{debug, trace, warn};
 use p2p::multiaddr::{Multiaddr, Protocol};
 use p2p::{
+    context::ProtocolContextMutRef,
     service::{ServiceControl, SessionType},
     utils::multiaddr_to_socketaddr,
     ProtocolId, SessionId,
@@ -23,7 +24,7 @@ const VERSION: u32 = 0;
 // The maximum number of new addresses to accumulate before announcing.
 const MAX_ADDR_TO_SEND: usize = 1000;
 // Every 24 hours send announce nodes message
-// const ANNOUNCE_INTERVAL: u64 = 3600 * 24;
+const ANNOUNCE_INTERVAL: u64 = 3600 * 24;
 const ANNOUNCE_THRESHOLD: usize = 10;
 
 // The maximum number addresses in on Nodes item
@@ -113,12 +114,11 @@ pub struct SubstreamValue {
 impl SubstreamValue {
     pub(crate) fn new(
         direction: SessionType,
-        stream: StreamHandle,
+        substream: Substream,
         max_known: usize,
-        remote_addr: Multiaddr,
-        listen_port: Option<u16>,
+        query_cycle: Option<Duration>,
     ) -> SubstreamValue {
-        let session_id = stream.session_id;
+        let session_id = substream.stream.session_id;
         let mut pending_messages = VecDeque::default();
         debug!("direction: {:?}", direction);
         let mut addr_known = AddrKnown::new(max_known);
@@ -126,21 +126,22 @@ impl SubstreamValue {
             pending_messages.push_back(DiscoveryMessage::GetNodes {
                 version: VERSION,
                 count: MAX_ADDR_TO_SEND as u32,
-                listen_port,
+                listen_port: substream.listen_port,
             });
             addr_known.insert(RawAddr::from(
-                multiaddr_to_socketaddr(&remote_addr).unwrap(),
+                multiaddr_to_socketaddr(&substream.remote_addr).unwrap(),
             ));
 
-            RemoteAddress::Listen(remote_addr)
+            RemoteAddress::Listen(substream.remote_addr)
         } else {
-            RemoteAddress::Init(remote_addr)
+            RemoteAddress::Init(substream.remote_addr)
         };
 
         SubstreamValue {
-            framed_stream: Framed::new(stream, DiscoveryCodec::default()),
-            // timer_future: Interval::new_interval(Duration::from_secs(ANNOUNCE_INTERVAL)),
-            timer_future: Interval::new_interval(Duration::from_secs(7)),
+            framed_stream: Framed::new(substream.stream, DiscoveryCodec::default()),
+            timer_future: Interval::new_interval(
+                query_cycle.unwrap_or_else(|| Duration::from_secs(ANNOUNCE_INTERVAL)),
+            ),
             pending_messages,
             addr_known,
             remote_addr,
@@ -355,29 +356,22 @@ pub struct Substream {
 }
 
 impl Substream {
-    pub fn new(
-        remote_addr: Multiaddr,
-        direction: SessionType,
-        proto_id: ProtocolId,
-        session_id: SessionId,
-        receiver: Receiver<Vec<u8>>,
-        sender: ServiceControl,
-        listens: &[Multiaddr],
-    ) -> Substream {
+    pub fn new(mut context: ProtocolContextMutRef, receiver: Receiver<Vec<u8>>) -> Substream {
         let stream = StreamHandle {
             data_buf: BytesMut::default(),
-            proto_id,
-            session_id,
+            proto_id: context.proto_id,
+            session_id: context.session.id,
             receiver,
-            sender,
+            sender: context.control().clone(),
         };
-        let listen_port = if direction.is_outbound() {
-            let local = multiaddr_to_socketaddr(&remote_addr)
+        let listen_port = if context.session.ty.is_outbound() {
+            let local = multiaddr_to_socketaddr(&context.session.address)
                 .unwrap()
                 .ip()
                 .is_loopback();
 
-            listens
+            context
+                .listens()
                 .iter()
                 .map(|address| multiaddr_to_socketaddr(address).unwrap())
                 .filter_map(|address| {
@@ -392,15 +386,13 @@ impl Substream {
             None
         };
         Substream {
-            remote_addr,
-            direction,
+            remote_addr: context.session.address.clone(),
+            direction: context.session.ty,
             stream,
             listen_port,
         }
     }
-}
 
-impl Substream {
     pub fn key(&self) -> SubstreamKey {
         SubstreamKey {
             direction: self.direction,
@@ -425,7 +417,7 @@ impl RemoteAddress {
         }
     }
 
-    fn into_inner(self) -> Multiaddr {
+    pub(crate) fn into_inner(self) -> Multiaddr {
         match self {
             RemoteAddress::Init(addr) | RemoteAddress::Listen(addr) => addr,
         }

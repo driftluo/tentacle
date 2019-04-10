@@ -98,6 +98,15 @@ impl AddrKnown {
     pub(crate) fn contains(&self, addr: &RawAddr) -> bool {
         self.addrs.contains(addr)
     }
+
+    pub(crate) fn remove<'a>(&mut self, addrs: impl Iterator<Item = &'a RawAddr>) {
+        addrs.for_each(|addr| {
+            self.addrs.remove(addr);
+            if let Some(time) = self.addr_times.remove(addr) {
+                self.time_addrs.remove(&time);
+            }
+        })
+    }
 }
 
 impl Default for AddrKnown {

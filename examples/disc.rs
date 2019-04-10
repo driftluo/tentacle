@@ -2,7 +2,7 @@ use env_logger;
 use log::debug;
 
 use fnv::FnvHashMap;
-use std::collections::HashSet;
+use std::{collections::HashSet, time::Duration};
 
 use futures::prelude::*;
 
@@ -51,8 +51,8 @@ fn create_meta(id: ProtocolId, start: u16) -> ProtocolMeta {
     MetaBuilder::default()
         .id(id)
         .service_handle(move || {
-            let discovery = Discovery::new(addr_mgr.clone());
-            ProtocolHandle::Callback(Box::new(DiscoveryProtocol::new(id, discovery)))
+            let discovery = Discovery::new(addr_mgr.clone(), Some(Duration::from_secs(7)));
+            ProtocolHandle::Callback(Box::new(DiscoveryProtocol::new(discovery)))
         })
         .build()
 }
