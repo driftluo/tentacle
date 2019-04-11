@@ -26,7 +26,6 @@ fn create_meta(id: ProtocolId) -> ProtocolMeta {
             // All protocol use the same handle.
             // This is just an example. In the actual environment, this should be a different handle.
             let handle = Box::new(PHandle {
-                proto_id: id,
                 count: 0,
                 connected_session_ids: Vec::new(),
                 clear_handle: HashMap::new(),
@@ -38,7 +37,6 @@ fn create_meta(id: ProtocolId) -> ProtocolMeta {
 
 #[derive(Default)]
 struct PHandle {
-    proto_id: ProtocolId,
     count: usize,
     connected_session_ids: Vec<SessionId>,
     clear_handle: HashMap<SessionId, Sender<()>>,
@@ -46,7 +44,7 @@ struct PHandle {
 
 impl ServiceProtocol for PHandle {
     fn init(&mut self, context: &mut ProtocolContext) {
-        if self.proto_id == 0 {
+        if context.proto_id == 0 {
             context.set_service_notify(0, Duration::from_secs(5), 3);
         }
     }
@@ -56,11 +54,11 @@ impl ServiceProtocol for PHandle {
         self.connected_session_ids.push(session.id);
         info!(
             "proto id [{}] open on session [{}], address: [{}], type: [{:?}], version: {}",
-            self.proto_id, session.id, session.address, session.ty, version
+            context.proto_id, session.id, session.address, session.ty, version
         );
         info!("connected sessions are: {:?}", self.connected_session_ids);
 
-        if self.proto_id != 1 {
+        if context.proto_id != 1 {
             return;
         }
 
@@ -102,7 +100,7 @@ impl ServiceProtocol for PHandle {
 
         info!(
             "proto id [{}] close on session [{}]",
-            self.proto_id, context.session.id
+            context.proto_id, context.session.id
         );
     }
 
@@ -111,14 +109,17 @@ impl ServiceProtocol for PHandle {
         info!(
             "received from [{}]: proto [{}] data {:?}, message count: {}",
             context.session.id,
-            self.proto_id,
+            context.proto_id,
             str::from_utf8(data.as_ref()).unwrap(),
             self.count
         );
     }
 
-    fn notify(&mut self, _context: &mut ProtocolContext, token: u64) {
-        info!("proto [{}] received notify token: {}", self.proto_id, token);
+    fn notify(&mut self, context: &mut ProtocolContext, token: u64) {
+        info!(
+            "proto [{}] received notify token: {}",
+            context.proto_id, token
+        );
     }
 }
 

@@ -17,7 +17,7 @@ use p2p::{
     secio::PeerId,
     service::TargetSession,
     traits::ServiceProtocol,
-    ProtocolId, SessionId,
+    SessionId,
 };
 use std::{
     str,
@@ -45,7 +45,6 @@ pub enum Event {
 /// The interval means that we send ping to peers.
 /// The timeout means that consider peer is timeout if during a timeout we still have not received pong from a peer
 pub struct PingHandler<S: Sender<Event>> {
-    id: ProtocolId,
     interval: Duration,
     timeout: Duration,
     connected_session_ids: FnvHashMap<SessionId, PingStatus>,
@@ -53,14 +52,8 @@ pub struct PingHandler<S: Sender<Event>> {
 }
 
 impl<S: Sender<Event>> PingHandler<S> {
-    pub fn new(
-        id: ProtocolId,
-        interval: Duration,
-        timeout: Duration,
-        event_sender: S,
-    ) -> PingHandler<S> {
+    pub fn new(interval: Duration, timeout: Duration, event_sender: S) -> PingHandler<S> {
         PingHandler {
-            id,
             interval,
             timeout,
             connected_session_ids: Default::default(),
@@ -104,14 +97,15 @@ impl<S> ServiceProtocol for PingHandler<S>
 where
     S: Sender<Event>,
 {
-    fn init(&mut self, control: &mut ProtocolContext) {
+    fn init(&mut self, context: &mut ProtocolContext) {
         // periodicly send ping to peers
-        control.set_service_notify(self.id, self.interval, SEND_PING_TOKEN);
-        control.set_service_notify(self.id, self.timeout, CHECK_TIMEOUT_TOKEN);
+        let proto_id = context.proto_id;
+        context.set_service_notify(proto_id, self.interval, SEND_PING_TOKEN);
+        context.set_service_notify(proto_id, self.timeout, CHECK_TIMEOUT_TOKEN);
     }
 
-    fn connected(&mut self, mut control: ProtocolContextMutRef, version: &str) {
-        let session = control.session;
+    fn connected(&mut self, mut context: ProtocolContextMutRef, version: &str) {
+        let session = context.session;
         match session.remote_pubkey {
             Some(ref pubkey) => {
                 let peer_id = pubkey.peer_id();
@@ -124,24 +118,27 @@ where
                     });
                 debug!(
                     "proto id [{}] open on session [{}], address: [{}], type: [{:?}], version: {}",
-                    self.id, session.id, session.address, session.ty, version
+                    context.proto_id, session.id, session.address, session.ty, version
                 );
                 debug!("connected sessions are: {:?}", self.connected_session_ids);
             }
             None => {
-                control.disconnect(session.id);
+                context.disconnect(session.id);
             }
         }
     }
 
-    fn disconnected(&mut self, control: ProtocolContextMutRef) {
-        let session = control.session;
+    fn disconnected(&mut self, context: ProtocolContextMutRef) {
+        let session = context.session;
         self.connected_session_ids.remove(&session.id);
-        debug!("proto id [{}] close on session [{}]", self.id, session.id);
+        debug!(
+            "proto id [{}] close on session [{}]",
+            context.proto_id, session.id
+        );
     }
 
-    fn received(&mut self, mut control: ProtocolContextMutRef, data: bytes::Bytes) {
-        let session = control.session;
+    fn received(&mut self, mut context: ProtocolContextMutRef, data: bytes::Bytes) {
+        let session = context.session;
         if let Some(peer_id) = self
             .connected_session_ids
             .get(&session.id)
@@ -161,7 +158,7 @@ where
                     let mut fbb = FlatBufferBuilder::new();
                     let msg = PingMessage::build_pong(&mut fbb, ping_msg.nonce());
                     fbb.finish(msg, None);
-                    control.send_message(fbb.finished_data().to_vec());
+                    context.send_message(fbb.finished_data().to_vec());
                     self.send_event(Event::Ping(peer_id));
                 }
                 PingPayload::Pong => {
@@ -194,10 +191,10 @@ where
         }
     }
 
-    fn notify(&mut self, control: &mut ProtocolContext, token: u64) {
+    fn notify(&mut self, context: &mut ProtocolContext, token: u64) {
         match token {
             SEND_PING_TOKEN => {
-                debug!("proto [{}] start ping peers", self.id);
+                debug!("proto [{}] start ping peers", context.proto_id);
                 let now = SystemTime::now();
                 let peers: Vec<(SessionId, u32)> = self
                     .connected_session_ids
@@ -220,15 +217,16 @@ where
                         .into_iter()
                         .map(|(session_id, _)| session_id)
                         .collect();
-                    control.filter_broadcast(
+                    let proto_id = context.proto_id;
+                    context.filter_broadcast(
                         TargetSession::Multi(peer_ids),
-                        self.id,
+                        proto_id,
                         fbb.finished_data().to_vec(),
                     );
                 }
             }
             CHECK_TIMEOUT_TOKEN => {
-                debug!("proto [{}] check ping timeout", self.id);
+                debug!("proto [{}] check ping timeout", context.proto_id);
                 let timeout = self.timeout;
                 for peer_id in self
                     .connected_session_ids

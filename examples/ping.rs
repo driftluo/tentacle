@@ -64,12 +64,7 @@ pub fn create_meta<S: Sender<Event> + Send + Clone + 'static>(
     MetaBuilder::new()
         .id(id)
         .service_handle(move || {
-            let handle = Box::new(PingHandler::new(
-                id,
-                interval,
-                timeout,
-                event_sender.clone(),
-            ));
+            let handle = Box::new(PingHandler::new(interval, timeout, event_sender.clone()));
             ProtocolHandle::Callback(handle)
         })
         .build()

@@ -107,7 +107,6 @@ impl ServiceHandle for SHandle {
 }
 
 struct PHandle {
-    proto_id: ProtocolId,
     connected_count: usize,
     sender: crossbeam_channel::Sender<usize>,
     dial_count: usize,
@@ -115,27 +114,28 @@ struct PHandle {
 }
 
 impl ServiceProtocol for PHandle {
-    fn init(&mut self, control: &mut ProtocolContext) {
-        control.set_service_notify(self.proto_id, Duration::from_secs(1), 3);
+    fn init(&mut self, context: &mut ProtocolContext) {
+        let proto_id = context.proto_id;
+        context.set_service_notify(proto_id, Duration::from_secs(1), 3);
     }
 
-    fn connected(&mut self, control: ProtocolContextMutRef, _version: &str) {
-        if control.session.ty.is_inbound() {
+    fn connected(&mut self, context: ProtocolContextMutRef, _version: &str) {
+        if context.session.ty.is_inbound() {
             // if server, dial itself
-            self.dial_addr = Some(control.listens()[0].clone());
+            self.dial_addr = Some(context.listens()[0].clone());
         } else {
             // if client, dial server
-            self.dial_addr = Some(control.session.address.clone());
+            self.dial_addr = Some(context.session.address.clone());
         }
         self.connected_count += 1;
     }
 
-    fn disconnected(&mut self, _control: ProtocolContextMutRef) {
+    fn disconnected(&mut self, _context: ProtocolContextMutRef) {
         self.connected_count -= 1;
     }
 
-    fn notify(&mut self, control: &mut ProtocolContext, _token: u64) {
-        control.dial(self.dial_addr.as_ref().unwrap().clone(), DialProtocol::All);
+    fn notify(&mut self, context: &mut ProtocolContext, _token: u64) {
+        context.dial(self.dial_addr.as_ref().unwrap().clone(), DialProtocol::All);
         self.dial_count += 1;
         if self.dial_count == 10 {
             self.sender.try_send(self.connected_count).unwrap();
@@ -154,7 +154,6 @@ fn create_meta(id: ProtocolId) -> (ProtocolMeta, crossbeam_channel::Receiver<usi
                 ProtocolHandle::Neither
             } else {
                 let handle = Box::new(PHandle {
-                    proto_id: id,
                     connected_count: 0,
                     sender: sender.clone(),
                     dial_count: 0,
