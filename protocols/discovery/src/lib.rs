@@ -11,9 +11,11 @@ use log::{debug, warn};
 use p2p::{
     context::{ProtocolContext, ProtocolContextMutRef},
     traits::ServiceProtocol,
-    ProtocolId, SessionId,
+    SessionId,
 };
 use rand::seq::SliceRandom;
+
+use std::time::Duration;
 
 mod addr;
 mod protocol;
@@ -36,17 +38,15 @@ pub use crate::{
 use crate::{addr::DEFAULT_MAX_KNOWN, substream::RemoteAddress};
 
 pub struct DiscoveryProtocol<M> {
-    id: ProtocolId,
     discovery: Option<Discovery<M>>,
     discovery_handle: DiscoveryHandle,
     discovery_senders: FnvHashMap<SessionId, Sender<Vec<u8>>>,
 }
 
 impl<M: AddressManager> DiscoveryProtocol<M> {
-    pub fn new(id: ProtocolId, discovery: Discovery<M>) -> DiscoveryProtocol<M> {
+    pub fn new(discovery: Discovery<M>) -> DiscoveryProtocol<M> {
         let discovery_handle = discovery.handle();
         DiscoveryProtocol {
-            id,
             discovery: Some(discovery),
             discovery_handle,
             discovery_senders: FnvHashMap::default(),
@@ -55,8 +55,8 @@ impl<M: AddressManager> DiscoveryProtocol<M> {
 }
 
 impl<M: AddressManager + Send + 'static> ServiceProtocol for DiscoveryProtocol<M> {
-    fn init(&mut self, control: &mut ProtocolContext) {
-        debug!("protocol [discovery({})]: init", self.id);
+    fn init(&mut self, context: &mut ProtocolContext) {
+        debug!("protocol [discovery({})]: init", context.proto_id);
 
         let discovery_task = self
             .discovery
@@ -74,11 +74,11 @@ impl<M: AddressManager + Send + 'static> ServiceProtocol for DiscoveryProtocol<M
                     })
             })
             .unwrap();
-        control.future_task(discovery_task);
+        context.future_task(discovery_task);
     }
 
-    fn connected(&mut self, mut control: ProtocolContextMutRef, _: &str) {
-        let session = control.session;
+    fn connected(&mut self, context: ProtocolContextMutRef, _: &str) {
+        let session = context.session;
         debug!(
             "protocol [discovery] open on session [{}], address: [{}], type: [{:?}]",
             session.id, session.address, session.ty
@@ -86,15 +86,7 @@ impl<M: AddressManager + Send + 'static> ServiceProtocol for DiscoveryProtocol<M
 
         let (sender, receiver) = channel(8);
         self.discovery_senders.insert(session.id, sender);
-        let substream = Substream::new(
-            session.address.clone(),
-            session.ty,
-            self.id,
-            session.id,
-            receiver,
-            control.control().clone(),
-            control.listens(),
-        );
+        let substream = Substream::new(context, receiver);
         match self.discovery_handle.substream_sender.try_send(substream) {
             Ok(_) => {
                 debug!("Send substream success");
@@ -106,18 +98,18 @@ impl<M: AddressManager + Send + 'static> ServiceProtocol for DiscoveryProtocol<M
         }
     }
 
-    fn disconnected(&mut self, control: ProtocolContextMutRef) {
-        self.discovery_senders.remove(&control.session.id);
+    fn disconnected(&mut self, context: ProtocolContextMutRef) {
+        self.discovery_senders.remove(&context.session.id);
         debug!(
             "protocol [discovery] close on session [{}]",
-            control.session.id
+            context.session.id
         );
     }
 
-    fn received(&mut self, control: ProtocolContextMutRef, data: bytes::Bytes) {
+    fn received(&mut self, context: ProtocolContextMutRef, data: bytes::Bytes) {
         debug!("[received message]: length={}", data.len());
 
-        if let Some(ref mut sender) = self.discovery_senders.get_mut(&control.session.id) {
+        if let Some(ref mut sender) = self.discovery_senders.get_mut(&context.session.id) {
             // TODO: handle channel is full (wait for poll API?)
             if let Err(err) = sender.try_send(data.to_vec()) {
                 if err.is_full() {
@@ -150,7 +142,9 @@ pub struct Discovery<M> {
     // For add new substream to Discovery
     substream_receiver: Receiver<Substream>,
 
-    err_keys: FnvHashSet<SubstreamKey>,
+    dead_keys: FnvHashSet<SubstreamKey>,
+
+    dynamic_query_cycle: Option<Duration>,
 }
 
 #[derive(Clone)]
@@ -159,7 +153,8 @@ pub struct DiscoveryHandle {
 }
 
 impl<M: AddressManager> Discovery<M> {
-    pub fn new(addr_mgr: M) -> Discovery<M> {
+    /// Query cycle means checking and synchronizing the cycle time of the currently connected node, default is 24 hours
+    pub fn new(addr_mgr: M, query_cycle: Option<Duration>) -> Discovery<M> {
         let (substream_sender, substream_receiver) = channel(8);
         Discovery {
             max_known: DEFAULT_MAX_KNOWN,
@@ -168,7 +163,8 @@ impl<M: AddressManager> Discovery<M> {
             substreams: FnvHashMap::default(),
             substream_sender,
             substream_receiver,
-            err_keys: FnvHashSet::default(),
+            dead_keys: FnvHashSet::default(),
+            dynamic_query_cycle: query_cycle,
         }
     }
 
@@ -190,10 +186,9 @@ impl<M: AddressManager> Discovery<M> {
                     debug!("Received a substream: key={:?}", key);
                     let value = SubstreamValue::new(
                         key.direction,
-                        substream.stream,
+                        substream,
                         self.max_known,
-                        substream.remote_addr,
-                        substream.listen_port,
+                        self.dynamic_query_cycle,
                     );
                     self.substreams.insert(key, value);
                 }
@@ -224,7 +219,7 @@ impl<M: AddressManager> Stream for Discovery<M> {
         for (key, value) in self.substreams.iter_mut() {
             if let Err(err) = value.check_timer() {
                 debug!("substream {:?} poll timer_future error: {:?}", key, err);
-                self.err_keys.insert(key.clone());
+                self.dead_keys.insert(key.clone());
             }
 
             match value.receive_messages(&mut self.addr_mgr) {
@@ -235,12 +230,13 @@ impl<M: AddressManager> Stream for Discovery<M> {
                     }
                 }
                 Ok(None) => {
-                    // TODO: EOF => remote closed the connection
+                    // stream close
+                    self.dead_keys.insert(key.clone());
                 }
                 Err(err) => {
                     debug!("substream {:?} receive messages error: {:?}", key, err);
                     // remove the substream
-                    self.err_keys.insert(key.clone());
+                    self.dead_keys.insert(key.clone());
                 }
             }
 
@@ -249,7 +245,7 @@ impl<M: AddressManager> Stream for Discovery<M> {
                 Err(err) => {
                     debug!("substream {:?} send messages error: {:?}", key, err);
                     // remove the substream
-                    self.err_keys.insert(key.clone());
+                    self.dead_keys.insert(key.clone());
                 }
             }
 
@@ -261,8 +257,17 @@ impl<M: AddressManager> Stream for Discovery<M> {
             }
         }
 
-        for key in self.err_keys.drain() {
-            self.substreams.remove(&key);
+        let mut dead_addr = Vec::default();
+        for key in self.dead_keys.drain() {
+            if let Some(value) = self.substreams.remove(&key) {
+                dead_addr.push(RawAddr::from(value.remote_addr.into_inner()))
+            }
+        }
+
+        if !dead_addr.is_empty() {
+            self.substreams
+                .values_mut()
+                .for_each(|value| value.addr_known.remove(dead_addr.iter()));
         }
 
         let mut rng = rand::thread_rng();
@@ -307,7 +312,7 @@ impl<M: AddressManager> Stream for Discovery<M> {
                 Err(err) => {
                     debug!("substream {:?} send messages error: {:?}", key, err);
                     // remove the substream
-                    self.err_keys.insert(key.clone());
+                    self.dead_keys.insert(key.clone());
                 }
             }
         }
