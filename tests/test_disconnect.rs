@@ -25,19 +25,17 @@ where
 }
 
 struct PHandle {
-    proto_id: ProtocolId,
     connected_count: usize,
 }
 
 impl ServiceProtocol for PHandle {
-    fn init(&mut self, _control: &mut ProtocolContext) {}
+    fn init(&mut self, _context: &mut ProtocolContext) {}
 
-    fn connected(&mut self, control: ProtocolContextMutRef, _version: &str) {
+    fn connected(&mut self, _context: ProtocolContextMutRef, _version: &str) {
         self.connected_count += 1;
-        assert_eq!(self.proto_id, control.session.id);
     }
 
-    fn disconnected(&mut self, _control: ProtocolContextMutRef) {
+    fn disconnected(&mut self, _context: ProtocolContextMutRef) {
         self.connected_count -= 1;
     }
 }
@@ -49,10 +47,7 @@ fn create_meta(id: ProtocolId) -> ProtocolMeta {
             if id == 0 {
                 ProtocolHandle::Neither
             } else {
-                let handle = Box::new(PHandle {
-                    proto_id: id,
-                    connected_count: 0,
-                });
+                let handle = Box::new(PHandle { connected_count: 0 });
                 ProtocolHandle::Callback(handle)
             }
         })

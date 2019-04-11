@@ -387,8 +387,8 @@ where
             }
             ProtocolEvent::Close { id, proto_id } => {
                 debug!("session [{}] proto [{}] closed", self.id, proto_id);
-                let _ = self.sub_streams.remove(&id);
-                let _ = self.proto_streams.remove(&proto_id);
+                self.sub_streams.remove(&id);
+                self.proto_streams.remove(&proto_id);
                 self.event_output(SessionEvent::ProtocolClose {
                     id: self.id,
                     proto_id,

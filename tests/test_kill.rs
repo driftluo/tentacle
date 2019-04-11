@@ -54,27 +54,26 @@ where
 }
 
 struct PHandle {
-    proto_id: ProtocolId,
     connected_count: usize,
     sender: crossbeam_channel::Sender<()>,
 }
 
 impl ServiceProtocol for PHandle {
-    fn init(&mut self, _control: &mut ProtocolContext) {}
+    fn init(&mut self, _context: &mut ProtocolContext) {}
 
-    fn connected(&mut self, control: ProtocolContextMutRef, _version: &str) {
+    fn connected(&mut self, _context: ProtocolContextMutRef, _version: &str) {
         self.connected_count += 1;
-        assert_eq!(self.proto_id, control.session.id);
         assert_eq!(self.sender.send(()), Ok(()));
     }
 
-    fn disconnected(&mut self, _control: ProtocolContextMutRef) {
+    fn disconnected(&mut self, _context: ProtocolContextMutRef) {
         self.connected_count -= 1;
         assert_eq!(self.sender.send(()), Ok(()));
     }
 
-    fn received(&mut self, mut env: ProtocolContextMutRef, data: bytes::Bytes) {
-        env.filter_broadcast(TargetSession::All, self.proto_id, data.to_vec());
+    fn received(&mut self, mut context: ProtocolContextMutRef, data: bytes::Bytes) {
+        let proto_id = context.proto_id;
+        context.filter_broadcast(TargetSession::All, proto_id, data.to_vec());
     }
 }
 
@@ -88,7 +87,6 @@ fn create_meta(id: ProtocolId) -> (ProtocolMeta, crossbeam_channel::Receiver<()>
                 ProtocolHandle::Neither
             } else {
                 let handle = Box::new(PHandle {
-                    proto_id: id,
                     connected_count: 0,
                     sender: sender.clone(),
                 });
