@@ -35,7 +35,7 @@ impl ServiceControl {
     fn send(&mut self, event: ServiceTask) -> Result<(), Error> {
         self.service_task_sender
             .unbounded_send(event)
-            .map_err(|e| e.into())
+            .map_err(Into::into)
     }
 
     /// Get service protocol message, Map(ID, Name), but can't modify

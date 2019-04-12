@@ -180,7 +180,7 @@ impl HandshakeContext<Local> {
                 .config
                 .agreements_proposal
                 .as_ref()
-                .map(|s| s.as_ref())
+                .map(AsRef::as_ref)
                 .unwrap_or(support::DEFAULT_AGREEMENTS_PROPOSITION);
             let theirs = &propose.exchange;
             match support::select_agreement(hashes_ordering, ours, theirs) {
@@ -197,7 +197,7 @@ impl HandshakeContext<Local> {
                 .config
                 .ciphers_proposal
                 .as_ref()
-                .map(|s| s.as_ref())
+                .map(AsRef::as_ref)
                 .unwrap_or(support::DEFAULT_CIPHERS_PROPOSITION);
             let theirs = &propose.ciphers;
             match support::select_cipher(hashes_ordering, ours, theirs) {
@@ -217,7 +217,7 @@ impl HandshakeContext<Local> {
                 .config
                 .digests_proposal
                 .as_ref()
-                .map(|s| s.as_ref())
+                .map(AsRef::as_ref)
                 .unwrap_or(support::DEFAULT_DIGESTS_PROPOSITION);
             let theirs = &propose.hashes;
             match support::select_digest(hashes_ordering, ours, theirs) {
