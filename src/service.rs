@@ -194,7 +194,7 @@ where
         let (listen_future, listen_addr) = self
             .multi_transport
             .listen(address.clone())
-            .map_err::<io::Error, _>(|e| e.into())?;
+            .map_err::<io::Error, _>(Into::into)?;
         let sender = self.session_event_sender.clone();
         let task = listen_future.then(move |result| match result {
             Ok(value) => tokio::spawn(
@@ -249,7 +249,7 @@ where
         let dial_future = self
             .multi_transport
             .dial(address.clone())
-            .map_err::<io::Error, _>(|e| e.into())?;
+            .map_err::<io::Error, _>(Into::into)?;
 
         let sender = self.session_event_sender.clone();
         let task = dial_future.then(|result| match result {

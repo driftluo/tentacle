@@ -389,7 +389,7 @@ mod tests {
             .map_err(|_| ());
 
         let client = TcpStream::connect(&listener_addr)
-            .map_err(|e| e.into())
+            .map_err(Into::into)
             .and_then(move |stream| config_2.handshake(stream))
             .and_then(move |(mut handle, _, _)| {
                 let _ = handle.write_all(data);
