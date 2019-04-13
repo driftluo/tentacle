@@ -227,7 +227,7 @@ where
         self.pending_tasks.push_back(ServiceTask::FutureTask {
             task: Box::new(task),
         });
-        self.state.add();
+        self.state.increase();
         Ok(listen_addr)
     }
 
@@ -283,7 +283,7 @@ where
         self.pending_tasks.push_back(ServiceTask::FutureTask {
             task: Box::new(task),
         });
-        self.state.add();
+        self.state.increase();
         Ok(())
     }
 
@@ -692,7 +692,7 @@ where
         H: AsyncRead + AsyncWrite + Send + 'static,
     {
         if ty.is_outbound() {
-            self.state.minus();
+            self.state.decrease();
         }
         let target = self
             .dial_protocols
@@ -1117,7 +1117,7 @@ where
             }
             SessionEvent::HandshakeFail { ty, error, address } => {
                 if ty.is_outbound() {
-                    self.state.minus();
+                    self.state.decrease();
                     self.dial_protocols.remove(&address);
                     self.handle.handle_error(
                         &mut self.service_context,
@@ -1160,7 +1160,7 @@ where
                 },
             ),
             SessionEvent::DialError { address, error } => {
-                self.state.minus();
+                self.state.decrease();
                 self.dial_protocols.remove(&address);
                 self.handle.handle_error(
                     &mut self.service_context,
@@ -1168,7 +1168,7 @@ where
                 )
             }
             SessionEvent::ListenError { address, error } => {
-                self.state.minus();
+                self.state.decrease();
                 self.handle.handle_error(
                     &mut self.service_context,
                     ServiceError::ListenError { address, error },
@@ -1206,7 +1206,7 @@ where
                     },
                 );
                 self.listens.push((listen_address, incoming));
-                self.state.minus();
+                self.state.decrease();
                 self.update_listens();
                 self.listen_poll();
             }
@@ -1430,11 +1430,15 @@ where
                 proto_id,
             } => self.protocol_close(session_id, proto_id, Source::External),
             ServiceTask::Shutdown => {
-                let ids = self.sessions.keys().cloned().collect::<Vec<SessionId>>();
-                ids.into_iter()
+                self.sessions
+                    .keys()
+                    .cloned()
+                    .collect::<Vec<SessionId>>()
+                    .into_iter()
                     .for_each(|i| self.session_close(i, Source::External));
                 self.state.pre_shutdown();
-                while let Some((address, _)) = self.listens.pop() {
+                while let Some((address, incoming)) = self.listens.pop() {
+                    drop(incoming);
                     self.handle.handle_event(
                         &mut self.service_context,
                         ServiceEvent::ListenClose { address },

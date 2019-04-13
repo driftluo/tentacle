@@ -184,9 +184,9 @@ impl<T> ProtocolHandle<T> {
 /// Service state
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Hash)]
 pub enum State {
-    /// Calculate the number of connection requests that need to be sent externally,
-    /// if run forever, it will default to 1, else it default to 0
+    /// Calculate the number of connection requests that need to be sent externally
     Running(usize),
+    Forever,
     PreShutdown,
 }
 
@@ -194,7 +194,7 @@ impl State {
     /// new
     pub fn new(forever: bool) -> Self {
         if forever {
-            State::Running(1)
+            State::Forever
         } else {
             State::Running(0)
         }
@@ -206,7 +206,7 @@ impl State {
         match self {
             State::Running(num) if num == &0 => true,
             State::PreShutdown => true,
-            State::Running(_) => false,
+            State::Running(_) | State::Forever => false,
         }
     }
 
@@ -218,19 +218,19 @@ impl State {
 
     /// Add one task count
     #[inline]
-    pub fn add(&mut self) {
+    pub fn increase(&mut self) {
         match self {
             State::Running(num) => *num += 1,
-            State::PreShutdown => (),
+            State::PreShutdown | State::Forever => (),
         }
     }
 
     /// Reduce one task count
     #[inline]
-    pub fn minus(&mut self) {
+    pub fn decrease(&mut self) {
         match self {
             State::Running(num) => *num -= 1,
-            State::PreShutdown => (),
+            State::PreShutdown | State::Forever => (),
         }
     }
 }
@@ -240,20 +240,35 @@ mod test {
     use super::State;
 
     #[test]
-    fn test_state() {
-        let mut state = State::new(true);
-        state.add();
-        state.add();
-        assert_eq!(state, State::Running(3));
-        state.minus();
-        state.minus();
-        assert_eq!(state, State::Running(1));
-        state.minus();
+    fn test_state_no_forever() {
+        let mut state = State::new(false);
+        state.increase();
+        state.increase();
+        assert_eq!(state, State::Running(2));
+        state.decrease();
+        state.decrease();
         assert_eq!(state, State::Running(0));
-        state.add();
-        state.add();
-        state.add();
-        state.add();
+        state.increase();
+        state.increase();
+        state.increase();
+        state.increase();
+        state.pre_shutdown();
+        assert_eq!(state, State::PreShutdown);
+    }
+
+    #[test]
+    fn test_state_forever() {
+        let mut state = State::new(true);
+        state.increase();
+        state.increase();
+        assert_eq!(state, State::Forever);
+        state.decrease();
+        state.decrease();
+        assert_eq!(state, State::Forever);
+        state.increase();
+        state.increase();
+        state.increase();
+        state.increase();
         state.pre_shutdown();
         assert_eq!(state, State::PreShutdown);
     }
