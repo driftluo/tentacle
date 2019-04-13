@@ -1273,7 +1273,9 @@ where
                 token,
             } => {
                 // TODO: if not contains should call handle_error let user know
-                if self.service_proto_handles.contains_key(&proto_id) {
+                if self.service_proto_handles.contains_key(&proto_id)
+                    || self.config.event.contains(&proto_id)
+                {
                     let (signal_sender, mut signal_receiver) = oneshot::channel::<()>();
                     let interval_sender =
                         self.service_context.control().service_task_sender.clone();
@@ -1320,6 +1322,7 @@ where
                 if self
                     .session_proto_handles
                     .contains_key(&(session_id, proto_id))
+                    || self.config.event.contains(&proto_id)
                 {
                     let (signal_sender, mut signal_receiver) = oneshot::channel::<()>();
                     let interval_sender =
