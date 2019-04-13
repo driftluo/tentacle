@@ -177,4 +177,15 @@ impl ServiceControl {
             token,
         })
     }
+
+    /// Shutdown service
+    ///
+    /// Order:
+    /// 1. close all listens
+    /// 2. try close all session's protocol stream
+    /// 3. try close all session
+    /// 4. close service
+    pub fn shutdown(&mut self) -> Result<(), Error> {
+        self.send(ServiceTask::Shutdown)
+    }
 }

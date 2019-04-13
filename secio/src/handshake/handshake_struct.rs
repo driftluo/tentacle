@@ -7,6 +7,8 @@ use crate::peer_id::PeerId;
 use flatbuffers::FlatBufferBuilder;
 use flatbuffers_verifier::get_root;
 
+use std::fmt;
+
 #[derive(Clone, Default, PartialEq, Ord, PartialOrd, Eq, Debug)]
 pub struct Propose {
     pub(crate) rand: Vec<u8>,
@@ -107,7 +109,7 @@ impl Exchange {
 }
 
 /// Public Key
-#[derive(Clone, Debug, PartialEq, Ord, PartialOrd, Eq, Hash)]
+#[derive(Clone, PartialEq, Ord, PartialOrd, Eq, Hash)]
 pub enum PublicKey {
     /// Secp256k1
     Secp256k1(Vec<u8>),
@@ -150,6 +152,16 @@ impl PublicKey {
     /// Generate Peer id
     pub fn peer_id(&self) -> PeerId {
         PeerId::from_public_key(self)
+    }
+}
+
+impl fmt::Debug for PublicKey {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "0x")?;
+        for byte in self.inner_ref() {
+            write!(f, "{:02x}", byte)?;
+        }
+        Ok(())
     }
 }
 

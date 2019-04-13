@@ -180,3 +180,81 @@ impl<T> ProtocolHandle<T> {
         self.is_event() || self.is_both()
     }
 }
+
+/// Service state
+#[derive(Copy, Clone, Debug, Eq, PartialEq, Hash)]
+pub enum State {
+    /// Calculate the number of connection requests that need to be sent externally,
+    /// if run forever, it will default to 1, else it default to 0
+    Running(usize),
+    PreShutdown,
+}
+
+impl State {
+    /// new
+    pub fn new(forever: bool) -> Self {
+        if forever {
+            State::Running(1)
+        } else {
+            State::Running(0)
+        }
+    }
+
+    /// Can it be shutdown?
+    #[inline]
+    pub fn is_shutdown(&self) -> bool {
+        match self {
+            State::Running(num) if num == &0 => true,
+            State::PreShutdown => true,
+            State::Running(_) => false,
+        }
+    }
+
+    /// Convert to pre shutdown state
+    #[inline]
+    pub fn pre_shutdown(&mut self) {
+        *self = State::PreShutdown
+    }
+
+    /// Add one task count
+    #[inline]
+    pub fn add(&mut self) {
+        match self {
+            State::Running(num) => *num += 1,
+            State::PreShutdown => (),
+        }
+    }
+
+    /// Reduce one task count
+    #[inline]
+    pub fn minus(&mut self) {
+        match self {
+            State::Running(num) => *num -= 1,
+            State::PreShutdown => (),
+        }
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::State;
+
+    #[test]
+    fn test_state() {
+        let mut state = State::new(true);
+        state.add();
+        state.add();
+        assert_eq!(state, State::Running(3));
+        state.minus();
+        state.minus();
+        assert_eq!(state, State::Running(1));
+        state.minus();
+        assert_eq!(state, State::Running(0));
+        state.add();
+        state.add();
+        state.add();
+        state.add();
+        state.pre_shutdown();
+        assert_eq!(state, State::PreShutdown);
+    }
+}

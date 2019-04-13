@@ -223,6 +223,19 @@ impl ServiceContext {
         }
     }
 
+    /// Shutdown service.
+    ///
+    /// Order:
+    /// 1. close all listens
+    /// 2. try close all session's protocol stream
+    /// 3. try close all session
+    /// 4. close service
+    pub fn shutdown(&mut self) {
+        if self.inner.shutdown().is_err() {
+            warn!("Service is abnormally closed")
+        }
+    }
+
     pub(crate) fn clone_self(&self) -> Self {
         ServiceContext {
             inner: self.inner.clone(),
