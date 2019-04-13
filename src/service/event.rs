@@ -240,6 +240,8 @@ pub(crate) enum ServiceTask {
         /// Listen address
         address: Multiaddr,
     },
+    /// Shutdown service
+    Shutdown,
 }
 
 impl fmt::Debug for ServiceTask {
@@ -305,6 +307,7 @@ impl fmt::Debug for ServiceTask {
                 session_id,
                 proto_id,
             } => write!(f, "Close session [{}] proto [{}]", session_id, proto_id),
+            Shutdown => write!(f, "Try close service"),
         }
     }
 }

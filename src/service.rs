@@ -21,7 +21,7 @@ use crate::{
     protocol_select::ProtocolInfo,
     secio::{handshake::Config, PublicKey, SecioKeyPair},
     service::{
-        config::ServiceConfig,
+        config::{ServiceConfig, State},
         event::ServiceTask,
         future_task::{BoxedFutureTask, FutureTaskManager},
     },
@@ -66,9 +66,8 @@ pub struct Service<T> {
 
     dial_protocols: HashMap<Multiaddr, DialProtocol>,
     config: ServiceConfig,
-    /// Calculate the number of connection requests that need to be sent externally,
-    /// if run forever, it will default to 1, else it default to 0
-    task_count: usize,
+    /// service state
+    state: State,
 
     next_session: SessionId,
 
@@ -153,7 +152,7 @@ where
             listens: Vec::new(),
             dial_protocols: HashMap::default(),
             config,
-            task_count: if forever { 1 } else { 0 },
+            state: State::new(forever),
             next_session: 0,
             write_buf: VecDeque::default(),
             read_service_buf: VecDeque::default(),
@@ -228,7 +227,7 @@ where
         self.pending_tasks.push_back(ServiceTask::FutureTask {
             task: Box::new(task),
         });
-        self.task_count += 1;
+        self.state.increase();
         Ok(listen_addr)
     }
 
@@ -284,7 +283,7 @@ where
         self.pending_tasks.push_back(ServiceTask::FutureTask {
             task: Box::new(task),
         });
-        self.task_count += 1;
+        self.state.increase();
         Ok(())
     }
 
@@ -693,7 +692,7 @@ where
         H: AsyncRead + AsyncWrite + Send + 'static,
     {
         if ty.is_outbound() {
-            self.task_count -= 1;
+            self.state.decrease();
         }
         let target = self
             .dial_protocols
@@ -1118,7 +1117,7 @@ where
             }
             SessionEvent::HandshakeFail { ty, error, address } => {
                 if ty.is_outbound() {
-                    self.task_count -= 1;
+                    self.state.decrease();
                     self.dial_protocols.remove(&address);
                     self.handle.handle_error(
                         &mut self.service_context,
@@ -1161,7 +1160,7 @@ where
                 },
             ),
             SessionEvent::DialError { address, error } => {
-                self.task_count -= 1;
+                self.state.decrease();
                 self.dial_protocols.remove(&address);
                 self.handle.handle_error(
                     &mut self.service_context,
@@ -1169,7 +1168,7 @@ where
                 )
             }
             SessionEvent::ListenError { address, error } => {
-                self.task_count -= 1;
+                self.state.decrease();
                 self.handle.handle_error(
                     &mut self.service_context,
                     ServiceError::ListenError { address, error },
@@ -1207,7 +1206,7 @@ where
                     },
                 );
                 self.listens.push((listen_address, incoming));
-                self.task_count -= 1;
+                self.state.decrease();
                 self.update_listens();
                 self.listen_poll();
             }
@@ -1430,6 +1429,23 @@ where
                 session_id,
                 proto_id,
             } => self.protocol_close(session_id, proto_id, Source::External),
+            ServiceTask::Shutdown => {
+                self.sessions
+                    .keys()
+                    .cloned()
+                    .collect::<Vec<SessionId>>()
+                    .into_iter()
+                    .for_each(|i| self.session_close(i, Source::External));
+                self.state.pre_shutdown();
+                while let Some((address, incoming)) = self.listens.pop() {
+                    drop(incoming);
+                    self.handle.handle_event(
+                        &mut self.service_context,
+                        ServiceEvent::ListenClose { address },
+                    )
+                }
+                self.pending_tasks.clear();
+            }
         }
     }
 
@@ -1492,7 +1508,7 @@ where
 
     fn poll(&mut self) -> Poll<Option<Self::Item>, Self::Error> {
         if self.listens.is_empty()
-            && self.task_count == 0
+            && self.state.is_shutdown()
             && self.sessions.is_empty()
             && self.pending_tasks.is_empty()
         {
@@ -1542,16 +1558,16 @@ where
 
         // Double check service state
         if self.listens.is_empty()
-            && self.task_count == 0
+            && self.state.is_shutdown()
             && self.sessions.is_empty()
             && self.pending_tasks.is_empty()
         {
             return Ok(Async::Ready(None));
         }
         debug!(
-            "listens count: {}, task_count: {}, sessions count: {}, pending task: {}",
+            "listens count: {}, state: {:?}, sessions count: {}, pending task: {}",
             self.listens.len(),
-            self.task_count,
+            self.state,
             self.sessions.len(),
             self.pending_tasks.len(),
         );

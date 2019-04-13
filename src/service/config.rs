@@ -180,3 +180,96 @@ impl<T> ProtocolHandle<T> {
         self.is_event() || self.is_both()
     }
 }
+
+/// Service state
+#[derive(Copy, Clone, Debug, Eq, PartialEq, Hash)]
+pub enum State {
+    /// Calculate the number of connection requests that need to be sent externally
+    Running(usize),
+    Forever,
+    PreShutdown,
+}
+
+impl State {
+    /// new
+    pub fn new(forever: bool) -> Self {
+        if forever {
+            State::Forever
+        } else {
+            State::Running(0)
+        }
+    }
+
+    /// Can it be shutdown?
+    #[inline]
+    pub fn is_shutdown(&self) -> bool {
+        match self {
+            State::Running(num) if num == &0 => true,
+            State::PreShutdown => true,
+            State::Running(_) | State::Forever => false,
+        }
+    }
+
+    /// Convert to pre shutdown state
+    #[inline]
+    pub fn pre_shutdown(&mut self) {
+        *self = State::PreShutdown
+    }
+
+    /// Add one task count
+    #[inline]
+    pub fn increase(&mut self) {
+        match self {
+            State::Running(num) => *num += 1,
+            State::PreShutdown | State::Forever => (),
+        }
+    }
+
+    /// Reduce one task count
+    #[inline]
+    pub fn decrease(&mut self) {
+        match self {
+            State::Running(num) => *num -= 1,
+            State::PreShutdown | State::Forever => (),
+        }
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::State;
+
+    #[test]
+    fn test_state_no_forever() {
+        let mut state = State::new(false);
+        state.increase();
+        state.increase();
+        assert_eq!(state, State::Running(2));
+        state.decrease();
+        state.decrease();
+        assert_eq!(state, State::Running(0));
+        state.increase();
+        state.increase();
+        state.increase();
+        state.increase();
+        state.pre_shutdown();
+        assert_eq!(state, State::PreShutdown);
+    }
+
+    #[test]
+    fn test_state_forever() {
+        let mut state = State::new(true);
+        state.increase();
+        state.increase();
+        assert_eq!(state, State::Forever);
+        state.decrease();
+        state.decrease();
+        assert_eq!(state, State::Forever);
+        state.increase();
+        state.increase();
+        state.increase();
+        state.increase();
+        state.pre_shutdown();
+        assert_eq!(state, State::PreShutdown);
+    }
+}
