@@ -18,7 +18,7 @@ fn main() {
         local_listen_addrs: Vec::new(),
     };
     let protocol = MetaBuilder::default()
-        .id(1)
+        .id(1.into())
         .service_handle(move || {
             ProtocolHandle::Callback(Box::new(IdentifyProtocol::new(callback.clone())))
         })

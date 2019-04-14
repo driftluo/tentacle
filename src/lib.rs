@@ -48,9 +48,56 @@ pub(crate) mod transports;
 /// Some useful functions
 pub mod utils;
 
+use std::{fmt, ops::AddAssign};
+
 /// Index of sub/protocol stream
-pub type StreamId = usize;
+type StreamId = usize;
 /// Protocol id
-pub type ProtocolId = usize;
+#[derive(Debug, Clone, Copy, Hash, Ord, PartialOrd, Eq, PartialEq, Default)]
+pub struct ProtocolId(usize);
+
+impl ProtocolId {
+    /// New a protocol id
+    pub fn new(id: usize) -> Self {
+        ProtocolId(id)
+    }
+
+    /// Get inner value
+    pub fn value(self) -> usize {
+        self.0
+    }
+}
+
+impl fmt::Display for ProtocolId {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "ProtocolId({})", self.0)
+    }
+}
+
+impl From<usize> for ProtocolId {
+    fn from(id: usize) -> Self {
+        ProtocolId::new(id)
+    }
+}
+
 /// Index of session
-pub type SessionId = usize;
+#[derive(Debug, Clone, Copy, Hash, Ord, PartialOrd, Eq, PartialEq, Default)]
+pub struct SessionId(usize);
+
+impl fmt::Display for SessionId {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "SessionId({})", self.0)
+    }
+}
+
+impl AddAssign<usize> for SessionId {
+    fn add_assign(&mut self, rhs: usize) {
+        self.0 += rhs
+    }
+}
+
+impl From<usize> for SessionId {
+    fn from(id: usize) -> Self {
+        SessionId(id)
+    }
+}

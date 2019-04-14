@@ -237,8 +237,8 @@ impl MetaBuilder {
 impl Default for MetaBuilder {
     fn default() -> Self {
         MetaBuilder {
-            id: 0,
-            name: Box::new(|id| format!("/p2p/{}", id)),
+            id: ProtocolId::new(0),
+            name: Box::new(|id| format!("/p2p/{}", id.value())),
             support_versions: vec!["0.0.1".to_owned()],
             codec: Box::new(|| Box::new(LengthDelimitedCodec::new())),
             service_handle: Box::new(|| ProtocolHandle::Neither),

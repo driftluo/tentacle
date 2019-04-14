@@ -37,7 +37,7 @@ impl ServiceProtocol for PHandle {
     fn init(&mut self, _context: &mut ProtocolContext) {}
 
     fn connected(&mut self, mut context: ProtocolContextMutRef, _version: &str) {
-        if context.session.ty.is_inbound() && context.proto_id == 1 {
+        if context.session.ty.is_inbound() && context.proto_id == 1.into() {
             self.count += 1;
             if self.count >= 4 {
                 let proto_id = context.proto_id;
@@ -67,27 +67,52 @@ fn create_meta(id: ProtocolId) -> ProtocolMeta {
 fn test_close(secio: bool) {
     let mut service_1 = create(
         secio,
-        vec![create_meta(0), create_meta(1), create_meta(2)].into_iter(),
+        vec![
+            create_meta(0.into()),
+            create_meta(1.into()),
+            create_meta(2.into()),
+        ]
+        .into_iter(),
         (),
     );
     let mut service_2 = create(
         secio,
-        vec![create_meta(0), create_meta(1), create_meta(2)].into_iter(),
+        vec![
+            create_meta(0.into()),
+            create_meta(1.into()),
+            create_meta(2.into()),
+        ]
+        .into_iter(),
         (),
     );
     let mut service_3 = create(
         secio,
-        vec![create_meta(0), create_meta(1), create_meta(2)].into_iter(),
+        vec![
+            create_meta(0.into()),
+            create_meta(1.into()),
+            create_meta(2.into()),
+        ]
+        .into_iter(),
         (),
     );
     let mut service_4 = create(
         secio,
-        vec![create_meta(0), create_meta(1), create_meta(2)].into_iter(),
+        vec![
+            create_meta(0.into()),
+            create_meta(1.into()),
+            create_meta(2.into()),
+        ]
+        .into_iter(),
         (),
     );
     let mut service_5 = create(
         secio,
-        vec![create_meta(0), create_meta(1), create_meta(2)].into_iter(),
+        vec![
+            create_meta(0.into()),
+            create_meta(1.into()),
+            create_meta(2.into()),
+        ]
+        .into_iter(),
         (),
     );
 
