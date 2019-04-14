@@ -36,7 +36,7 @@ struct PHandle {
 impl ServiceProtocol for PHandle {
     fn init(&mut self, _context: &mut ProtocolContext) {}
 
-    fn connected(&mut self, mut context: ProtocolContextMutRef, _version: &str) {
+    fn connected(&mut self, context: ProtocolContextMutRef, _version: &str) {
         if context.session.ty.is_inbound() && context.proto_id == 1.into() {
             self.count += 1;
             if self.count >= 4 {

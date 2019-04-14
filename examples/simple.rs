@@ -49,7 +49,7 @@ impl ServiceProtocol for PHandle {
         }
     }
 
-    fn connected(&mut self, mut context: ProtocolContextMutRef, version: &str) {
+    fn connected(&mut self, context: ProtocolContextMutRef, version: &str) {
         let session = context.session;
         self.connected_session_ids.push(session.id);
         info!(
@@ -67,7 +67,7 @@ impl ServiceProtocol for PHandle {
         let (sender, mut receiver) = oneshot();
         self.clear_handle.insert(session.id, sender);
         let session_id = session.id;
-        let mut interval_sender = context.control().clone();
+        let interval_sender = context.control().clone();
         let interval_task = Interval::new(Instant::now(), Duration::from_secs(5))
             .for_each(move |_| {
                 let _ = interval_sender.send_message_to(
@@ -132,7 +132,7 @@ impl ServiceHandle for SHandle {
     fn handle_event(&mut self, context: &mut ServiceContext, event: ServiceEvent) {
         info!("service event: {:?}", event);
         if let ServiceEvent::SessionOpen { .. } = event {
-            let mut delay_sender = context.control().clone();
+            let delay_sender = context.control().clone();
 
             let delay_task = Delay::new(Instant::now() + Duration::from_secs(3))
                 .and_then(move |_| {

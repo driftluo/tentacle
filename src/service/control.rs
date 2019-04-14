@@ -32,7 +32,7 @@ impl ServiceControl {
 
     /// Send raw event
     #[inline]
-    fn send(&mut self, event: ServiceTask) -> Result<(), Error> {
+    fn send(&self, event: ServiceTask) -> Result<(), Error> {
         self.service_task_sender
             .unbounded_send(event)
             .map_err(Into::into)
@@ -46,26 +46,26 @@ impl ServiceControl {
 
     /// Create a new listener
     #[inline]
-    pub fn listen(&mut self, address: Multiaddr) -> Result<(), Error> {
+    pub fn listen(&self, address: Multiaddr) -> Result<(), Error> {
         self.send(ServiceTask::Listen { address })
     }
 
     /// Initiate a connection request to address
     #[inline]
-    pub fn dial(&mut self, address: Multiaddr, target: DialProtocol) -> Result<(), Error> {
+    pub fn dial(&self, address: Multiaddr, target: DialProtocol) -> Result<(), Error> {
         self.send(ServiceTask::Dial { address, target })
     }
 
     /// Disconnect a connection
     #[inline]
-    pub fn disconnect(&mut self, session_id: SessionId) -> Result<(), Error> {
+    pub fn disconnect(&self, session_id: SessionId) -> Result<(), Error> {
         self.send(ServiceTask::Disconnect { session_id })
     }
 
     /// Send message
     #[inline]
     pub fn send_message_to(
-        &mut self,
+        &self,
         session_id: SessionId,
         proto_id: ProtocolId,
         data: Vec<u8>,
@@ -76,7 +76,7 @@ impl ServiceControl {
     /// Send data to the specified protocol for the specified sessions.
     #[inline]
     pub fn filter_broadcast(
-        &mut self,
+        &self,
         target: TargetSession,
         proto_id: ProtocolId,
         data: Vec<u8>,
@@ -90,7 +90,7 @@ impl ServiceControl {
 
     /// Send a future task
     #[inline]
-    pub fn future_task<T>(&mut self, task: T) -> Result<(), Error>
+    pub fn future_task<T>(&self, task: T) -> Result<(), Error>
     where
         T: Future<Item = (), Error = ()> + 'static + Send,
     {
@@ -103,11 +103,7 @@ impl ServiceControl {
     ///
     /// If the protocol has been open, do nothing
     #[inline]
-    pub fn open_protocol(
-        &mut self,
-        session_id: SessionId,
-        proto_id: ProtocolId,
-    ) -> Result<(), Error> {
+    pub fn open_protocol(&self, session_id: SessionId, proto_id: ProtocolId) -> Result<(), Error> {
         self.send(ServiceTask::ProtocolOpen {
             session_id,
             proto_id,
@@ -118,11 +114,7 @@ impl ServiceControl {
     ///
     /// If the protocol has been closed, do nothing
     #[inline]
-    pub fn close_protocol(
-        &mut self,
-        session_id: SessionId,
-        proto_id: ProtocolId,
-    ) -> Result<(), Error> {
+    pub fn close_protocol(&self, session_id: SessionId, proto_id: ProtocolId) -> Result<(), Error> {
         self.send(ServiceTask::ProtocolClose {
             session_id,
             proto_id,
@@ -131,7 +123,7 @@ impl ServiceControl {
 
     /// Set a service notify token
     pub fn set_service_notify(
-        &mut self,
+        &self,
         proto_id: ProtocolId,
         interval: Duration,
         token: u64,
@@ -144,13 +136,13 @@ impl ServiceControl {
     }
 
     /// remove a service notify token
-    pub fn remove_service_notify(&mut self, proto_id: ProtocolId, token: u64) -> Result<(), Error> {
+    pub fn remove_service_notify(&self, proto_id: ProtocolId, token: u64) -> Result<(), Error> {
         self.send(ServiceTask::RemoveProtocolNotify { proto_id, token })
     }
 
     /// Set a session notify token
     pub fn set_session_notify(
-        &mut self,
+        &self,
         session_id: SessionId,
         proto_id: ProtocolId,
         interval: Duration,
@@ -166,7 +158,7 @@ impl ServiceControl {
 
     /// Remove a session notify token
     pub fn remove_session_notify(
-        &mut self,
+        &self,
         session_id: SessionId,
         proto_id: ProtocolId,
         token: u64,
@@ -185,7 +177,7 @@ impl ServiceControl {
     /// 2. try close all session's protocol stream
     /// 3. try close all session
     /// 4. close service
-    pub fn shutdown(&mut self) -> Result<(), Error> {
+    pub fn shutdown(&self) -> Result<(), Error> {
         self.send(ServiceTask::Shutdown)
     }
 }

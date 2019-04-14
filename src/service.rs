@@ -293,7 +293,7 @@ where
     }
 
     /// Get service control, control can send tasks externally to the runtime inside
-    pub fn control(&mut self) -> &mut ServiceControl {
+    pub fn control(&self) -> &ServiceControl {
         self.service_context.control()
     }
 

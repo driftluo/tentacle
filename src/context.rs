@@ -64,7 +64,7 @@ impl ServiceContext {
 
     /// Create a new listener
     #[inline]
-    pub fn listen(&mut self, address: Multiaddr) {
+    pub fn listen(&self, address: Multiaddr) {
         if self.inner.listen(address).is_err() {
             warn!("Service is abnormally closed")
         }
@@ -72,7 +72,7 @@ impl ServiceContext {
 
     /// Initiate a connection request to address
     #[inline]
-    pub fn dial(&mut self, address: Multiaddr, target: DialProtocol) {
+    pub fn dial(&self, address: Multiaddr, target: DialProtocol) {
         if self.inner.dial(address, target).is_err() {
             warn!("Service is abnormally closed")
         }
@@ -80,7 +80,7 @@ impl ServiceContext {
 
     /// Disconnect a connection
     #[inline]
-    pub fn disconnect(&mut self, session_id: SessionId) {
+    pub fn disconnect(&self, session_id: SessionId) {
         if self.inner.disconnect(session_id).is_err() {
             warn!("Service is abnormally closed")
         }
@@ -88,7 +88,7 @@ impl ServiceContext {
 
     /// Send message
     #[inline]
-    pub fn send_message_to(&mut self, session_id: SessionId, proto_id: ProtocolId, data: Vec<u8>) {
+    pub fn send_message_to(&self, session_id: SessionId, proto_id: ProtocolId, data: Vec<u8>) {
         if self
             .inner
             .send_message_to(session_id, proto_id, data)
@@ -101,7 +101,7 @@ impl ServiceContext {
     /// Send data to the specified protocol for the specified sessions.
     #[inline]
     pub fn filter_broadcast(
-        &mut self,
+        &self,
         session_ids: TargetSession,
         proto_id: ProtocolId,
         data: Vec<u8>,
@@ -117,7 +117,7 @@ impl ServiceContext {
 
     /// Send a future task
     #[inline]
-    pub fn future_task<T>(&mut self, task: T)
+    pub fn future_task<T>(&self, task: T)
     where
         T: Future<Item = (), Error = ()> + 'static + Send,
     {
@@ -130,7 +130,7 @@ impl ServiceContext {
     ///
     /// If the protocol has been open, do nothing
     #[inline]
-    pub fn open_protocol(&mut self, session_id: SessionId, proto_id: ProtocolId) {
+    pub fn open_protocol(&self, session_id: SessionId, proto_id: ProtocolId) {
         if self.inner.open_protocol(session_id, proto_id).is_err() {
             warn!("Service is abnormally closed")
         }
@@ -140,7 +140,7 @@ impl ServiceContext {
     ///
     /// If the protocol has been closed, do nothing
     #[inline]
-    pub fn close_protocol(&mut self, session_id: SessionId, proto_id: ProtocolId) {
+    pub fn close_protocol(&self, session_id: SessionId, proto_id: ProtocolId) {
         if self.inner.close_protocol(session_id, proto_id).is_err() {
             warn!("Service is abnormally closed")
         }
@@ -148,8 +148,8 @@ impl ServiceContext {
 
     /// Get the internal channel sender side handle
     #[inline]
-    pub fn control(&mut self) -> &mut ServiceControl {
-        &mut self.inner
+    pub fn control(&self) -> &ServiceControl {
+        &self.inner
     }
 
     /// Get service protocol message, Map(ID, Name), but can't modify
@@ -177,7 +177,7 @@ impl ServiceContext {
     }
 
     /// Set a service notify token
-    pub fn set_service_notify(&mut self, proto_id: ProtocolId, interval: Duration, token: u64) {
+    pub fn set_service_notify(&self, proto_id: ProtocolId, interval: Duration, token: u64) {
         if self
             .inner
             .set_service_notify(proto_id, interval, token)
@@ -189,7 +189,7 @@ impl ServiceContext {
 
     /// Set a session notify token
     pub fn set_session_notify(
-        &mut self,
+        &self,
         session_id: SessionId,
         proto_id: ProtocolId,
         interval: Duration,
@@ -205,19 +205,14 @@ impl ServiceContext {
     }
 
     /// Remove a service timer by a token
-    pub fn remove_service_notify(&mut self, proto_id: ProtocolId, token: u64) {
+    pub fn remove_service_notify(&self, proto_id: ProtocolId, token: u64) {
         if self.inner.remove_service_notify(proto_id, token).is_err() {
             warn!("Service is abnormally closed")
         }
     }
 
     /// Remove a session timer by a token
-    pub fn remove_session_notify(
-        &mut self,
-        session_id: SessionId,
-        proto_id: ProtocolId,
-        token: u64,
-    ) {
+    pub fn remove_session_notify(&self, session_id: SessionId, proto_id: ProtocolId, token: u64) {
         if self
             .inner
             .remove_session_notify(session_id, proto_id, token)
@@ -234,7 +229,7 @@ impl ServiceContext {
     /// 2. try close all session's protocol stream
     /// 3. try close all session
     /// 4. close service
-    pub fn shutdown(&mut self) {
+    pub fn shutdown(&self) {
         if self.inner.shutdown().is_err() {
             warn!("Service is abnormally closed")
         }
@@ -286,7 +281,7 @@ pub struct ProtocolContextMutRef<'a> {
 impl<'a> ProtocolContextMutRef<'a> {
     /// Send message to current protocol current session
     #[inline]
-    pub fn send_message(&mut self, data: Vec<u8>) {
+    pub fn send_message(&self, data: Vec<u8>) {
         let proto_id = self.proto_id();
         self.inner.send_message_to(self.session.id, proto_id, data)
     }
