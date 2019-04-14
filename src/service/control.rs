@@ -64,7 +64,7 @@ impl ServiceControl {
 
     /// Send message
     #[inline]
-    pub fn send_message(
+    pub fn send_message_to(
         &mut self,
         session_id: SessionId,
         proto_id: ProtocolId,

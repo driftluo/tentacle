@@ -88,8 +88,12 @@ impl ServiceContext {
 
     /// Send message
     #[inline]
-    pub fn send_message(&mut self, session_id: SessionId, proto_id: ProtocolId, data: Vec<u8>) {
-        if self.inner.send_message(session_id, proto_id, data).is_err() {
+    pub fn send_message_to(&mut self, session_id: SessionId, proto_id: ProtocolId, data: Vec<u8>) {
+        if self
+            .inner
+            .send_message_to(session_id, proto_id, data)
+            .is_err()
+        {
             warn!("Service is abnormally closed")
         }
     }
@@ -266,8 +270,7 @@ impl ProtocolContext {
         session: &'a SessionContext,
     ) -> ProtocolContextMutRef<'a> {
         ProtocolContextMutRef {
-            inner: &mut self.inner,
-            proto_id: self.proto_id,
+            inner: self,
             session,
         }
     }
@@ -275,9 +278,7 @@ impl ProtocolContext {
 
 /// Protocol handle context contain session context
 pub struct ProtocolContextMutRef<'a> {
-    inner: &'a mut ServiceContext,
-    /// Protocol id
-    pub proto_id: ProtocolId,
+    inner: &'a mut ProtocolContext,
     /// Session context
     pub session: &'a SessionContext,
 }
@@ -286,8 +287,14 @@ impl<'a> ProtocolContextMutRef<'a> {
     /// Send message to current protocol current session
     #[inline]
     pub fn send_message(&mut self, data: Vec<u8>) {
-        self.inner
-            .send_message(self.session.id, self.proto_id, data)
+        let proto_id = self.proto_id();
+        self.inner.send_message_to(self.session.id, proto_id, data)
+    }
+
+    /// Protocol id
+    #[inline]
+    pub fn proto_id(&self) -> ProtocolId {
+        self.inner.proto_id
     }
 }
 
@@ -308,7 +315,7 @@ impl DerefMut for ProtocolContext {
 }
 
 impl<'a> Deref for ProtocolContextMutRef<'a> {
-    type Target = ServiceContext;
+    type Target = ProtocolContext;
 
     #[inline]
     fn deref(&self) -> &Self::Target {

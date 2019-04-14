@@ -70,7 +70,7 @@ impl ServiceProtocol for PHandle {
         let mut interval_sender = context.control().clone();
         let interval_task = Interval::new(Instant::now(), Duration::from_secs(5))
             .for_each(move |_| {
-                let _ = interval_sender.send_message(
+                let _ = interval_sender.send_message_to(
                     session_id,
                     1.into(),
                     b"I am a interval message".to_vec(),
