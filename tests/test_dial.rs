@@ -150,7 +150,7 @@ fn create_meta(id: ProtocolId) -> (ProtocolMeta, crossbeam_channel::Receiver<usi
     let meta = MetaBuilder::new()
         .id(id)
         .service_handle(move || {
-            if id == 0 {
+            if id == 0.into() {
                 ProtocolHandle::Neither
             } else {
                 let handle = Box::new(PHandle {
@@ -184,7 +184,7 @@ fn create_shandle(
             Box::new(SHandle {
                 sender,
                 secio,
-                session_id: 0,
+                session_id: 0.into(),
                 kind: SessionType::Inbound,
             }),
             receiver,
@@ -213,8 +213,8 @@ fn check_dial_errors(
 }
 
 fn test_repeated_dial(secio: bool) {
-    let (meta_1, receiver_1) = create_meta(1);
-    let (meta_2, receiver_2) = create_meta(1);
+    let (meta_1, receiver_1) = create_meta(1.into());
+    let (meta_2, receiver_2) = create_meta(1.into());
     let (shandle, error_receiver_1) = create_shandle(secio, false);
 
     let mut service = create(secio, meta_1, shandle);
@@ -249,7 +249,7 @@ fn test_repeated_dial(secio: bool) {
 }
 
 fn test_dial_with_no_notify(secio: bool) {
-    let (meta, _receiver) = create_meta(0);
+    let (meta, _receiver) = create_meta(0.into());
     let (shandle, error_receiver) = create_shandle(secio, true);
     let mut service = create(secio, meta, shandle);
     let mut control = service.control().clone();

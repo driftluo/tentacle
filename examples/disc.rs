@@ -19,7 +19,7 @@ use discovery::{AddressManager, Discovery, DiscoveryProtocol, MisbehaveResult, M
 
 fn main() {
     env_logger::init();
-    let meta = create_meta(1, 0);
+    let meta = create_meta(1.into(), 0);
     let mut service = ServiceBuilder::default()
         .insert_protocol(meta)
         .forever(true)
@@ -46,7 +46,7 @@ fn create_meta(id: ProtocolId, start: u16) -> ProtocolMeta {
         .map(|port| format!("/ip4/127.0.0.1/tcp/{}", port).parse().unwrap())
         .collect();
     let mut peers = FnvHashMap::default();
-    peers.insert(0, (100, addrs));
+    peers.insert(0.into(), (100, addrs));
     let addr_mgr = SimpleAddressManager { peers };
     MetaBuilder::default()
         .id(id)
@@ -75,10 +75,10 @@ pub struct SimpleAddressManager {
 }
 
 impl AddressManager for SimpleAddressManager {
-    fn add_new_addr(&mut self, _session_id: SessionId, addr: Multiaddr) {
+    fn add_new_addr(&mut self, session_id: SessionId, addr: Multiaddr) {
         let (_, addrs) = self
             .peers
-            .entry(0)
+            .entry(session_id)
             .or_insert_with(|| (100, HashSet::default()));
         addrs.insert(addr);
     }
@@ -89,8 +89,11 @@ impl AddressManager for SimpleAddressManager {
         }
     }
 
-    fn misbehave(&mut self, _session_id: SessionId, _ty: Misbehavior) -> MisbehaveResult {
-        let (score, _) = self.peers.entry(0).or_insert((100, HashSet::default()));
+    fn misbehave(&mut self, session_id: SessionId, _ty: Misbehavior) -> MisbehaveResult {
+        let (score, _) = self
+            .peers
+            .entry(session_id)
+            .or_insert((100, HashSet::default()));
         *score -= 20;
         if *score < 0 {
             MisbehaveResult::Disconnect

@@ -40,11 +40,11 @@ impl ServiceProtocol for PHandle {
     }
 }
 
-fn create_meta(id: ProtocolId) -> ProtocolMeta {
+fn create_meta(id: impl Into<ProtocolId> + Copy + Send + 'static) -> ProtocolMeta {
     MetaBuilder::new()
-        .id(id)
+        .id(id.into())
         .service_handle(move || {
-            if id == 0 {
+            if id.into() == 0.into() {
                 ProtocolHandle::Neither
             } else {
                 let handle = Box::new(PHandle { connected_count: 0 });
@@ -67,7 +67,7 @@ fn test_disconnect(secio: bool) {
     let handle = thread::spawn(|| tokio::run(service.for_each(|_| Ok(()))));
     thread::sleep(Duration::from_secs(5));
 
-    control.disconnect(1).unwrap();
+    control.disconnect(1.into()).unwrap();
     handle.join().expect("test fail");
 }
 

@@ -44,8 +44,8 @@ struct PHandle {
 
 impl ServiceProtocol for PHandle {
     fn init(&mut self, context: &mut ProtocolContext) {
-        if context.proto_id == 0 {
-            context.set_service_notify(0, Duration::from_secs(5), 3);
+        if context.proto_id == 0.into() {
+            context.set_service_notify(0.into(), Duration::from_secs(5), 3);
         }
     }
 
@@ -58,7 +58,7 @@ impl ServiceProtocol for PHandle {
         );
         info!("connected sessions are: {:?}", self.connected_session_ids);
 
-        if context.proto_id != 1 {
+        if context.proto_id != 1.into() {
             return;
         }
 
@@ -72,7 +72,7 @@ impl ServiceProtocol for PHandle {
             .for_each(move |_| {
                 let _ = interval_sender.send_message(
                     session_id,
-                    1,
+                    1.into(),
                     b"I am a interval message".to_vec(),
                 );
                 if let Ok(Async::Ready(_)) = receiver.poll() {
@@ -138,7 +138,7 @@ impl ServiceHandle for SHandle {
                 .and_then(move |_| {
                     let _ = delay_sender.filter_broadcast(
                         TargetSession::All,
-                        0,
+                        0.into(),
                         b"I am a delayed message".to_vec(),
                     );
                     Ok(())
@@ -164,8 +164,8 @@ fn main() {
 
 fn create_server() -> Service<SHandle> {
     ServiceBuilder::default()
-        .insert_protocol(create_meta(0))
-        .insert_protocol(create_meta(1))
+        .insert_protocol(create_meta(0.into()))
+        .insert_protocol(create_meta(1.into()))
         .key_pair(SecioKeyPair::secp256k1_generated())
         .build(SHandle)
 }
@@ -177,9 +177,9 @@ fn create_server() -> Service<SHandle> {
 /// Because server only supports 0,1
 fn create_client() -> Service<SHandle> {
     ServiceBuilder::default()
-        .insert_protocol(create_meta(0))
-        .insert_protocol(create_meta(1))
-        .insert_protocol(create_meta(2))
+        .insert_protocol(create_meta(0.into()))
+        .insert_protocol(create_meta(1.into()))
+        .insert_protocol(create_meta(2.into()))
         .key_pair(SecioKeyPair::secp256k1_generated())
         .build(SHandle)
 }

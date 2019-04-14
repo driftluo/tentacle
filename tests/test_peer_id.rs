@@ -71,7 +71,7 @@ fn create_meta(id: ProtocolId) -> ProtocolMeta {
     MetaBuilder::new()
         .id(id)
         .service_handle(move || {
-            if id == 0 {
+            if id == 0.into() {
                 ProtocolHandle::Neither
             } else {
                 let handle = Box::new(PHandle);
@@ -82,7 +82,7 @@ fn create_meta(id: ProtocolId) -> ProtocolMeta {
 }
 
 fn test_peer_id(fail: bool) {
-    let meta = create_meta(1);
+    let meta = create_meta(1.into());
     let key = SecioKeyPair::secp256k1_generated();
     let mut service = create(key.clone(), meta, ());
 
@@ -92,7 +92,7 @@ fn test_peer_id(fail: bool) {
     thread::spawn(|| tokio::run(service.for_each(|_| Ok(()))));
 
     let (shandle, error_receiver) = create_shandle();
-    let meta = create_meta(1);
+    let meta = create_meta(1.into());
     let mut service = create(SecioKeyPair::secp256k1_generated(), meta, shandle);
     let mut control = service.control().clone();
     thread::spawn(|| tokio::run(service.for_each(|_| Ok(()))));

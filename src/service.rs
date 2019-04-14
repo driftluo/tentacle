@@ -153,7 +153,7 @@ where
             dial_protocols: HashMap::default(),
             config,
             state: State::new(forever),
-            next_session: 0,
+            next_session: SessionId::default(),
             write_buf: VecDeque::default(),
             read_service_buf: VecDeque::default(),
             read_session_buf: VecDeque::default(),

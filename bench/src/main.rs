@@ -44,7 +44,6 @@ where
 }
 
 struct PHandle {
-    proto_id: ProtocolId,
     connected_count: usize,
     sender: crossbeam_channel::Sender<Notify>,
 }
@@ -52,9 +51,8 @@ struct PHandle {
 impl ServiceProtocol for PHandle {
     fn init(&mut self, _control: &mut ProtocolContext) {}
 
-    fn connected(&mut self, control: ProtocolContextMutRef, _version: &str) {
+    fn connected(&mut self, _control: ProtocolContextMutRef, _version: &str) {
         self.connected_count += 1;
-        assert_eq!(self.proto_id, control.session.id);
         let _ = self.sender.send(Notify::Connected);
     }
 
@@ -80,11 +78,10 @@ fn create_meta(id: ProtocolId) -> (ProtocolMeta, crossbeam_channel::Receiver<Not
             )
         })
         .service_handle(move || {
-            if id == 0 {
+            if id == ProtocolId::default() {
                 ProtocolHandle::Neither
             } else {
                 let handle = Box::new(PHandle {
-                    proto_id: id,
                     connected_count: 0,
                     sender: sender.clone(),
                 });
@@ -99,7 +96,7 @@ fn create_meta(id: ProtocolId) -> (ProtocolMeta, crossbeam_channel::Receiver<Not
 pub fn init() {
     // init secio two peers
     START_SECIO.call_once(|| {
-        let (meta, _receiver) = create_meta(1);
+        let (meta, _receiver) = create_meta(ProtocolId::new(1));
         let mut service = create(true, meta, ());
         let listen_addr = service
             .listen("/ip4/127.0.0.1/tcp/0".parse().unwrap())
@@ -107,7 +104,7 @@ pub fn init() {
         let control = service.control().clone();
         thread::spawn(|| tokio::run(service.for_each(|_| Ok(()))));
 
-        let (meta, client_receiver) = create_meta(1);
+        let (meta, client_receiver) = create_meta(1.into());
         let mut service = create(true, meta, ());
         service.dial(listen_addr, DialProtocol::All).unwrap();
         thread::spawn(|| tokio::run(service.for_each(|_| Ok(()))));
@@ -121,7 +118,7 @@ pub fn init() {
 
     // init no secio two peers
     START_NO_SECIO.call_once(|| {
-        let (meta, _receiver) = create_meta(1);
+        let (meta, _receiver) = create_meta(ProtocolId::new(1));
         let mut service = create(false, meta, ());
         let listen_addr = service
             .listen("/ip4/127.0.0.1/tcp/0".parse().unwrap())
@@ -129,7 +126,7 @@ pub fn init() {
         let control = service.control().clone();
         thread::spawn(|| tokio::run(service.for_each(|_| Ok(()))));
 
-        let (meta, client_receiver) = create_meta(1);
+        let (meta, client_receiver) = create_meta(ProtocolId::new(1));
         let mut service = create(false, meta, ());
         service.dial(listen_addr, DialProtocol::All).unwrap();
         thread::spawn(|| tokio::run(service.for_each(|_| Ok(()))));
@@ -144,9 +141,9 @@ pub fn init() {
 
 fn secio_and_send_data(data: &[u8]) {
     unsafe {
-        SECIO_CONTROL
-            .as_mut()
-            .map(|control| control.filter_broadcast(TargetSession::All, 1, data.to_vec()));
+        SECIO_CONTROL.as_mut().map(|control| {
+            control.filter_broadcast(TargetSession::All, ProtocolId::new(1), data.to_vec())
+        });
         if let Some(rev) = SECIO_RECV.as_ref() {
             assert_eq!(rev.recv(), Ok(Notify::Message(bytes::Bytes::from(data))))
         }
@@ -157,7 +154,7 @@ fn no_secio_and_send_data(data: &[u8]) {
     unsafe {
         NO_SECIO_CONTROL
             .as_mut()
-            .map(|control| control.filter_broadcast(TargetSession::All, 1, data.to_vec()));
+            .map(|control| control.filter_broadcast(TargetSession::All, 1.into(), data.to_vec()));
 
         if let Some(rev) = NO_SECIO_RECV.as_ref() {
             assert_eq!(rev.recv(), Ok(Notify::Message(bytes::Bytes::from(data))))

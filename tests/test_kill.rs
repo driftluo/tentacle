@@ -83,7 +83,7 @@ fn create_meta(id: ProtocolId) -> (ProtocolMeta, crossbeam_channel::Receiver<()>
     let meta = MetaBuilder::new()
         .id(id)
         .service_handle(move || {
-            if id == 0 {
+            if id == 0.into() {
                 ProtocolHandle::Neither
             } else {
                 let handle = Box::new(PHandle {
@@ -101,7 +101,7 @@ fn create_meta(id: ProtocolId) -> (ProtocolMeta, crossbeam_channel::Receiver<()>
 /// Test just like https://github.com/libp2p/rust-libp2p/issues/648 this issue, kill some peer
 /// and observe if there has a memory leak, cpu takes up too much problem
 fn test_kill(secio: bool) {
-    let (meta, receiver) = create_meta(1);
+    let (meta, receiver) = create_meta(1.into());
     let mut service = create(secio, meta, ());
     let listen_addr = service
         .listen("/ip4/127.0.0.1/tcp/0".parse().unwrap())
@@ -116,7 +116,7 @@ fn test_kill(secio: bool) {
             // wait connected
             assert_eq!(receiver.recv(), Ok(()));
 
-            let _ = control.filter_broadcast(TargetSession::All, 1, b"hello world".to_vec());
+            let _ = control.filter_broadcast(TargetSession::All, 1.into(), b"hello world".to_vec());
             let mem_start = current_used_memory().unwrap();
             let cpu_start = current_used_cpu().unwrap();
 
@@ -130,7 +130,7 @@ fn test_kill(secio: bool) {
             assert!((cpu_stop - cpu_start) / cpu_start < 0.1);
         }
         Ok(ForkResult::Child) => {
-            let (meta, _receiver) = create_meta(1);
+            let (meta, _receiver) = create_meta(1.into());
             let mut service = create(secio, meta, ());
             service.dial(listen_addr, DialProtocol::All).unwrap();
             let handle = thread::spawn(|| tokio::run(service.for_each(|_| Ok(()))));
