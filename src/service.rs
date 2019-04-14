@@ -518,7 +518,7 @@ where
     ///
     /// Valid after Service starts
     #[inline]
-    pub fn send_message(&mut self, session_id: SessionId, proto_id: ProtocolId, data: &[u8]) {
+    pub fn send_message_to(&mut self, session_id: SessionId, proto_id: ProtocolId, data: &[u8]) {
         self.write_buf.push_back((
             session_id,
             SessionEvent::ProtocolMessage {
@@ -1225,7 +1225,7 @@ where
                 proto_id,
                 data,
             } => match target {
-                TargetSession::Single(id) => self.send_message(id, proto_id, &data),
+                TargetSession::Single(id) => self.send_message_to(id, proto_id, &data),
                 TargetSession::Multi(ids) => self.filter_broadcast(ids, proto_id, &data),
                 TargetSession::All => self.broadcast(proto_id, &data),
             },

@@ -79,7 +79,7 @@ impl AsyncRead for StreamHandle {}
 impl io::Write for StreamHandle {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
         self.sender
-            .send_message(self.session_id, self.proto_id, buf.to_vec())
+            .send_message_to(self.session_id, self.proto_id, buf.to_vec())
             .map(|()| buf.len())
             .map_err(|_| io::ErrorKind::BrokenPipe.into())
     }
