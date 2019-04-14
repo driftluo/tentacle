@@ -356,7 +356,7 @@ pub struct Substream {
 }
 
 impl Substream {
-    pub fn new(mut context: ProtocolContextMutRef, receiver: Receiver<Vec<u8>>) -> Substream {
+    pub fn new(context: ProtocolContextMutRef, receiver: Receiver<Vec<u8>>) -> Substream {
         let stream = StreamHandle {
             data_buf: BytesMut::default(),
             proto_id: context.proto_id,

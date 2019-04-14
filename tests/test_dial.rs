@@ -251,8 +251,8 @@ fn test_repeated_dial(secio: bool) {
 fn test_dial_with_no_notify(secio: bool) {
     let (meta, _receiver) = create_meta(0.into());
     let (shandle, error_receiver) = create_shandle(secio, true);
-    let mut service = create(secio, meta, shandle);
-    let mut control = service.control().clone();
+    let service = create(secio, meta, shandle);
+    let control = service.control().clone();
     thread::spawn(|| tokio::run(service.for_each(|_| Ok(()))));
     // macOs can't dial 0 port
     for _ in 0..2 {

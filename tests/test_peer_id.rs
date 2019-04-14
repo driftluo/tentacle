@@ -93,8 +93,8 @@ fn test_peer_id(fail: bool) {
 
     let (shandle, error_receiver) = create_shandle();
     let meta = create_meta(1.into());
-    let mut service = create(SecioKeyPair::secp256k1_generated(), meta, shandle);
-    let mut control = service.control().clone();
+    let service = create(SecioKeyPair::secp256k1_generated(), meta, shandle);
+    let control = service.control().clone();
     thread::spawn(|| tokio::run(service.for_each(|_| Ok(()))));
 
     if fail {

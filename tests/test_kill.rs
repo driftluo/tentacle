@@ -71,7 +71,7 @@ impl ServiceProtocol for PHandle {
         assert_eq!(self.sender.send(()), Ok(()));
     }
 
-    fn received(&mut self, mut context: ProtocolContextMutRef, data: bytes::Bytes) {
+    fn received(&mut self, context: ProtocolContextMutRef, data: bytes::Bytes) {
         let proto_id = context.proto_id;
         context.filter_broadcast(TargetSession::All, proto_id, data.to_vec());
     }
@@ -106,7 +106,7 @@ fn test_kill(secio: bool) {
     let listen_addr = service
         .listen("/ip4/127.0.0.1/tcp/0".parse().unwrap())
         .unwrap();
-    let mut control = service.control().clone();
+    let control = service.control().clone();
     thread::spawn(|| tokio::run(service.for_each(|_| Ok(()))));
     thread::sleep(Duration::from_millis(100));
 
