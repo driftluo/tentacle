@@ -58,12 +58,12 @@ pub struct ProtocolId(usize);
 
 impl ProtocolId {
     /// New a protocol id
-    pub fn new(id: usize) -> Self {
+    pub const fn new(id: usize) -> Self {
         ProtocolId(id)
     }
 
     /// Get inner value
-    pub fn value(self) -> usize {
+    pub const fn value(self) -> usize {
         self.0
     }
 }
@@ -83,6 +83,18 @@ impl From<usize> for ProtocolId {
 /// Index of session
 #[derive(Debug, Clone, Copy, Hash, Ord, PartialOrd, Eq, PartialEq, Default)]
 pub struct SessionId(usize);
+
+impl SessionId {
+    /// New a session id
+    pub const fn new(id: usize) -> Self {
+        SessionId(id)
+    }
+
+    /// Get inner value
+    pub const fn value(self) -> usize {
+        self.0
+    }
+}
 
 impl fmt::Display for SessionId {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
