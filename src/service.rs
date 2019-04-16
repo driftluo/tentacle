@@ -1380,7 +1380,8 @@ where
                         &mut self.service_context,
                         ProtocolEvent::ProtocolNotify { proto_id, token },
                     )
-                } else if self.service_proto_handles.contains_key(&proto_id) {
+                }
+                if self.service_proto_handles.contains_key(&proto_id) {
                     // callback output
                     self.read_service_buf
                         .push_back((proto_id, ServiceProtocolEvent::Notify { token }));
@@ -1410,7 +1411,9 @@ where
                                 },
                             )
                         }
-                    } else if self
+                    }
+
+                    if self
                         .session_proto_handles
                         .contains_key(&(session_id, proto_id))
                     {
