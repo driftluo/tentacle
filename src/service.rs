@@ -6,10 +6,10 @@ use futures::{
 use log::{debug, error, trace, warn};
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 use std::{error::Error as ErrorTrait, io};
 use tokio::prelude::{AsyncRead, AsyncWrite, FutureExt};
-use tokio::timer::{self, Interval};
+use tokio::timer::{self, Delay, Interval};
 
 use crate::{
     context::{ServiceContext, SessionContext, SessionControl},
@@ -107,10 +107,8 @@ pub struct Service<T> {
     service_task_receiver: mpsc::UnboundedReceiver<ServiceTask>,
 
     pending_tasks: VecDeque<ServiceTask>,
-    /// When handle channel full, count + 1,
-    /// if error count > 100, back to 0, and output an error event
-    /// if error count > 10, don't try notify
-    handles_error_count: HashMap<(ProtocolId, Option<SessionId>), u8>,
+    /// When handle channel full, set a deadline(30 second) to notify user
+    handles_error_count: HashMap<(ProtocolId, Option<SessionId>), Option<Delay>>,
 
     notify: Option<Task>,
 }
@@ -405,24 +403,33 @@ where
     /// When proto handle channel is full, call here
     #[inline]
     fn proto_handle_error(&mut self, proto_id: ProtocolId, session_id: Option<SessionId>) {
-        let error_count = self
+        let delay_time = Instant::now() + Duration::from_secs(30);
+
+        let delay = self
             .handles_error_count
             .entry((proto_id, session_id))
-            .or_default();
-        *error_count += 1;
+            .or_insert_with(|| Some(Delay::new(delay_time)));
 
-        let error = session_id
-            .map(Error::SessionProtoHandleBlock)
-            .unwrap_or(Error::ServiceProtoHandleBlock);
-
-        if *error_count > 100 {
-            *error_count = 0;
-            self.handle.handle_error(
-                &mut self.service_context,
-                ServiceError::ProtocolHandleError { proto_id, error },
-            );
-        } else if *error_count < 10 {
-            self.notify();
+        match delay.take() {
+            Some(mut inner) => match inner.poll() {
+                Ok(Async::Ready(_)) => {
+                    let error = session_id
+                        .map(Error::SessionProtoHandleBlock)
+                        .unwrap_or(Error::ServiceProtoHandleBlock);
+                    self.notify();
+                    self.handle.handle_error(
+                        &mut self.service_context,
+                        ServiceError::ProtocolHandleError { proto_id, error },
+                    );
+                }
+                Ok(Async::NotReady) => *delay = Some(inner),
+                Err(_) => {
+                    *delay = Some(Delay::new(delay_time));
+                }
+            },
+            None => {
+                *delay = Some(Delay::new(delay_time));
+            }
         }
     }
 
