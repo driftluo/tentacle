@@ -8,7 +8,6 @@ use p2p::{
     utils::{is_reachable, multiaddr_to_socketaddr},
     SessionId,
 };
-use serde_derive::{Deserialize, Serialize};
 
 // See: bitcoin/netaddress.cpp pchIPv4[12]
 pub(crate) const PCH_IPV4: [u8; 18] = [
@@ -115,7 +114,7 @@ impl Default for AddrKnown {
     }
 }
 
-#[derive(Copy, Clone, Debug, PartialOrd, Ord, Eq, PartialEq, Hash, Serialize, Deserialize)]
+#[derive(Copy, Clone, Debug, PartialOrd, Ord, Eq, PartialEq, Hash)]
 pub struct RawAddr(pub(crate) [u8; 18]);
 
 impl From<&[u8]> for RawAddr {
