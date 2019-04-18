@@ -218,13 +218,20 @@ impl ServiceContext {
         }
     }
 
-    /// Shutdown service.
+    /// Close service.
     ///
     /// Order:
     /// 1. close all listens
     /// 2. try close all session's protocol stream
     /// 3. try close all session
     /// 4. close service
+    pub fn close(&self) {
+        if self.inner.close().is_err() {
+            warn!("Service is abnormally closed")
+        }
+    }
+
+    /// Shutdown service, don't care anything, may cause partial message loss
     pub fn shutdown(&self) {
         if self.inner.shutdown().is_err() {
             warn!("Service is abnormally closed")

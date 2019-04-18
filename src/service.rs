@@ -1446,14 +1446,9 @@ where
                 session_id,
                 proto_id,
             } => self.protocol_close(session_id, proto_id, Source::External),
-            ServiceTask::Shutdown => {
-                self.sessions
-                    .keys()
-                    .cloned()
-                    .collect::<Vec<SessionId>>()
-                    .into_iter()
-                    .for_each(|i| self.session_close(i, Source::External));
+            ServiceTask::Shutdown(quick) => {
                 self.state.pre_shutdown();
+
                 while let Some((address, incoming)) = self.listens.pop() {
                     drop(incoming);
                     self.handle.handle_event(
@@ -1462,6 +1457,24 @@ where
                     )
                 }
                 self.pending_tasks.clear();
+
+                let sessions = self.sessions.keys().cloned().collect::<Vec<SessionId>>();
+
+                if quick {
+                    // clean buffer
+                    self.write_buf.clear();
+                    self.read_session_buf.clear();
+                    self.read_service_buf.clear();
+
+                    // don't care about any session action
+                    sessions
+                        .into_iter()
+                        .for_each(|i| self.session_close(i, Source::Internal));
+                } else {
+                    sessions
+                        .into_iter()
+                        .for_each(|i| self.session_close(i, Source::External));
+                }
             }
         }
     }

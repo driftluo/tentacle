@@ -501,7 +501,11 @@ where
                 .map(|_| ())
                 .map_err(|e| error!("session close event send to service error: {:?}", e)),
         );
+        self.clean();
+    }
 
+    /// Clean env
+    fn clean(&mut self) {
         self.sub_streams.clear();
         self.service_receiver.close();
         self.proto_event_receiver.close();
@@ -537,6 +541,11 @@ where
             self.ty,
             self.sub_streams.len()
         );
+
+        // double check here
+        if self.state.is_local_close() {
+            return Ok(Async::Ready(None));
+        }
 
         if !self.read_buf.is_empty() || !self.write_buf.is_empty() {
             self.flush();
@@ -618,7 +627,8 @@ where
                 Ok(Async::Ready(None)) => {
                     // Must drop by service
                     self.state = SessionState::LocalClose;
-                    break;
+                    self.clean();
+                    return Ok(Async::Ready(None));
                 }
                 Ok(Async::NotReady) => break,
                 Err(err) => {
