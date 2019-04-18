@@ -1,3 +1,4 @@
+use bytes::Bytes;
 use futures::{
     prelude::*,
     sync::{mpsc, oneshot},
@@ -88,7 +89,7 @@ impl ServiceContext {
 
     /// Send message
     #[inline]
-    pub fn send_message_to(&self, session_id: SessionId, proto_id: ProtocolId, data: Vec<u8>) {
+    pub fn send_message_to(&self, session_id: SessionId, proto_id: ProtocolId, data: Bytes) {
         if self
             .inner
             .send_message_to(session_id, proto_id, data)
@@ -100,12 +101,7 @@ impl ServiceContext {
 
     /// Send data to the specified protocol for the specified sessions.
     #[inline]
-    pub fn filter_broadcast(
-        &self,
-        session_ids: TargetSession,
-        proto_id: ProtocolId,
-        data: Vec<u8>,
-    ) {
+    pub fn filter_broadcast(&self, session_ids: TargetSession, proto_id: ProtocolId, data: Bytes) {
         if self
             .inner
             .filter_broadcast(session_ids, proto_id, data)
@@ -281,7 +277,7 @@ pub struct ProtocolContextMutRef<'a> {
 impl<'a> ProtocolContextMutRef<'a> {
     /// Send message to current protocol current session
     #[inline]
-    pub fn send_message(&self, data: Vec<u8>) {
+    pub fn send_message(&self, data: Bytes) {
         let proto_id = self.proto_id();
         self.inner.send_message_to(self.session.id, proto_id, data)
     }

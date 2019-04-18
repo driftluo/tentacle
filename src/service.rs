@@ -43,8 +43,14 @@ pub use crate::service::{
     control::ServiceControl,
     event::{ProtocolEvent, ServiceError, ServiceEvent},
 };
+use bytes::Bytes;
 
+/// If the buffer capacity is greater than u8 max, shrink it
 pub(crate) const BUF_SHRINK_THRESHOLD: usize = u8::max_value() as usize;
+/// Received from remote, aggregate mode, buffer size is 8 times that of any send
+pub(crate) const RECEIVED_SIZE: usize = 256;
+/// Send to remote, distribute mode, buffer size is less than 8 times the received
+pub(crate) const SEND_SIZE: usize = 32;
 
 /// Protocol handle value
 pub(crate) enum InnerProtocolHandle {
@@ -125,7 +131,7 @@ where
         forever: bool,
         config: ServiceConfig,
     ) -> Self {
-        let (session_event_sender, session_event_receiver) = mpsc::channel(256);
+        let (session_event_sender, session_event_receiver) = mpsc::channel(RECEIVED_SIZE);
         let (service_task_sender, service_task_receiver) = mpsc::unbounded();
         let proto_infos = protocol_configs
             .values()
@@ -134,7 +140,7 @@ where
                 (meta.id(), proto_info)
             })
             .collect();
-        let (future_task_sender, future_task_receiver) = mpsc::channel(128);
+        let (future_task_sender, future_task_receiver) = mpsc::channel(SEND_SIZE);
 
         Service {
             protocol_configs,
@@ -458,7 +464,7 @@ where
         match handle {
             InnerProtocolHandle::Service(handle) => {
                 debug!("init service level [{}] proto handle", proto_id);
-                let (sender, receiver) = mpsc::channel(32);
+                let (sender, receiver) = mpsc::channel(RECEIVED_SIZE);
                 let mut stream = ServiceProtocolStream::new(
                     handle,
                     self.service_context.clone_self(),
@@ -525,13 +531,13 @@ where
     ///
     /// Valid after Service starts
     #[inline]
-    pub fn send_message_to(&mut self, session_id: SessionId, proto_id: ProtocolId, data: &[u8]) {
+    pub fn send_message_to(&mut self, session_id: SessionId, proto_id: ProtocolId, data: Bytes) {
         self.write_buf.push_back((
             session_id,
             SessionEvent::ProtocolMessage {
                 id: session_id,
                 proto_id,
-                data: data.into(),
+                data,
             },
         ));
         self.distribute_to_session();
@@ -541,8 +547,7 @@ where
     ///
     /// Valid after Service starts
     #[inline]
-    pub fn filter_broadcast(&mut self, ids: Vec<SessionId>, proto_id: ProtocolId, data: &[u8]) {
-        let data: bytes::Bytes = data.into();
+    pub fn filter_broadcast(&mut self, ids: Vec<SessionId>, proto_id: ProtocolId, data: Bytes) {
         for id in self.sessions.keys() {
             if ids.contains(id) {
                 debug!(
@@ -568,14 +573,13 @@ where
     ///
     /// Valid after Service starts
     #[inline]
-    pub fn broadcast(&mut self, proto_id: ProtocolId, data: &[u8]) {
+    pub fn broadcast(&mut self, proto_id: ProtocolId, data: Bytes) {
         debug!(
             "broadcast message, peer count: {}, proto_id: {}, data len: {}",
             self.sessions.len(),
             proto_id,
             data.len()
         );
-        let data: bytes::Bytes = data.into();
         for id in self.sessions.keys() {
             self.write_buf.push_back((
                 *id,
@@ -763,7 +767,7 @@ where
             self.next_session += 1;
         }
 
-        let (service_event_sender, service_event_receiver) = mpsc::channel(32);
+        let (service_event_sender, service_event_receiver) = mpsc::channel(SEND_SIZE);
         let session_control = SessionControl {
             notify_signals: HashMap::default(),
             event_sender: service_event_sender,
@@ -1232,9 +1236,9 @@ where
                 proto_id,
                 data,
             } => match target {
-                TargetSession::Single(id) => self.send_message_to(id, proto_id, &data),
-                TargetSession::Multi(ids) => self.filter_broadcast(ids, proto_id, &data),
-                TargetSession::All => self.broadcast(proto_id, &data),
+                TargetSession::Single(id) => self.send_message_to(id, proto_id, data),
+                TargetSession::Multi(ids) => self.filter_broadcast(ids, proto_id, data),
+                TargetSession::All => self.broadcast(proto_id, data),
             },
             ServiceTask::Dial { address, target } => {
                 if !self.dial_protocols.contains_key(&address) {

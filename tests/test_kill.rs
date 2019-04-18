@@ -1,4 +1,5 @@
 #![cfg(target_os = "linux")]
+use bytes::Bytes;
 use futures::prelude::Stream;
 use nix::{
     sys::signal::{kill, Signal},
@@ -73,7 +74,7 @@ impl ServiceProtocol for PHandle {
 
     fn received(&mut self, context: ProtocolContextMutRef, data: bytes::Bytes) {
         let proto_id = context.proto_id;
-        context.filter_broadcast(TargetSession::All, proto_id, data.to_vec());
+        context.filter_broadcast(TargetSession::All, proto_id, data);
     }
 }
 
@@ -116,7 +117,8 @@ fn test_kill(secio: bool) {
             // wait connected
             assert_eq!(receiver.recv(), Ok(()));
 
-            let _ = control.filter_broadcast(TargetSession::All, 1.into(), b"hello world".to_vec());
+            let _ =
+                control.filter_broadcast(TargetSession::All, 1.into(), Bytes::from("hello world"));
             let mem_start = current_used_memory().unwrap();
             let cpu_start = current_used_cpu().unwrap();
 

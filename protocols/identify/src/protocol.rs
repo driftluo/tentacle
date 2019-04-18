@@ -6,6 +6,7 @@ use crate::protocol_generated::p2p::identify::{
     IdentifyMessageBuilder, IdentifyPayload as FbsIdentifyPayload, ListenAddrs as FbsListenAddrs,
     ListenAddrsBuilder, ObservedAddr as FbsObservedAddr, ObservedAddrBuilder,
 };
+use bytes::Bytes;
 use p2p::multiaddr::Multiaddr;
 
 #[derive(Clone, PartialEq, Eq, Debug)]
@@ -15,7 +16,7 @@ pub enum IdentifyMessage {
 }
 
 impl IdentifyMessage {
-    pub(crate) fn encode(&self) -> Vec<u8> {
+    pub(crate) fn encode(&self) -> Bytes {
         let mut fbb = FlatBufferBuilder::new();
         let offset = match self {
             IdentifyMessage::ListenAddrs(addrs) => {
@@ -46,7 +47,7 @@ impl IdentifyMessage {
             }
         };
         fbb.finish(offset, None);
-        fbb.finished_data().to_vec()
+        Bytes::from(fbb.finished_data())
     }
 
     pub(crate) fn decode(data: &[u8]) -> Option<Self> {

@@ -18,6 +18,8 @@
 
 #![deny(missing_docs)]
 
+/// Re-pub bytes crate
+pub use bytes;
 /// Re-pub multiaddr crate
 pub use multiaddr;
 /// Re-pub secio crate

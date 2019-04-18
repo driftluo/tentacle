@@ -5,6 +5,8 @@ use futures::{
 use log::{debug, trace};
 use std::collections::HashMap;
 
+use crate::service::SEND_SIZE;
+
 pub(crate) type FutureTaskId = u64;
 pub(crate) type BoxedFutureTask = Box<dyn Future<Item = (), Error = ()> + 'static + Send>;
 
@@ -19,7 +21,7 @@ pub(crate) struct FutureTaskManager {
 
 impl FutureTaskManager {
     pub(crate) fn new(task_receiver: mpsc::Receiver<BoxedFutureTask>) -> FutureTaskManager {
-        let (id_sender, id_receiver) = mpsc::channel(128);
+        let (id_sender, id_receiver) = mpsc::channel(SEND_SIZE);
         FutureTaskManager {
             signals: HashMap::default(),
             next_id: 0,

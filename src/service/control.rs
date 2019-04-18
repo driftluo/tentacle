@@ -10,6 +10,7 @@ use crate::{
     service::{DialProtocol, ServiceTask, TargetSession},
     ProtocolId, SessionId,
 };
+use bytes::Bytes;
 
 /// Service control, used to send commands externally at runtime
 #[derive(Clone)]
@@ -68,7 +69,7 @@ impl ServiceControl {
         &self,
         session_id: SessionId,
         proto_id: ProtocolId,
-        data: Vec<u8>,
+        data: Bytes,
     ) -> Result<(), Error> {
         self.filter_broadcast(TargetSession::Single(session_id), proto_id, data)
     }
@@ -79,7 +80,7 @@ impl ServiceControl {
         &self,
         target: TargetSession,
         proto_id: ProtocolId,
-        data: Vec<u8>,
+        data: Bytes,
     ) -> Result<(), Error> {
         self.send(ServiceTask::ProtocolMessage {
             target,

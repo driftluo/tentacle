@@ -1,3 +1,4 @@
+use bytes::Bytes;
 use env_logger;
 use futures::{oneshot, prelude::*, sync::oneshot::Sender};
 use log::info;
@@ -73,7 +74,7 @@ impl ServiceProtocol for PHandle {
                 let _ = interval_sender.send_message_to(
                     session_id,
                     1.into(),
-                    b"I am a interval message".to_vec(),
+                    Bytes::from("I am a interval message"),
                 );
                 if let Ok(Async::Ready(_)) = receiver.poll() {
                     Err(Error::shutdown())
@@ -139,7 +140,7 @@ impl ServiceHandle for SHandle {
                     let _ = delay_sender.filter_broadcast(
                         TargetSession::All,
                         0.into(),
-                        b"I am a delayed message".to_vec(),
+                        Bytes::from("I am a delayed message"),
                     );
                     Ok(())
                 })

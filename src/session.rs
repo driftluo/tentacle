@@ -22,7 +22,7 @@ use crate::{
     multiaddr::Multiaddr,
     protocol_select::{client_select, server_select, ProtocolInfo},
     secio::{codec::stream_handle::StreamHandle as SecureHandle, PublicKey},
-    service::{config::Meta, SessionType, BUF_SHRINK_THRESHOLD},
+    service::{config::Meta, SessionType, BUF_SHRINK_THRESHOLD, RECEIVED_SIZE, SEND_SIZE},
     substream::{ProtocolEvent, SubStream},
     transports::{MultiIncoming, MultiStream},
     yamux::{Config, Session as YamuxSession, StreamHandle},
@@ -177,7 +177,7 @@ where
         meta: SessionMeta,
     ) -> Self {
         let socket = YamuxSession::new(socket, meta.config, meta.ty.into());
-        let (proto_event_sender, proto_event_receiver) = mpsc::channel(256);
+        let (proto_event_sender, proto_event_receiver) = mpsc::channel(RECEIVED_SIZE);
         Session {
             socket,
             protocol_configs: meta.protocol_configs,
@@ -362,7 +362,7 @@ where
                 part.read_buf = raw_part.read_buf;
                 part.write_buf = raw_part.write_buf;
                 let frame = Framed::from_parts(part);
-                let (session_to_proto_sender, session_to_proto_receiver) = mpsc::channel(32);
+                let (session_to_proto_sender, session_to_proto_receiver) = mpsc::channel(SEND_SIZE);
                 let proto_stream = SubStream::new(
                     frame,
                     self.proto_event_sender.clone(),

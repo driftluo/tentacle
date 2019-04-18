@@ -1,4 +1,5 @@
 use bench::Bench;
+use bytes::Bytes;
 use futures::prelude::Stream;
 use p2p::{
     builder::{MetaBuilder, ServiceBuilder},
@@ -142,7 +143,7 @@ pub fn init() {
 fn secio_and_send_data(data: &[u8]) {
     unsafe {
         SECIO_CONTROL.as_mut().map(|control| {
-            control.filter_broadcast(TargetSession::All, ProtocolId::new(1), data.to_vec())
+            control.filter_broadcast(TargetSession::All, ProtocolId::new(1), Bytes::from(data))
         });
         if let Some(rev) = SECIO_RECV.as_ref() {
             assert_eq!(rev.recv(), Ok(Notify::Message(bytes::Bytes::from(data))))
@@ -152,9 +153,9 @@ fn secio_and_send_data(data: &[u8]) {
 
 fn no_secio_and_send_data(data: &[u8]) {
     unsafe {
-        NO_SECIO_CONTROL
-            .as_mut()
-            .map(|control| control.filter_broadcast(TargetSession::All, 1.into(), data.to_vec()));
+        NO_SECIO_CONTROL.as_mut().map(|control| {
+            control.filter_broadcast(TargetSession::All, 1.into(), Bytes::from(data))
+        });
 
         if let Some(rev) = NO_SECIO_RECV.as_ref() {
             assert_eq!(rev.recv(), Ok(Notify::Message(bytes::Bytes::from(data))))

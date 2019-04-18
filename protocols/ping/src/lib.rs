@@ -7,6 +7,7 @@ mod protocol_generated;
 mod protocol_generated_verifier;
 
 use crate::protocol_generated::p2p::ping::*;
+use bytes::Bytes;
 use flatbuffers::{FlatBufferBuilder, WIPOffset};
 use flatbuffers_verifier::get_root;
 use fnv::FnvHashMap;
@@ -158,7 +159,7 @@ where
                     let mut fbb = FlatBufferBuilder::new();
                     let msg = PingMessage::build_pong(&mut fbb, ping_msg.nonce());
                     fbb.finish(msg, None);
-                    context.send_message(fbb.finished_data().to_vec());
+                    context.send_message(Bytes::from(fbb.finished_data()));
                     self.send_event(Event::Ping(peer_id));
                 }
                 PingPayload::Pong => {
@@ -221,7 +222,7 @@ where
                     context.filter_broadcast(
                         TargetSession::Multi(peer_ids),
                         proto_id,
-                        fbb.finished_data().to_vec(),
+                        Bytes::from(fbb.finished_data()),
                     );
                 }
             }
