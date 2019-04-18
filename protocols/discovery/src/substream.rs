@@ -18,6 +18,7 @@ use tokio::timer::Interval;
 
 use crate::addr::{AddrKnown, AddressManager, Misbehavior, RawAddr};
 use crate::protocol::{DiscoveryCodec, DiscoveryMessage, Node, Nodes};
+use bytes::Bytes;
 
 // FIXME: should be a more high level version number
 const VERSION: u32 = 0;
@@ -79,7 +80,7 @@ impl AsyncRead for StreamHandle {}
 impl io::Write for StreamHandle {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
         self.sender
-            .send_message_to(self.session_id, self.proto_id, buf.to_vec())
+            .send_message_to(self.session_id, self.proto_id, Bytes::from(buf))
             .map(|()| buf.len())
             .map_err(|_| io::ErrorKind::BrokenPipe.into())
     }
