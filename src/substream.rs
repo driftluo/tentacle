@@ -239,6 +239,11 @@ where
     type Error = ();
 
     fn poll(&mut self) -> Poll<Option<Self::Item>, Self::Error> {
+        // double check here
+        if self.dead {
+            return Ok(Async::Ready(None));
+        }
+
         if !self.read_buf.is_empty() || !self.write_buf.is_empty() {
             if let Err(err) = self.flush() {
                 self.error_close(err);
@@ -294,6 +299,8 @@ where
                 Ok(Async::Ready(None)) => {
                     // Must be session close
                     self.dead = true;
+                    let _ = self.sub_stream.get_mut().shutdown();
+                    return Ok(Async::Ready(None));
                 }
                 Ok(Async::NotReady) => break,
                 Err(_) => {

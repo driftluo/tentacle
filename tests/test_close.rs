@@ -31,12 +31,14 @@ where
 
 struct PHandle {
     count: u8,
+    shutdown: bool,
 }
 
 impl ServiceProtocol for PHandle {
     fn init(&mut self, _context: &mut ProtocolContext) {}
 
     fn connected(&mut self, context: ProtocolContextMutRef, _version: &str) {
+        context.send_message(bytes::Bytes::from("hello"));
         if context.session.ty.is_inbound() && context.proto_id == 1.into() {
             self.count += 1;
             if self.count >= 4 {
@@ -46,31 +48,39 @@ impl ServiceProtocol for PHandle {
         }
     }
 
+    fn received(&mut self, context: ProtocolContextMutRef, data: bytes::Bytes) {
+        context.send_message(data);
+    }
+
     fn notify(&mut self, context: &mut ProtocolContext, _token: u64) {
         self.count += 1;
         if self.count > 6 {
-            context.shutdown();
+            if self.shutdown {
+                context.shutdown();
+            } else {
+                context.close();
+            }
         }
     }
 }
 
-fn create_meta(id: ProtocolId) -> ProtocolMeta {
+fn create_meta(id: ProtocolId, shutdown: bool) -> ProtocolMeta {
     MetaBuilder::new()
         .id(id)
         .service_handle(move || {
-            let handle = Box::new(PHandle { count: 0 });
+            let handle = Box::new(PHandle { count: 0, shutdown });
             ProtocolHandle::Callback(handle)
         })
         .build()
 }
 
-fn test_close(secio: bool) {
+fn test(secio: bool, shutdown: bool) {
     let mut service_1 = create(
         secio,
         vec![
-            create_meta(0.into()),
-            create_meta(1.into()),
-            create_meta(2.into()),
+            create_meta(0.into(), shutdown),
+            create_meta(1.into(), shutdown),
+            create_meta(2.into(), shutdown),
         ]
         .into_iter(),
         (),
@@ -78,9 +88,9 @@ fn test_close(secio: bool) {
     let mut service_2 = create(
         secio,
         vec![
-            create_meta(0.into()),
-            create_meta(1.into()),
-            create_meta(2.into()),
+            create_meta(0.into(), shutdown),
+            create_meta(1.into(), shutdown),
+            create_meta(2.into(), shutdown),
         ]
         .into_iter(),
         (),
@@ -88,9 +98,9 @@ fn test_close(secio: bool) {
     let mut service_3 = create(
         secio,
         vec![
-            create_meta(0.into()),
-            create_meta(1.into()),
-            create_meta(2.into()),
+            create_meta(0.into(), shutdown),
+            create_meta(1.into(), shutdown),
+            create_meta(2.into(), shutdown),
         ]
         .into_iter(),
         (),
@@ -98,9 +108,9 @@ fn test_close(secio: bool) {
     let mut service_4 = create(
         secio,
         vec![
-            create_meta(0.into()),
-            create_meta(1.into()),
-            create_meta(2.into()),
+            create_meta(0.into(), shutdown),
+            create_meta(1.into(), shutdown),
+            create_meta(2.into(), shutdown),
         ]
         .into_iter(),
         (),
@@ -108,9 +118,9 @@ fn test_close(secio: bool) {
     let mut service_5 = create(
         secio,
         vec![
-            create_meta(0.into()),
-            create_meta(1.into()),
-            create_meta(2.into()),
+            create_meta(0.into(), shutdown),
+            create_meta(1.into(), shutdown),
+            create_meta(2.into(), shutdown),
         ]
         .into_iter(),
         (),
@@ -143,10 +153,20 @@ fn test_close(secio: bool) {
 
 #[test]
 fn test_close_with_secio() {
-    test_close(true)
+    test(true, false)
 }
 
 #[test]
 fn test_close_with_no_secio() {
-    test_close(false)
+    test(false, false)
+}
+
+#[test]
+fn test_shutdown_with_secio() {
+    test(true, true)
+}
+
+#[test]
+fn test_shutdown_with_no_secio() {
+    test(false, true)
 }
