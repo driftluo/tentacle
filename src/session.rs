@@ -5,7 +5,7 @@ use futures::{
     task::{self, Task},
 };
 use log::{debug, error, trace, warn};
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::Arc;
 use std::{
     io::{self, ErrorKind},
@@ -148,7 +148,7 @@ pub(crate) struct Session<T> {
     sub_streams: HashMap<StreamId, mpsc::Sender<ProtocolEvent>>,
     proto_streams: HashMap<ProtocolId, StreamId>,
     /// The buffer which will distribute to sub streams
-    write_buf: VecDeque<ProtocolEvent>,
+    write_buf: VecDeque<(ProtocolId, ProtocolEvent)>,
     /// The buffer which will send to service
     read_buf: VecDeque<SessionEvent>,
 
@@ -288,35 +288,26 @@ where
 
     #[inline]
     fn distribute_to_substream(&mut self) {
-        for event in self.write_buf.split_off(0) {
-            match event {
-                ProtocolEvent::Message { id, proto_id, data } => {
-                    if let Some(sender) = self.sub_streams.get_mut(&id) {
-                        if let Err(e) =
-                            sender.try_send(ProtocolEvent::Message { id, proto_id, data })
-                        {
-                            if e.is_full() {
-                                self.write_buf.push_back(e.into_inner());
-                                self.notify();
-                            } else {
-                                debug!("session send to sub stream error: {}", e);
-                            }
+        let mut block_substream = HashSet::new();
+
+        for (proto_id, event) in self.write_buf.split_off(0) {
+            // Guarantee the order in which messages are sent
+            if block_substream.contains(&proto_id) {
+                self.write_buf.push_back((proto_id, event));
+                continue;
+            }
+            if let Some(stream_id) = self.proto_streams.get(&proto_id) {
+                if let Some(sender) = self.sub_streams.get_mut(&stream_id) {
+                    if let Err(e) = sender.try_send(event) {
+                        if e.is_full() {
+                            self.write_buf.push_back((proto_id, e.into_inner()));
+                            self.notify();
+                            block_substream.insert(proto_id);
+                        } else {
+                            debug!("session send to sub stream error: {}", e);
                         }
-                    };
-                }
-                ProtocolEvent::Close { id, proto_id } => {
-                    if let Some(sender) = self.sub_streams.get_mut(&id) {
-                        if let Err(e) = sender.try_send(ProtocolEvent::Close { id, proto_id }) {
-                            if e.is_full() {
-                                self.write_buf.push_back(e.into_inner());
-                                self.notify();
-                            } else {
-                                debug!("session send to sub stream error: {}", e);
-                            }
-                        }
-                    };
-                }
-                _ => (),
+                    }
+                };
             }
         }
 
@@ -426,11 +417,14 @@ where
         match event {
             SessionEvent::ProtocolMessage { proto_id, data, .. } => {
                 if let Some(stream_id) = self.proto_streams.get(&proto_id) {
-                    self.write_buf.push_back(ProtocolEvent::Message {
-                        id: *stream_id,
+                    self.write_buf.push_back((
                         proto_id,
-                        data,
-                    });
+                        ProtocolEvent::Message {
+                            id: *stream_id,
+                            proto_id,
+                            data,
+                        },
+                    ));
                 } else {
                     trace!("protocol {} not ready", proto_id);
                 }
@@ -465,10 +459,13 @@ where
                 if !self.proto_streams.contains_key(&proto_id) {
                     debug!("proto [{}] has been closed", proto_id);
                 } else {
-                    self.write_buf.push_back(ProtocolEvent::Close {
-                        id: self.proto_streams[&proto_id],
+                    self.write_buf.push_back((
                         proto_id,
-                    });
+                        ProtocolEvent::Close {
+                            id: self.proto_streams[&proto_id],
+                            proto_id,
+                        },
+                    ));
                 }
             }
             _ => (),
@@ -480,10 +477,13 @@ where
     #[inline]
     fn close_all_proto(&mut self) {
         for (proto_id, stream_id) in self.proto_streams.iter() {
-            self.write_buf.push_back(ProtocolEvent::Close {
-                id: *stream_id,
-                proto_id: *proto_id,
-            });
+            self.write_buf.push_back((
+                *proto_id,
+                ProtocolEvent::Close {
+                    id: *stream_id,
+                    proto_id: *proto_id,
+                },
+            ));
         }
         self.distribute_to_substream();
     }

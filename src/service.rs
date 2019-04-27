@@ -304,10 +304,18 @@ where
     /// Distribute event to sessions
     #[inline]
     fn distribute_to_session(&mut self) {
+        let mut block_sessions = HashSet::new();
+
         for (id, event) in self.write_buf.split_off(0) {
+            // Guarantee the order in which messages are sent
+            if block_sessions.contains(&id) {
+                self.write_buf.push_back((id, event));
+                continue;
+            }
             if let Some(session) = self.sessions.get_mut(&id) {
                 if let Err(e) = session.event_sender.try_send(event) {
                     if e.is_full() {
+                        block_sessions.insert(id);
                         debug!("session [{}] is full", id);
                         self.write_buf.push_back((id, e.into_inner()));
                         self.notify();
@@ -329,14 +337,21 @@ where
     #[inline(always)]
     fn distribute_to_user_level(&mut self) {
         let mut abnormally_close_handle = Vec::default();
+        let mut block_handles = HashSet::new();
 
         for (proto_id, event) in self.read_service_buf.split_off(0) {
+            // Guarantee the order in which messages are sent
+            if block_handles.contains(&proto_id) {
+                self.read_service_buf.push_back((proto_id, event));
+                continue;
+            }
             if let Some(sender) = self.service_proto_handles.get_mut(&proto_id) {
                 if let Err(e) = sender.try_send(event) {
                     if e.is_full() {
                         debug!("service proto [{}] handle is full", proto_id);
                         self.read_service_buf.push_back((proto_id, e.into_inner()));
                         self.proto_handle_error(proto_id, None);
+                        block_handles.insert(proto_id);
                     } else {
                         error!(
                             "channel shutdown, proto [{}] message can't send to user",

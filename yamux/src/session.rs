@@ -1,11 +1,12 @@
 //! The session, can open and manage substreams
 
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::{BTreeMap, HashSet, VecDeque};
 use std::io;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use fnv::{FnvHashMap, FnvHashSet};
 use futures::{
+    future::Future,
     sync::mpsc::{channel, Receiver, Sender},
     task::{self, Task},
     try_ready, Async, AsyncSink, Poll, Sink, Stream,
@@ -13,7 +14,7 @@ use futures::{
 use log::{debug, warn};
 use tokio::codec::Framed;
 use tokio::prelude::{AsyncRead, AsyncWrite};
-use tokio::timer::Interval;
+use tokio::timer::{Delay, Interval};
 
 use crate::{
     config::Config,
@@ -24,6 +25,8 @@ use crate::{
 };
 
 const BUF_SHRINK_THRESHOLD: usize = u8::max_value() as usize;
+const DELAY_TIME: Duration = Duration::from_secs(1);
+const TIMEOUT: Duration = Duration::from_secs(30);
 
 /// The session
 pub struct Session<T> {
@@ -70,6 +73,10 @@ pub struct Session<T> {
     event_receiver: Receiver<StreamEvent>,
 
     keepalive_future: Option<Interval>,
+    /// Delay notify with abnormally poor network status
+    delay: Option<Delay>,
+    /// Last successful send time
+    last_send_success: Instant,
 
     notify: Option<Task>,
 }
@@ -131,6 +138,8 @@ where
             event_sender,
             event_receiver,
             keepalive_future,
+            delay: None,
+            last_send_success: Instant::now(),
             notify: None,
         }
     }
@@ -246,10 +255,19 @@ where
                 Ok(AsyncSink::NotReady(frame)) => {
                     debug!("[{:?}] framed_stream NotReady, frame: {:?}", self.ty, frame);
                     self.write_pending_frames.push_front(frame);
-                    self.notify();
+                    // No message has been sent for 30 seconds,
+                    // we believe the connection is no longer valid
+                    if self.last_send_success.elapsed() > TIMEOUT {
+                        return Err(io::ErrorKind::TimedOut.into());
+                    }
+                    if self.delay.is_none() {
+                        self.delay = Some(Delay::new(Instant::now() + DELAY_TIME));
+                    }
                     return Ok(Async::NotReady);
                 }
-                Ok(AsyncSink::Ready) => {}
+                Ok(AsyncSink::Ready) => {
+                    self.last_send_success = Instant::now();
+                }
                 Err(err) => {
                     debug!("[{:?}] framed_stream error: {:?}", self.ty, err);
                     return Err(err);
@@ -289,8 +307,15 @@ where
 
     /// Try send buffer to all sub streams
     fn distribute_to_substream(&mut self) -> Result<(), io::Error> {
+        let mut block_substream = HashSet::new();
+
         for frame in self.read_pending_frames.split_off(0) {
             let stream_id = frame.stream_id();
+            // Guarantee the order in which messages are sent
+            if block_substream.contains(&stream_id) {
+                self.read_pending_frames.push_back(frame);
+                continue;
+            }
             if frame.flags().contains(Flag::Syn) {
                 if self.local_go_away {
                     let flags = Flags::from(Flag::Rst);
@@ -316,6 +341,7 @@ where
                             if err.is_full() {
                                 self.read_pending_frames.push_back(err.into_inner());
                                 self.notify();
+                                block_substream.insert(stream_id);
                                 false
                             } else {
                                 debug!("send to stream error: {:?}", err);
@@ -480,6 +506,16 @@ where
     fn poll(&mut self) -> Poll<Option<Self::Item>, Self::Error> {
         if self.is_dead() {
             return Ok(Async::Ready(None));
+        }
+
+        if let Some(mut inner) = self.delay.take() {
+            match inner.poll() {
+                Ok(Async::Ready(_)) => {}
+                Ok(Async::NotReady) => self.delay = Some(inner),
+                Err(_) => {
+                    self.delay = Some(Delay::new(Instant::now() + DELAY_TIME));
+                }
+            }
         }
 
         if !self.read_pending_frames.is_empty() || !self.write_pending_frames.is_empty() {
