@@ -19,9 +19,7 @@ fn main() {
     };
     let protocol = MetaBuilder::default()
         .id(1.into())
-        .service_handle(move || {
-            ProtocolHandle::Callback(Box::new(IdentifyProtocol::new(callback.clone())))
-        })
+        .service_handle(move || ProtocolHandle::Callback(Box::new(IdentifyProtocol::new(callback))))
         .build();
     if std::env::args().nth(1) == Some("server".to_string()) {
         debug!("Starting server ......");

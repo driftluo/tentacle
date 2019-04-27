@@ -61,11 +61,6 @@ where
         }
     }
 
-    /// Replace sessions context
-    pub fn sessions(&mut self, sessions: HashMap<SessionId, Arc<SessionContext>>) {
-        self.sessions = sessions;
-    }
-
     #[inline]
     pub fn handle_event(&mut self, event: ServiceProtocolEvent) {
         use self::ServiceProtocolEvent::*;
