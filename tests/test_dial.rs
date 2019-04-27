@@ -155,7 +155,7 @@ fn create_meta(id: ProtocolId) -> (ProtocolMeta, crossbeam_channel::Receiver<usi
             } else {
                 let handle = Box::new(PHandle {
                     connected_count: 0,
-                    sender: sender.clone(),
+                    sender,
                     dial_count: 0,
                     dial_addr: None,
                 });

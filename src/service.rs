@@ -336,7 +336,7 @@ where
     /// Distribute event to user level
     #[inline(always)]
     fn distribute_to_user_level(&mut self) {
-        let mut abnormally_close_handle = Vec::default();
+        let mut error = false;
         let mut block_handles = HashSet::new();
 
         for (proto_id, event) in self.read_service_buf.split_off(0) {
@@ -358,11 +358,7 @@ where
                             proto_id
                         );
 
-                        if self.config.reopen {
-                            self.read_service_buf.push_back((proto_id, e.into_inner()));
-                            abnormally_close_handle.push((proto_id, None));
-                        }
-
+                        error = true;
                         self.handle.handle_error(
                             &mut self.service_context,
                             ServiceError::ProtocolHandleError {
@@ -392,12 +388,7 @@ where
                             proto_id, session_id
                         );
 
-                        if self.config.reopen {
-                            self.read_session_buf
-                                .push_back((session_id, proto_id, e.into_inner()));
-                            abnormally_close_handle.push((proto_id, Some(session_id)));
-                        }
-
+                        error = true;
                         self.handle.handle_error(
                             &mut self.service_context,
                             ServiceError::ProtocolHandleError {
@@ -410,6 +401,11 @@ where
             }
         }
 
+        if error {
+            // if handle panic, close service
+            self.handle_service_task(ServiceTask::Shutdown(false));
+        }
+
         if self.read_service_buf.capacity() > BUF_SHRINK_THRESHOLD {
             self.read_service_buf.shrink_to_fit();
         }
@@ -417,8 +413,6 @@ where
         if self.read_session_buf.capacity() > BUF_SHRINK_THRESHOLD {
             self.read_session_buf.shrink_to_fit();
         }
-
-        self.reopen_handle(abnormally_close_handle.into_iter());
     }
 
     /// When proto handle channel is full, call here
@@ -454,19 +448,6 @@ where
         }
     }
 
-    /// When handle dead, restart them
-    #[inline]
-    fn reopen_handle(
-        &mut self,
-        dead_handles: impl Iterator<Item = (ProtocolId, Option<SessionId>)>,
-    ) {
-        for (proto_id, session_id) in dead_handles {
-            if let Some(handle) = self.proto_handle(session_id.is_some(), proto_id) {
-                self.handle_open(handle, proto_id, session_id, true)
-            }
-        }
-    }
-
     /// Spawn protocol handle
     #[inline]
     fn handle_open(
@@ -474,7 +455,6 @@ where
         handle: InnerProtocolHandle,
         proto_id: ProtocolId,
         id: Option<SessionId>,
-        reopen: bool,
     ) {
         match handle {
             InnerProtocolHandle::Service(handle) => {
@@ -491,27 +471,6 @@ where
                     .entry(proto_id)
                     .and_modify(|old| *old = sender.clone())
                     .or_insert(sender);
-
-                if reopen {
-                    let sessions = self
-                        .session_service_protos
-                        .iter()
-                        .filter(|(_session_id, protos)| protos.contains(&proto_id))
-                        .map(|(session_id, _)| {
-                            (
-                                *session_id,
-                                Arc::clone(
-                                    &self
-                                        .sessions
-                                        .get(&session_id)
-                                        .expect("can't find session context on connected sessions")
-                                        .inner,
-                                ),
-                            )
-                        })
-                        .collect();
-                    stream.sessions(sessions)
-                }
 
                 stream.handle_event(ServiceProtocolEvent::Init);
 
@@ -929,7 +888,7 @@ where
         // Service proto handle processing flow
         if !self.service_proto_handles.contains_key(&proto_id) {
             if let Some(handle) = self.proto_handle(false, proto_id) {
-                self.handle_open(handle, proto_id, None, false)
+                self.handle_open(handle, proto_id, None)
             }
         }
 
@@ -947,7 +906,7 @@ where
 
         // Session proto handle processing flow
         if let Some(handle) = self.proto_handle(true, proto_id) {
-            self.handle_open(handle, proto_id, Some(id), false);
+            self.handle_open(handle, proto_id, Some(id));
 
             self.read_session_buf.push_back((
                 id,

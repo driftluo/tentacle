@@ -1,5 +1,5 @@
 use crate::{
-    builder::{CodecFn, NameFn, SelectVersionFn, ServiceHandleFn, SessionHandleFn},
+    builder::{CodecFn, NameFn, SelectVersionFn, SessionHandleFn},
     traits::{Codec, ServiceProtocol, SessionProtocol},
     yamux::config::Config as YamuxConfig,
     ProtocolId, SessionId,
@@ -14,8 +14,6 @@ pub(crate) struct ServiceConfig {
     pub max_frame_length: usize,
     /// event output or callback output
     pub event: HashSet<ProtocolId>,
-    /// Whether to allow the handle to be reopen
-    pub reopen: bool,
 }
 
 impl Default for ServiceConfig {
@@ -25,7 +23,6 @@ impl Default for ServiceConfig {
             yamux_config: YamuxConfig::default(),
             max_frame_length: 1024 * 1024 * 8,
             event: HashSet::default(),
-            reopen: false,
         }
     }
 }
@@ -55,7 +52,7 @@ pub enum TargetSession {
 /// Define the minimum data required for a custom protocol
 pub struct ProtocolMeta {
     pub(crate) inner: Arc<Meta>,
-    pub(crate) service_handle: ServiceHandleFn,
+    pub(crate) service_handle: ProtocolHandle<Box<dyn ServiceProtocol + Send + 'static>>,
     pub(crate) session_handle: SessionHandleFn,
 }
 
@@ -92,9 +89,13 @@ impl ProtocolMeta {
     ///
     /// This function is called when the protocol is first opened in the service
     /// and remains in memory until the entire service is closed.
+    ///
+    /// #### Warning
+    ///
+    /// Only can be called once, and will return `ProtocolHandle::Neither` or later.
     #[inline]
     pub fn service_handle(&mut self) -> ProtocolHandle<Box<dyn ServiceProtocol + Send + 'static>> {
-        (self.service_handle)()
+        ::std::mem::replace(&mut self.service_handle, ProtocolHandle::Neither)
     }
 
     /// A session level callback handle for a protocol.
