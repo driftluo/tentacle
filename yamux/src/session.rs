@@ -2,10 +2,11 @@
 
 use std::collections::{BTreeMap, VecDeque};
 use std::io;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use fnv::{FnvHashMap, FnvHashSet};
 use futures::{
+    future::Future,
     sync::mpsc::{channel, Receiver, Sender},
     task::{self, Task},
     try_ready, Async, AsyncSink, Poll, Sink, Stream,
@@ -13,7 +14,7 @@ use futures::{
 use log::{debug, warn};
 use tokio::codec::Framed;
 use tokio::prelude::{AsyncRead, AsyncWrite};
-use tokio::timer::Interval;
+use tokio::timer::{Delay, Interval};
 
 use crate::{
     config::Config,
@@ -24,6 +25,8 @@ use crate::{
 };
 
 const BUF_SHRINK_THRESHOLD: usize = u8::max_value() as usize;
+const DELAY_TIME: Duration = Duration::from_secs(1);
+const TIMEOUT: u64 = 30;
 
 /// The session
 pub struct Session<T> {
@@ -70,6 +73,10 @@ pub struct Session<T> {
     event_receiver: Receiver<StreamEvent>,
 
     keepalive_future: Option<Interval>,
+    /// Delay notify with abnormally poor network status
+    delay: Option<Delay>,
+    /// Last successful send time
+    last_send_success: Instant,
 
     notify: Option<Task>,
 }
@@ -131,6 +138,8 @@ where
             event_sender,
             event_receiver,
             keepalive_future,
+            delay: None,
+            last_send_success: Instant::now(),
             notify: None,
         }
     }
@@ -246,10 +255,19 @@ where
                 Ok(AsyncSink::NotReady(frame)) => {
                     debug!("[{:?}] framed_stream NotReady, frame: {:?}", self.ty, frame);
                     self.write_pending_frames.push_front(frame);
-                    self.notify();
+                    // No message has been sent for 30 seconds,
+                    // we believe the connection is no longer valid
+                    if self.last_send_success.elapsed().as_secs() > TIMEOUT {
+                        return Err(io::ErrorKind::TimedOut.into());
+                    }
+                    if self.delay.is_none() {
+                        self.delay = Some(Delay::new(Instant::now() + DELAY_TIME));
+                    }
                     return Ok(Async::NotReady);
                 }
-                Ok(AsyncSink::Ready) => {}
+                Ok(AsyncSink::Ready) => {
+                    self.last_send_success = Instant::now();
+                }
                 Err(err) => {
                     debug!("[{:?}] framed_stream error: {:?}", self.ty, err);
                     return Err(err);
@@ -480,6 +498,16 @@ where
     fn poll(&mut self) -> Poll<Option<Self::Item>, Self::Error> {
         if self.is_dead() {
             return Ok(Async::Ready(None));
+        }
+
+        if let Some(mut inner) = self.delay.take() {
+            match inner.poll() {
+                Ok(Async::Ready(_)) => {}
+                Ok(Async::NotReady) => self.delay = Some(inner),
+                Err(_) => {
+                    self.delay = Some(Delay::new(Instant::now() + DELAY_TIME));
+                }
+            }
         }
 
         if !self.read_pending_frames.is_empty() || !self.write_pending_frames.is_empty() {
