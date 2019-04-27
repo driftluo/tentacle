@@ -1,6 +1,6 @@
 //! The session, can open and manage substreams
 
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::{BTreeMap, HashSet, VecDeque};
 use std::io;
 use std::time::{Duration, Instant};
 
@@ -26,7 +26,7 @@ use crate::{
 
 const BUF_SHRINK_THRESHOLD: usize = u8::max_value() as usize;
 const DELAY_TIME: Duration = Duration::from_secs(1);
-const TIMEOUT: u64 = 30;
+const TIMEOUT: Duration = Duration::from_secs(30);
 
 /// The session
 pub struct Session<T> {
@@ -257,7 +257,7 @@ where
                     self.write_pending_frames.push_front(frame);
                     // No message has been sent for 30 seconds,
                     // we believe the connection is no longer valid
-                    if self.last_send_success.elapsed().as_secs() > TIMEOUT {
+                    if self.last_send_success.elapsed() > TIMEOUT {
                         return Err(io::ErrorKind::TimedOut.into());
                     }
                     if self.delay.is_none() {
@@ -307,8 +307,15 @@ where
 
     /// Try send buffer to all sub streams
     fn distribute_to_substream(&mut self) -> Result<(), io::Error> {
+        let mut block_substream = HashSet::new();
+
         for frame in self.read_pending_frames.split_off(0) {
             let stream_id = frame.stream_id();
+            // Guarantee the order in which messages are sent
+            if block_substream.contains(&stream_id) {
+                self.read_pending_frames.push_back(frame);
+                continue;
+            }
             if frame.flags().contains(Flag::Syn) {
                 if self.local_go_away {
                     let flags = Flags::from(Flag::Rst);
@@ -334,6 +341,7 @@ where
                             if err.is_full() {
                                 self.read_pending_frames.push_back(err.into_inner());
                                 self.notify();
+                                block_substream.insert(stream_id);
                                 false
                             } else {
                                 debug!("send to stream error: {:?}", err);
