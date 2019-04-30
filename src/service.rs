@@ -728,7 +728,7 @@ where
                             return;
                         }
                     } else {
-                        address.append(Protocol::P2p(
+                        address.push(Protocol::P2p(
                             Multihash::from_bytes(key.peer_id().into_bytes())
                                 .expect("Invalid peer id"),
                         ))

@@ -100,7 +100,7 @@ fn test_peer_id(fail: bool) {
     if fail {
         (1..11).for_each(|_| {
             let mut addr = listen_addr.clone();
-            addr.append(MultiProtocol::P2p(
+            addr.push(MultiProtocol::P2p(
                 Multihash::from_bytes(
                     SecioKeyPair::secp256k1_generated()
                         .to_peer_id()
@@ -113,7 +113,7 @@ fn test_peer_id(fail: bool) {
         });
         assert_eq!(error_receiver.recv(), Ok(9));
     } else {
-        listen_addr.append(MultiProtocol::P2p(
+        listen_addr.push(MultiProtocol::P2p(
             Multihash::from_bytes(key.to_peer_id().into_bytes()).expect("Invalid peer id"),
         ));
         control.dial(listen_addr, DialProtocol::All).unwrap();

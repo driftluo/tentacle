@@ -1,4 +1,4 @@
-use std::io;
+use std::{convert::TryFrom, io};
 
 use bytes::{Bytes, BytesMut};
 use flatbuffers::FlatBufferBuilder;
@@ -96,7 +96,7 @@ impl DiscoveryMessage {
                 for item in items {
                     let mut vec_addrs = Vec::new();
                     for address in &item.addresses {
-                        let seq = fbb.create_vector(&address.to_bytes());
+                        let seq = fbb.create_vector(address.as_ref());
                         let mut bytes_builder = BytesBuilder::new(&mut fbb);
                         bytes_builder.add_seq(seq);
                         vec_addrs.push(bytes_builder.finish());
@@ -149,7 +149,7 @@ impl DiscoveryMessage {
                     let mut addresses = Vec::new();
                     for j in 0..fbs_addresses.len() {
                         let address = fbs_addresses.get(j);
-                        let multiaddr = Multiaddr::from_bytes(address.seq()?.to_vec()).ok()?;
+                        let multiaddr = Multiaddr::try_from(address.seq()?.to_vec()).ok()?;
                         addresses.push(multiaddr);
                     }
                     items.push(Node { addresses });

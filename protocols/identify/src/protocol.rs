@@ -9,6 +9,8 @@ use crate::protocol_generated::p2p::identify::{
 use bytes::Bytes;
 use p2p::multiaddr::Multiaddr;
 
+use std::convert::TryFrom;
+
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub enum IdentifyMessage {
     ListenAddrs(Vec<Multiaddr>),
@@ -79,12 +81,12 @@ fn addr_to_offset<'b>(
     fbb: &mut FlatBufferBuilder<'b>,
     addr: &Multiaddr,
 ) -> WIPOffset<FbsAddress<'b>> {
-    let bytes = fbb.create_vector(&addr.to_bytes());
+    let bytes = fbb.create_vector(addr.as_ref());
     let mut addr_builder = AddressBuilder::new(fbb);
     addr_builder.add_bytes(bytes);
     addr_builder.finish()
 }
 
 fn fbs_to_addr(addr: &FbsAddress) -> Option<Multiaddr> {
-    Multiaddr::from_bytes(addr.bytes()?.to_vec()).ok()
+    Multiaddr::try_from(addr.bytes()?.to_vec()).ok()
 }

@@ -2,9 +2,9 @@ use futures::{Async, Future, Poll};
 use std::{io, net::ToSocketAddrs};
 
 use crate::{
-    multiaddr::{multihash::Multihash, Multiaddr, Protocol, ToMultiaddr},
+    multiaddr::{multihash::Multihash, Multiaddr, Protocol},
     secio::PeerId,
-    utils::{extract_peer_id, is_ws},
+    utils::{extract_peer_id, is_ws, socketaddr_to_multiaddr},
 };
 
 /// DNS resolver, use on multi-thread tokio runtime
@@ -65,13 +65,13 @@ impl Future for DNSResolver {
         match tokio_threadpool::blocking(|| (self.domain.as_str(), self.port).to_socket_addrs()) {
             Ok(Async::Ready(Ok(mut iter))) => match iter.next() {
                 Some(address) => {
-                    let mut address = address.to_multiaddr().unwrap();
+                    let mut address = socketaddr_to_multiaddr(address);
 
                     if self.ws {
-                        address.append(Protocol::Ws);
+                        address.push(Protocol::Ws);
                     }
                     if let Some(peer_id) = self.peer_id.take() {
-                        address.append(Protocol::P2p(
+                        address.push(Protocol::P2p(
                             Multihash::from_bytes(peer_id.into_bytes()).expect("Invalid peer id"),
                         ))
                     }
