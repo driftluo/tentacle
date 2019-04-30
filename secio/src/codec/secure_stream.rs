@@ -6,17 +6,25 @@ use futures::{
     task::{self, Task},
 };
 use log::{debug, trace};
-use tokio::codec::{length_delimited::LengthDelimitedCodec, Framed};
-use tokio::prelude::{AsyncRead, AsyncWrite};
+use tokio::{
+    codec::{length_delimited::LengthDelimitedCodec, Framed},
+    prelude::{AsyncRead, AsyncWrite},
+    timer::Delay,
+};
 
-use std::cmp::min;
-use std::collections::VecDeque;
-use std::io;
+use std::{
+    cmp::min,
+    collections::VecDeque,
+    io,
+    time::{Duration, Instant},
+};
 
 use crate::{
     codec::{stream_handle::StreamEvent, stream_handle::StreamHandle, Hmac, StreamCipher},
     error::SecioError,
 };
+
+const DELAY_TIME: Duration = Duration::from_millis(300);
 
 /// Encrypted stream
 pub struct SecureStream<T> {
@@ -41,6 +49,8 @@ pub struct SecureStream<T> {
     event_sender: Sender<StreamEvent>,
     // For receive events from sub streams
     event_receiver: Receiver<StreamEvent>,
+    /// Delay notify with abnormally poor network status
+    delay: Option<Delay>,
 
     notify: Option<Task>,
 }
@@ -72,6 +82,7 @@ where
             frame_sender: None,
             event_sender,
             event_receiver,
+            delay: None,
             notify: None,
         }
     }
@@ -92,9 +103,11 @@ where
     fn send_frame(&mut self) -> Result<(), io::Error> {
         while let Some(frame) = self.pending.pop_front() {
             if let AsyncSink::NotReady(data) = self.socket.start_send(frame)? {
-                debug!("can't send");
+                debug!("socket not ready, can't send");
                 self.pending.push_front(data);
-                self.notify();
+                if self.delay.is_none() {
+                    self.delay = Some(Delay::new(Instant::now() + DELAY_TIME));
+                }
                 break;
             }
         }
@@ -128,12 +141,11 @@ where
     fn recv_frame(&mut self) -> Poll<Option<()>, SecioError> {
         loop {
             match self.socket.poll() {
-                Ok(Async::Ready(Some(t))) => {
+                Ok(Async::Ready(Some(mut t))) => {
                     trace!("receive raw data size: {:?}", t.len());
-                    let data = self.decode(&t)?;
-                    debug!("receive data size: {:?}", data.len());
-                    self.read_buf
-                        .push_back(StreamEvent::Frame(BytesMut::from(data)));
+                    self.decode(&mut t)?;
+                    debug!("receive data size: {:?}", t.len());
+                    self.read_buf.push_back(StreamEvent::Frame(t));
                     self.send_to_handle()?;
                 }
                 Ok(Async::Ready(None)) => {
@@ -156,13 +168,12 @@ where
 
     #[inline]
     fn send_to_handle(&mut self) -> Result<(), io::Error> {
-        let mut notify = false;
         if let Some(ref mut sender) = self.frame_sender {
             while let Some(event) = self.read_buf.pop_front() {
                 if let Err(e) = sender.try_send(event) {
                     if e.is_full() {
                         self.read_buf.push_front(e.into_inner());
-                        notify = true;
+                        self.notify();
                         break;
                     } else {
                         debug!("send error: {}", e);
@@ -172,9 +183,6 @@ where
             }
         };
 
-        if notify {
-            self.notify();
-        }
         Ok(())
     }
 
@@ -194,7 +202,7 @@ where
 
     /// Decoding data
     #[inline]
-    fn decode(&mut self, frame: &BytesMut) -> Result<Vec<u8>, SecioError> {
+    fn decode(&mut self, frame: &mut BytesMut) -> Result<(), SecioError> {
         if frame.len() < self.decode_hmac.num_bytes() {
             debug!("frame too short when decoding secio frame");
             return Err(SecioError::FrameTooShort);
@@ -211,19 +219,18 @@ where
             }
         }
 
-        let mut data_buf = frame.to_vec();
-        data_buf.truncate(content_length);
-        self.decode_cipher.decrypt(&mut data_buf);
+        frame.truncate(content_length);
+        self.decode_cipher.decrypt(frame);
 
         if !self.nonce.is_empty() {
-            let n = min(data_buf.len(), self.nonce.len());
-            if data_buf[..n] != self.nonce[..n] {
+            let n = min(frame.len(), self.nonce.len());
+            if frame[..n] != self.nonce[..n] {
                 return Err(SecioError::NonceVerificationFailed);
             }
             self.nonce.drain(..n);
-            data_buf.drain(..n);
+            frame.split_to(n);
         }
-        Ok(data_buf)
+        Ok(())
     }
 
     /// Encoding data
@@ -246,6 +253,16 @@ where
         // Stream must ensure that the handshake is completed
         if self.dead && self.nonce.is_empty() {
             return Ok(Async::Ready(None));
+        }
+
+        if let Some(mut inner) = self.delay.take() {
+            match inner.poll() {
+                Ok(Async::Ready(_)) => {}
+                Ok(Async::NotReady) => self.delay = Some(inner),
+                Err(_) => {
+                    self.delay = Some(Delay::new(Instant::now() + DELAY_TIME));
+                }
+            }
         }
 
         if !self.pending.is_empty() || !self.read_buf.is_empty() {
