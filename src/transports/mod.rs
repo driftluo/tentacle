@@ -1,4 +1,4 @@
-use crate::multiaddr::{Multiaddr, ToMultiaddr};
+use crate::{multiaddr::Multiaddr, utils::socketaddr_to_multiaddr};
 
 use futures::prelude::{Async, Future, Poll, Stream};
 use log::debug;
@@ -180,9 +180,7 @@ impl Stream for MultiIncoming {
                 // so why incoming will appear unconnected stream ?
                 Async::Ready(Some(stream)) => match stream.peer_addr() {
                     Ok(remote_address) => Ok(Async::Ready(Some((
-                        remote_address
-                            .to_multiaddr()
-                            .expect("socket address to multiaddr fail"),
+                        socketaddr_to_multiaddr(remote_address),
                         MultiStream::Tcp(stream),
                     )))),
                     Err(err) => {

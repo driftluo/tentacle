@@ -2,7 +2,10 @@ use crate::{
     multiaddr::{Multiaddr, Protocol},
     secio::PeerId,
 };
-use std::net::{IpAddr, SocketAddr};
+use std::{
+    iter::{self, FromIterator},
+    net::{IpAddr, SocketAddr},
+};
 
 /// This module create a `DNSResolver` future task to DNS resolver
 pub mod dns;
@@ -83,6 +86,16 @@ pub fn multiaddr_to_socketaddr(addr: &Multiaddr) -> Option<SocketAddr> {
     }
 
     None
+}
+
+/// convert socket address to multiaddr
+pub fn socketaddr_to_multiaddr(address: SocketAddr) -> Multiaddr {
+    let proto = match address.ip() {
+        IpAddr::V4(ip) => Protocol::Ip4(ip),
+        IpAddr::V6(ip) => Protocol::Ip6(ip),
+    };
+    let it = iter::once(proto).chain(iter::once(Protocol::Tcp(address.port())));
+    Multiaddr::from_iter(it)
 }
 
 /// Get peer id from multiaddr

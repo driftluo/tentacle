@@ -11,9 +11,9 @@ use tokio::{
 };
 
 use crate::{
-    multiaddr::{Multiaddr, ToMultiaddr},
+    multiaddr::Multiaddr,
     transports::{Transport, TransportError},
-    utils::{dns::DNSResolver, multiaddr_to_socketaddr},
+    utils::{dns::DNSResolver, multiaddr_to_socketaddr, socketaddr_to_multiaddr},
 };
 
 /// Tcp listen bind
@@ -21,11 +21,8 @@ fn bind(address: Multiaddr) -> Result<(Multiaddr, Incoming), TransportError> {
     match multiaddr_to_socketaddr(&address) {
         Some(socket_address) => {
             let tcp = TcpListener::bind(&socket_address).map_err(TransportError::Io)?;
-            let listen_addr = tcp
-                .local_addr()
-                .map_err(TransportError::Io)?
-                .to_multiaddr()
-                .unwrap();
+            let listen_addr =
+                socketaddr_to_multiaddr(tcp.local_addr().map_err(TransportError::Io)?);
 
             Ok((listen_addr, tcp.incoming()))
         }
