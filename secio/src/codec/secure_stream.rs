@@ -1,10 +1,6 @@
 use bytes::{Bytes, BytesMut};
 use futures::sync::mpsc::{self, Receiver, Sender};
-use futures::{
-    prelude::*,
-    sink::Sink,
-    task::{self, Task},
-};
+use futures::{prelude::*, sink::Sink, stream::iter_ok};
 use log::{debug, trace};
 use tokio::{
     codec::{length_delimited::LengthDelimitedCodec, Framed},
@@ -51,8 +47,6 @@ pub struct SecureStream<T> {
     event_receiver: Receiver<StreamEvent>,
     /// Delay notify with abnormally poor network status
     delay: Option<Delay>,
-
-    notify: Option<Task>,
 }
 
 impl<T> SecureStream<T>
@@ -83,7 +77,6 @@ where
             event_sender,
             event_receiver,
             delay: None,
-            notify: None,
         }
     }
 
@@ -105,9 +98,7 @@ where
             if let AsyncSink::NotReady(data) = self.socket.start_send(frame)? {
                 debug!("socket not ready, can't send");
                 self.pending.push_front(data);
-                if self.delay.is_none() {
-                    self.delay = Some(Delay::new(Instant::now() + DELAY_TIME));
-                }
+                self.set_delay();
                 break;
             }
         }
@@ -173,7 +164,7 @@ where
                 if let Err(e) = sender.try_send(event) {
                     if e.is_full() {
                         self.read_buf.push_front(e.into_inner());
-                        self.notify();
+                        self.set_delay();
                         break;
                     } else {
                         debug!("send error: {}", e);
@@ -194,9 +185,30 @@ where
     }
 
     #[inline]
-    fn notify(&mut self) {
-        if let Some(task) = self.notify.take() {
-            task.notify();
+    fn set_delay(&mut self) {
+        // Why use `delay` instead of `notify`?
+        //
+        // In fact, on machines that can use multi-core normally, there is almost no problem with the `notify` behavior,
+        // and even the efficiency will be higher.
+        //
+        // However, if you are on a single-core bully machine, `notify` may have a very amazing starvation behavior.
+        //
+        // Under a single-core machine, `notify` may fall into the loop of infinitely preemptive CPU, causing starvation.
+        if self.delay.is_none() {
+            self.delay = Some(Delay::new(Instant::now() + DELAY_TIME));
+        }
+    }
+
+    fn close(&mut self) {
+        self.read_buf.push_back(StreamEvent::Close);
+        let events = self.read_buf.split_off(0);
+        if let Some(sender) = self.frame_sender.take() {
+            tokio::spawn(
+                sender
+                    .send_all(iter_ok(events))
+                    .map(|_| ())
+                    .map_err(|e| debug!("close event send to handle error: {:?}", e)),
+            );
         }
     }
 
@@ -271,16 +283,12 @@ where
 
         match self.recv_frame() {
             Ok(Async::Ready(None)) => {
-                if let Some(mut sender) = self.frame_sender.take() {
-                    let _ = sender.try_send(StreamEvent::Close);
-                }
+                self.close();
                 return Ok(Async::Ready(None));
             }
             Err(err) => {
                 debug!("receive frame error: {:?}", err);
-                if let Some(mut sender) = self.frame_sender.take() {
-                    let _ = sender.try_send(StreamEvent::Close);
-                }
+                self.close();
                 return Err(err.into());
             }
             _ => (),
@@ -311,7 +319,6 @@ where
             return Ok(Async::Ready(None));
         }
 
-        self.notify = Some(task::current());
         Ok(Async::NotReady)
     }
 }

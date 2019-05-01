@@ -1,18 +1,19 @@
-use futures::{
-    prelude::*,
-    stream::iter_ok,
-    sync::mpsc,
-    task::{self, Task},
-};
+use futures::{prelude::*, stream::iter_ok, sync::mpsc};
 use log::debug;
-use std::collections::VecDeque;
-use std::io::{self, ErrorKind};
+use std::{
+    collections::VecDeque,
+    io::{self, ErrorKind},
+    time::Instant,
+};
 use tokio::{
     codec::{length_delimited::LengthDelimitedCodec, Framed},
     prelude::AsyncWrite,
+    timer::Delay,
 };
 
-use crate::{error::Error, traits::Codec, yamux::StreamHandle, ProtocolId, StreamId};
+use crate::{
+    error::Error, service::DELAY_TIME, traits::Codec, yamux::StreamHandle, ProtocolId, StreamId,
+};
 
 /// Event generated/received by the protocol stream
 #[derive(Debug)]
@@ -72,8 +73,8 @@ pub(crate) struct SubStream<U> {
     event_sender: mpsc::Sender<ProtocolEvent>,
     /// Receive events from session
     event_receiver: mpsc::Receiver<ProtocolEvent>,
-
-    notify: Option<Task>,
+    /// Delay notify with abnormally poor machines
+    delay: Option<Delay>,
 }
 
 impl<U> SubStream<U>
@@ -96,7 +97,7 @@ where
             event_receiver,
             write_buf: VecDeque::new(),
             read_buf: VecDeque::new(),
-            notify: None,
+            delay: None,
             dead: false,
         }
     }
@@ -203,7 +204,7 @@ where
             if let Err(e) = self.event_sender.try_send(event) {
                 if e.is_full() {
                     self.read_buf.push_front(e.into_inner());
-                    self.notify();
+                    self.set_delay();
                 } else {
                     debug!("proto send to session error: {}, may be kill by remote", e);
                     self.dead = true;
@@ -214,9 +215,17 @@ where
     }
 
     #[inline]
-    fn notify(&mut self) {
-        if let Some(task) = self.notify.take() {
-            task.notify();
+    fn set_delay(&mut self) {
+        // Why use `delay` instead of `notify`?
+        //
+        // In fact, on machines that can use multi-core normally, there is almost no problem with the `notify` behavior,
+        // and even the efficiency will be higher.
+        //
+        // However, if you are on a single-core bully machine, `notify` may have a very amazing starvation behavior.
+        //
+        // Under a single-core machine, `notify` may fall into the loop of infinitely preemptive CPU, causing starvation.
+        if self.delay.is_none() {
+            self.delay = Some(Delay::new(Instant::now() + DELAY_TIME));
         }
     }
 
@@ -248,6 +257,16 @@ where
             if let Err(err) = self.flush() {
                 self.error_close(err);
                 return Err(());
+            }
+        }
+
+        if let Some(mut inner) = self.delay.take() {
+            match inner.poll() {
+                Ok(Async::Ready(_)) => {}
+                Ok(Async::NotReady) => self.delay = Some(inner),
+                Err(_) => {
+                    self.delay = Some(Delay::new(Instant::now() + DELAY_TIME));
+                }
             }
         }
 
@@ -314,7 +333,6 @@ where
             return Ok(Async::Ready(None));
         }
 
-        self.notify = Some(task::current());
         Ok(Async::NotReady)
     }
 }
