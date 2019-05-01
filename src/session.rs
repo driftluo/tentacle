@@ -1,9 +1,4 @@
-use futures::{
-    prelude::*,
-    stream::iter_ok,
-    sync::mpsc,
-    task::{self, Task},
-};
+use futures::{prelude::*, stream::iter_ok, sync::mpsc};
 use log::{debug, error, trace, warn};
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::Arc;
@@ -22,7 +17,9 @@ use crate::{
     multiaddr::Multiaddr,
     protocol_select::{client_select, server_select, ProtocolInfo},
     secio::{codec::stream_handle::StreamHandle as SecureHandle, PublicKey},
-    service::{config::Meta, SessionType, BUF_SHRINK_THRESHOLD, RECEIVED_SIZE, SEND_SIZE},
+    service::{
+        config::Meta, SessionType, BUF_SHRINK_THRESHOLD, DELAY_TIME, RECEIVED_SIZE, SEND_SIZE,
+    },
     substream::{ProtocolEvent, SubStream},
     transports::{MultiIncoming, MultiStream},
     yamux::{Config, Session as YamuxSession, StreamHandle},
@@ -161,8 +158,8 @@ pub(crate) struct Session<T> {
     service_sender: mpsc::Sender<SessionEvent>,
     /// Receive event from service
     service_receiver: mpsc::Receiver<SessionEvent>,
-
-    notify: Option<Task>,
+    /// Delay notify with abnormally poor machines
+    delay: Option<Delay>,
 }
 
 impl<T> Session<T>
@@ -194,7 +191,7 @@ where
             proto_event_receiver,
             service_sender,
             service_receiver,
-            notify: None,
+            delay: None,
             state: SessionState::Normal,
         }
     }
@@ -277,7 +274,7 @@ where
             if let Err(e) = self.service_sender.try_send(event) {
                 if e.is_full() {
                     self.read_buf.push_front(e.into_inner());
-                    self.notify();
+                    self.set_delay();
                     return;
                 } else {
                     error!("session send to service error: {}", e);
@@ -301,7 +298,7 @@ where
                     if let Err(e) = sender.try_send(event) {
                         if e.is_full() {
                             self.write_buf.push_back((proto_id, e.into_inner()));
-                            self.notify();
+                            self.set_delay();
                             block_substream.insert(proto_id);
                         } else {
                             debug!("session send to sub stream error: {}", e);
@@ -520,9 +517,17 @@ where
     }
 
     #[inline]
-    fn notify(&mut self) {
-        if let Some(task) = self.notify.take() {
-            task.notify();
+    fn set_delay(&mut self) {
+        // Why use `delay` instead of `notify`?
+        //
+        // In fact, on machines that can use multi-core normally, there is almost no problem with the `notify` behavior,
+        // and even the efficiency will be higher.
+        //
+        // However, if you are on a single-core bully machine, `notify` may have a very amazing starvation behavior.
+        //
+        // Under a single-core machine, `notify` may fall into the loop of infinitely preemptive CPU, causing starvation.
+        if self.delay.is_none() {
+            self.delay = Some(Delay::new(Instant::now() + DELAY_TIME));
         }
     }
 }
@@ -549,6 +554,16 @@ where
 
         if !self.read_buf.is_empty() || !self.write_buf.is_empty() {
             self.flush();
+        }
+
+        if let Some(mut inner) = self.delay.take() {
+            match inner.poll() {
+                Ok(Async::Ready(_)) => {}
+                Ok(Async::NotReady) => self.delay = Some(inner),
+                Err(_) => {
+                    self.delay = Some(Delay::new(Instant::now() + DELAY_TIME));
+                }
+            }
         }
 
         if let Some(mut check) = self.timeout_check.take() {
@@ -655,7 +670,6 @@ where
             SessionState::Normal => (),
         }
 
-        self.notify = Some(task::current());
         Ok(Async::NotReady)
     }
 }

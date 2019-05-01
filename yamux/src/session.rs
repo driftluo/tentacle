@@ -8,7 +8,6 @@ use fnv::{FnvHashMap, FnvHashSet};
 use futures::{
     future::Future,
     sync::mpsc::{channel, Receiver, Sender},
-    task::{self, Task},
     try_ready, Async, AsyncSink, Poll, Sink, Stream,
 };
 use log::{debug, warn};
@@ -25,7 +24,7 @@ use crate::{
 };
 
 const BUF_SHRINK_THRESHOLD: usize = u8::max_value() as usize;
-const DELAY_TIME: Duration = Duration::from_secs(1);
+const DELAY_TIME: Duration = Duration::from_millis(300);
 const TIMEOUT: Duration = Duration::from_secs(30);
 
 /// The session
@@ -77,8 +76,6 @@ pub struct Session<T> {
     delay: Option<Delay>,
     /// Last successful send time
     last_send_success: Instant,
-
-    notify: Option<Task>,
 }
 
 /// Session type, client or server
@@ -140,7 +137,6 @@ where
             keepalive_future,
             delay: None,
             last_send_success: Instant::now(),
-            notify: None,
         }
     }
 
@@ -260,9 +256,7 @@ where
                     if self.last_send_success.elapsed() > TIMEOUT {
                         return Err(io::ErrorKind::TimedOut.into());
                     }
-                    if self.delay.is_none() {
-                        self.delay = Some(Delay::new(Instant::now() + DELAY_TIME));
-                    }
+                    self.set_delay();
                     return Ok(Async::NotReady);
                 }
                 Ok(AsyncSink::Ready) => {
@@ -340,7 +334,7 @@ where
                         Err(err) => {
                             if err.is_full() {
                                 self.read_pending_frames.push_back(err.into_inner());
-                                self.notify();
+                                self.set_delay();
                                 block_substream.insert(stream_id);
                                 false
                             } else {
@@ -489,9 +483,17 @@ where
     }
 
     #[inline]
-    fn notify(&mut self) {
-        if let Some(task) = self.notify.take() {
-            task.notify();
+    fn set_delay(&mut self) {
+        // Why use `delay` instead of `notify`?
+        //
+        // In fact, on machines that can use multi-core normally, there is almost no problem with the `notify` behavior,
+        // and even the efficiency will be higher.
+        //
+        // However, if you are on a single-core bully machine, `notify` may have a very amazing starvation behavior.
+        //
+        // Under a single-core machine, `notify` may fall into the loop of infinitely preemptive CPU, causing starvation.
+        if self.delay.is_none() {
+            self.delay = Some(Delay::new(Instant::now() + DELAY_TIME));
         }
     }
 }
@@ -546,7 +548,6 @@ where
             return Ok(Async::Ready(None));
         }
 
-        self.notify = Some(task::current());
         Ok(Async::NotReady)
     }
 }

@@ -1,7 +1,6 @@
 use futures::{
     prelude::*,
     sync::{mpsc, oneshot},
-    task::{self, Task},
 };
 use log::{debug, error, trace, warn};
 use std::collections::{HashMap, HashSet, VecDeque};
@@ -51,6 +50,7 @@ pub(crate) const BUF_SHRINK_THRESHOLD: usize = u8::max_value() as usize;
 pub(crate) const RECEIVED_SIZE: usize = 256;
 /// Send to remote, distribute mode, buffer size is less than 8 times the received
 pub(crate) const SEND_SIZE: usize = 32;
+pub(crate) const DELAY_TIME: Duration = Duration::from_millis(300);
 
 /// Protocol handle value
 pub(crate) enum InnerProtocolHandle {
@@ -115,8 +115,8 @@ pub struct Service<T> {
     pending_tasks: VecDeque<ServiceTask>,
     /// When handle channel full, set a deadline(30 second) to notify user
     handles_error_count: HashMap<(ProtocolId, Option<SessionId>), Option<Delay>>,
-
-    notify: Option<Task>,
+    /// Delay notify with abnormally poor machines
+    delay: Option<Delay>,
 }
 
 impl<T> Service<T>
@@ -167,7 +167,7 @@ where
             service_task_receiver,
             pending_tasks: VecDeque::default(),
             handles_error_count: HashMap::default(),
-            notify: None,
+            delay: None,
         }
     }
 
@@ -318,7 +318,7 @@ where
                         block_sessions.insert(id);
                         debug!("session [{}] is full", id);
                         self.write_buf.push_back((id, e.into_inner()));
-                        self.notify();
+                        self.set_delay();
                     } else {
                         error!("channel shutdown, message can't send")
                     }
@@ -431,7 +431,7 @@ where
                     let error = session_id
                         .map(Error::SessionProtoHandleBlock)
                         .unwrap_or(Error::ServiceProtoHandleBlock);
-                    self.notify();
+                    self.set_delay();
                     self.handle.handle_error(
                         &mut self.service_context,
                         ServiceError::ProtocolHandleError { proto_id, error },
@@ -1496,9 +1496,17 @@ where
     }
 
     #[inline]
-    fn notify(&mut self) {
-        if let Some(task) = self.notify.take() {
-            task.notify();
+    fn set_delay(&mut self) {
+        // Why use `delay` instead of `notify`?
+        //
+        // In fact, on machines that can use multi-core normally, there is almost no problem with the `notify` behavior,
+        // and even the efficiency will be higher.
+        //
+        // However, if you are on a single-core bully machine, `notify` may have a very amazing starvation behavior.
+        //
+        // Under a single-core machine, `notify` may fall into the loop of infinitely preemptive CPU, causing starvation.
+        if self.delay.is_none() {
+            self.delay = Some(Delay::new(Instant::now() + DELAY_TIME));
         }
     }
 }
@@ -1529,6 +1537,16 @@ where
         {
             self.distribute_to_session();
             self.distribute_to_user_level();
+        }
+
+        if let Some(mut inner) = self.delay.take() {
+            match inner.poll() {
+                Ok(Async::Ready(_)) => {}
+                Ok(Async::NotReady) => self.delay = Some(inner),
+                Err(_) => {
+                    self.delay = Some(Delay::new(Instant::now() + DELAY_TIME));
+                }
+            }
         }
 
         self.listen_poll();
@@ -1576,7 +1594,6 @@ where
             self.pending_tasks.len(),
         );
 
-        self.notify = Some(task::current());
         Ok(Async::NotReady)
     }
 }
