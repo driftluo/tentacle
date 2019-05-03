@@ -56,6 +56,17 @@ impl FutureTaskManager {
     }
 }
 
+impl Drop for FutureTaskManager {
+    fn drop(&mut self) {
+        // Because of https://docs.rs/futures/0.1.26/src/futures/sync/oneshot.rs.html#205-209
+        // just drop may case deadlock, and receiver will block on runtime, we use send to drop
+        // all future task as soon as possible
+        self.signals.drain().for_each(|(_, sender)| {
+            let _ = sender.send(());
+        })
+    }
+}
+
 impl Stream for FutureTaskManager {
     type Item = ();
     type Error = ();
