@@ -13,7 +13,7 @@ edition = "2018"
 p2p = { path = "../..", version = "0.2.0-alpha.7", package = "tentacle" }
 log = "0.4"
 flatbuffers = "0.6.0"
-flatbuffers-verifier = "0.1.8"
+flatbuffers-verifier = "0.2.0"
 fnv = "1.0.6"
 generic-channel = "0.2.0"
 bytes = "0.4"
