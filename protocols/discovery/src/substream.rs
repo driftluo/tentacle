@@ -366,17 +366,12 @@ impl Substream {
             sender: context.control().clone(),
         };
         let listen_port = if context.session.ty.is_outbound() {
-            let local = multiaddr_to_socketaddr(&context.session.address)
-                .unwrap()
-                .ip()
-                .is_loopback();
-
             context
                 .listens()
                 .iter()
                 .map(|address| multiaddr_to_socketaddr(address).unwrap())
                 .filter_map(|address| {
-                    if local || RawAddr::from(address).is_reachable() {
+                    if !address.ip().is_loopback() || RawAddr::from(address).is_reachable() {
                         Some(address.port())
                     } else {
                         None
