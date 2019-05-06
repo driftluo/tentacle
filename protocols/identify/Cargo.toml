@@ -1,6 +1,6 @@
 [package]
 name = "tentacle-identify"
-version = "0.2.2"
+version = "0.2.3"
 authors = ["Qian Linfeng <thewawar@gmail.com>"]
 license = "MIT"
 description = "p2p identify protocol"
@@ -10,7 +10,7 @@ categories = ["network-programming", "asynchronous"]
 edition = "2018"
 
 [dependencies]
-p2p = { path = "../..", version = "0.2.0-alpha.7", package = "tentacle" }
+p2p = { path = "../..", version = "0.2.0-alpha.9", package = "tentacle" }
 bytes = "0.4"
 flatbuffers = "0.6.0"
 flatbuffers-verifier = "0.2.0"

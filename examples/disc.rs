@@ -27,7 +27,7 @@ fn main() {
 
     if std::env::args().nth(1) == Some("server".to_string()) {
         debug!("Starting server ......");
-        let _ = service.listen("/ip4/127.0.0.1/tcp/1337".parse().unwrap());
+        let _ = service.listen("/ip4/0.0.0.0/tcp/1337".parse().unwrap());
         tokio::run(service.for_each(|_| Ok(())))
     } else {
         debug!("Starting client ......");
@@ -36,7 +36,7 @@ fn main() {
             "/ip4/127.0.0.1/tcp/1337".parse().unwrap(),
             DialProtocol::All,
         );
-        let _ = service.listen("/ip4/127.0.0.1/tcp/1338".parse().unwrap());
+        let _ = service.listen("/ip4/0.0.0.0/tcp/1338".parse().unwrap());
         tokio::run(service.for_each(|_| Ok(())))
     }
 }
