@@ -1,6 +1,6 @@
 [package]
 name = "tentacle"
-version = "0.2.0-alpha.8"
+version = "0.2.0-alpha.9"
 license = "MIT"
 description = "Minimal implementation for a multiplexed p2p network framework."
 authors = ["piaoliu <441594700@qq.com>", "Nervos Core Dev <dev@nervos.org>"]
@@ -13,7 +13,7 @@ edition = "2018"
 
 [dependencies]
 yamux = { path = "yamux", version = "0.1.7", package = "tokio-yamux" }
-secio = { path = "secio", version = "0.1.3", package = "tentacle-secio" }
+secio = { path = "secio", version = "0.1.4", package = "tentacle-secio" }
 
 futures = "0.1"
 tokio = "0.1"
