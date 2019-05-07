@@ -7,7 +7,7 @@ use crate::{
     error::Error,
     multiaddr::Multiaddr,
     protocol_select::ProtocolInfo,
-    service::{DialProtocol, ServiceTask, TargetSession},
+    service::{event::Priority, DialProtocol, ServiceTask, TargetSession},
     ProtocolId, SessionId,
 };
 use bytes::Bytes;
@@ -16,6 +16,7 @@ use bytes::Bytes;
 #[derive(Clone)]
 pub struct ServiceControl {
     pub(crate) service_task_sender: mpsc::UnboundedSender<ServiceTask>,
+    pub(crate) quick_send: mpsc::UnboundedSender<ServiceTask>,
     pub(crate) proto_infos: Arc<HashMap<ProtocolId, ProtocolInfo>>,
 }
 
@@ -23,10 +24,12 @@ impl ServiceControl {
     /// New
     pub(crate) fn new(
         service_task_sender: mpsc::UnboundedSender<ServiceTask>,
+        quick_send: mpsc::UnboundedSender<ServiceTask>,
         proto_infos: HashMap<ProtocolId, ProtocolInfo>,
     ) -> Self {
         ServiceControl {
             service_task_sender,
+            quick_send,
             proto_infos: Arc::new(proto_infos),
         }
     }
@@ -37,6 +40,12 @@ impl ServiceControl {
         self.service_task_sender
             .unbounded_send(event)
             .map_err(Into::into)
+    }
+
+    /// Send raw event on quick channel
+    #[inline]
+    fn quick_send(&self, event: ServiceTask) -> Result<(), Error> {
+        self.quick_send.unbounded_send(event).map_err(Into::into)
     }
 
     /// Get service protocol message, Map(ID, Name), but can't modify
@@ -74,6 +83,17 @@ impl ServiceControl {
         self.filter_broadcast(TargetSession::Single(session_id), proto_id, data)
     }
 
+    /// Send message on quick channel
+    #[inline]
+    pub fn quick_send_message_to(
+        &self,
+        session_id: SessionId,
+        proto_id: ProtocolId,
+        data: Bytes,
+    ) -> Result<(), Error> {
+        self.quick_filter_broadcast(TargetSession::Single(session_id), proto_id, data)
+    }
+
     /// Send data to the specified protocol for the specified sessions.
     #[inline]
     pub fn filter_broadcast(
@@ -85,6 +105,23 @@ impl ServiceControl {
         self.send(ServiceTask::ProtocolMessage {
             target,
             proto_id,
+            priority: Priority::Normal,
+            data,
+        })
+    }
+
+    /// Send data to the specified protocol for the specified sessions on quick channel.
+    #[inline]
+    pub fn quick_filter_broadcast(
+        &self,
+        target: TargetSession,
+        proto_id: ProtocolId,
+        data: Bytes,
+    ) -> Result<(), Error> {
+        self.quick_send(ServiceTask::ProtocolMessage {
+            target,
+            proto_id,
+            priority: Priority::High,
             data,
         })
     }
@@ -179,11 +216,11 @@ impl ServiceControl {
     /// 3. try close all session
     /// 4. close service
     pub fn close(&self) -> Result<(), Error> {
-        self.send(ServiceTask::Shutdown(false))
+        self.quick_send(ServiceTask::Shutdown(false))
     }
 
     /// Shutdown service, don't care anything, may cause partial message loss
     pub fn shutdown(&self) -> Result<(), Error> {
-        self.send(ServiceTask::Shutdown(true))
+        self.quick_send(ServiceTask::Shutdown(true))
     }
 }

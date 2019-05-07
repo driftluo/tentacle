@@ -21,7 +21,7 @@ use crate::{
     secio::{handshake::Config, PublicKey, SecioKeyPair},
     service::{
         config::{ServiceConfig, State},
-        event::ServiceTask,
+        event::{Priority, ServiceTask},
         future_task::{BoxedFutureTask, FutureTaskManager},
     },
     session::{Session, SessionEvent, SessionMeta},
@@ -79,7 +79,8 @@ pub struct Service<T> {
 
     /// Can be upgrade to list service level protocols
     handle: T,
-
+    /// The buffer will be prioritized for distribution to session
+    high_write_buf: VecDeque<(SessionId, SessionEvent)>,
     /// The buffer which will distribute to sessions
     write_buf: VecDeque<(SessionId, SessionEvent)>,
     /// The buffer which will distribute to service protocol handle
@@ -111,6 +112,7 @@ pub struct Service<T> {
     service_context: ServiceContext,
     /// External event receiver
     service_task_receiver: mpsc::UnboundedReceiver<ServiceTask>,
+    quick_task_receiver: mpsc::UnboundedReceiver<ServiceTask>,
 
     pending_tasks: VecDeque<ServiceTask>,
     /// When handle channel full, set a deadline(30 second) to notify user
@@ -133,6 +135,7 @@ where
     ) -> Self {
         let (session_event_sender, session_event_receiver) = mpsc::channel(RECEIVED_SIZE);
         let (service_task_sender, service_task_receiver) = mpsc::unbounded();
+        let (quick_task_sender, quick_task_receiver) = mpsc::unbounded();
         let proto_infos = protocol_configs
             .values()
             .map(|meta| {
@@ -158,13 +161,20 @@ where
             config,
             state: State::new(forever),
             next_session: SessionId::default(),
+            high_write_buf: VecDeque::default(),
             write_buf: VecDeque::default(),
             read_service_buf: VecDeque::default(),
             read_session_buf: VecDeque::default(),
             session_event_sender,
             session_event_receiver,
-            service_context: ServiceContext::new(service_task_sender, proto_infos, key_pair),
+            service_context: ServiceContext::new(
+                service_task_sender,
+                quick_task_sender,
+                proto_infos,
+                key_pair,
+            ),
             service_task_receiver,
+            quick_task_receiver,
             pending_tasks: VecDeque::default(),
             handles_error_count: HashMap::default(),
             delay: None,
@@ -301,15 +311,25 @@ where
         self.service_context.control()
     }
 
-    /// Distribute event to sessions
-    #[inline]
-    fn distribute_to_session(&mut self) {
-        let mut block_sessions = HashSet::new();
+    fn push_back(&mut self, priority: Priority, id: SessionId, event: SessionEvent) {
+        if priority.is_high() {
+            self.high_write_buf.push_back((id, event));
+        } else {
+            self.write_buf.push_back((id, event));
+        }
+    }
 
-        for (id, event) in self.write_buf.split_off(0) {
+    #[inline(always)]
+    fn distribute_to_session_process<D: Iterator<Item = (SessionId, SessionEvent)>>(
+        &mut self,
+        data: D,
+        priority: Priority,
+        block_sessions: &mut HashSet<SessionId>,
+    ) {
+        for (id, event) in data {
             // Guarantee the order in which messages are sent
             if block_sessions.contains(&id) {
-                self.write_buf.push_back((id, event));
+                self.push_back(priority, id, event);
                 continue;
             }
             if let Some(session) = self.sessions.get_mut(&id) {
@@ -317,7 +337,7 @@ where
                     if e.is_full() {
                         block_sessions.insert(id);
                         debug!("session [{}] is full", id);
-                        self.write_buf.push_back((id, e.into_inner()));
+                        self.push_back(priority, id, e.into_inner());
                         self.set_delay();
                     } else {
                         error!("channel shutdown, message can't send")
@@ -327,9 +347,27 @@ where
                 debug!("Can't find session {} to send data", id);
             }
         }
+    }
+
+    /// Distribute event to sessions
+    #[inline]
+    fn distribute_to_session(&mut self) {
+        let mut block_sessions = HashSet::new();
+
+        let high = self.high_write_buf.split_off(0).into_iter();
+        self.distribute_to_session_process(high, Priority::High, &mut block_sessions);
+
+        if self.sessions.len() > block_sessions.len() {
+            let normal = self.write_buf.split_off(0).into_iter();
+            self.distribute_to_session_process(normal, Priority::Normal, &mut block_sessions);
+        }
 
         if self.write_buf.capacity() > BUF_SHRINK_THRESHOLD {
             self.write_buf.shrink_to_fit();
+        }
+
+        if self.high_write_buf.capacity() > BUF_SHRINK_THRESHOLD {
+            self.high_write_buf.shrink_to_fit();
         }
     }
 
@@ -502,67 +540,72 @@ where
     }
 
     /// Send data to the specified protocol for the specified session.
-    ///
-    /// Valid after Service starts
     #[inline]
-    pub fn send_message_to(&mut self, session_id: SessionId, proto_id: ProtocolId, data: Bytes) {
-        self.write_buf.push_back((
-            session_id,
-            SessionEvent::ProtocolMessage {
-                id: session_id,
-                proto_id,
-                data,
-            },
-        ));
+    fn send_message_to(
+        &mut self,
+        session_id: SessionId,
+        proto_id: ProtocolId,
+        priority: Priority,
+        data: Bytes,
+    ) {
+        let message_event = SessionEvent::ProtocolMessage {
+            id: session_id,
+            proto_id,
+            priority,
+            data,
+        };
+        self.push_back(priority, session_id, message_event);
+
         self.distribute_to_session();
     }
 
     /// Send data to the specified protocol for the specified sessions.
-    ///
-    /// Valid after Service starts
     #[inline]
-    pub fn filter_broadcast(&mut self, ids: Vec<SessionId>, proto_id: ProtocolId, data: Bytes) {
-        for id in self.sessions.keys() {
-            if ids.contains(id) {
+    fn filter_broadcast(
+        &mut self,
+        ids: Vec<SessionId>,
+        proto_id: ProtocolId,
+        priority: Priority,
+        data: Bytes,
+    ) {
+        for id in self.sessions.keys().cloned().collect::<Vec<SessionId>>() {
+            if ids.contains(&id) {
                 debug!(
                     "send message to session [{}], proto [{}], data len: {}",
                     id,
                     proto_id,
                     data.len()
                 );
-                self.write_buf.push_back((
-                    *id,
-                    SessionEvent::ProtocolMessage {
-                        id: *id,
-                        proto_id,
-                        data: data.clone(),
-                    },
-                ));
+
+                let message_event = SessionEvent::ProtocolMessage {
+                    id,
+                    proto_id,
+                    priority,
+                    data: data.clone(),
+                };
+                self.push_back(priority, id, message_event);
             }
         }
         self.distribute_to_session();
     }
 
     /// Broadcast data for a specified protocol.
-    ///
-    /// Valid after Service starts
     #[inline]
-    pub fn broadcast(&mut self, proto_id: ProtocolId, data: Bytes) {
+    fn broadcast(&mut self, proto_id: ProtocolId, priority: Priority, data: Bytes) {
         debug!(
             "broadcast message, peer count: {}, proto_id: {}, data len: {}",
             self.sessions.len(),
             proto_id,
             data.len()
         );
-        for id in self.sessions.keys() {
-            self.write_buf.push_back((
-                *id,
-                SessionEvent::ProtocolMessage {
-                    id: *id,
-                    proto_id,
-                    data: data.clone(),
-                },
-            ));
+        for id in self.sessions.keys().cloned().collect::<Vec<SessionId>>() {
+            let message_event = SessionEvent::ProtocolMessage {
+                id,
+                proto_id,
+                priority,
+                data: data.clone(),
+            };
+            self.push_back(priority, id, message_event);
         }
         self.distribute_to_session();
     }
@@ -1110,9 +1153,9 @@ where
                     )
                 }
             }
-            SessionEvent::ProtocolMessage { id, proto_id, data } => {
-                self.protocol_message(id, proto_id, data)
-            }
+            SessionEvent::ProtocolMessage {
+                id, proto_id, data, ..
+            } => self.protocol_message(id, proto_id, data),
             SessionEvent::ProtocolOpen {
                 id,
                 proto_id,
@@ -1208,11 +1251,12 @@ where
             ServiceTask::ProtocolMessage {
                 target,
                 proto_id,
+                priority,
                 data,
             } => match target {
-                TargetSession::Single(id) => self.send_message_to(id, proto_id, data),
-                TargetSession::Multi(ids) => self.filter_broadcast(ids, proto_id, data),
-                TargetSession::All => self.broadcast(proto_id, data),
+                TargetSession::Single(id) => self.send_message_to(id, proto_id, priority, data),
+                TargetSession::Multi(ids) => self.filter_broadcast(ids, proto_id, priority, data),
+                TargetSession::All => self.broadcast(proto_id, priority, data),
             },
             ServiceTask::Dial { address, target } => {
                 if !self.dial_protocols.contains_key(&address) {
@@ -1289,9 +1333,9 @@ where
             }
             ServiceTask::RemoveProtocolNotify { proto_id, token } => {
                 if let Some(signals) = self.service_notify_signals.get_mut(&proto_id) {
-                    if let Some(signal) = signals.remove(&token) {
-                        let _ = signal.send(());
-                    }
+                    signals
+                        .remove(&token)
+                        .and_then(|signal| signal.send(()).ok());
                     if signals.is_empty() {
                         self.service_notify_signals.remove(&proto_id);
                     }
@@ -1349,9 +1393,9 @@ where
             } => {
                 if let Some(session) = self.sessions.get_mut(&session_id) {
                     if let Some(signals) = session.notify_signals.get_mut(&proto_id) {
-                        if let Some(signal) = signals.remove(&token) {
-                            let _ = signal.send(());
-                        }
+                        signals
+                            .remove(&token)
+                            .and_then(|signal| signal.send(()).ok());
                         if signals.is_empty() {
                             session.notify_signals.remove(&proto_id);
                         }
@@ -1496,6 +1540,29 @@ where
     }
 
     #[inline]
+    fn user_task_poll(&mut self) {
+        for _ in 0..256 {
+            let task = match self.quick_task_receiver.poll() {
+                Ok(Async::Ready(Some(task))) => Some(task),
+                Ok(Async::Ready(None)) => None,
+                Ok(Async::NotReady) => None,
+                Err(_) => None,
+            }
+            .or_else(|| match self.service_task_receiver.poll() {
+                Ok(Async::Ready(Some(task))) => Some(task),
+                Ok(Async::Ready(None)) => None,
+                Ok(Async::NotReady) => None,
+                Err(_) => None,
+            });
+
+            match task {
+                Some(task) => self.handle_service_task(task),
+                None => break,
+            }
+        }
+    }
+
+    #[inline]
     fn set_delay(&mut self) {
         // Why use `delay` instead of `notify`?
         //
@@ -1532,6 +1599,7 @@ where
         }
 
         if !self.write_buf.is_empty()
+            || !self.high_write_buf.is_empty()
             || !self.read_service_buf.is_empty()
             || !self.read_session_buf.is_empty()
         {
@@ -1563,17 +1631,8 @@ where
             }
         }
 
-        for _ in 0..256 {
-            match self.service_task_receiver.poll() {
-                Ok(Async::Ready(Some(task))) => self.handle_service_task(task),
-                Ok(Async::Ready(None)) => unreachable!(),
-                Ok(Async::NotReady) => break,
-                Err(err) => {
-                    warn!("receive service task error: {:?}", err);
-                    break;
-                }
-            }
-        }
+        // receive user task
+        self.user_task_poll();
 
         // process any task buffer
         self.send_pending_task();

@@ -23,7 +23,7 @@ jobs:
     - stage: Test
       name: Unitest
       script:
-        - RUSTFLAGS='-F warnings' cargo test --all
+        - RUSTFLAGS='-F warnings' RUST_BACKTRACE=full cargo test --all
     - stage: Test
       name: Bench
       script:

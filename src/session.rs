@@ -18,7 +18,8 @@ use crate::{
     protocol_select::{client_select, server_select, ProtocolInfo},
     secio::{codec::stream_handle::StreamHandle as SecureHandle, PublicKey},
     service::{
-        config::Meta, SessionType, BUF_SHRINK_THRESHOLD, DELAY_TIME, RECEIVED_SIZE, SEND_SIZE,
+        config::Meta, event::Priority, SessionType, BUF_SHRINK_THRESHOLD, DELAY_TIME,
+        RECEIVED_SIZE, SEND_SIZE,
     },
     substream::{ProtocolEvent, SubStream},
     transports::{MultiIncoming, MultiStream},
@@ -78,6 +79,8 @@ pub(crate) enum SessionEvent {
         id: SessionId,
         /// Protocol id
         proto_id: ProtocolId,
+        /// priority
+        priority: Priority,
         /// Data
         data: bytes::Bytes,
     },
@@ -144,6 +147,8 @@ pub(crate) struct Session<T> {
     /// Sub streams maps a stream id to a sender of sub stream
     sub_streams: HashMap<StreamId, mpsc::Sender<ProtocolEvent>>,
     proto_streams: HashMap<ProtocolId, StreamId>,
+    /// The buffer will be prioritized for distribute to sub streams
+    high_write_buf: VecDeque<(ProtocolId, ProtocolEvent)>,
     /// The buffer which will distribute to sub streams
     write_buf: VecDeque<(ProtocolId, ProtocolEvent)>,
     /// The buffer which will send to service
@@ -185,6 +190,7 @@ where
             next_stream: 0,
             sub_streams: HashMap::default(),
             proto_streams: HashMap::default(),
+            high_write_buf: VecDeque::default(),
             write_buf: VecDeque::default(),
             read_buf: VecDeque::default(),
             proto_event_sender,
@@ -283,23 +289,34 @@ where
         }
     }
 
-    #[inline]
-    fn distribute_to_substream(&mut self) {
-        let mut block_substream = HashSet::new();
+    fn push_back(&mut self, priority: Priority, id: ProtocolId, event: ProtocolEvent) {
+        if priority.is_high() {
+            self.high_write_buf.push_back((id, event));
+        } else {
+            self.write_buf.push_back((id, event));
+        }
+    }
 
-        for (proto_id, event) in self.write_buf.split_off(0) {
+    #[inline(always)]
+    fn distribute_to_substream_process<D: Iterator<Item = (ProtocolId, ProtocolEvent)>>(
+        &mut self,
+        data: D,
+        priority: Priority,
+        block_substreams: &mut HashSet<ProtocolId>,
+    ) {
+        for (proto_id, event) in data {
             // Guarantee the order in which messages are sent
-            if block_substream.contains(&proto_id) {
-                self.write_buf.push_back((proto_id, event));
+            if block_substreams.contains(&proto_id) {
+                self.push_back(priority, proto_id, event);
                 continue;
             }
             if let Some(stream_id) = self.proto_streams.get(&proto_id) {
                 if let Some(sender) = self.sub_streams.get_mut(&stream_id) {
                     if let Err(e) = sender.try_send(event) {
                         if e.is_full() {
-                            self.write_buf.push_back((proto_id, e.into_inner()));
+                            self.push_back(priority, proto_id, e.into_inner());
                             self.set_delay();
-                            block_substream.insert(proto_id);
+                            block_substreams.insert(proto_id);
                         } else {
                             debug!("session send to sub stream error: {}", e);
                         }
@@ -307,9 +324,26 @@ where
                 };
             }
         }
+    }
+
+    #[inline]
+    fn distribute_to_substream(&mut self) {
+        let mut block_substreams = HashSet::new();
+
+        let high = self.high_write_buf.split_off(0).into_iter();
+        self.distribute_to_substream_process(high, Priority::High, &mut block_substreams);
+
+        if self.sub_streams.len() > block_substreams.len() {
+            let normal = self.write_buf.split_off(0).into_iter();
+            self.distribute_to_substream_process(normal, Priority::Normal, &mut block_substreams);
+        }
 
         if self.write_buf.capacity() > BUF_SHRINK_THRESHOLD {
             self.write_buf.shrink_to_fit();
+        }
+
+        if self.high_write_buf.capacity() > BUF_SHRINK_THRESHOLD {
+            self.high_write_buf.shrink_to_fit();
         }
     }
 
@@ -388,6 +422,7 @@ where
                     id: self.id,
                     proto_id,
                     data,
+                    priority: Priority::Normal,
                 })
             }
             ProtocolEvent::SelectError { proto_name } => {
@@ -412,16 +447,20 @@ where
     /// Handling events send by the service
     fn handle_session_event(&mut self, event: SessionEvent) {
         match event {
-            SessionEvent::ProtocolMessage { proto_id, data, .. } => {
+            SessionEvent::ProtocolMessage {
+                proto_id,
+                data,
+                priority,
+                ..
+            } => {
                 if let Some(stream_id) = self.proto_streams.get(&proto_id) {
-                    self.write_buf.push_back((
+                    let event = ProtocolEvent::Message {
+                        id: *stream_id,
                         proto_id,
-                        ProtocolEvent::Message {
-                            id: *stream_id,
-                            proto_id,
-                            data,
-                        },
-                    ));
+                        priority,
+                        data,
+                    };
+                    self.push_back(priority, proto_id, event);
                 } else {
                     trace!("protocol {} not ready", proto_id);
                 }
@@ -541,10 +580,11 @@ where
 
     fn poll(&mut self) -> Poll<Option<Self::Item>, Self::Error> {
         debug!(
-            "session [{}], [{:?}], proto count [{}] ",
+            "session [{}], [{:?}], proto count [{}], state: {:?} ",
             self.id,
             self.ty,
-            self.sub_streams.len()
+            self.sub_streams.len(),
+            self.state
         );
 
         // double check here
@@ -552,7 +592,10 @@ where
             return Ok(Async::Ready(None));
         }
 
-        if !self.read_buf.is_empty() || !self.write_buf.is_empty() {
+        if !self.read_buf.is_empty()
+            || !self.write_buf.is_empty()
+            || !self.high_write_buf.is_empty()
+        {
             self.flush();
         }
 

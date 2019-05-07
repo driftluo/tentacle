@@ -53,11 +53,12 @@ impl ServiceContext {
     /// New
     pub(crate) fn new(
         service_task_sender: mpsc::UnboundedSender<ServiceTask>,
+        quick_task_sender: mpsc::UnboundedSender<ServiceTask>,
         proto_infos: HashMap<ProtocolId, ProtocolInfo>,
         key_pair: Option<SecioKeyPair>,
     ) -> Self {
         ServiceContext {
-            inner: ServiceControl::new(service_task_sender, proto_infos),
+            inner: ServiceControl::new(service_task_sender, quick_task_sender, proto_infos),
             key_pair,
             listens: Vec::new(),
         }
@@ -99,12 +100,41 @@ impl ServiceContext {
         }
     }
 
+    /// Send message on quick channel
+    #[inline]
+    pub fn quick_send_message_to(&self, session_id: SessionId, proto_id: ProtocolId, data: Bytes) {
+        if self
+            .inner
+            .quick_send_message_to(session_id, proto_id, data)
+            .is_err()
+        {
+            warn!("Service is abnormally closed")
+        }
+    }
+
     /// Send data to the specified protocol for the specified sessions.
     #[inline]
     pub fn filter_broadcast(&self, session_ids: TargetSession, proto_id: ProtocolId, data: Bytes) {
         if self
             .inner
             .filter_broadcast(session_ids, proto_id, data)
+            .is_err()
+        {
+            warn!("Service is abnormally closed")
+        }
+    }
+
+    /// Send data to the specified protocol for the specified sessions on quick channel.
+    #[inline]
+    pub fn quick_filter_broadcast(
+        &self,
+        session_ids: TargetSession,
+        proto_id: ProtocolId,
+        data: Bytes,
+    ) {
+        if self
+            .inner
+            .quick_filter_broadcast(session_ids, proto_id, data)
             .is_err()
         {
             warn!("Service is abnormally closed")
@@ -287,6 +317,14 @@ impl<'a> ProtocolContextMutRef<'a> {
     pub fn send_message(&self, data: Bytes) {
         let proto_id = self.proto_id();
         self.inner.send_message_to(self.session.id, proto_id, data)
+    }
+
+    /// Send message to current protocol current session on quick channel
+    #[inline]
+    pub fn quick_send_message(&self, data: Bytes) {
+        let proto_id = self.proto_id();
+        self.inner
+            .quick_send_message_to(self.session.id, proto_id, data)
     }
 
     /// Protocol id

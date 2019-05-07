@@ -12,7 +12,11 @@ use tokio::{
 };
 
 use crate::{
-    error::Error, service::DELAY_TIME, traits::Codec, yamux::StreamHandle, ProtocolId, StreamId,
+    error::Error,
+    service::{event::Priority, DELAY_TIME},
+    traits::Codec,
+    yamux::StreamHandle,
+    ProtocolId, StreamId,
 };
 
 /// Event generated/received by the protocol stream
@@ -40,6 +44,8 @@ pub(crate) enum ProtocolEvent {
         id: StreamId,
         /// Protocol id
         proto_id: ProtocolId,
+        /// priority
+        priority: Priority,
         /// Data
         data: bytes::Bytes,
     },
@@ -63,6 +69,8 @@ pub(crate) struct SubStream<U> {
     sub_stream: Framed<StreamHandle, U>,
     id: StreamId,
     proto_id: ProtocolId,
+    /// The buffer will be prioritized for send to underlying network
+    high_write_buf: VecDeque<bytes::Bytes>,
     // The buffer which will send to underlying network
     write_buf: VecDeque<bytes::Bytes>,
     // The buffer which will send to user
@@ -95,6 +103,7 @@ where
             proto_id,
             event_sender,
             event_receiver,
+            high_write_buf: VecDeque::new(),
             write_buf: VecDeque::new(),
             read_buf: VecDeque::new(),
             delay: None,
@@ -102,22 +111,52 @@ where
         }
     }
 
-    /// Send data to the lower `yamux` sub stream
-    fn send_data(&mut self) -> Result<(), io::Error> {
-        while let Some(frame) = self.write_buf.pop_front() {
-            match self.sub_stream.start_send(frame) {
-                Ok(AsyncSink::NotReady(frame)) => {
-                    debug!("framed_stream NotReady, frame len: {:?}", frame.len());
-                    self.write_buf.push_front(frame);
-                    return Ok(());
-                }
-                Ok(AsyncSink::Ready) => {}
-                Err(err) => {
-                    debug!("framed_stream send error: {:?}", err);
-                    return Err(err);
-                }
+    fn push_front(&mut self, priority: Priority, frame: bytes::Bytes) {
+        if priority.is_high() {
+            self.high_write_buf.push_front(frame);
+        } else {
+            self.write_buf.push_front(frame);
+        }
+    }
+
+    fn push_back(&mut self, priority: Priority, frame: bytes::Bytes) {
+        if priority.is_high() {
+            self.high_write_buf.push_back(frame);
+        } else {
+            self.write_buf.push_back(frame);
+        }
+    }
+
+    #[inline]
+    fn send_inner(&mut self, frame: bytes::Bytes, priority: Priority) -> Result<bool, io::Error> {
+        match self.sub_stream.start_send(frame) {
+            Ok(AsyncSink::NotReady(frame)) => {
+                debug!("framed_stream NotReady, frame len: {:?}", frame.len());
+                self.push_front(priority, frame);
+                Ok(true)
+            }
+            Ok(AsyncSink::Ready) => Ok(false),
+            Err(err) => {
+                debug!("framed_stream send error: {:?}", err);
+                Err(err)
             }
         }
+    }
+
+    /// Send data to the lower `yamux` sub stream
+    fn send_data(&mut self) -> Result<(), io::Error> {
+        while let Some(frame) = self.high_write_buf.pop_front() {
+            if self.send_inner(frame, Priority::High)? {
+                return Ok(());
+            }
+        }
+
+        while let Some(frame) = self.write_buf.pop_front() {
+            if self.send_inner(frame, Priority::Normal)? {
+                return Ok(());
+            }
+        }
+
         match self.sub_stream.poll_complete() {
             Ok(Async::NotReady) => return Ok(()),
             Ok(Async::Ready(_)) => (),
@@ -164,9 +203,10 @@ where
     /// Handling commands send by session
     fn handle_proto_event(&mut self, event: ProtocolEvent) {
         match event {
-            ProtocolEvent::Message { data, .. } => {
+            ProtocolEvent::Message { data, priority, .. } => {
                 debug!("proto [{}] send data: {}", self.proto_id, data.len());
-                self.write_buf.push_back(data);
+                self.push_back(priority, data);
+
                 if let Err(err) = self.send_data() {
                     // Whether it is a read send error or a flush error,
                     // the most essential problem is that there is a problem with the external network.
@@ -253,7 +293,10 @@ where
             return Ok(Async::Ready(None));
         }
 
-        if !self.read_buf.is_empty() || !self.write_buf.is_empty() {
+        if !self.read_buf.is_empty()
+            || !self.write_buf.is_empty()
+            || !self.high_write_buf.is_empty()
+        {
             if let Err(err) = self.flush() {
                 self.error_close(err);
                 return Err(());
@@ -285,6 +328,7 @@ where
                         id: self.id,
                         proto_id: self.proto_id,
                         data: data.into(),
+                        priority: Priority::Normal,
                     })
                 }
                 Ok(Async::Ready(None)) => {
