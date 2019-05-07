@@ -18,7 +18,7 @@ clippy:
 	RUSTFLAGS='-F warnings' cargo clippy --all --tests
 
 test:
-	RUSTFLAGS='-F warnings' cargo test --all
+	RUSTFLAGS='-F warnings' RUST_BACKTRACE=full cargo test --all
 
 examples:
 	cargo build --examples --all

@@ -97,3 +97,43 @@ impl Stream for FutureTaskManager {
         Ok(Async::NotReady)
     }
 }
+
+#[cfg(test)]
+mod test {
+    use super::{BoxedFutureTask, FutureTaskManager};
+
+    use std::{thread, time};
+
+    use futures::{
+        future::{empty, lazy},
+        prelude::{Future, Stream},
+        sink::Sink,
+        stream::iter_ok,
+        sync::mpsc::channel,
+    };
+
+    #[test]
+    fn test_manager_drop() {
+        let (sender, receiver) = channel(128);
+        let manager = FutureTaskManager::new(receiver);
+        let tasks = iter_ok(
+            (1..100)
+                .map(|_| Box::new(empty()) as BoxedFutureTask)
+                .collect::<Vec<_>>(),
+        );
+        let send_task = sender.clone().send_all(tasks);
+
+        let handle = thread::spawn(|| {
+            tokio::run(lazy(|| {
+                tokio::spawn(manager.for_each(|_| Ok(())).map(|_| ()).map_err(|_| ()));
+                tokio::spawn(send_task.map(|_| ()).map_err(|_| ()));
+                Ok(())
+            }));
+        });
+
+        thread::sleep(time::Duration::from_millis(300));
+        drop(sender);
+
+        handle.join().unwrap()
+    }
+}
