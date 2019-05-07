@@ -111,16 +111,28 @@ where
         }
     }
 
+    fn push_front(&mut self, priority: Priority, frame: bytes::Bytes) {
+        if priority.is_high() {
+            self.high_write_buf.push_front(frame);
+        } else {
+            self.write_buf.push_front(frame);
+        }
+    }
+
+    fn push_back(&mut self, priority: Priority, frame: bytes::Bytes) {
+        if priority.is_high() {
+            self.high_write_buf.push_back(frame);
+        } else {
+            self.write_buf.push_back(frame);
+        }
+    }
+
     #[inline]
     fn send_inner(&mut self, frame: bytes::Bytes, priority: Priority) -> Result<bool, io::Error> {
         match self.sub_stream.start_send(frame) {
             Ok(AsyncSink::NotReady(frame)) => {
                 debug!("framed_stream NotReady, frame len: {:?}", frame.len());
-                if priority.is_high() {
-                    self.high_write_buf.push_front(frame);
-                } else {
-                    self.write_buf.push_front(frame);
-                }
+                self.push_front(priority, frame);
                 Ok(true)
             }
             Ok(AsyncSink::Ready) => Ok(false),
@@ -193,11 +205,7 @@ where
         match event {
             ProtocolEvent::Message { data, priority, .. } => {
                 debug!("proto [{}] send data: {}", self.proto_id, data.len());
-                if priority.is_high() {
-                    self.high_write_buf.push_back(data);
-                } else {
-                    self.write_buf.push_back(data);
-                }
+                self.push_back(priority, data);
 
                 if let Err(err) = self.send_data() {
                     // Whether it is a read send error or a flush error,

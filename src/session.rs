@@ -334,8 +334,8 @@ where
         self.distribute_to_substream_process(high, Priority::High, &mut block_substreams);
 
         if self.sub_streams.len() > block_substreams.len() {
-            let general = self.write_buf.split_off(0).into_iter();
-            self.distribute_to_substream_process(general, Priority::Normal, &mut block_substreams);
+            let normal = self.write_buf.split_off(0).into_iter();
+            self.distribute_to_substream_process(normal, Priority::Normal, &mut block_substreams);
         }
 
         if self.write_buf.capacity() > BUF_SHRINK_THRESHOLD {
@@ -460,11 +460,7 @@ where
                         priority,
                         data,
                     };
-                    if priority.is_high() {
-                        self.high_write_buf.push_back((proto_id, event));
-                    } else {
-                        self.write_buf.push_back((proto_id, event));
-                    }
+                    self.push_back(priority, proto_id, event);
                 } else {
                     trace!("protocol {} not ready", proto_id);
                 }

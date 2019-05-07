@@ -358,8 +358,8 @@ where
         self.distribute_to_session_process(high, Priority::High, &mut block_sessions);
 
         if self.sessions.len() > block_sessions.len() {
-            let general = self.write_buf.split_off(0).into_iter();
-            self.distribute_to_session_process(general, Priority::Normal, &mut block_sessions);
+            let normal = self.write_buf.split_off(0).into_iter();
+            self.distribute_to_session_process(normal, Priority::Normal, &mut block_sessions);
         }
 
         if self.write_buf.capacity() > BUF_SHRINK_THRESHOLD {
@@ -554,11 +554,7 @@ where
             priority,
             data,
         };
-        if priority.is_high() {
-            self.high_write_buf.push_back((session_id, message_event));
-        } else {
-            self.write_buf.push_back((session_id, message_event));
-        }
+        self.push_back(priority, session_id, message_event);
 
         self.distribute_to_session();
     }
@@ -572,8 +568,8 @@ where
         priority: Priority,
         data: Bytes,
     ) {
-        for id in self.sessions.keys() {
-            if ids.contains(id) {
+        for id in self.sessions.keys().cloned().collect::<Vec<SessionId>>() {
+            if ids.contains(&id) {
                 debug!(
                     "send message to session [{}], proto [{}], data len: {}",
                     id,
@@ -582,16 +578,12 @@ where
                 );
 
                 let message_event = SessionEvent::ProtocolMessage {
-                    id: *id,
+                    id,
                     proto_id,
                     priority,
                     data: data.clone(),
                 };
-                if priority.is_high() {
-                    self.high_write_buf.push_back((*id, message_event));
-                } else {
-                    self.write_buf.push_back((*id, message_event));
-                }
+                self.push_back(priority, id, message_event);
             }
         }
         self.distribute_to_session();
@@ -606,18 +598,14 @@ where
             proto_id,
             data.len()
         );
-        for id in self.sessions.keys() {
+        for id in self.sessions.keys().cloned().collect::<Vec<SessionId>>() {
             let message_event = SessionEvent::ProtocolMessage {
-                id: *id,
+                id,
                 proto_id,
                 priority,
                 data: data.clone(),
             };
-            if priority.is_high() {
-                self.high_write_buf.push_back((*id, message_event));
-            } else {
-                self.write_buf.push_back((*id, message_event));
-            }
+            self.push_back(priority, id, message_event);
         }
         self.distribute_to_session();
     }
