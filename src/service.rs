@@ -4,7 +4,10 @@ use futures::{
 };
 use log::{debug, error, trace, warn};
 use std::collections::{HashMap, HashSet, VecDeque};
-use std::sync::Arc;
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc,
+};
 use std::time::{Duration, Instant};
 use std::{error::Error as ErrorTrait, io};
 use tokio::prelude::{AsyncRead, AsyncWrite, FutureExt};
@@ -118,7 +121,7 @@ pub struct Service<T> {
     /// When handle channel full, set a deadline(30 second) to notify user
     handles_error_count: HashMap<(ProtocolId, Option<SessionId>), Option<Delay>>,
     /// Delay notify with abnormally poor machines
-    delay: Option<Delay>,
+    delay: Arc<AtomicBool>,
 }
 
 impl<T> Service<T>
@@ -177,7 +180,7 @@ where
             quick_task_receiver,
             pending_tasks: VecDeque::default(),
             handles_error_count: HashMap::default(),
-            delay: None,
+            delay: Arc::new(AtomicBool::new(false)),
         }
     }
 
@@ -1600,8 +1603,16 @@ where
         // However, if you are on a single-core bully machine, `notify` may have a very amazing starvation behavior.
         //
         // Under a single-core machine, `notify` may fall into the loop of infinitely preemptive CPU, causing starvation.
-        if self.delay.is_none() {
-            self.delay = Some(Delay::new(Instant::now() + DELAY_TIME));
+        if !self.delay.load(Ordering::Acquire) {
+            self.delay.store(true, Ordering::Release);
+            let notify = futures::task::current();
+            let delay = self.delay.clone();
+            let delay_task = Delay::new(Instant::now() + DELAY_TIME).then(move |_| {
+                notify.notify();
+                delay.store(false, Ordering::Release);
+                Ok(())
+            });
+            tokio::spawn(delay_task);
         }
     }
 }
@@ -1633,16 +1644,6 @@ where
         {
             self.distribute_to_session();
             self.distribute_to_user_level();
-        }
-
-        if let Some(mut inner) = self.delay.take() {
-            match inner.poll() {
-                Ok(Async::Ready(_)) => {}
-                Ok(Async::NotReady) => self.delay = Some(inner),
-                Err(_) => {
-                    self.delay = Some(Delay::new(Instant::now() + DELAY_TIME));
-                }
-            }
         }
 
         self.listen_poll();

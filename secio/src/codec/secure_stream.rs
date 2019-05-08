@@ -12,6 +12,10 @@ use std::{
     cmp::min,
     collections::VecDeque,
     io,
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    },
     time::{Duration, Instant},
 };
 
@@ -86,7 +90,7 @@ pub struct SecureStream<T> {
     // For receive events from sub streams
     event_receiver: Receiver<StreamEvent>,
     /// Delay notify with abnormally poor network status
-    delay: Option<Delay>,
+    delay: Arc<AtomicBool>,
 }
 
 impl<T> SecureStream<T>
@@ -117,7 +121,7 @@ where
             frame_sender: None,
             event_sender,
             event_receiver,
-            delay: None,
+            delay: Arc::new(AtomicBool::new(false)),
         }
     }
 
@@ -273,8 +277,16 @@ where
         // However, if you are on a single-core bully machine, `notify` may have a very amazing starvation behavior.
         //
         // Under a single-core machine, `notify` may fall into the loop of infinitely preemptive CPU, causing starvation.
-        if self.delay.is_none() {
-            self.delay = Some(Delay::new(Instant::now() + DELAY_TIME));
+        if !self.delay.load(Ordering::Acquire) {
+            self.delay.store(true, Ordering::Release);
+            let notify = futures::task::current();
+            let delay = self.delay.clone();
+            let delay_task = Delay::new(Instant::now() + DELAY_TIME).then(move |_| {
+                notify.notify();
+                delay.store(false, Ordering::Release);
+                Ok(())
+            });
+            tokio::spawn(delay_task);
         }
     }
 
@@ -344,16 +356,6 @@ where
         // Stream must ensure that the handshake is completed
         if self.dead && self.nonce.is_empty() {
             return Ok(Async::Ready(None));
-        }
-
-        if let Some(mut inner) = self.delay.take() {
-            match inner.poll() {
-                Ok(Async::Ready(_)) => {}
-                Ok(Async::NotReady) => self.delay = Some(inner),
-                Err(_) => {
-                    self.delay = Some(Delay::new(Instant::now() + DELAY_TIME));
-                }
-            }
         }
 
         if !self.pending.is_empty() || !self.read_buf.is_empty() {

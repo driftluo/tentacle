@@ -2,7 +2,13 @@
 
 use std::collections::{BTreeMap, HashSet, VecDeque};
 use std::io;
-use std::time::{Duration, Instant};
+use std::{
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    },
+    time::{Duration, Instant},
+};
 
 use fnv::{FnvHashMap, FnvHashSet};
 use futures::{
@@ -73,7 +79,7 @@ pub struct Session<T> {
 
     keepalive_future: Option<Interval>,
     /// Delay notify with abnormally poor network status
-    delay: Option<Delay>,
+    delay: Arc<AtomicBool>,
     /// Last successful send time
     last_send_success: Instant,
 }
@@ -135,7 +141,7 @@ where
             event_sender,
             event_receiver,
             keepalive_future,
-            delay: None,
+            delay: Arc::new(AtomicBool::new(false)),
             last_send_success: Instant::now(),
         }
     }
@@ -502,8 +508,16 @@ where
         // However, if you are on a single-core bully machine, `notify` may have a very amazing starvation behavior.
         //
         // Under a single-core machine, `notify` may fall into the loop of infinitely preemptive CPU, causing starvation.
-        if self.delay.is_none() {
-            self.delay = Some(Delay::new(Instant::now() + DELAY_TIME));
+        if !self.delay.load(Ordering::Acquire) {
+            self.delay.store(true, Ordering::Release);
+            let notify = futures::task::current();
+            let delay = self.delay.clone();
+            let delay_task = Delay::new(Instant::now() + DELAY_TIME).then(move |_| {
+                notify.notify();
+                delay.store(false, Ordering::Release);
+                Ok(())
+            });
+            tokio::spawn(delay_task);
         }
     }
 }
@@ -518,16 +532,6 @@ where
     fn poll(&mut self) -> Poll<Option<Self::Item>, Self::Error> {
         if self.is_dead() {
             return Ok(Async::Ready(None));
-        }
-
-        if let Some(mut inner) = self.delay.take() {
-            match inner.poll() {
-                Ok(Async::Ready(_)) => {}
-                Ok(Async::NotReady) => self.delay = Some(inner),
-                Err(_) => {
-                    self.delay = Some(Delay::new(Instant::now() + DELAY_TIME));
-                }
-            }
         }
 
         if !self.read_pending_frames.is_empty() || !self.write_pending_frames.is_empty() {
