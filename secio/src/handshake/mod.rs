@@ -1,8 +1,11 @@
 /// Most of the code for this module comes from `rust-libp2p`, but modified some logic(struct).
 use crate::{
-    codec::stream_handle::StreamHandle, error::SecioError, exchange::KeyAgreement,
-    handshake::procedure::handshake, stream_cipher::Cipher, support, Digest, EphemeralPublicKey,
-    PublicKey, SecioKeyPair,
+    codec::{secure_stream::StreamConfig, stream_handle::StreamHandle},
+    error::SecioError,
+    exchange::KeyAgreement,
+    handshake::procedure::handshake,
+    stream_cipher::Cipher,
+    support, Digest, EphemeralPublicKey, PublicKey, SecioKeyPair,
 };
 
 use futures::Future;
@@ -19,6 +22,8 @@ mod handshake_generated_verifier;
 pub(crate) mod handshake_struct;
 mod procedure;
 
+const MAX_FRAME_SIZE: usize = 1024 * 1024 * 8;
+
 /// Config for Secio
 #[derive(Debug, Clone)]
 pub struct Config {
@@ -27,6 +32,7 @@ pub struct Config {
     pub(crate) ciphers_proposal: Option<String>,
     pub(crate) digests_proposal: Option<String>,
     pub(crate) max_frame_length: usize,
+    pub(crate) stream_config: StreamConfig,
 }
 
 impl Config {
@@ -37,13 +43,32 @@ impl Config {
             agreements_proposal: None,
             ciphers_proposal: None,
             digests_proposal: None,
-            max_frame_length: 1024 * 1024 * 8,
+            max_frame_length: MAX_FRAME_SIZE,
+            stream_config: StreamConfig::new(),
         }
     }
 
     /// Max frame length
     pub fn max_frame_length(mut self, size: usize) -> Self {
+        // if max > default, change all size limit to max
+        if size > MAX_FRAME_SIZE {
+            self.stream_config.frame_size = size;
+            self.stream_config.send_buffer_size = size;
+            self.stream_config.recv_buffer_size = size;
+        }
         self.max_frame_length = size;
+        self
+    }
+
+    /// Set secure stream config
+    pub fn stream_config(mut self, config: StreamConfig) -> Self {
+        self.stream_config = config;
+        if self.stream_config.frame_size == 0 {
+            panic!("frame_size can't be zero")
+        }
+        if self.stream_config.frame_size > MAX_FRAME_SIZE {
+            self.max_frame_length = self.stream_config.frame_size;
+        }
         self
     }
 

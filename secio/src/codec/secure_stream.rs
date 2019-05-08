@@ -21,11 +21,51 @@ use crate::{
 };
 
 const DELAY_TIME: Duration = Duration::from_millis(300);
+/// Default max buffer size
+const MAX_BUF_SIZE: usize = 1024 * 1024;
+/// Default max frame size
+const MAX_FRAME_SIZE: usize = 256 * 1024;
+
+/// Stream config
+#[derive(Debug, Clone, Copy)]
+pub struct StreamConfig {
+    /// default is 1Mb
+    pub recv_buffer_size: usize,
+    /// default is 1Mb
+    pub send_buffer_size: usize,
+    /// default is 256kb
+    pub frame_size: usize,
+}
+
+impl StreamConfig {
+    /// new a default config
+    pub const fn new() -> Self {
+        StreamConfig {
+            recv_buffer_size: MAX_BUF_SIZE,
+            send_buffer_size: MAX_BUF_SIZE,
+            frame_size: MAX_FRAME_SIZE,
+        }
+    }
+
+    /// see https://github.com/rust-lang/rust/issues/57563
+    /// can't use `if` to filter out 0, so add one to avoid this case
+    const fn recv_event_size(&self) -> usize {
+        (self.recv_buffer_size / self.frame_size) + 1
+    }
+
+    /// see https://github.com/rust-lang/rust/issues/57563
+    /// can't use `if` to filter out 0, so add one to avoid this case
+    const fn send_event_size(&self) -> usize {
+        (self.send_buffer_size / self.frame_size) + 1
+    }
+}
 
 /// Encrypted stream
 pub struct SecureStream<T> {
     socket: Framed<T, LengthDelimitedCodec>,
     dead: bool,
+
+    config: StreamConfig,
 
     decode_cipher: StreamCipher,
     decode_hmac: Hmac,
@@ -66,6 +106,7 @@ where
         SecureStream {
             socket,
             dead: false,
+            config: StreamConfig::new(),
             decode_cipher,
             decode_hmac,
             encode_cipher,
@@ -78,6 +119,12 @@ where
             event_receiver,
             delay: None,
         }
+    }
+
+    /// Set the config of this stream
+    pub fn set_config(mut self, config: StreamConfig) -> Self {
+        self.config = config;
+        self
     }
 
     /// Create a unique handle to this stream.
@@ -131,6 +178,11 @@ where
     #[inline]
     fn recv_frame(&mut self) -> Poll<Option<()>, SecioError> {
         loop {
+            if self.read_buf.len() > self.config.recv_event_size() {
+                self.set_delay();
+                break;
+            }
+
             match self.socket.poll() {
                 Ok(Async::Ready(Some(mut t))) => {
                     trace!("receive raw data size: {:?}", t.len());
@@ -155,6 +207,33 @@ where
             };
         }
         Ok(Async::NotReady)
+    }
+
+    #[inline]
+    fn recv_event(&mut self) {
+        loop {
+            if self.pending.len() > self.config.send_event_size() {
+                self.set_delay();
+                break;
+            }
+            match self.event_receiver.poll() {
+                Ok(Async::Ready(Some(event))) => {
+                    if let Err(err) = self.handle_event(event) {
+                        debug!("send message error: {:?}", err);
+                        break;
+                    }
+                }
+                Ok(Async::Ready(None)) => unreachable!(),
+                Ok(Async::NotReady) => {
+                    debug!("event not ready");
+                    break;
+                }
+                Err(err) => {
+                    debug!("receive event error: {:?}", err);
+                    break;
+                }
+            }
+        }
     }
 
     #[inline]
@@ -294,25 +373,7 @@ where
             _ => (),
         }
 
-        loop {
-            match self.event_receiver.poll() {
-                Ok(Async::Ready(Some(event))) => {
-                    if let Err(err) = self.handle_event(event) {
-                        debug!("send message error: {:?}", err);
-                        break;
-                    }
-                }
-                Ok(Async::Ready(None)) => unreachable!(),
-                Ok(Async::NotReady) => {
-                    debug!("event not ready");
-                    break;
-                }
-                Err(err) => {
-                    debug!("receive event error: {:?}", err);
-                    break;
-                }
-            }
-        }
+        self.recv_event();
 
         // Double check stream state
         if self.dead && self.nonce.is_empty() {

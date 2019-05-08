@@ -15,7 +15,7 @@ use crate::{
     error::Error,
     service::{event::Priority, DELAY_TIME},
     traits::Codec,
-    yamux::StreamHandle,
+    yamux::{Config, StreamHandle},
     ProtocolId, StreamId,
 };
 
@@ -69,6 +69,8 @@ pub(crate) struct SubStream<U> {
     sub_stream: Framed<StreamHandle, U>,
     id: StreamId,
     proto_id: ProtocolId,
+
+    config: Config,
     /// The buffer will be prioritized for send to underlying network
     high_write_buf: VecDeque<bytes::Bytes>,
     // The buffer which will send to underlying network
@@ -96,11 +98,13 @@ where
         event_receiver: mpsc::Receiver<ProtocolEvent>,
         id: StreamId,
         proto_id: ProtocolId,
+        config: Config,
     ) -> Self {
         SubStream {
             sub_stream,
             id,
             proto_id,
+            config,
             event_sender,
             event_receiver,
             high_write_buf: VecDeque::new(),
@@ -254,6 +258,83 @@ where
         }
     }
 
+    fn recv_event(&mut self) -> Option<()> {
+        loop {
+            if self.dead {
+                break;
+            }
+
+            if self.write_buf.len() > self.config.send_event_size() {
+                self.set_delay();
+                break;
+            }
+
+            match self.event_receiver.poll() {
+                Ok(Async::Ready(Some(event))) => self.handle_proto_event(event),
+                Ok(Async::Ready(None)) => {
+                    // Must be session close
+                    self.dead = true;
+                    let _ = self.sub_stream.get_mut().shutdown();
+                    return None;
+                }
+                Ok(Async::NotReady) => break,
+                Err(_) => {
+                    break;
+                }
+            }
+        }
+        Some(())
+    }
+
+    fn recv_frame(&mut self) -> Option<()> {
+        loop {
+            if self.dead {
+                break;
+            }
+
+            if self.read_buf.len() > self.config.recv_event_size() {
+                self.set_delay();
+                break;
+            }
+
+            match self.sub_stream.poll() {
+                Ok(Async::Ready(Some(data))) => {
+                    debug!(
+                        "protocol [{}] receive data len: {}",
+                        self.proto_id,
+                        data.len()
+                    );
+                    self.output_event(ProtocolEvent::Message {
+                        id: self.id,
+                        proto_id: self.proto_id,
+                        data: data.into(),
+                        priority: Priority::Normal,
+                    })
+                }
+                Ok(Async::Ready(None)) => {
+                    debug!("protocol [{}] close", self.proto_id);
+                    self.dead = true;
+                }
+                Ok(Async::NotReady) => break,
+                Err(err) => {
+                    debug!("sub stream codec error: {:?}", err);
+                    match err.kind() {
+                        ErrorKind::BrokenPipe
+                        | ErrorKind::ConnectionAborted
+                        | ErrorKind::ConnectionReset
+                        | ErrorKind::NotConnected
+                        | ErrorKind::UnexpectedEof => self.dead = true,
+                        _ => {
+                            self.error_close(err);
+                            return None;
+                        }
+                    }
+                }
+            }
+        }
+        Some(())
+    }
+
     #[inline]
     fn set_delay(&mut self) {
         // Why use `delay` instead of `notify`?
@@ -313,63 +394,12 @@ where
             }
         }
 
-        loop {
-            if self.dead {
-                break;
-            }
-            match self.sub_stream.poll() {
-                Ok(Async::Ready(Some(data))) => {
-                    debug!(
-                        "protocol [{}] receive data len: {}",
-                        self.proto_id,
-                        data.len()
-                    );
-                    self.output_event(ProtocolEvent::Message {
-                        id: self.id,
-                        proto_id: self.proto_id,
-                        data: data.into(),
-                        priority: Priority::Normal,
-                    })
-                }
-                Ok(Async::Ready(None)) => {
-                    debug!("protocol [{}] close", self.proto_id);
-                    self.dead = true;
-                }
-                Ok(Async::NotReady) => break,
-                Err(err) => {
-                    debug!("sub stream codec error: {:?}", err);
-                    match err.kind() {
-                        ErrorKind::BrokenPipe
-                        | ErrorKind::ConnectionAborted
-                        | ErrorKind::ConnectionReset
-                        | ErrorKind::NotConnected
-                        | ErrorKind::UnexpectedEof => self.dead = true,
-                        _ => {
-                            self.error_close(err);
-                            return Ok(Async::Ready(None));
-                        }
-                    }
-                }
-            }
+        if self.recv_frame().is_none() {
+            return Ok(Async::Ready(None));
         }
 
-        loop {
-            if self.dead {
-                break;
-            }
-            match self.event_receiver.poll() {
-                Ok(Async::Ready(Some(event))) => self.handle_proto_event(event),
-                Ok(Async::Ready(None)) => {
-                    // Must be session close
-                    self.dead = true;
-                    let _ = self.sub_stream.get_mut().shutdown();
-                    return Ok(Async::Ready(None));
-                }
-                Ok(Async::NotReady) => break,
-                Err(_) => {
-                    break;
-                }
-            }
+        if self.recv_event().is_none() {
+            return Ok(Async::Ready(None));
         }
 
         if self.dead {

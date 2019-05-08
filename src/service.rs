@@ -1542,6 +1542,13 @@ where
     #[inline]
     fn user_task_poll(&mut self) {
         for _ in 0..256 {
+            if self.write_buf.len() > self.config.yamux_config.send_event_size()
+                || self.high_write_buf.len() > self.config.yamux_config.send_event_size()
+            {
+                self.set_delay();
+                break;
+            }
+
             let task = match self.quick_task_receiver.poll() {
                 Ok(Async::Ready(Some(task))) => Some(task),
                 Ok(Async::Ready(None)) => None,
@@ -1558,6 +1565,27 @@ where
             match task {
                 Some(task) => self.handle_service_task(task),
                 None => break,
+            }
+        }
+    }
+
+    fn session_poll(&mut self) {
+        loop {
+            if self.read_session_buf.len() > self.config.yamux_config.recv_event_size()
+                || self.read_session_buf.len() > self.config.yamux_config.recv_event_size()
+            {
+                self.set_delay();
+                break;
+            }
+
+            match self.session_event_receiver.poll() {
+                Ok(Async::Ready(Some(event))) => self.handle_session_event(event),
+                Ok(Async::Ready(None)) => unreachable!(),
+                Ok(Async::NotReady) => break,
+                Err(err) => {
+                    warn!("receive session error: {:?}", err);
+                    break;
+                }
             }
         }
     }
@@ -1619,17 +1647,7 @@ where
 
         self.listen_poll();
 
-        loop {
-            match self.session_event_receiver.poll() {
-                Ok(Async::Ready(Some(event))) => self.handle_session_event(event),
-                Ok(Async::Ready(None)) => unreachable!(),
-                Ok(Async::NotReady) => break,
-                Err(err) => {
-                    warn!("receive session error: {:?}", err);
-                    break;
-                }
-            }
-        }
+        self.session_poll();
 
         // receive user task
         self.user_task_poll();

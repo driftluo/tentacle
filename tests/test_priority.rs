@@ -58,7 +58,7 @@ impl ServiceProtocol for PHandle {
         if data == Bytes::from("high") {
             // We are not sure that the message was sent in the first few,
             // but it will definitely be far ahead of the sending order.
-            if self.count <= 50 {
+            if self.count <= 200 {
                 self.test_result.store(true, Ordering::SeqCst);
             }
             context.close();

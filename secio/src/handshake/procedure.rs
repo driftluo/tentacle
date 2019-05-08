@@ -285,7 +285,8 @@ where
                 encode_cipher,
                 encode_hmac,
                 pub_ephemeral_context.state.remote.local.nonce.to_vec(),
-            );
+            )
+            .set_config(pub_ephemeral_context.config.stream_config);
             Ok((secure_stream, pub_ephemeral_context))
         })
         .and_then(|(mut secure_stream, pub_ephemeral_context)| {
