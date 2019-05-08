@@ -52,8 +52,8 @@ pub struct ServiceContext {
 impl ServiceContext {
     /// New
     pub(crate) fn new(
-        service_task_sender: mpsc::UnboundedSender<ServiceTask>,
-        quick_task_sender: mpsc::UnboundedSender<ServiceTask>,
+        service_task_sender: mpsc::Sender<ServiceTask>,
+        quick_task_sender: mpsc::Sender<ServiceTask>,
         proto_infos: HashMap<ProtocolId, ProtocolInfo>,
         key_pair: Option<SecioKeyPair>,
     ) -> Self {
@@ -66,7 +66,7 @@ impl ServiceContext {
 
     /// Create a new listener
     #[inline]
-    pub fn listen(&self, address: Multiaddr) {
+    pub fn listen(&mut self, address: Multiaddr) {
         if self.inner.listen(address).is_err() {
             warn!("Service is abnormally closed")
         }
@@ -74,7 +74,7 @@ impl ServiceContext {
 
     /// Initiate a connection request to address
     #[inline]
-    pub fn dial(&self, address: Multiaddr, target: DialProtocol) {
+    pub fn dial(&mut self, address: Multiaddr, target: DialProtocol) {
         if self.inner.dial(address, target).is_err() {
             warn!("Service is abnormally closed")
         }
@@ -82,7 +82,7 @@ impl ServiceContext {
 
     /// Disconnect a connection
     #[inline]
-    pub fn disconnect(&self, session_id: SessionId) {
+    pub fn disconnect(&mut self, session_id: SessionId) {
         if self.inner.disconnect(session_id).is_err() {
             warn!("Service is abnormally closed")
         }
@@ -90,7 +90,7 @@ impl ServiceContext {
 
     /// Send message
     #[inline]
-    pub fn send_message_to(&self, session_id: SessionId, proto_id: ProtocolId, data: Bytes) {
+    pub fn send_message_to(&mut self, session_id: SessionId, proto_id: ProtocolId, data: Bytes) {
         if self
             .inner
             .send_message_to(session_id, proto_id, data)
@@ -102,7 +102,12 @@ impl ServiceContext {
 
     /// Send message on quick channel
     #[inline]
-    pub fn quick_send_message_to(&self, session_id: SessionId, proto_id: ProtocolId, data: Bytes) {
+    pub fn quick_send_message_to(
+        &mut self,
+        session_id: SessionId,
+        proto_id: ProtocolId,
+        data: Bytes,
+    ) {
         if self
             .inner
             .quick_send_message_to(session_id, proto_id, data)
@@ -114,7 +119,12 @@ impl ServiceContext {
 
     /// Send data to the specified protocol for the specified sessions.
     #[inline]
-    pub fn filter_broadcast(&self, session_ids: TargetSession, proto_id: ProtocolId, data: Bytes) {
+    pub fn filter_broadcast(
+        &mut self,
+        session_ids: TargetSession,
+        proto_id: ProtocolId,
+        data: Bytes,
+    ) {
         if self
             .inner
             .filter_broadcast(session_ids, proto_id, data)
@@ -127,7 +137,7 @@ impl ServiceContext {
     /// Send data to the specified protocol for the specified sessions on quick channel.
     #[inline]
     pub fn quick_filter_broadcast(
-        &self,
+        &mut self,
         session_ids: TargetSession,
         proto_id: ProtocolId,
         data: Bytes,
@@ -143,7 +153,7 @@ impl ServiceContext {
 
     /// Send a future task
     #[inline]
-    pub fn future_task<T>(&self, task: T)
+    pub fn future_task<T>(&mut self, task: T)
     where
         T: Future<Item = (), Error = ()> + 'static + Send,
     {
@@ -156,7 +166,7 @@ impl ServiceContext {
     ///
     /// If the protocol has been open, do nothing
     #[inline]
-    pub fn open_protocol(&self, session_id: SessionId, proto_id: ProtocolId) {
+    pub fn open_protocol(&mut self, session_id: SessionId, proto_id: ProtocolId) {
         if self.inner.open_protocol(session_id, proto_id).is_err() {
             warn!("Service is abnormally closed")
         }
@@ -166,7 +176,7 @@ impl ServiceContext {
     ///
     /// If the protocol has been closed, do nothing
     #[inline]
-    pub fn close_protocol(&self, session_id: SessionId, proto_id: ProtocolId) {
+    pub fn close_protocol(&mut self, session_id: SessionId, proto_id: ProtocolId) {
         if self.inner.close_protocol(session_id, proto_id).is_err() {
             warn!("Service is abnormally closed")
         }
@@ -203,7 +213,7 @@ impl ServiceContext {
     }
 
     /// Set a service notify token
-    pub fn set_service_notify(&self, proto_id: ProtocolId, interval: Duration, token: u64) {
+    pub fn set_service_notify(&mut self, proto_id: ProtocolId, interval: Duration, token: u64) {
         if self
             .inner
             .set_service_notify(proto_id, interval, token)
@@ -215,7 +225,7 @@ impl ServiceContext {
 
     /// Set a session notify token
     pub fn set_session_notify(
-        &self,
+        &mut self,
         session_id: SessionId,
         proto_id: ProtocolId,
         interval: Duration,
@@ -231,14 +241,19 @@ impl ServiceContext {
     }
 
     /// Remove a service timer by a token
-    pub fn remove_service_notify(&self, proto_id: ProtocolId, token: u64) {
+    pub fn remove_service_notify(&mut self, proto_id: ProtocolId, token: u64) {
         if self.inner.remove_service_notify(proto_id, token).is_err() {
             warn!("Service is abnormally closed")
         }
     }
 
     /// Remove a session timer by a token
-    pub fn remove_session_notify(&self, session_id: SessionId, proto_id: ProtocolId, token: u64) {
+    pub fn remove_session_notify(
+        &mut self,
+        session_id: SessionId,
+        proto_id: ProtocolId,
+        token: u64,
+    ) {
         if self
             .inner
             .remove_session_notify(session_id, proto_id, token)
@@ -255,14 +270,14 @@ impl ServiceContext {
     /// 2. try close all session's protocol stream
     /// 3. try close all session
     /// 4. close service
-    pub fn close(&self) {
+    pub fn close(&mut self) {
         if self.inner.close().is_err() {
             warn!("Service is abnormally closed")
         }
     }
 
     /// Shutdown service, don't care anything, may cause partial message loss
-    pub fn shutdown(&self) {
+    pub fn shutdown(&mut self) {
         if self.inner.shutdown().is_err() {
             warn!("Service is abnormally closed")
         }
@@ -314,14 +329,14 @@ pub struct ProtocolContextMutRef<'a> {
 impl<'a> ProtocolContextMutRef<'a> {
     /// Send message to current protocol current session
     #[inline]
-    pub fn send_message(&self, data: Bytes) {
+    pub fn send_message(&mut self, data: Bytes) {
         let proto_id = self.proto_id();
         self.inner.send_message_to(self.session.id, proto_id, data)
     }
 
     /// Send message to current protocol current session on quick channel
     #[inline]
-    pub fn quick_send_message(&self, data: Bytes) {
+    pub fn quick_send_message(&mut self, data: Bytes) {
         let proto_id = self.proto_id();
         self.inner
             .quick_send_message_to(self.session.id, proto_id, data)

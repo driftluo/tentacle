@@ -15,37 +15,47 @@ use bytes::Bytes;
 /// Service control, used to send commands externally at runtime
 #[derive(Clone)]
 pub struct ServiceControl {
-    pub(crate) service_task_sender: mpsc::UnboundedSender<ServiceTask>,
-    pub(crate) quick_send: mpsc::UnboundedSender<ServiceTask>,
+    pub(crate) service_task_sender: mpsc::Sender<ServiceTask>,
+    pub(crate) quick_task_sender: mpsc::Sender<ServiceTask>,
     pub(crate) proto_infos: Arc<HashMap<ProtocolId, ProtocolInfo>>,
 }
 
 impl ServiceControl {
     /// New
     pub(crate) fn new(
-        service_task_sender: mpsc::UnboundedSender<ServiceTask>,
-        quick_send: mpsc::UnboundedSender<ServiceTask>,
+        service_task_sender: mpsc::Sender<ServiceTask>,
+        quick_task_sender: mpsc::Sender<ServiceTask>,
         proto_infos: HashMap<ProtocolId, ProtocolInfo>,
     ) -> Self {
         ServiceControl {
             service_task_sender,
-            quick_send,
+            quick_task_sender,
             proto_infos: Arc::new(proto_infos),
         }
     }
 
     /// Send raw event
     #[inline]
-    fn send(&self, event: ServiceTask) -> Result<(), Error> {
-        self.service_task_sender
-            .unbounded_send(event)
-            .map_err(Into::into)
+    fn send(&mut self, event: ServiceTask) -> Result<(), Error> {
+        self.service_task_sender.start_send(event)?;
+        loop {
+            // Wait until the message has been sent
+            if self.service_task_sender.poll_complete()?.is_ready() {
+                return Ok(());
+            }
+        }
     }
 
     /// Send raw event on quick channel
     #[inline]
-    fn quick_send(&self, event: ServiceTask) -> Result<(), Error> {
-        self.quick_send.unbounded_send(event).map_err(Into::into)
+    fn quick_send(&mut self, event: ServiceTask) -> Result<(), Error> {
+        self.quick_task_sender.start_send(event)?;
+        loop {
+            // Wait until the message has been sent
+            if self.quick_task_sender.poll_complete()?.is_ready() {
+                return Ok(());
+            }
+        }
     }
 
     /// Get service protocol message, Map(ID, Name), but can't modify
@@ -56,26 +66,26 @@ impl ServiceControl {
 
     /// Create a new listener
     #[inline]
-    pub fn listen(&self, address: Multiaddr) -> Result<(), Error> {
+    pub fn listen(&mut self, address: Multiaddr) -> Result<(), Error> {
         self.send(ServiceTask::Listen { address })
     }
 
     /// Initiate a connection request to address
     #[inline]
-    pub fn dial(&self, address: Multiaddr, target: DialProtocol) -> Result<(), Error> {
+    pub fn dial(&mut self, address: Multiaddr, target: DialProtocol) -> Result<(), Error> {
         self.send(ServiceTask::Dial { address, target })
     }
 
     /// Disconnect a connection
     #[inline]
-    pub fn disconnect(&self, session_id: SessionId) -> Result<(), Error> {
+    pub fn disconnect(&mut self, session_id: SessionId) -> Result<(), Error> {
         self.send(ServiceTask::Disconnect { session_id })
     }
 
     /// Send message
     #[inline]
     pub fn send_message_to(
-        &self,
+        &mut self,
         session_id: SessionId,
         proto_id: ProtocolId,
         data: Bytes,
@@ -86,7 +96,7 @@ impl ServiceControl {
     /// Send message on quick channel
     #[inline]
     pub fn quick_send_message_to(
-        &self,
+        &mut self,
         session_id: SessionId,
         proto_id: ProtocolId,
         data: Bytes,
@@ -97,7 +107,7 @@ impl ServiceControl {
     /// Send data to the specified protocol for the specified sessions.
     #[inline]
     pub fn filter_broadcast(
-        &self,
+        &mut self,
         target: TargetSession,
         proto_id: ProtocolId,
         data: Bytes,
@@ -113,7 +123,7 @@ impl ServiceControl {
     /// Send data to the specified protocol for the specified sessions on quick channel.
     #[inline]
     pub fn quick_filter_broadcast(
-        &self,
+        &mut self,
         target: TargetSession,
         proto_id: ProtocolId,
         data: Bytes,
@@ -128,7 +138,7 @@ impl ServiceControl {
 
     /// Send a future task
     #[inline]
-    pub fn future_task<T>(&self, task: T) -> Result<(), Error>
+    pub fn future_task<T>(&mut self, task: T) -> Result<(), Error>
     where
         T: Future<Item = (), Error = ()> + 'static + Send,
     {
@@ -141,7 +151,11 @@ impl ServiceControl {
     ///
     /// If the protocol has been open, do nothing
     #[inline]
-    pub fn open_protocol(&self, session_id: SessionId, proto_id: ProtocolId) -> Result<(), Error> {
+    pub fn open_protocol(
+        &mut self,
+        session_id: SessionId,
+        proto_id: ProtocolId,
+    ) -> Result<(), Error> {
         self.send(ServiceTask::ProtocolOpen {
             session_id,
             proto_id,
@@ -152,7 +166,11 @@ impl ServiceControl {
     ///
     /// If the protocol has been closed, do nothing
     #[inline]
-    pub fn close_protocol(&self, session_id: SessionId, proto_id: ProtocolId) -> Result<(), Error> {
+    pub fn close_protocol(
+        &mut self,
+        session_id: SessionId,
+        proto_id: ProtocolId,
+    ) -> Result<(), Error> {
         self.send(ServiceTask::ProtocolClose {
             session_id,
             proto_id,
@@ -161,7 +179,7 @@ impl ServiceControl {
 
     /// Set a service notify token
     pub fn set_service_notify(
-        &self,
+        &mut self,
         proto_id: ProtocolId,
         interval: Duration,
         token: u64,
@@ -174,13 +192,13 @@ impl ServiceControl {
     }
 
     /// remove a service notify token
-    pub fn remove_service_notify(&self, proto_id: ProtocolId, token: u64) -> Result<(), Error> {
+    pub fn remove_service_notify(&mut self, proto_id: ProtocolId, token: u64) -> Result<(), Error> {
         self.send(ServiceTask::RemoveProtocolNotify { proto_id, token })
     }
 
     /// Set a session notify token
     pub fn set_session_notify(
-        &self,
+        &mut self,
         session_id: SessionId,
         proto_id: ProtocolId,
         interval: Duration,
@@ -196,7 +214,7 @@ impl ServiceControl {
 
     /// Remove a session notify token
     pub fn remove_session_notify(
-        &self,
+        &mut self,
         session_id: SessionId,
         proto_id: ProtocolId,
         token: u64,
@@ -215,12 +233,12 @@ impl ServiceControl {
     /// 2. try close all session's protocol stream
     /// 3. try close all session
     /// 4. close service
-    pub fn close(&self) -> Result<(), Error> {
+    pub fn close(&mut self) -> Result<(), Error> {
         self.quick_send(ServiceTask::Shutdown(false))
     }
 
     /// Shutdown service, don't care anything, may cause partial message loss
-    pub fn shutdown(&self) -> Result<(), Error> {
+    pub fn shutdown(&mut self) -> Result<(), Error> {
         self.quick_send(ServiceTask::Shutdown(true))
     }
 }

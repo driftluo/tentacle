@@ -105,7 +105,7 @@ where
         context.set_service_notify(proto_id, self.timeout, CHECK_TIMEOUT_TOKEN);
     }
 
-    fn connected(&mut self, context: ProtocolContextMutRef, version: &str) {
+    fn connected(&mut self, mut context: ProtocolContextMutRef, version: &str) {
         let session = context.session;
         match session.remote_pubkey {
             Some(ref pubkey) => {
@@ -138,7 +138,7 @@ where
         );
     }
 
-    fn received(&mut self, context: ProtocolContextMutRef, data: bytes::Bytes) {
+    fn received(&mut self, mut context: ProtocolContextMutRef, data: bytes::Bytes) {
         let session = context.session;
         if let Some(peer_id) = self
             .connected_session_ids

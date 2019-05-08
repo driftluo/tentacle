@@ -114,8 +114,8 @@ pub struct Service<T> {
     /// External event is passed in from this
     service_context: ServiceContext,
     /// External event receiver
-    service_task_receiver: mpsc::UnboundedReceiver<ServiceTask>,
-    quick_task_receiver: mpsc::UnboundedReceiver<ServiceTask>,
+    service_task_receiver: mpsc::Receiver<ServiceTask>,
+    quick_task_receiver: mpsc::Receiver<ServiceTask>,
 
     pending_tasks: VecDeque<ServiceTask>,
     /// When handle channel full, set a deadline(30 second) to notify user
@@ -137,8 +137,8 @@ where
         config: ServiceConfig,
     ) -> Self {
         let (session_event_sender, session_event_receiver) = mpsc::channel(RECEIVED_SIZE);
-        let (service_task_sender, service_task_receiver) = mpsc::unbounded();
-        let (quick_task_sender, quick_task_receiver) = mpsc::unbounded();
+        let (service_task_sender, service_task_receiver) = mpsc::channel(RECEIVED_SIZE);
+        let (quick_task_sender, quick_task_receiver) = mpsc::channel(RECEIVED_SIZE / 2);
         let proto_infos = protocol_configs
             .values()
             .map(|meta| {
@@ -1309,13 +1309,13 @@ where
                     || self.config.event.contains(&proto_id)
                 {
                     let (signal_sender, mut signal_receiver) = oneshot::channel::<()>();
-                    let interval_sender =
+                    let mut interval_sender =
                         self.service_context.control().service_task_sender.clone();
                     let fut = Interval::new(Instant::now(), interval)
                         .for_each(move |_| {
                             if signal_receiver.poll() == Ok(Async::NotReady) {
                                 interval_sender
-                                    .unbounded_send(ServiceTask::ProtocolNotify { proto_id, token })
+                                    .try_send(ServiceTask::ProtocolNotify { proto_id, token })
                                     .map_err(|err| {
                                         debug!("interval error: {:?}", err);
                                         timer::Error::shutdown()
@@ -1357,13 +1357,13 @@ where
                     || self.config.event.contains(&proto_id)
                 {
                     let (signal_sender, mut signal_receiver) = oneshot::channel::<()>();
-                    let interval_sender =
+                    let mut interval_sender =
                         self.service_context.control().service_task_sender.clone();
                     let fut = Interval::new(Instant::now(), interval)
                         .for_each(move |_| {
                             if signal_receiver.poll() == Ok(Async::NotReady) {
                                 interval_sender
-                                    .unbounded_send(ServiceTask::ProtocolSessionNotify {
+                                    .try_send(ServiceTask::ProtocolSessionNotify {
                                         session_id,
                                         proto_id,
                                         token,
