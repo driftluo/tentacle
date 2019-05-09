@@ -88,6 +88,18 @@ impl ServiceBuilder {
         self
     }
 
+    /// Set send buffer size, default is 1Mb
+    pub fn set_send_buffer_size(mut self, size: usize) -> Self {
+        self.config.yamux_config.send_buffer_size = size;
+        self
+    }
+
+    /// Set receive buffer size, default is 1Mb
+    pub fn set_recv_buffer_size(mut self, size: usize) -> Self {
+        self.config.yamux_config.recv_buffer_size = size;
+        self
+    }
+
     /// Clear all protocols
     pub fn clear(&mut self) {
         self.inner.clear();

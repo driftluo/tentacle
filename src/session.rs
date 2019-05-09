@@ -1,9 +1,12 @@
 use futures::{prelude::*, stream::iter_ok, sync::mpsc};
 use log::{debug, error, trace, warn};
 use std::collections::{HashMap, HashSet, VecDeque};
-use std::sync::Arc;
 use std::{
     io::{self, ErrorKind},
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    },
     time::{Duration, Instant},
 };
 use tokio::prelude::{AsyncRead, AsyncWrite, FutureExt};
@@ -131,6 +134,8 @@ pub(crate) struct Session<T> {
 
     protocol_configs: HashMap<String, Arc<Meta>>,
 
+    config: Config,
+
     id: SessionId,
     timeout: Duration,
     timeout_check: Option<Delay>,
@@ -164,7 +169,7 @@ pub(crate) struct Session<T> {
     /// Receive event from service
     service_receiver: mpsc::Receiver<SessionEvent>,
     /// Delay notify with abnormally poor machines
-    delay: Option<Delay>,
+    delay: Arc<AtomicBool>,
 }
 
 impl<T> Session<T>
@@ -183,6 +188,7 @@ where
         Session {
             socket,
             protocol_configs: meta.protocol_configs,
+            config: meta.config,
             id: meta.id,
             timeout: meta.timeout,
             timeout_check: Some(Delay::new(Instant::now() + meta.timeout)),
@@ -197,7 +203,7 @@ where
             proto_event_receiver,
             service_sender,
             service_receiver,
-            delay: None,
+            delay: Arc::new(AtomicBool::new(false)),
             state: SessionState::Normal,
         }
     }
@@ -391,6 +397,7 @@ where
                     session_to_proto_receiver,
                     self.next_stream,
                     proto_id,
+                    self.config,
                 );
                 self.sub_streams
                     .insert(self.next_stream, session_to_proto_sender);
@@ -509,6 +516,66 @@ where
         self.distribute_to_substream();
     }
 
+    fn recv_substreams(&mut self) -> Option<()> {
+        loop {
+            // Local close means user doesn't want any message from this session
+            // But when remote close, we should try my best to accept all data as much as possible
+            if self.state.is_local_close() {
+                break;
+            }
+
+            if self.read_buf.len() > self.config.recv_event_size() {
+                self.set_delay();
+                break;
+            }
+
+            match self.proto_event_receiver.poll() {
+                Ok(Async::Ready(Some(event))) => self.handle_stream_event(event),
+                Ok(Async::Ready(None)) => {
+                    // Drop by self
+                    return None;
+                }
+                Ok(Async::NotReady) => break,
+                Err(err) => {
+                    debug!("receive proto event error: {:?}", err);
+                    break;
+                }
+            }
+        }
+
+        Some(())
+    }
+
+    fn recv_service(&mut self) -> Option<()> {
+        loop {
+            if !self.state.is_normal() {
+                break;
+            }
+
+            if self.write_buf.len() > self.config.send_event_size() {
+                self.set_delay();
+                break;
+            }
+
+            match self.service_receiver.poll() {
+                Ok(Async::Ready(Some(event))) => self.handle_session_event(event),
+                Ok(Async::Ready(None)) => {
+                    // Must drop by service
+                    self.state = SessionState::LocalClose;
+                    self.clean();
+                    return None;
+                }
+                Ok(Async::NotReady) => break,
+                Err(err) => {
+                    warn!("receive service message error: {:?}", err);
+                    break;
+                }
+            }
+        }
+
+        Some(())
+    }
+
     /// Try close all protocol
     #[inline]
     fn close_all_proto(&mut self) {
@@ -565,8 +632,16 @@ where
         // However, if you are on a single-core bully machine, `notify` may have a very amazing starvation behavior.
         //
         // Under a single-core machine, `notify` may fall into the loop of infinitely preemptive CPU, causing starvation.
-        if self.delay.is_none() {
-            self.delay = Some(Delay::new(Instant::now() + DELAY_TIME));
+        if !self.delay.load(Ordering::Acquire) {
+            self.delay.store(true, Ordering::Release);
+            let notify = futures::task::current();
+            let delay = self.delay.clone();
+            let delay_task = Delay::new(Instant::now() + DELAY_TIME).then(move |_| {
+                notify.notify();
+                delay.store(false, Ordering::Release);
+                Ok(())
+            });
+            tokio::spawn(delay_task);
         }
     }
 }
@@ -597,16 +672,6 @@ where
             || !self.high_write_buf.is_empty()
         {
             self.flush();
-        }
-
-        if let Some(mut inner) = self.delay.take() {
-            match inner.poll() {
-                Ok(Async::Ready(_)) => {}
-                Ok(Async::NotReady) => self.delay = Some(inner),
-                Err(_) => {
-                    self.delay = Some(Delay::new(Instant::now() + DELAY_TIME));
-                }
-            }
         }
 
         if let Some(mut check) = self.timeout_check.take() {
@@ -656,44 +721,12 @@ where
             }
         }
 
-        loop {
-            // Local close means user doesn't want any message from this session
-            // But when remote close, we should try my best to accept all data as much as possible
-            if self.state.is_local_close() {
-                break;
-            }
-            match self.proto_event_receiver.poll() {
-                Ok(Async::Ready(Some(event))) => self.handle_stream_event(event),
-                Ok(Async::Ready(None)) => {
-                    // Drop by self
-                    return Ok(Async::Ready(None));
-                }
-                Ok(Async::NotReady) => break,
-                Err(err) => {
-                    debug!("receive proto event error: {:?}", err);
-                    break;
-                }
-            }
+        if self.recv_substreams().is_none() {
+            return Ok(Async::Ready(None));
         }
 
-        loop {
-            if !self.state.is_normal() {
-                break;
-            }
-            match self.service_receiver.poll() {
-                Ok(Async::Ready(Some(event))) => self.handle_session_event(event),
-                Ok(Async::Ready(None)) => {
-                    // Must drop by service
-                    self.state = SessionState::LocalClose;
-                    self.clean();
-                    return Ok(Async::Ready(None));
-                }
-                Ok(Async::NotReady) => break,
-                Err(err) => {
-                    warn!("receive service message error: {:?}", err);
-                    break;
-                }
-            }
+        if self.recv_service().is_none() {
+            return Ok(Async::Ready(None));
         }
 
         match self.state {

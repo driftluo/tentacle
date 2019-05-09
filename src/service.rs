@@ -4,7 +4,10 @@ use futures::{
 };
 use log::{debug, error, trace, warn};
 use std::collections::{HashMap, HashSet, VecDeque};
-use std::sync::Arc;
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc,
+};
 use std::time::{Duration, Instant};
 use std::{error::Error as ErrorTrait, io};
 use tokio::prelude::{AsyncRead, AsyncWrite, FutureExt};
@@ -118,7 +121,7 @@ pub struct Service<T> {
     /// When handle channel full, set a deadline(30 second) to notify user
     handles_error_count: HashMap<(ProtocolId, Option<SessionId>), Option<Delay>>,
     /// Delay notify with abnormally poor machines
-    delay: Option<Delay>,
+    delay: Arc<AtomicBool>,
 }
 
 impl<T> Service<T>
@@ -177,7 +180,7 @@ where
             quick_task_receiver,
             pending_tasks: VecDeque::default(),
             handles_error_count: HashMap::default(),
-            delay: None,
+            delay: Arc::new(AtomicBool::new(false)),
         }
     }
 
@@ -1542,6 +1545,13 @@ where
     #[inline]
     fn user_task_poll(&mut self) {
         for _ in 0..256 {
+            if self.write_buf.len() > self.config.yamux_config.send_event_size()
+                || self.high_write_buf.len() > self.config.yamux_config.send_event_size()
+            {
+                self.set_delay();
+                break;
+            }
+
             let task = match self.quick_task_receiver.poll() {
                 Ok(Async::Ready(Some(task))) => Some(task),
                 Ok(Async::Ready(None)) => None,
@@ -1562,6 +1572,27 @@ where
         }
     }
 
+    fn session_poll(&mut self) {
+        loop {
+            if self.read_session_buf.len() > self.config.yamux_config.recv_event_size()
+                || self.read_session_buf.len() > self.config.yamux_config.recv_event_size()
+            {
+                self.set_delay();
+                break;
+            }
+
+            match self.session_event_receiver.poll() {
+                Ok(Async::Ready(Some(event))) => self.handle_session_event(event),
+                Ok(Async::Ready(None)) => unreachable!(),
+                Ok(Async::NotReady) => break,
+                Err(err) => {
+                    warn!("receive session error: {:?}", err);
+                    break;
+                }
+            }
+        }
+    }
+
     #[inline]
     fn set_delay(&mut self) {
         // Why use `delay` instead of `notify`?
@@ -1572,8 +1603,16 @@ where
         // However, if you are on a single-core bully machine, `notify` may have a very amazing starvation behavior.
         //
         // Under a single-core machine, `notify` may fall into the loop of infinitely preemptive CPU, causing starvation.
-        if self.delay.is_none() {
-            self.delay = Some(Delay::new(Instant::now() + DELAY_TIME));
+        if !self.delay.load(Ordering::Acquire) {
+            self.delay.store(true, Ordering::Release);
+            let notify = futures::task::current();
+            let delay = self.delay.clone();
+            let delay_task = Delay::new(Instant::now() + DELAY_TIME).then(move |_| {
+                notify.notify();
+                delay.store(false, Ordering::Release);
+                Ok(())
+            });
+            tokio::spawn(delay_task);
         }
     }
 }
@@ -1607,29 +1646,9 @@ where
             self.distribute_to_user_level();
         }
 
-        if let Some(mut inner) = self.delay.take() {
-            match inner.poll() {
-                Ok(Async::Ready(_)) => {}
-                Ok(Async::NotReady) => self.delay = Some(inner),
-                Err(_) => {
-                    self.delay = Some(Delay::new(Instant::now() + DELAY_TIME));
-                }
-            }
-        }
-
         self.listen_poll();
 
-        loop {
-            match self.session_event_receiver.poll() {
-                Ok(Async::Ready(Some(event))) => self.handle_session_event(event),
-                Ok(Async::Ready(None)) => unreachable!(),
-                Ok(Async::NotReady) => break,
-                Err(err) => {
-                    warn!("receive session error: {:?}", err);
-                    break;
-                }
-            }
-        }
+        self.session_poll();
 
         // receive user task
         self.user_task_poll();
