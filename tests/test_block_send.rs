@@ -5,6 +5,7 @@ use std::{
         atomic::{AtomicUsize, Ordering},
         Arc,
     },
+    thread,
     time::{Duration, Instant},
 };
 use tentacle::{

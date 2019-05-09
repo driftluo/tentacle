@@ -26,7 +26,7 @@ use crate::{
 
 const DELAY_TIME: Duration = Duration::from_millis(300);
 /// Default max buffer size
-const MAX_BUF_SIZE: usize = 1024 * 1024;
+const MAX_BUF_SIZE: usize = 24 * 1024 * 1024;
 /// Default max frame size
 const MAX_FRAME_SIZE: usize = 256 * 1024;
 

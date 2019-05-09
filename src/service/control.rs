@@ -1,5 +1,6 @@
 use futures::{prelude::*, sync::mpsc};
 
+use std::thread;
 use std::time::Duration;
 use std::{collections::HashMap, sync::Arc};
 
@@ -34,28 +35,31 @@ impl ServiceControl {
         }
     }
 
-    /// Send raw event
-    #[inline]
-    fn send(&mut self, event: ServiceTask) -> Result<(), Error> {
-        self.service_task_sender.start_send(event)?;
-        loop {
-            // Wait until the message has been sent
-            if self.service_task_sender.poll_complete()?.is_ready() {
+    fn block_send(sender: &mut mpsc::Sender<ServiceTask>, event: ServiceTask) -> Result<(), Error> {
+        let mut event_opt = Some(event);
+        while let Some(event) = event_opt.take() {
+            if let Err(err) = sender.try_send(event) {
+                if err.is_full() {
+                    // Wait until the message has been sent
+                    thread::sleep(Duration::from_millis(200));
+                    event_opt = Some(err.into_inner());
+                }
+            } else {
                 return Ok(());
             }
         }
+        Ok(())
+    }
+
+    /// Send raw event
+    fn send(&mut self, event: ServiceTask) -> Result<(), Error> {
+        Self::block_send(&mut self.service_task_sender, event)
     }
 
     /// Send raw event on quick channel
     #[inline]
     fn quick_send(&mut self, event: ServiceTask) -> Result<(), Error> {
-        self.quick_task_sender.start_send(event)?;
-        loop {
-            // Wait until the message has been sent
-            if self.quick_task_sender.poll_complete()?.is_ready() {
-                return Ok(());
-            }
-        }
+        Self::block_send(&mut self.quick_task_sender, event)
     }
 
     /// Get service protocol message, Map(ID, Name), but can't modify

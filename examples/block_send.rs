@@ -50,7 +50,10 @@ impl ServiceProtocol for PHandle {
             for i in 0..length {
                 let now = Instant::now();
                 println!("> [Server] send {}", i);
-                context.send_message(Bytes::from(format!("{}-000000000000000000000{}", prefix, i)));
+                context.send_message(Bytes::from(format!(
+                    "{}-000000000000000000000{}",
+                    prefix, i
+                )));
                 if i >= 0 && i < 256 {
                     first_256 += now.elapsed();
                 } else if i >= length - 256 && i < length {

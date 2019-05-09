@@ -1544,7 +1544,7 @@ where
 
     #[inline]
     fn user_task_poll(&mut self) {
-        for _ in 0..256 {
+        loop {
             if self.write_buf.len() > self.config.yamux_config.send_event_size()
                 || self.high_write_buf.len() > self.config.yamux_config.send_event_size()
             {

@@ -14,7 +14,7 @@ pub const DEFAULT_KEEPALIVE_INTERVAL: Duration = Duration::from_secs(6);
 /// Default write timeout duration
 pub const DEFAULT_WRITE_TIMEOUT: Duration = Duration::from_secs(10);
 /// Default max buffer size
-const MAX_BUF_SIZE: usize = 1024 * 1024;
+const MAX_BUF_SIZE: usize = 24 * 1024 * 1024;
 
 /// Configuration of session and stream
 #[derive(Clone, Copy)]
