@@ -119,7 +119,7 @@ pub struct Service<T> {
 
     pending_tasks: VecDeque<ServiceTask>,
     /// When handle channel full, set a deadline(30 second) to notify user
-    handles_error_count: HashMap<(ProtocolId, Option<SessionId>), Option<Delay>>,
+    handles_error_count: HashMap<(ProtocolId, Option<SessionId>), Option<Instant>>,
     /// Delay notify with abnormally poor machines
     delay: Arc<AtomicBool>,
 }
@@ -459,16 +459,14 @@ where
     /// When proto handle channel is full, call here
     #[inline]
     fn proto_handle_error(&mut self, proto_id: ProtocolId, session_id: Option<SessionId>) {
-        let delay_time = Instant::now() + Duration::from_secs(30);
-
         let delay = self
             .handles_error_count
             .entry((proto_id, session_id))
-            .or_insert_with(|| Some(Delay::new(delay_time)));
+            .or_insert_with(|| Some(Instant::now()));
 
         match delay.take() {
-            Some(mut inner) => match inner.poll() {
-                Ok(Async::Ready(_)) => {
+            Some(time) => {
+                if time.elapsed() > Duration::from_secs(30) {
                     let error = session_id
                         .map(Error::SessionProtoHandleBlock)
                         .unwrap_or(Error::ServiceProtoHandleBlock);
@@ -478,14 +476,8 @@ where
                         ServiceError::ProtocolHandleError { proto_id, error },
                     );
                 }
-                Ok(Async::NotReady) => *delay = Some(inner),
-                Err(_) => {
-                    *delay = Some(Delay::new(delay_time));
-                }
-            },
-            None => {
-                *delay = Some(Delay::new(delay_time));
             }
+            None => *delay = Some(Instant::now()),
         }
     }
 

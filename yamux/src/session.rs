@@ -579,8 +579,10 @@ where
             }
         }
 
-        // Something wrong on here, just break this pipe
-        if self.last_read_success.elapsed() > self.config.keepalive_interval {
+        // Interval broken or Stream error on here, just break this pipe
+        if self.last_read_success.elapsed()
+            > self.config.keepalive_interval + Duration::from_secs(5)
+        {
             self.shutdown()?;
             return Err(io::ErrorKind::BrokenPipe.into());
         }
