@@ -37,7 +37,7 @@ struct PHandle {
 impl ServiceProtocol for PHandle {
     fn init(&mut self, _context: &mut ProtocolContext) {}
 
-    fn connected(&mut self, context: ProtocolContextMutRef, _version: &str) {
+    fn connected(&mut self, mut context: ProtocolContextMutRef, _version: &str) {
         context.send_message(bytes::Bytes::from("hello"));
         if context.session.ty.is_inbound() && context.proto_id == 1.into() {
             self.count += 1;
@@ -48,7 +48,7 @@ impl ServiceProtocol for PHandle {
         }
     }
 
-    fn received(&mut self, context: ProtocolContextMutRef, data: bytes::Bytes) {
+    fn received(&mut self, mut context: ProtocolContextMutRef, data: bytes::Bytes) {
         context.send_message(data);
     }
 
