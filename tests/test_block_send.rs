@@ -21,9 +21,7 @@ pub fn create<F>(secio: bool, meta: ProtocolMeta, shandle: F) -> Service<F>
 where
     F: ServiceHandle,
 {
-    let builder = ServiceBuilder::default()
-        .insert_protocol(meta)
-        .forever(true);
+    let builder = ServiceBuilder::default().insert_protocol(meta);
 
     if secio {
         builder
@@ -109,7 +107,6 @@ fn test_block_send(secio: bool) {
     let mut service = create(secio, meta, ());
     service.dial(listen_addr, DialProtocol::All).unwrap();
     let handle_2 = thread::spawn(|| tokio::run(service.for_each(|_| Ok(()))));
-    // handle_1.join().unwrap();
     handle_2.join().unwrap();
 
     assert_eq!(result.load(Ordering::SeqCst), 1024);
@@ -120,7 +117,7 @@ fn test_block_send_with_secio() {
     test_block_send(true)
 }
 
-// #[test]
-// fn test_block_send_with_no_secio() {
-//     test_block_send(false)
-// }
+#[test]
+fn test_block_send_with_no_secio() {
+    test_block_send(false)
+}

@@ -324,6 +324,14 @@ impl io::Read for StreamHandle {
 
         self.check_self_state()?;
 
+        debug!(
+            "send window size: {}, receive window size: {}, send buf: {}, read buf: {}",
+            self.send_window,
+            self.recv_window,
+            self.write_buf.len(),
+            self.read_buf.len()
+        );
+
         let n = ::std::cmp::min(buf.len(), self.read_buf.len());
         if n == 0 {
             return Err(io::ErrorKind::WouldBlock.into());
@@ -352,7 +360,7 @@ impl io::Read for StreamHandle {
 
 impl io::Write for StreamHandle {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-        debug!("[{}] StreamHandle.write({:?})", self.id, buf);
+        debug!("[{}] StreamHandle.write({:?})", self.id, buf.len());
         if let Err(e) = self.recv_frames() {
             match e {
                 Error::SessionShutdown => return Err(io::ErrorKind::BrokenPipe.into()),
@@ -371,6 +379,15 @@ impl io::Write for StreamHandle {
                 "The local is closed and data cannot be written.",
             ));
         }
+
+        debug!(
+            "send window size: {}, receive window size: {}, send buf: {}, read buf: {}",
+            self.send_window,
+            self.recv_window,
+            self.write_buf.len(),
+            self.read_buf.len()
+        );
+
         if self.send_window == 0 {
             return Err(io::ErrorKind::WouldBlock.into());
         }

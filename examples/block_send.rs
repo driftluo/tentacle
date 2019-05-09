@@ -20,9 +20,7 @@ pub fn create<F>(secio: bool, meta: ProtocolMeta, shandle: F) -> Service<F>
 where
     F: ServiceHandle,
 {
-    let builder = ServiceBuilder::default()
-        .insert_protocol(meta)
-        .forever(true);
+    let builder = ServiceBuilder::default().insert_protocol(meta);
 
     if secio {
         builder

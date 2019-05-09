@@ -143,19 +143,34 @@ where
         Ok(StreamHandle::new(frame_receiver, self.event_sender.clone()))
     }
 
+    /// Sink `start_send` Ready -> data in buffer or send
+    /// Sink `start_send` NotReady -> buffer full need poll complete
     #[inline]
     fn send_frame(&mut self) -> Result<(), io::Error> {
         while let Some(frame) = self.pending.pop_front() {
             if let AsyncSink::NotReady(data) = self.socket.start_send(frame)? {
                 debug!("socket not ready, can't send");
                 self.pending.push_front(data);
-                self.set_delay();
-                break;
+                if self.poll_complete()? {
+                    break;
+                }
             }
         }
-        // TODO: not ready???
-        self.socket.poll_complete()?;
+        self.poll_complete()?;
         Ok(())
+    }
+
+    /// https://docs.rs/tokio/0.1.19/tokio/prelude/trait.Sink.html
+    /// Must use poll complete to ensure data send to lower-level
+    ///
+    /// Sink `poll_complete` Ready -> no buffer remain, flush all
+    /// Sink `poll_complete` NotReady -> there is more work left to do, may wake up next poll
+    fn poll_complete(&mut self) -> Result<bool, io::Error> {
+        if self.socket.poll_complete()?.is_not_ready() {
+            self.set_delay();
+            return Ok(true);
+        }
+        Ok(false)
     }
 
     #[inline]
@@ -361,6 +376,8 @@ where
         if !self.pending.is_empty() || !self.read_buf.is_empty() {
             self.flush()?;
         }
+
+        self.poll_complete()?;
 
         match self.recv_frame() {
             Ok(Async::Ready(None)) => {
