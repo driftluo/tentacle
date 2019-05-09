@@ -39,9 +39,9 @@ struct PHandle {
 impl ServiceProtocol for PHandle {
     fn init(&mut self, _context: &mut ProtocolContext) {}
 
-    fn connected(&mut self, mut context: ProtocolContextMutRef, _version: &str) {
+    fn connected(&mut self, context: ProtocolContextMutRef, _version: &str) {
         if context.session.ty.is_inbound() {
-            let prefix = "x".repeat(1000);
+            let prefix = "x".repeat(100);
             // NOTE: 256 is the send channel buffer size
             let length = 1024;
             let mut first_256 = Duration::default();
@@ -63,7 +63,7 @@ impl ServiceProtocol for PHandle {
         }
     }
 
-    fn received(&mut self, mut context: ProtocolContextMutRef, _data: Bytes) {
+    fn received(&mut self, context: ProtocolContextMutRef, _data: Bytes) {
         if context.session.ty.is_outbound() {
             self.count.fetch_add(1, Ordering::SeqCst);
         }
