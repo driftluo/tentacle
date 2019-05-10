@@ -73,60 +73,48 @@ impl ServiceContext {
     /// Create a new listener
     #[inline]
     pub fn listen(&self, address: Multiaddr) {
-        if self.inner.listen(address).is_err() {
-            warn!("Service is abnormally closed")
+        if let Err(e) = self.inner.listen(address) {
+            warn!("Service Error: {}", e)
         }
     }
 
     /// Initiate a connection request to address
     #[inline]
     pub fn dial(&self, address: Multiaddr, target: DialProtocol) {
-        if self.inner.dial(address, target).is_err() {
-            warn!("Service is abnormally closed")
+        if let Err(e) = self.inner.dial(address, target) {
+            warn!("Service Error: {}", e)
         }
     }
 
     /// Disconnect a connection
     #[inline]
     pub fn disconnect(&self, session_id: SessionId) {
-        if self.inner.disconnect(session_id).is_err() {
-            warn!("Service is abnormally closed")
+        if let Err(e) = self.inner.disconnect(session_id) {
+            warn!("Service Error: {}", e)
         }
     }
 
     /// Send message
     #[inline]
     pub fn send_message_to(&self, session_id: SessionId, proto_id: ProtocolId, data: Bytes) {
-        if self
-            .inner
-            .send_message_to(session_id, proto_id, data)
-            .is_err()
-        {
-            warn!("Service is abnormally closed")
+        if let Err(e) = self.inner.send_message_to(session_id, proto_id, data) {
+            warn!("Service Error: {}", e)
         }
     }
 
     /// Send message on quick channel
     #[inline]
     pub fn quick_send_message_to(&self, session_id: SessionId, proto_id: ProtocolId, data: Bytes) {
-        if self
-            .inner
-            .quick_send_message_to(session_id, proto_id, data)
-            .is_err()
-        {
-            warn!("Service is abnormally closed")
+        if let Err(e) = self.inner.quick_send_message_to(session_id, proto_id, data) {
+            warn!("Service Error: {}", e)
         }
     }
 
     /// Send data to the specified protocol for the specified sessions.
     #[inline]
     pub fn filter_broadcast(&self, session_ids: TargetSession, proto_id: ProtocolId, data: Bytes) {
-        if self
-            .inner
-            .filter_broadcast(session_ids, proto_id, data)
-            .is_err()
-        {
-            warn!("Service is abnormally closed")
+        if let Err(e) = self.inner.filter_broadcast(session_ids, proto_id, data) {
+            warn!("Service Error: {}", e)
         }
     }
 
@@ -138,12 +126,11 @@ impl ServiceContext {
         proto_id: ProtocolId,
         data: Bytes,
     ) {
-        if self
+        if let Err(e) = self
             .inner
             .quick_filter_broadcast(session_ids, proto_id, data)
-            .is_err()
         {
-            warn!("Service is abnormally closed")
+            warn!("Service Error: {}", e)
         }
     }
 
@@ -153,8 +140,8 @@ impl ServiceContext {
     where
         T: Future<Item = (), Error = ()> + 'static + Send,
     {
-        if self.inner.future_task(task).is_err() {
-            warn!("Service is abnormally closed")
+        if let Err(e) = self.inner.future_task(task) {
+            warn!("Service Error: {}", e)
         }
     }
 
@@ -163,8 +150,8 @@ impl ServiceContext {
     /// If the protocol has been open, do nothing
     #[inline]
     pub fn open_protocol(&self, session_id: SessionId, proto_id: ProtocolId) {
-        if self.inner.open_protocol(session_id, proto_id).is_err() {
-            warn!("Service is abnormally closed")
+        if let Err(e) = self.inner.open_protocol(session_id, proto_id) {
+            warn!("Service Error: {}", e)
         }
     }
 
@@ -173,8 +160,8 @@ impl ServiceContext {
     /// If the protocol has been closed, do nothing
     #[inline]
     pub fn close_protocol(&self, session_id: SessionId, proto_id: ProtocolId) {
-        if self.inner.close_protocol(session_id, proto_id).is_err() {
-            warn!("Service is abnormally closed")
+        if let Err(e) = self.inner.close_protocol(session_id, proto_id) {
+            warn!("Service Error: {}", e)
         }
     }
 
@@ -210,12 +197,8 @@ impl ServiceContext {
 
     /// Set a service notify token
     pub fn set_service_notify(&self, proto_id: ProtocolId, interval: Duration, token: u64) {
-        if self
-            .inner
-            .set_service_notify(proto_id, interval, token)
-            .is_err()
-        {
-            warn!("Service is abnormally closed")
+        if let Err(e) = self.inner.set_service_notify(proto_id, interval, token) {
+            warn!("Service Error: {}", e)
         }
     }
 
@@ -227,30 +210,28 @@ impl ServiceContext {
         interval: Duration,
         token: u64,
     ) {
-        if self
+        if let Err(e) = self
             .inner
             .set_session_notify(session_id, proto_id, interval, token)
-            .is_err()
         {
-            warn!("Service is abnormally closed")
+            warn!("Service Error: {}", e)
         }
     }
 
     /// Remove a service timer by a token
     pub fn remove_service_notify(&self, proto_id: ProtocolId, token: u64) {
-        if self.inner.remove_service_notify(proto_id, token).is_err() {
-            warn!("Service is abnormally closed")
+        if let Err(e) = self.inner.remove_service_notify(proto_id, token) {
+            warn!("Service Error: {}", e)
         }
     }
 
     /// Remove a session timer by a token
     pub fn remove_session_notify(&self, session_id: SessionId, proto_id: ProtocolId, token: u64) {
-        if self
+        if let Err(e) = self
             .inner
             .remove_session_notify(session_id, proto_id, token)
-            .is_err()
         {
-            warn!("Service is abnormally closed")
+            warn!("Service Error: {}", e)
         }
     }
 
@@ -262,15 +243,15 @@ impl ServiceContext {
     /// 3. try close all session
     /// 4. close service
     pub fn close(&self) {
-        if self.inner.close().is_err() {
-            warn!("Service is abnormally closed")
+        if let Err(e) = self.inner.close() {
+            warn!("Service Error: {}", e)
         }
     }
 
     /// Shutdown service, don't care anything, may cause partial message loss
     pub fn shutdown(&self) {
-        if self.inner.shutdown().is_err() {
-            warn!("Service is abnormally closed")
+        if let Err(e) = self.inner.shutdown() {
+            warn!("Service Error: {}", e)
         }
     }
 

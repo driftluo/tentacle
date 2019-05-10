@@ -49,14 +49,6 @@ impl ServiceControl {
         }
     }
 
-    fn normal_count_add(&self) {
-        self.normal_count.fetch_add(1, Ordering::Release);
-    }
-
-    fn quick_count_add(&self) {
-        self.quick_count.fetch_add(1, Ordering::Release);
-    }
-
     pub(crate) fn normal_count_sub(&self) {
         self.normal_count.fetch_sub(1, Ordering::Release);
     }
@@ -70,7 +62,7 @@ impl ServiceControl {
         let timeout = Instant::now();
         loop {
             if self.normal_count.load(Ordering::Acquire) < RECEIVED_SIZE {
-                self.normal_count_add();
+                self.normal_count.fetch_add(1, Ordering::Release);
                 break self
                     .service_task_sender
                     .unbounded_send(event)
@@ -90,7 +82,7 @@ impl ServiceControl {
         let timeout = Instant::now();
         loop {
             if self.quick_count.load(Ordering::Acquire) < RECEIVED_SIZE / 2 {
-                self.quick_count_add();
+                self.quick_count.fetch_add(1, Ordering::Release);
                 break self
                     .quick_task_sender
                     .unbounded_send(event)

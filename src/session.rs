@@ -518,19 +518,20 @@ where
 
     fn recv_substreams(&mut self) -> Option<()> {
         loop {
-            // Local close means user doesn't want any message from this session
-            // But when remote close, we should try my best to accept all data as much as possible
-            if self.state.is_local_close() {
-                break;
-            }
-
             if self.read_buf.len() > self.config.recv_event_size() {
                 self.set_delay();
                 break;
             }
 
             match self.proto_event_receiver.poll() {
-                Ok(Async::Ready(Some(event))) => self.handle_stream_event(event),
+                Ok(Async::Ready(Some(event))) => {
+                    // Local close means user doesn't want any message from this session
+                    // But when remote close, we should try my best to accept all data as much as possible
+                    if self.state.is_local_close() {
+                        continue;
+                    }
+                    self.handle_stream_event(event)
+                }
                 Ok(Async::Ready(None)) => {
                     // Drop by self
                     return None;
@@ -548,17 +549,18 @@ where
 
     fn recv_service(&mut self) -> Option<()> {
         loop {
-            if !self.state.is_normal() {
-                break;
-            }
-
             if self.write_buf.len() > self.config.send_event_size() {
                 self.set_delay();
                 break;
             }
 
             match self.service_receiver.poll() {
-                Ok(Async::Ready(Some(event))) => self.handle_session_event(event),
+                Ok(Async::Ready(Some(event))) => {
+                    if !self.state.is_normal() {
+                        continue;
+                    }
+                    self.handle_session_event(event)
+                }
                 Ok(Async::Ready(None)) => {
                     // Must drop by service
                     self.state = SessionState::LocalClose;
@@ -700,19 +702,20 @@ where
                 Ok(Async::NotReady) => break,
                 Err(err) => {
                     debug!("session poll error: {:?}", err);
-                    self.state = SessionState::RemoteClose;
+                    self.write_buf.clear();
 
                     match err.kind() {
                         ErrorKind::BrokenPipe
                         | ErrorKind::ConnectionAborted
                         | ErrorKind::ConnectionReset
                         | ErrorKind::NotConnected
-                        | ErrorKind::UnexpectedEof => (),
+                        | ErrorKind::UnexpectedEof => self.state = SessionState::RemoteClose,
                         _ => {
                             self.event_output(SessionEvent::MuxerError {
                                 id: self.id,
                                 error: err.into(),
                             });
+                            self.state = SessionState::Abnormal;
                         }
                     }
 
@@ -730,7 +733,7 @@ where
         }
 
         match self.state {
-            SessionState::LocalClose => {
+            SessionState::LocalClose | SessionState::Abnormal => {
                 self.close_session();
                 return Ok(Async::Ready(None));
             }
@@ -791,6 +794,8 @@ enum SessionState {
     LocalClose,
     /// Normal communication
     Normal,
+    /// Abnormal state
+    Abnormal,
 }
 
 impl SessionState {

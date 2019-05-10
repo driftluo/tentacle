@@ -344,7 +344,10 @@ where
                         self.push_back(priority, id, e.into_inner());
                         self.set_delay();
                     } else {
-                        error!("channel shutdown, message can't send")
+                        debug!(
+                            "session {} has been shutdown, message can't send, just drop it",
+                            id
+                        )
                     }
                 }
             } else {
@@ -395,7 +398,7 @@ where
                         self.proto_handle_error(proto_id, None);
                         block_handles.insert(proto_id);
                     } else {
-                        error!(
+                        debug!(
                             "channel shutdown, proto [{}] message can't send to user",
                             proto_id
                         );
@@ -546,6 +549,9 @@ where
         priority: Priority,
         data: Bytes,
     ) {
+        if !self.sessions.contains_key(&session_id) {
+            return;
+        }
         let message_event = SessionEvent::ProtocolMessage {
             id: session_id,
             proto_id,
@@ -863,6 +869,11 @@ where
         // Close all open proto
         let close_proto_ids = self.session_service_protos.remove(&id).unwrap_or_default();
         debug!("session [{}] close proto [{:?}]", id, close_proto_ids);
+        // clean write buffer
+        self.write_buf.retain(|&(session_id, _)| id != session_id);
+        self.high_write_buf
+            .retain(|&(session_id, _)| id != session_id);
+        self.set_delay();
 
         close_proto_ids.into_iter().for_each(|proto_id| {
             self.protocol_close(id, proto_id, Source::Internal);

@@ -584,7 +584,7 @@ where
             > self.config.keepalive_interval + Duration::from_secs(5)
         {
             self.shutdown()?;
-            return Err(io::ErrorKind::BrokenPipe.into());
+            return Err(io::ErrorKind::TimedOut.into());
         }
 
         self.recv_frames()?;
