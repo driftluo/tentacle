@@ -11,7 +11,7 @@ use std::sync::{
 use std::time::{Duration, Instant};
 use std::{error::Error as ErrorTrait, io};
 use tokio::prelude::{AsyncRead, AsyncWrite, FutureExt};
-use tokio::timer::{self, Delay, Interval};
+use tokio::timer::{Delay, Interval};
 
 use crate::{
     context::{ServiceContext, SessionContext, SessionControl},
@@ -114,12 +114,12 @@ pub struct Service<T> {
     /// External event is passed in from this
     service_context: ServiceContext,
     /// External event receiver
-    service_task_receiver: mpsc::Receiver<ServiceTask>,
-    quick_task_receiver: mpsc::Receiver<ServiceTask>,
+    service_task_receiver: mpsc::UnboundedReceiver<ServiceTask>,
+    quick_task_receiver: mpsc::UnboundedReceiver<ServiceTask>,
 
     pending_tasks: VecDeque<ServiceTask>,
     /// When handle channel full, set a deadline(30 second) to notify user
-    handles_error_count: HashMap<(ProtocolId, Option<SessionId>), Option<Delay>>,
+    handles_error_count: HashMap<(ProtocolId, Option<SessionId>), Option<Instant>>,
     /// Delay notify with abnormally poor machines
     delay: Arc<AtomicBool>,
 }
@@ -137,8 +137,8 @@ where
         config: ServiceConfig,
     ) -> Self {
         let (session_event_sender, session_event_receiver) = mpsc::channel(RECEIVED_SIZE);
-        let (service_task_sender, service_task_receiver) = mpsc::channel(RECEIVED_SIZE);
-        let (quick_task_sender, quick_task_receiver) = mpsc::channel(RECEIVED_SIZE / 2);
+        let (service_task_sender, service_task_receiver) = mpsc::unbounded();
+        let (quick_task_sender, quick_task_receiver) = mpsc::unbounded();
         let proto_infos = protocol_configs
             .values()
             .map(|meta| {
@@ -161,7 +161,6 @@ where
             session_proto_handles: HashMap::default(),
             listens: Vec::new(),
             dial_protocols: HashMap::default(),
-            config,
             state: State::new(forever),
             next_session: SessionId::default(),
             high_write_buf: VecDeque::default(),
@@ -175,7 +174,9 @@ where
                 quick_task_sender,
                 proto_infos,
                 key_pair,
+                config.timeout,
             ),
+            config,
             service_task_receiver,
             quick_task_receiver,
             pending_tasks: VecDeque::default(),
@@ -343,7 +344,10 @@ where
                         self.push_back(priority, id, e.into_inner());
                         self.set_delay();
                     } else {
-                        error!("channel shutdown, message can't send")
+                        debug!(
+                            "session {} has been shutdown, message can't send, just drop it",
+                            id
+                        )
                     }
                 }
             } else {
@@ -394,7 +398,7 @@ where
                         self.proto_handle_error(proto_id, None);
                         block_handles.insert(proto_id);
                     } else {
-                        error!(
+                        debug!(
                             "channel shutdown, proto [{}] message can't send to user",
                             proto_id
                         );
@@ -459,16 +463,14 @@ where
     /// When proto handle channel is full, call here
     #[inline]
     fn proto_handle_error(&mut self, proto_id: ProtocolId, session_id: Option<SessionId>) {
-        let delay_time = Instant::now() + Duration::from_secs(30);
-
         let delay = self
             .handles_error_count
             .entry((proto_id, session_id))
-            .or_insert_with(|| Some(Delay::new(delay_time)));
+            .or_insert_with(|| Some(Instant::now()));
 
         match delay.take() {
-            Some(mut inner) => match inner.poll() {
-                Ok(Async::Ready(_)) => {
+            Some(inner) => {
+                if inner.elapsed() > Duration::from_secs(30) {
                     let error = session_id
                         .map(Error::SessionProtoHandleBlock)
                         .unwrap_or(Error::ServiceProtoHandleBlock);
@@ -477,15 +479,11 @@ where
                         &mut self.service_context,
                         ServiceError::ProtocolHandleError { proto_id, error },
                     );
+                } else {
+                    *delay = Some(inner);
                 }
-                Ok(Async::NotReady) => *delay = Some(inner),
-                Err(_) => {
-                    *delay = Some(Delay::new(delay_time));
-                }
-            },
-            None => {
-                *delay = Some(Delay::new(delay_time));
             }
+            None => *delay = Some(Instant::now()),
         }
     }
 
@@ -551,6 +549,9 @@ where
         priority: Priority,
         data: Bytes,
     ) {
+        if !self.sessions.contains_key(&session_id) {
+            return;
+        }
         let message_event = SessionEvent::ProtocolMessage {
             id: session_id,
             proto_id,
@@ -868,6 +869,11 @@ where
         // Close all open proto
         let close_proto_ids = self.session_service_protos.remove(&id).unwrap_or_default();
         debug!("session [{}] close proto [{:?}]", id, close_proto_ids);
+        // clean write buffer
+        self.write_buf.retain(|&(session_id, _)| id != session_id);
+        self.high_write_buf
+            .retain(|&(session_id, _)| id != session_id);
+        self.set_delay();
 
         close_proto_ids.into_iter().for_each(|proto_id| {
             self.protocol_close(id, proto_id, Source::Internal);
@@ -1309,22 +1315,28 @@ where
                     || self.config.event.contains(&proto_id)
                 {
                     let (signal_sender, mut signal_receiver) = oneshot::channel::<()>();
-                    let mut interval_sender =
-                        self.service_context.control().service_task_sender.clone();
+                    let interval_sender = self.service_context.control().clone();
                     let fut = Interval::new(Instant::now(), interval)
+                        .map_err(|_| ())
                         .for_each(move |_| {
                             if signal_receiver.poll() == Ok(Async::NotReady) {
-                                interval_sender
-                                    .try_send(ServiceTask::ProtocolNotify { proto_id, token })
-                                    .map_err(|err| {
-                                        debug!("interval error: {:?}", err);
-                                        timer::Error::shutdown()
-                                    })
+                                match interval_sender
+                                    .send(ServiceTask::ProtocolNotify { proto_id, token })
+                                {
+                                    Ok(_) => Ok(()),
+                                    Err(e) => {
+                                        if let Error::TaskDisconnect = e {
+                                            Err(())
+                                        } else {
+                                            Ok(())
+                                        }
+                                    }
+                                }
                             } else {
-                                Err(timer::Error::shutdown())
+                                Err(())
                             }
                         })
-                        .map_err(|err| debug!("notify close by: {}", err));
+                        .map_err(|_| debug!("notify close"));
 
                     // If set more than once, the older task will stop when sender dropped
                     self.service_notify_signals
@@ -1357,26 +1369,30 @@ where
                     || self.config.event.contains(&proto_id)
                 {
                     let (signal_sender, mut signal_receiver) = oneshot::channel::<()>();
-                    let mut interval_sender =
-                        self.service_context.control().service_task_sender.clone();
+                    let interval_sender = self.service_context.control().clone();
                     let fut = Interval::new(Instant::now(), interval)
+                        .map_err(|_| ())
                         .for_each(move |_| {
                             if signal_receiver.poll() == Ok(Async::NotReady) {
-                                interval_sender
-                                    .try_send(ServiceTask::ProtocolSessionNotify {
-                                        session_id,
-                                        proto_id,
-                                        token,
-                                    })
-                                    .map_err(|err| {
-                                        debug!("interval error: {:?}", err);
-                                        timer::Error::shutdown()
-                                    })
+                                match interval_sender.send(ServiceTask::ProtocolSessionNotify {
+                                    session_id,
+                                    proto_id,
+                                    token,
+                                }) {
+                                    Ok(_) => Ok(()),
+                                    Err(e) => {
+                                        if let Error::TaskDisconnect = e {
+                                            Err(())
+                                        } else {
+                                            Ok(())
+                                        }
+                                    }
+                                }
                             } else {
-                                Err(timer::Error::shutdown())
+                                Err(())
                             }
                         })
-                        .map_err(|err| debug!("session notify close by: {}", err));
+                        .map_err(|_| debug!("session notify close"));
 
                     // If set more than once, the older task will stop when sender dropped
                     if let Some(session) = self.sessions.get_mut(&session_id) {
@@ -1553,13 +1569,19 @@ where
             }
 
             let task = match self.quick_task_receiver.poll() {
-                Ok(Async::Ready(Some(task))) => Some(task),
+                Ok(Async::Ready(Some(task))) => {
+                    self.service_context.control().quick_count_sub();
+                    Some(task)
+                }
                 Ok(Async::Ready(None)) => None,
                 Ok(Async::NotReady) => None,
                 Err(_) => None,
             }
             .or_else(|| match self.service_task_receiver.poll() {
-                Ok(Async::Ready(Some(task))) => Some(task),
+                Ok(Async::Ready(Some(task))) => {
+                    self.service_context.control().normal_count_sub();
+                    Some(task)
+                }
                 Ok(Async::Ready(None)) => None,
                 Ok(Async::NotReady) => None,
                 Err(_) => None,

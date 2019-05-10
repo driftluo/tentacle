@@ -77,11 +77,13 @@ pub struct Session<T> {
     // For receive events from sub streams
     event_receiver: Receiver<StreamEvent>,
 
-    keepalive_future: Option<Interval>,
+    keepalive_future: Option<Receiver<()>>,
     /// Delay notify with abnormally poor network status
     delay: Arc<AtomicBool>,
     /// Last successful send time
     last_send_success: Instant,
+    /// Last successful read time
+    last_read_success: Instant,
 }
 
 /// Session type, client or server
@@ -118,7 +120,22 @@ where
         let (event_sender, event_receiver) = channel(32);
         let framed_stream = Framed::new(raw_stream, FrameCodec::default());
         let keepalive_future = if config.enable_keepalive {
-            Some(Interval::new_interval(config.keepalive_interval))
+            let (mut interval_sender, interval_receiver) = channel(2);
+            tokio::spawn(
+                Interval::new_interval(config.keepalive_interval)
+                    .map_err(|_| ())
+                    .for_each(move |_| match interval_sender.try_send(()) {
+                        Ok(_) => Ok(()),
+                        Err(e) => {
+                            if e.is_full() {
+                                Ok(())
+                            } else {
+                                Err(())
+                            }
+                        }
+                    }),
+            );
+            Some(interval_receiver)
         } else {
             None
         };
@@ -143,6 +160,7 @@ where
             keepalive_future,
             delay: Arc::new(AtomicBool::new(false)),
             last_send_success: Instant::now(),
+            last_read_success: Instant::now(),
         }
     }
 
@@ -246,6 +264,8 @@ where
         stream
     }
 
+    /// Sink `start_send` Ready -> data in buffer or send
+    /// Sink `start_send` NotReady -> buffer full need poll complete
     #[inline]
     fn send_all(&mut self) -> Poll<(), io::Error> {
         while let Some(frame) = self.write_pending_frames.pop_front() {
@@ -262,8 +282,9 @@ where
                     if self.last_send_success.elapsed() > TIMEOUT {
                         return Err(io::ErrorKind::TimedOut.into());
                     }
-                    self.set_delay();
-                    return Ok(Async::NotReady);
+                    if self.poll_complete()? {
+                        break;
+                    }
                 }
                 Ok(AsyncSink::Ready) => {
                     self.last_send_success = Instant::now();
@@ -274,9 +295,21 @@ where
                 }
             }
         }
-        // TODO: not ready???
-        self.framed_stream.poll_complete()?;
+        self.poll_complete()?;
         Ok(Async::Ready(()))
+    }
+
+    /// https://docs.rs/tokio/0.1.19/tokio/prelude/trait.Sink.html
+    /// Must use poll complete to ensure data send to lower-level
+    ///
+    /// Sink `poll_complete` Ready -> no buffer remain, flush all
+    /// Sink `poll_complete` NotReady -> there is more work left to do, may wake up next poll
+    fn poll_complete(&mut self) -> Result<bool, io::Error> {
+        if self.framed_stream.poll_complete()?.is_not_ready() {
+            self.set_delay();
+            return Ok(true);
+        }
+        Ok(false)
     }
 
     fn send_frame(&mut self, frame: Frame) -> Poll<(), io::Error> {
@@ -290,7 +323,7 @@ where
     }
 
     fn handle_frame(&mut self, frame: Frame) -> Result<(), io::Error> {
-        debug!("[{:?}] Session::handle_frame({:?})", self.ty, frame);
+        debug!("[{:?}] Session::handle_frame({:?})", self.ty, frame.ty());
         match frame.ty() {
             Type::Data | Type::WindowUpdate => {
                 self.handle_stream_message(frame)?;
@@ -425,6 +458,7 @@ where
             match self.framed_stream.poll() {
                 Ok(Async::Ready(Some(frame))) => {
                     self.handle_frame(frame)?;
+                    self.last_read_success = Instant::now();
                 }
                 Ok(Async::Ready(None)) => {
                     self.eof = true;
@@ -538,18 +572,34 @@ where
             self.flush()?;
         }
 
+        self.poll_complete()?;
+
+        debug!(
+            "send buf: {}, read buf: {}",
+            self.write_pending_frames.len(),
+            self.read_pending_frames.len()
+        );
+
         if let Some(ref mut fut) = self.keepalive_future {
             match fut.poll() {
-                Ok(Async::Ready(Some(ping_at))) => {
+                Ok(Async::Ready(Some(_))) => {
                     // TODO: Handle not ready
-                    let _ = self.keep_alive(ping_at)?;
+                    let _ = self.keep_alive(Instant::now())?;
                 }
                 Ok(Async::Ready(None)) => {}
                 Ok(Async::NotReady) => {}
-                Err(err) => {
-                    warn!("poll keepalive_future error: {}", err);
+                Err(_) => {
+                    warn!("poll keepalive_future error");
                 }
             }
+        }
+
+        // Interval broken or Stream error on here, just break this pipe
+        if self.last_read_success.elapsed()
+            > self.config.keepalive_interval + Duration::from_secs(5)
+        {
+            self.shutdown()?;
+            return Err(io::ErrorKind::TimedOut.into());
         }
 
         self.recv_frames()?;

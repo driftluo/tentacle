@@ -65,6 +65,7 @@ pub(crate) enum ProtocolEvent {
         /// Codec error
         error: Error,
     },
+    TimeoutCheck,
 }
 
 /// Each custom protocol in a session corresponds to a sub stream
@@ -135,6 +136,8 @@ where
         }
     }
 
+    /// Sink `start_send` Ready -> data in buffer or send
+    /// Sink `start_send` NotReady -> buffer full need poll complete
     #[inline]
     fn send_inner(&mut self, frame: bytes::Bytes, priority: Priority) -> Result<bool, io::Error> {
         match self.sub_stream.start_send(frame) {
@@ -154,27 +157,34 @@ where
     /// Send data to the lower `yamux` sub stream
     fn send_data(&mut self) -> Result<(), io::Error> {
         while let Some(frame) = self.high_write_buf.pop_front() {
-            if self.send_inner(frame, Priority::High)? {
+            if self.send_inner(frame, Priority::High)? && self.poll_complete()? {
                 return Ok(());
             }
         }
 
         while let Some(frame) = self.write_buf.pop_front() {
-            if self.send_inner(frame, Priority::Normal)? {
+            if self.send_inner(frame, Priority::Normal)? && self.poll_complete()? {
                 return Ok(());
             }
         }
 
-        match self.sub_stream.poll_complete() {
-            Ok(Async::NotReady) => return Ok(()),
-            Ok(Async::Ready(_)) => (),
-            Err(err) => {
-                debug!("poll complete error: {:?}", err);
-                return Err(err);
-            }
-        };
+        self.poll_complete()?;
+
         debug!("send success, proto_id: {}", self.proto_id);
         Ok(())
+    }
+
+    /// https://docs.rs/tokio/0.1.19/tokio/prelude/trait.Sink.html
+    /// Must use poll complete to ensure data send to lower-level
+    ///
+    /// Sink `poll_complete` Ready -> no buffer remain, flush all
+    /// Sink `poll_complete` NotReady -> there is more work left to do, may wake up next poll
+    fn poll_complete(&mut self) -> Result<bool, io::Error> {
+        if self.sub_stream.poll_complete()?.is_not_ready() {
+            self.set_delay();
+            return Ok(true);
+        }
+        Ok(false)
     }
 
     /// Close protocol sub stream
@@ -395,6 +405,15 @@ where
                 return Err(());
             }
         }
+
+        self.poll_complete()
+            .map_err(|e| debug!("poll complete error: {}", e))?;
+
+        debug!(
+            "write buf: {}, read buf: {}",
+            self.write_buf.len(),
+            self.read_buf.len()
+        );
 
         if self.recv_frame().is_none() {
             return Ok(Async::Ready(None));

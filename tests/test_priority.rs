@@ -42,7 +42,7 @@ struct PHandle {
 impl ServiceProtocol for PHandle {
     fn init(&mut self, _context: &mut ProtocolContext) {}
 
-    fn connected(&mut self, mut context: ProtocolContextMutRef, _version: &str) {
+    fn connected(&mut self, context: ProtocolContextMutRef, _version: &str) {
         if context.session.ty.is_inbound() {
             for i in 0..1024 {
                 if i == 254 {
@@ -53,7 +53,7 @@ impl ServiceProtocol for PHandle {
         }
     }
 
-    fn received(&mut self, mut context: ProtocolContextMutRef, data: bytes::Bytes) {
+    fn received(&mut self, context: ProtocolContextMutRef, data: bytes::Bytes) {
         self.count += 1;
         if data == Bytes::from("high") {
             // We are not sure that the message was sent in the first few,

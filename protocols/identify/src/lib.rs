@@ -138,7 +138,7 @@ impl<T: Callback> ServiceProtocol for IdentifyProtocol<T> {
         );
     }
 
-    fn connected(&mut self, mut context: ProtocolContextMutRef, _version: &str) {
+    fn connected(&mut self, context: ProtocolContextMutRef, _version: &str) {
         let session = context.session;
         if session.remote_pubkey.is_none() {
             error!("IdentifyProtocol require secio enabled!");
@@ -188,7 +188,7 @@ impl<T: Callback> ServiceProtocol for IdentifyProtocol<T> {
         }
     }
 
-    fn received(&mut self, mut context: ProtocolContextMutRef, data: bytes::Bytes) {
+    fn received(&mut self, context: ProtocolContextMutRef, data: bytes::Bytes) {
         if !self.secio_enabled {
             return;
         }
