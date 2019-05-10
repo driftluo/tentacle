@@ -1,4 +1,5 @@
 use futures::{prelude::*, sync::mpsc};
+use log::debug;
 
 use std::thread;
 use std::time::{Duration, Instant};
@@ -50,25 +51,29 @@ impl ServiceControl {
     }
 
     pub(crate) fn normal_count_sub(&self) {
-        self.normal_count.fetch_sub(1, Ordering::Release);
+        let old = self.normal_count.fetch_sub(1, Ordering::SeqCst);
+        debug!("normal sub task number to {}", old - 1);
     }
 
     pub(crate) fn quick_count_sub(&self) {
-        self.quick_count.fetch_sub(1, Ordering::Release);
+        let old = self.quick_count.fetch_sub(1, Ordering::SeqCst);
+        debug!("quick add task number to {}", old - 1);
     }
 
     /// Send raw event
     pub(crate) fn send(&self, event: ServiceTask) -> Result<(), Error> {
         let timeout = Instant::now();
         loop {
-            if self.normal_count.load(Ordering::Acquire) < RECEIVED_SIZE {
-                self.normal_count.fetch_add(1, Ordering::Release);
+            if self.normal_count.load(Ordering::SeqCst) < RECEIVED_SIZE {
+                let old = self.normal_count.fetch_add(1, Ordering::SeqCst);
+                debug!("normal add task number to {}", old + 1);
                 break self
                     .service_task_sender
                     .unbounded_send(event)
                     .map_err(Into::into);
             } else {
                 if timeout.elapsed() > self.timeout {
+                    debug!("normal timeout");
                     return Err(Error::IoError(io::ErrorKind::TimedOut.into()));
                 }
                 thread::sleep(Duration::from_millis(200))
@@ -81,14 +86,16 @@ impl ServiceControl {
     fn quick_send(&self, event: ServiceTask) -> Result<(), Error> {
         let timeout = Instant::now();
         loop {
-            if self.quick_count.load(Ordering::Acquire) < RECEIVED_SIZE / 2 {
-                self.quick_count.fetch_add(1, Ordering::Release);
+            if self.quick_count.load(Ordering::SeqCst) < RECEIVED_SIZE / 2 {
+                let old = self.quick_count.fetch_add(1, Ordering::SeqCst);
+                debug!("quick add task number to {}", old + 1);
                 break self
                     .quick_task_sender
                     .unbounded_send(event)
                     .map_err(Into::into);
             } else {
                 if timeout.elapsed() > self.timeout {
+                    debug!("quick timeout");
                     return Err(Error::IoError(io::ErrorKind::TimedOut.into()));
                 }
                 thread::sleep(Duration::from_millis(200))

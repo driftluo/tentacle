@@ -90,6 +90,8 @@ pub(crate) struct SubStream<U> {
     event_receiver: mpsc::Receiver<ProtocolEvent>,
     /// Delay notify with abnormally poor machines
     delay: Arc<AtomicBool>,
+
+    control: Arc<AtomicBool>,
 }
 
 impl<U> SubStream<U>
@@ -104,6 +106,7 @@ where
         id: StreamId,
         proto_id: ProtocolId,
         config: Config,
+        control: Arc<AtomicBool>,
     ) -> Self {
         SubStream {
             sub_stream,
@@ -117,6 +120,7 @@ where
             read_buf: VecDeque::new(),
             delay: Arc::new(AtomicBool::new(false)),
             dead: false,
+            control,
         }
     }
 
@@ -392,7 +396,8 @@ where
 
     fn poll(&mut self) -> Poll<Option<Self::Item>, Self::Error> {
         // double check here
-        if self.dead {
+        if self.dead || self.control.load(Ordering::SeqCst) {
+            self.close_proto_stream();
             return Ok(Async::Ready(None));
         }
 
@@ -423,7 +428,7 @@ where
             return Ok(Async::Ready(None));
         }
 
-        if self.dead {
+        if self.dead || self.control.load(Ordering::SeqCst) {
             self.close_proto_stream();
             return Ok(Async::Ready(None));
         }

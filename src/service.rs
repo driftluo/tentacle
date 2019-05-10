@@ -1560,11 +1560,11 @@ where
 
     #[inline]
     fn user_task_poll(&mut self) {
-        loop {
+        let mut finished = false;
+        for _ in 0..256 {
             if self.write_buf.len() > self.config.yamux_config.send_event_size()
-                || self.high_write_buf.len() > self.config.yamux_config.send_event_size()
+                && self.high_write_buf.len() > self.config.yamux_config.send_event_size()
             {
-                self.set_delay();
                 break;
             }
 
@@ -1589,29 +1589,42 @@ where
 
             match task {
                 Some(task) => self.handle_service_task(task),
-                None => break,
+                None => {
+                    finished = true;
+                    break;
+                }
             }
+        }
+        if !finished {
+            self.set_delay();
         }
     }
 
     fn session_poll(&mut self) {
-        loop {
-            if self.read_session_buf.len() > self.config.yamux_config.recv_event_size()
-                || self.read_session_buf.len() > self.config.yamux_config.recv_event_size()
+        let mut finished = false;
+        for _ in 0..256 {
+            if self.read_service_buf.len() > self.config.yamux_config.recv_event_size()
+                && self.read_session_buf.len() > self.config.yamux_config.recv_event_size()
             {
-                self.set_delay();
                 break;
             }
 
             match self.session_event_receiver.poll() {
                 Ok(Async::Ready(Some(event))) => self.handle_session_event(event),
                 Ok(Async::Ready(None)) => unreachable!(),
-                Ok(Async::NotReady) => break,
-                Err(err) => {
-                    warn!("receive session error: {:?}", err);
+                Ok(Async::NotReady) => {
+                    finished = true;
+                    break;
+                }
+                Err(_) => {
+                    warn!("receive session error");
+                    finished = true;
                     break;
                 }
             }
+        }
+        if !finished {
+            self.set_delay();
         }
     }
 
@@ -1687,11 +1700,20 @@ where
             return Ok(Async::Ready(None));
         }
         debug!(
-            "listens count: {}, state: {:?}, sessions count: {}, pending task: {}",
+            "listens count: {}, state: {:?}, sessions count: {},\
+             pending task: {}, normal_count: {}, quick_count: {}",
             self.listens.len(),
             self.state,
             self.sessions.len(),
             self.pending_tasks.len(),
+            self.service_context
+                .control()
+                .normal_count
+                .load(Ordering::SeqCst),
+            self.service_context
+                .control()
+                .quick_count
+                .load(Ordering::SeqCst)
         );
 
         Ok(Async::NotReady)
