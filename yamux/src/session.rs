@@ -77,7 +77,7 @@ pub struct Session<T> {
     // For receive events from sub streams
     event_receiver: Receiver<StreamEvent>,
 
-    keepalive_future: Option<Interval>,
+    keepalive_future: Option<Receiver<()>>,
     /// Delay notify with abnormally poor network status
     delay: Arc<AtomicBool>,
     /// Last successful send time
@@ -120,7 +120,22 @@ where
         let (event_sender, event_receiver) = channel(32);
         let framed_stream = Framed::new(raw_stream, FrameCodec::default());
         let keepalive_future = if config.enable_keepalive {
-            Some(Interval::new_interval(config.keepalive_interval))
+            let (mut interval_sender, interval_receiver) = channel(2);
+            tokio::spawn(
+                Interval::new_interval(config.keepalive_interval)
+                    .map_err(|_| ())
+                    .for_each(move |_| match interval_sender.try_send(()) {
+                        Ok(_) => Ok(()),
+                        Err(e) => {
+                            if e.is_full() {
+                                Ok(())
+                            } else {
+                                Err(())
+                            }
+                        }
+                    }),
+            );
+            Some(interval_receiver)
         } else {
             None
         };
@@ -567,14 +582,14 @@ where
 
         if let Some(ref mut fut) = self.keepalive_future {
             match fut.poll() {
-                Ok(Async::Ready(Some(ping_at))) => {
+                Ok(Async::Ready(Some(_))) => {
                     // TODO: Handle not ready
-                    let _ = self.keep_alive(ping_at)?;
+                    let _ = self.keep_alive(Instant::now())?;
                 }
                 Ok(Async::Ready(None)) => {}
                 Ok(Async::NotReady) => {}
-                Err(err) => {
-                    warn!("poll keepalive_future error: {}", err);
+                Err(_) => {
+                    warn!("poll keepalive_future error");
                 }
             }
         }

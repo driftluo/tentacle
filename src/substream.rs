@@ -65,6 +65,7 @@ pub(crate) enum ProtocolEvent {
         /// Codec error
         error: Error,
     },
+    TimeoutCheck,
 }
 
 /// Each custom protocol in a session corresponds to a sub stream
