@@ -36,18 +36,24 @@ struct PHandle {
 impl ServiceProtocol for PHandle {
     fn init(&mut self, context: &mut ProtocolContext) {
         let proto_id = context.proto_id;
-        context.set_service_notify(proto_id, Duration::from_millis(10), 0);
-        context.set_service_notify(proto_id, Duration::from_millis(30), 1);
+        context.set_service_notify(proto_id, Duration::from_millis(100), 0);
+        context.set_service_notify(proto_id, Duration::from_millis(200), 1);
     }
 
     fn connected(&mut self, context: ProtocolContextMutRef, _version: &str) {
-        info!("Session open: {:?}", context.session.id);
+        info!(
+            "Session open: {:?} {}",
+            context.session.id, context.session.address
+        );
         self.sessions.insert(context.session.id, context.session.ty);
     }
 
     fn disconnected(&mut self, context: ProtocolContextMutRef) {
-        use log::warn;
-        warn!("Session close: {:?}", context.session.id);
+        log::warn!(
+            "Session close: {:?} {}",
+            context.session.id,
+            context.session.address
+        );
         self.sessions.remove(&context.session.id);
     }
 

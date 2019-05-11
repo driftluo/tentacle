@@ -39,6 +39,8 @@ pub struct SessionContext {
     // TODO: use reference?
     /// Remote public key
     pub remote_pubkey: Option<PublicKey>,
+    /// Session is closed
+    pub closed: Arc<AtomicBool>,
 }
 
 /// The Service runtime can send some instructions to the inside of the handle.

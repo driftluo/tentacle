@@ -342,6 +342,12 @@ where
                 continue;
             }
             if let Some(session) = self.sessions.get_mut(&id) {
+                if session.inner.closed.load(Ordering::SeqCst) {
+                    if let SessionEvent::ProtocolMessage { .. } = event {
+                        continue;
+                    }
+                }
+
                 if let Err(e) = session.event_sender.try_send(event) {
                     if e.is_full() {
                         block_sessions.insert(id);
@@ -389,7 +395,21 @@ where
         let mut error = false;
         let mut block_handles = HashSet::new();
 
+        let closed_sessions = self
+            .sessions
+            .iter()
+            .filter(|(_, control)| control.inner.closed.load(Ordering::SeqCst))
+            .map(|(session_id, _)| *session_id)
+            .collect::<HashSet<_>>();
+
         for (session_id, proto_id, event) in self.read_service_buf.split_off(0) {
+            if let Some(ref session_id) = session_id {
+                if closed_sessions.contains(session_id) {
+                    if let ServiceProtocolEvent::Received { .. } = event {
+                        continue;
+                    }
+                }
+            }
             // Guarantee the order in which messages are sent
             if block_handles.contains(&proto_id) {
                 self.read_service_buf
@@ -797,6 +817,7 @@ where
             self.next_session += 1;
         }
 
+        let session_closed = Arc::new(AtomicBool::new(false));
         let (service_event_sender, service_event_receiver) = mpsc::channel(SEND_SIZE);
         let session_control = SessionControl {
             notify_signals: HashMap::default(),
@@ -806,6 +827,7 @@ where
                 address,
                 ty,
                 remote_pubkey,
+                closed: session_closed.clone(),
             }),
         };
 
@@ -824,6 +846,7 @@ where
             self.session_event_sender.clone(),
             service_event_receiver,
             meta,
+            session_closed,
         );
 
         if ty.is_outbound() {
@@ -1135,8 +1158,8 @@ where
         let task = Interval::new(Instant::now(), Duration::from_millis(200))
             .map_err(|_| ())
             .for_each(move |_| {
-                if quick_count.load(Ordering::SeqCst) > RECEIVED_SIZE / 2
-                    || normal_count.load(Ordering::SeqCst) > RECEIVED_SIZE
+                if quick_count.load(Ordering::SeqCst) > RECEIVED_SIZE / 4
+                    || normal_count.load(Ordering::SeqCst) > RECEIVED_SIZE / 2
                 {
                     notify.notify();
                 }
@@ -1603,7 +1626,7 @@ where
     #[inline]
     fn user_task_poll(&mut self) {
         let mut finished = false;
-        for _ in 0..256 {
+        for _ in 0..32 {
             if self.write_buf.len() > self.config.yamux_config.send_event_size()
                 || self.high_write_buf.len() > self.config.yamux_config.send_event_size()
             {
@@ -1644,7 +1667,7 @@ where
 
     fn session_poll(&mut self) {
         let mut finished = false;
-        for _ in 0..256 {
+        for _ in 0..32 {
             if self.read_service_buf.len() > self.config.yamux_config.recv_event_size()
                 || self.read_session_buf.len() > self.config.yamux_config.recv_event_size()
             {
