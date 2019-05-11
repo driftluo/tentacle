@@ -14,6 +14,7 @@ pub(crate) struct ServiceConfig {
     pub max_frame_length: usize,
     /// event output or callback output
     pub event: HashSet<ProtocolId>,
+    pub keep_buffer: bool,
 }
 
 impl Default for ServiceConfig {
@@ -23,6 +24,7 @@ impl Default for ServiceConfig {
             yamux_config: YamuxConfig::default(),
             max_frame_length: 1024 * 1024 * 8,
             event: HashSet::default(),
+            keep_buffer: false,
         }
     }
 }

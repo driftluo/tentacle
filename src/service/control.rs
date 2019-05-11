@@ -20,6 +20,7 @@ use crate::{
     ProtocolId, SessionId,
 };
 use bytes::Bytes;
+use std::sync::atomic::AtomicBool;
 
 /// Service control, used to send commands externally at runtime
 #[derive(Clone)]
@@ -30,6 +31,7 @@ pub struct ServiceControl {
     pub(crate) normal_count: Arc<AtomicUsize>,
     pub(crate) quick_count: Arc<AtomicUsize>,
     timeout: Duration,
+    closed: Arc<AtomicBool>,
 }
 
 impl ServiceControl {
@@ -39,6 +41,7 @@ impl ServiceControl {
         quick_task_sender: mpsc::UnboundedSender<ServiceTask>,
         proto_infos: HashMap<ProtocolId, ProtocolInfo>,
         timeout: Duration,
+        closed: Arc<AtomicBool>,
     ) -> Self {
         ServiceControl {
             service_task_sender,
@@ -47,6 +50,7 @@ impl ServiceControl {
             normal_count: Arc::new(AtomicUsize::new(0)),
             quick_count: Arc::new(AtomicUsize::new(0)),
             timeout,
+            closed,
         }
     }
 
@@ -62,6 +66,9 @@ impl ServiceControl {
 
     /// Send raw event
     pub(crate) fn send(&self, event: ServiceTask) -> Result<(), Error> {
+        if self.closed.load(Ordering::SeqCst) {
+            return Ok(());
+        }
         let timeout = Instant::now();
         loop {
             if self.normal_count.load(Ordering::SeqCst) < RECEIVED_SIZE {
@@ -72,8 +79,7 @@ impl ServiceControl {
                     .unbounded_send(event)
                     .map_err(Into::into);
             } else {
-                if timeout.elapsed() > self.timeout {
-                    debug!("normal timeout");
+                if timeout.elapsed() > Duration::from_secs(2) {
                     return Err(Error::IoError(io::ErrorKind::TimedOut.into()));
                 }
                 thread::sleep(Duration::from_millis(200))
@@ -84,6 +90,9 @@ impl ServiceControl {
     /// Send raw event on quick channel
     #[inline]
     fn quick_send(&self, event: ServiceTask) -> Result<(), Error> {
+        if self.closed.load(Ordering::SeqCst) {
+            return Ok(());
+        }
         let timeout = Instant::now();
         loop {
             if self.quick_count.load(Ordering::SeqCst) < RECEIVED_SIZE / 2 {
@@ -94,7 +103,7 @@ impl ServiceControl {
                     .unbounded_send(event)
                     .map_err(Into::into);
             } else {
-                if timeout.elapsed() > self.timeout {
+                if timeout.elapsed() > Duration::from_secs(2) {
                     debug!("quick timeout");
                     return Err(Error::IoError(io::ErrorKind::TimedOut.into()));
                 }
@@ -112,19 +121,19 @@ impl ServiceControl {
     /// Create a new listener
     #[inline]
     pub fn listen(&self, address: Multiaddr) -> Result<(), Error> {
-        self.send(ServiceTask::Listen { address })
+        self.quick_send(ServiceTask::Listen { address })
     }
 
     /// Initiate a connection request to address
     #[inline]
     pub fn dial(&self, address: Multiaddr, target: DialProtocol) -> Result<(), Error> {
-        self.send(ServiceTask::Dial { address, target })
+        self.quick_send(ServiceTask::Dial { address, target })
     }
 
     /// Disconnect a connection
     #[inline]
     pub fn disconnect(&self, session_id: SessionId) -> Result<(), Error> {
-        self.send(ServiceTask::Disconnect { session_id })
+        self.quick_send(ServiceTask::Disconnect { session_id })
     }
 
     /// Send message
@@ -197,7 +206,7 @@ impl ServiceControl {
     /// If the protocol has been open, do nothing
     #[inline]
     pub fn open_protocol(&self, session_id: SessionId, proto_id: ProtocolId) -> Result<(), Error> {
-        self.send(ServiceTask::ProtocolOpen {
+        self.quick_send(ServiceTask::ProtocolOpen {
             session_id,
             proto_id,
         })
@@ -208,7 +217,7 @@ impl ServiceControl {
     /// If the protocol has been closed, do nothing
     #[inline]
     pub fn close_protocol(&self, session_id: SessionId, proto_id: ProtocolId) -> Result<(), Error> {
-        self.send(ServiceTask::ProtocolClose {
+        self.quick_send(ServiceTask::ProtocolClose {
             session_id,
             proto_id,
         })

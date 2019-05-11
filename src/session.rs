@@ -139,6 +139,8 @@ pub(crate) struct Session<T> {
     id: SessionId,
     timeout: Duration,
 
+    keep_buffer: bool,
+
     state: SessionState,
 
     // NOTE: Not used yet, may useful later
@@ -204,6 +206,7 @@ where
             id: meta.id,
             timeout: meta.timeout,
             ty: meta.ty,
+            keep_buffer: meta.keep_buffer,
             next_stream: 0,
             sub_streams: HashMap::default(),
             proto_streams: HashMap::default(),
@@ -411,7 +414,8 @@ where
                     proto_id,
                     self.config,
                     self.substreams_control.clone(),
-                );
+                )
+                .keep_buffer(self.keep_buffer);
                 self.sub_streams
                     .insert(self.next_stream, session_to_proto_sender);
                 self.proto_streams.insert(proto_id, self.next_stream);
@@ -723,6 +727,10 @@ where
                 Err(err) => {
                     debug!("session poll error: {:?}", err);
                     self.write_buf.clear();
+                    self.high_write_buf.clear();
+                    if !self.keep_buffer {
+                        self.read_buf.clear()
+                    }
 
                     match err.kind() {
                         ErrorKind::BrokenPipe
@@ -781,6 +789,7 @@ pub(crate) struct SessionMeta {
     // remote_address: ::std::net::SocketAddr,
     // remote_public_key: Option<PublicKey>,
     timeout: Duration,
+    keep_buffer: bool,
 }
 
 impl SessionMeta {
@@ -791,6 +800,7 @@ impl SessionMeta {
             ty,
             protocol_configs: HashMap::new(),
             timeout,
+            keep_buffer: false,
         }
     }
 
@@ -801,6 +811,11 @@ impl SessionMeta {
 
     pub fn config(mut self, config: Config) -> Self {
         self.config = config;
+        self
+    }
+
+    pub fn keep_buffer(mut self, keep: bool) -> Self {
+        self.keep_buffer = keep;
         self
     }
 }

@@ -19,6 +19,7 @@ use crate::{
     session::SessionEvent,
     ProtocolId, SessionId,
 };
+use std::sync::atomic::AtomicBool;
 
 pub(crate) struct SessionControl {
     pub(crate) inner: Arc<SessionContext>,
@@ -56,6 +57,7 @@ impl ServiceContext {
         quick_task_sender: mpsc::UnboundedSender<ServiceTask>,
         proto_infos: HashMap<ProtocolId, ProtocolInfo>,
         key_pair: Option<SecioKeyPair>,
+        closed: Arc<AtomicBool>,
         timeout: Duration,
     ) -> Self {
         ServiceContext {
@@ -64,6 +66,7 @@ impl ServiceContext {
                 quick_task_sender,
                 proto_infos,
                 timeout,
+                closed,
             ),
             key_pair,
             listens: Vec::new(),
