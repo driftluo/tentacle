@@ -1,7 +1,10 @@
 use futures::{prelude::*, sync::mpsc};
 use log::warn;
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc,
+};
 
 use crate::{
     context::{ProtocolContext, ServiceContext, SessionContext},
@@ -41,6 +44,7 @@ pub struct ServiceProtocolStream<T> {
     handle_context: ProtocolContext,
     sessions: HashMap<SessionId, Arc<SessionContext>>,
     receiver: mpsc::Receiver<ServiceProtocolEvent>,
+    shutdown: Arc<AtomicBool>,
 }
 
 impl<T> ServiceProtocolStream<T>
@@ -52,18 +56,41 @@ where
         service_context: ServiceContext,
         receiver: mpsc::Receiver<ServiceProtocolEvent>,
         proto_id: ProtocolId,
+        shutdown: Arc<AtomicBool>,
     ) -> Self {
         ServiceProtocolStream {
             handle,
             handle_context: ProtocolContext::new(service_context, proto_id),
             sessions: HashMap::default(),
             receiver,
+            shutdown,
         }
     }
 
     #[inline]
     pub fn handle_event(&mut self, event: ServiceProtocolEvent) {
         use self::ServiceProtocolEvent::*;
+
+        if self.shutdown.load(Ordering::SeqCst) {
+            match event {
+                Disconnected { .. } => (),
+                _ => return,
+            }
+        }
+
+        let closed_sessions = self
+            .sessions
+            .iter()
+            .filter(|(_, context)| context.closed.load(Ordering::SeqCst))
+            .map(|(session_id, _)| *session_id)
+            .collect::<Vec<_>>();
+        for session_id in closed_sessions {
+            if let Some(session) = self.sessions.remove(&session_id) {
+                self.handle
+                    .disconnected(self.handle_context.as_mut(&session));
+            }
+        }
+
         match event {
             Init => self.handle.init(&mut self.handle_context),
             Connected { session, version } => {
@@ -79,8 +106,10 @@ where
             }
             Received { id, data } => {
                 if let Some(session) = self.sessions.get(&id) {
-                    self.handle
-                        .received(self.handle_context.as_mut(&session), data);
+                    if !session.closed.load(Ordering::SeqCst) {
+                        self.handle
+                            .received(self.handle_context.as_mut(&session), data);
+                    }
                 }
             }
             Notify { token } => {
@@ -149,6 +178,7 @@ pub struct SessionProtocolStream<T> {
     handle_context: ProtocolContext,
     context: Arc<SessionContext>,
     receiver: mpsc::Receiver<SessionProtocolEvent>,
+    shutdown: Arc<AtomicBool>,
 }
 
 impl<T> SessionProtocolStream<T>
@@ -161,18 +191,32 @@ where
         context: Arc<SessionContext>,
         receiver: mpsc::Receiver<SessionProtocolEvent>,
         proto_id: ProtocolId,
+        shutdown: Arc<AtomicBool>,
     ) -> Self {
         SessionProtocolStream {
             handle,
             handle_context: ProtocolContext::new(service_context, proto_id),
             receiver,
             context,
+            shutdown,
         }
     }
 
     #[inline]
-    fn handle_event(&mut self, event: SessionProtocolEvent) {
+    fn handle_event(&mut self, mut event: SessionProtocolEvent) {
         use self::SessionProtocolEvent::*;
+
+        if self.shutdown.load(Ordering::SeqCst) {
+            match event {
+                Disconnected {} => (),
+                _ => return,
+            }
+        }
+
+        if self.context.closed.load(Ordering::SeqCst) {
+            event = SessionProtocolEvent::Disconnected;
+        }
+
         match event {
             Connected { version } => {
                 self.handle

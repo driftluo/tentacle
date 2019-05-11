@@ -19,6 +19,7 @@ use crate::{
     session::SessionEvent,
     ProtocolId, SessionId,
 };
+use std::sync::atomic::AtomicBool;
 
 pub(crate) struct SessionControl {
     pub(crate) inner: Arc<SessionContext>,
@@ -38,6 +39,8 @@ pub struct SessionContext {
     // TODO: use reference?
     /// Remote public key
     pub remote_pubkey: Option<PublicKey>,
+    /// Session is closed
+    pub closed: Arc<AtomicBool>,
 }
 
 /// The Service runtime can send some instructions to the inside of the handle.
@@ -56,6 +59,7 @@ impl ServiceContext {
         quick_task_sender: mpsc::UnboundedSender<ServiceTask>,
         proto_infos: HashMap<ProtocolId, ProtocolInfo>,
         key_pair: Option<SecioKeyPair>,
+        closed: Arc<AtomicBool>,
         timeout: Duration,
     ) -> Self {
         ServiceContext {
@@ -64,6 +68,7 @@ impl ServiceContext {
                 quick_task_sender,
                 proto_infos,
                 timeout,
+                closed,
             ),
             key_pair,
             listens: Vec::new(),

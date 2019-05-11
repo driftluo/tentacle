@@ -83,6 +83,7 @@ pub(crate) struct SubStream<U> {
     // The buffer which will send to user
     read_buf: VecDeque<ProtocolEvent>,
     dead: bool,
+    keep_buffer: bool,
 
     /// Send event to session
     event_sender: mpsc::Sender<ProtocolEvent>,
@@ -90,6 +91,8 @@ pub(crate) struct SubStream<U> {
     event_receiver: mpsc::Receiver<ProtocolEvent>,
     /// Delay notify with abnormally poor machines
     delay: Arc<AtomicBool>,
+
+    closed: Arc<AtomicBool>,
 }
 
 impl<U> SubStream<U>
@@ -104,12 +107,14 @@ where
         id: StreamId,
         proto_id: ProtocolId,
         config: Config,
+        closed: Arc<AtomicBool>,
     ) -> Self {
         SubStream {
             sub_stream,
             id,
             proto_id,
             config,
+            keep_buffer: false,
             event_sender,
             event_receiver,
             high_write_buf: VecDeque::new(),
@@ -117,7 +122,13 @@ where
             read_buf: VecDeque::new(),
             delay: Arc::new(AtomicBool::new(false)),
             dead: false,
+            closed,
         }
+    }
+
+    pub fn keep_buffer(mut self, keep: bool) -> Self {
+        self.keep_buffer = keep;
+        self
     }
 
     fn push_front(&mut self, priority: Priority, frame: bytes::Bytes) {
@@ -210,6 +221,9 @@ where
     /// When send or receive message error, output error and close stream
     fn error_close(&mut self, error: io::Error) {
         self.dead = true;
+        if !self.keep_buffer {
+            self.read_buf.clear()
+        }
         self.read_buf.push_back(ProtocolEvent::Error {
             id: self.id,
             proto_id: self.proto_id,
@@ -392,7 +406,8 @@ where
 
     fn poll(&mut self) -> Poll<Option<Self::Item>, Self::Error> {
         // double check here
-        if self.dead {
+        if self.dead || self.closed.load(Ordering::SeqCst) {
+            self.close_proto_stream();
             return Ok(Async::Ready(None));
         }
 
@@ -423,7 +438,10 @@ where
             return Ok(Async::Ready(None));
         }
 
-        if self.dead {
+        if self.dead || self.closed.load(Ordering::SeqCst) {
+            if !self.keep_buffer {
+                self.read_buf.clear()
+            }
             self.close_proto_stream();
             return Ok(Async::Ready(None));
         }

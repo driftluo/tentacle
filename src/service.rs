@@ -87,7 +87,7 @@ pub struct Service<T> {
     /// The buffer which will distribute to sessions
     write_buf: VecDeque<(SessionId, SessionEvent)>,
     /// The buffer which will distribute to service protocol handle
-    read_service_buf: VecDeque<(ProtocolId, ServiceProtocolEvent)>,
+    read_service_buf: VecDeque<(Option<SessionId>, ProtocolId, ServiceProtocolEvent)>,
     /// The buffer which will distribute to session protocol handle
     read_session_buf: VecDeque<(SessionId, ProtocolId, SessionProtocolEvent)>,
 
@@ -122,6 +122,8 @@ pub struct Service<T> {
     handles_error_count: HashMap<(ProtocolId, Option<SessionId>), Option<Instant>>,
     /// Delay notify with abnormally poor machines
     delay: Arc<AtomicBool>,
+
+    shutdown: Arc<AtomicBool>,
 }
 
 impl<T> Service<T>
@@ -147,6 +149,7 @@ where
             })
             .collect();
         let (future_task_sender, future_task_receiver) = mpsc::channel(SEND_SIZE);
+        let shutdown = Arc::new(AtomicBool::new(false));
 
         Service {
             protocol_configs,
@@ -174,6 +177,7 @@ where
                 quick_task_sender,
                 proto_infos,
                 key_pair,
+                shutdown.clone(),
                 config.timeout,
             ),
             config,
@@ -182,6 +186,7 @@ where
             pending_tasks: VecDeque::default(),
             handles_error_count: HashMap::default(),
             delay: Arc::new(AtomicBool::new(false)),
+            shutdown,
         }
     }
 
@@ -337,6 +342,12 @@ where
                 continue;
             }
             if let Some(session) = self.sessions.get_mut(&id) {
+                if session.inner.closed.load(Ordering::SeqCst) {
+                    if let SessionEvent::ProtocolMessage { .. } = event {
+                        continue;
+                    }
+                }
+
                 if let Err(e) = session.event_sender.try_send(event) {
                     if e.is_full() {
                         block_sessions.insert(id);
@@ -384,17 +395,33 @@ where
         let mut error = false;
         let mut block_handles = HashSet::new();
 
-        for (proto_id, event) in self.read_service_buf.split_off(0) {
+        let closed_sessions = self
+            .sessions
+            .iter()
+            .filter(|(_, control)| control.inner.closed.load(Ordering::SeqCst))
+            .map(|(session_id, _)| *session_id)
+            .collect::<HashSet<_>>();
+
+        for (session_id, proto_id, event) in self.read_service_buf.split_off(0) {
+            if let Some(ref session_id) = session_id {
+                if closed_sessions.contains(session_id) {
+                    if let ServiceProtocolEvent::Received { .. } = event {
+                        continue;
+                    }
+                }
+            }
             // Guarantee the order in which messages are sent
             if block_handles.contains(&proto_id) {
-                self.read_service_buf.push_back((proto_id, event));
+                self.read_service_buf
+                    .push_back((session_id, proto_id, event));
                 continue;
             }
             if let Some(sender) = self.service_proto_handles.get_mut(&proto_id) {
                 if let Err(e) = sender.try_send(event) {
                     if e.is_full() {
                         debug!("service proto [{}] handle is full", proto_id);
-                        self.read_service_buf.push_back((proto_id, e.into_inner()));
+                        self.read_service_buf
+                            .push_back((session_id, proto_id, e.into_inner()));
                         self.proto_handle_error(proto_id, None);
                         block_handles.insert(proto_id);
                     } else {
@@ -504,6 +531,7 @@ where
                     self.service_context.clone_self(),
                     receiver,
                     proto_id,
+                    self.shutdown.clone(),
                 );
 
                 self.service_proto_handles
@@ -527,6 +555,7 @@ where
                         Arc::clone(&session_control.inner),
                         receiver,
                         proto_id,
+                        self.shutdown.clone(),
                     );
 
                     tokio::spawn(stream.for_each(|_| Ok(())).map_err(|_| ()));
@@ -788,6 +817,7 @@ where
             self.next_session += 1;
         }
 
+        let session_closed = Arc::new(AtomicBool::new(false));
         let (service_event_sender, service_event_receiver) = mpsc::channel(SEND_SIZE);
         let session_control = SessionControl {
             notify_signals: HashMap::default(),
@@ -797,6 +827,7 @@ where
                 address,
                 ty,
                 remote_pubkey,
+                closed: session_closed.clone(),
             }),
         };
 
@@ -807,13 +838,15 @@ where
                     .map(|(key, value)| (key.clone(), value.inner.clone()))
                     .collect(),
             )
-            .config(self.config.yamux_config);
+            .config(self.config.yamux_config)
+            .keep_buffer(self.config.keep_buffer);
 
         let mut session = Session::new(
             handle,
             self.session_event_sender.clone(),
             service_event_receiver,
             meta,
+            session_closed,
         );
 
         if ty.is_outbound() {
@@ -874,6 +907,12 @@ where
         self.high_write_buf
             .retain(|&(session_id, _)| id != session_id);
         self.set_delay();
+        if !self.config.keep_buffer {
+            self.read_session_buf
+                .retain(|&(session_id, _, _)| id != session_id);
+            self.read_service_buf
+                .retain(|&(session_id, _, _)| Some(id) != session_id);
+        }
 
         close_proto_ids.into_iter().for_each(|proto_id| {
             self.protocol_close(id, proto_id, Source::Internal);
@@ -947,6 +986,7 @@ where
         if self.service_proto_handles.contains_key(&proto_id) {
             if let Some(session_control) = self.sessions.get(&id) {
                 self.read_service_buf.push_back((
+                    Some(id),
                     proto_id,
                     ServiceProtocolEvent::Connected {
                         session: Arc::clone(&session_control.inner),
@@ -1003,6 +1043,7 @@ where
         // Service proto handle processing flow
         if self.service_proto_handles.contains_key(&proto_id) {
             self.read_service_buf.push_back((
+                Some(session_id),
                 proto_id,
                 ServiceProtocolEvent::Received {
                     id: session_id,
@@ -1062,6 +1103,7 @@ where
         // Service proto handle processing flow
         if self.service_proto_handles.contains_key(&proto_id) {
             self.read_service_buf.push_back((
+                Some(session_id),
                 proto_id,
                 ServiceProtocolEvent::Disconnected { id: session_id },
             ));
@@ -1108,6 +1150,25 @@ where
         }
     }
 
+    /// check queue if full
+    fn notify_queue(&mut self) {
+        let notify = futures::task::current();
+        let quick_count = self.service_context.control().quick_count.clone();
+        let normal_count = self.service_context.control().normal_count.clone();
+        let task = Interval::new(Instant::now(), Duration::from_millis(200))
+            .map_err(|_| ())
+            .for_each(move |_| {
+                if quick_count.load(Ordering::SeqCst) > RECEIVED_SIZE / 4
+                    || normal_count.load(Ordering::SeqCst) > RECEIVED_SIZE / 2
+                {
+                    notify.notify();
+                }
+                Ok(())
+            })
+            .map_err(|_| debug!("queue notify close"));
+        self.send_future_task(Box::new(task))
+    }
+
     /// When listen update, call here
     #[inline]
     fn update_listens(&mut self) {
@@ -1120,6 +1181,7 @@ where
 
         for proto_id in self.service_proto_handles.keys() {
             self.read_service_buf.push_back((
+                None,
                 *proto_id,
                 ServiceProtocolEvent::Update {
                     listen_addrs: new_listens.clone(),
@@ -1431,8 +1493,11 @@ where
                 }
                 if self.service_proto_handles.contains_key(&proto_id) {
                     // callback output
-                    self.read_service_buf
-                        .push_back((proto_id, ServiceProtocolEvent::Notify { token }));
+                    self.read_service_buf.push_back((
+                        None,
+                        proto_id,
+                        ServiceProtocolEvent::Notify { token },
+                    ));
                     self.distribute_to_user_level();
                 }
             }
@@ -1560,11 +1625,11 @@ where
 
     #[inline]
     fn user_task_poll(&mut self) {
-        loop {
+        let mut finished = false;
+        for _ in 0..32 {
             if self.write_buf.len() > self.config.yamux_config.send_event_size()
                 || self.high_write_buf.len() > self.config.yamux_config.send_event_size()
             {
-                self.set_delay();
                 break;
             }
 
@@ -1589,29 +1654,42 @@ where
 
             match task {
                 Some(task) => self.handle_service_task(task),
-                None => break,
+                None => {
+                    finished = true;
+                    break;
+                }
             }
+        }
+        if !finished {
+            self.set_delay();
         }
     }
 
     fn session_poll(&mut self) {
-        loop {
-            if self.read_session_buf.len() > self.config.yamux_config.recv_event_size()
+        let mut finished = false;
+        for _ in 0..32 {
+            if self.read_service_buf.len() > self.config.yamux_config.recv_event_size()
                 || self.read_session_buf.len() > self.config.yamux_config.recv_event_size()
             {
-                self.set_delay();
                 break;
             }
 
             match self.session_event_receiver.poll() {
                 Ok(Async::Ready(Some(event))) => self.handle_session_event(event),
                 Ok(Async::Ready(None)) => unreachable!(),
-                Ok(Async::NotReady) => break,
-                Err(err) => {
-                    warn!("receive session error: {:?}", err);
+                Ok(Async::NotReady) => {
+                    finished = true;
+                    break;
+                }
+                Err(_) => {
+                    warn!("receive session error");
+                    finished = true;
                     break;
                 }
             }
+        }
+        if !finished {
+            self.set_delay();
         }
     }
 
@@ -1625,13 +1703,13 @@ where
         // However, if you are on a single-core bully machine, `notify` may have a very amazing starvation behavior.
         //
         // Under a single-core machine, `notify` may fall into the loop of infinitely preemptive CPU, causing starvation.
-        if !self.delay.load(Ordering::Acquire) {
-            self.delay.store(true, Ordering::Release);
+        if !self.delay.load(Ordering::SeqCst) {
+            self.delay.store(true, Ordering::SeqCst);
             let notify = futures::task::current();
             let delay = self.delay.clone();
             let delay_task = Delay::new(Instant::now() + DELAY_TIME).then(move |_| {
                 notify.notify();
-                delay.store(false, Ordering::Release);
+                delay.store(false, Ordering::SeqCst);
                 Ok(())
             });
             tokio::spawn(delay_task);
@@ -1652,11 +1730,13 @@ where
             && self.sessions.is_empty()
             && self.pending_tasks.is_empty()
         {
+            self.shutdown.store(true, Ordering::SeqCst);
             return Ok(Async::Ready(None));
         }
 
         if let Some(stream) = self.future_task_manager.take() {
             tokio::spawn(stream.for_each(|_| Ok(())));
+            self.notify_queue();
         }
 
         if !self.write_buf.is_empty()
@@ -1684,14 +1764,24 @@ where
             && self.sessions.is_empty()
             && self.pending_tasks.is_empty()
         {
+            self.shutdown.store(true, Ordering::SeqCst);
             return Ok(Async::Ready(None));
         }
         debug!(
-            "listens count: {}, state: {:?}, sessions count: {}, pending task: {}",
+            "listens count: {}, state: {:?}, sessions count: {},\
+             pending task: {}, normal_count: {}, quick_count: {}",
             self.listens.len(),
             self.state,
             self.sessions.len(),
             self.pending_tasks.len(),
+            self.service_context
+                .control()
+                .normal_count
+                .load(Ordering::SeqCst),
+            self.service_context
+                .control()
+                .quick_count
+                .load(Ordering::SeqCst)
         );
 
         Ok(Async::NotReady)

@@ -100,6 +100,13 @@ impl ServiceBuilder {
         self
     }
 
+    /// If session is close by remote, did you want to keep unreceived message as more as possible
+    /// default is false
+    pub fn keep_buffer(mut self, keep: bool) -> Self {
+        self.config.keep_buffer = keep;
+        self
+    }
+
     /// Clear all protocols
     pub fn clear(&mut self) {
         self.inner.clear();

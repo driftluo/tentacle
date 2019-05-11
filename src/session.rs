@@ -139,6 +139,8 @@ pub(crate) struct Session<T> {
     id: SessionId,
     timeout: Duration,
 
+    keep_buffer: bool,
+
     state: SessionState,
 
     // NOTE: Not used yet, may useful later
@@ -169,6 +171,9 @@ pub(crate) struct Session<T> {
     service_receiver: mpsc::Receiver<SessionEvent>,
     /// Delay notify with abnormally poor machines
     delay: Arc<AtomicBool>,
+
+    substreams_control: Arc<AtomicBool>,
+    session_closed: Arc<AtomicBool>,
 }
 
 impl<T> Session<T>
@@ -181,6 +186,7 @@ where
         service_sender: mpsc::Sender<SessionEvent>,
         service_receiver: mpsc::Receiver<SessionEvent>,
         meta: SessionMeta,
+        session_closed: Arc<AtomicBool>,
     ) -> Self {
         let socket = YamuxSession::new(socket, meta.config, meta.ty.into());
         let (proto_event_sender, proto_event_receiver) = mpsc::channel(RECEIVED_SIZE);
@@ -202,6 +208,7 @@ where
             id: meta.id,
             timeout: meta.timeout,
             ty: meta.ty,
+            keep_buffer: meta.keep_buffer,
             next_stream: 0,
             sub_streams: HashMap::default(),
             proto_streams: HashMap::default(),
@@ -214,6 +221,8 @@ where
             service_receiver,
             delay: Arc::new(AtomicBool::new(false)),
             state: SessionState::Normal,
+            substreams_control: Arc::new(AtomicBool::new(false)),
+            session_closed,
         }
     }
 
@@ -407,7 +416,9 @@ where
                     self.next_stream,
                     proto_id,
                     self.config,
-                );
+                    self.substreams_control.clone(),
+                )
+                .keep_buffer(self.keep_buffer);
                 self.sub_streams
                     .insert(self.next_stream, session_to_proto_sender);
                 self.proto_streams.insert(proto_id, self.next_stream);
@@ -434,6 +445,9 @@ where
             }
             ProtocolEvent::Message { data, proto_id, .. } => {
                 debug!("get proto [{}] data len: {}", proto_id, data.len());
+                if self.state == SessionState::RemoteClose && !self.keep_buffer {
+                    return;
+                }
                 self.event_output(SessionEvent::ProtocolMessage {
                     id: self.id,
                     proto_id,
@@ -532,9 +546,9 @@ where
     }
 
     fn recv_substreams(&mut self) -> Option<()> {
-        loop {
+        let mut finished = false;
+        for _ in 0..32 {
             if self.read_buf.len() > self.config.recv_event_size() {
-                self.set_delay();
                 break;
             }
 
@@ -551,21 +565,29 @@ where
                     // Drop by self
                     return None;
                 }
-                Ok(Async::NotReady) => break,
-                Err(err) => {
-                    debug!("receive proto event error: {:?}", err);
+                Ok(Async::NotReady) => {
+                    finished = true;
+                    break;
+                }
+                Err(_) => {
+                    debug!("receive proto event error");
+                    finished = true;
                     break;
                 }
             }
+        }
+
+        if !finished {
+            self.set_delay();
         }
 
         Some(())
     }
 
     fn recv_service(&mut self) -> Option<()> {
-        loop {
+        let mut finished = false;
+        for _ in 0..32 {
             if self.write_buf.len() > self.config.send_event_size() {
-                self.set_delay();
                 break;
             }
 
@@ -582,12 +604,20 @@ where
                     self.clean();
                     return None;
                 }
-                Ok(Async::NotReady) => break,
-                Err(err) => {
-                    warn!("receive service message error: {:?}", err);
+                Ok(Async::NotReady) => {
+                    finished = true;
+                    break;
+                }
+                Err(_) => {
+                    warn!("receive service message error");
+                    finished = true;
                     break;
                 }
             }
+        }
+
+        if !finished {
+            self.set_delay();
         }
 
         Some(())
@@ -596,20 +626,16 @@ where
     /// Try close all protocol
     #[inline]
     fn close_all_proto(&mut self) {
-        for (proto_id, stream_id) in self.proto_streams.iter() {
-            self.write_buf.push_back((
-                *proto_id,
-                ProtocolEvent::Close {
-                    id: *stream_id,
-                    proto_id: *proto_id,
-                },
-            ));
+        if self.substreams_control.load(Ordering::SeqCst) {
+            self.close_session()
         }
-        self.distribute_to_substream();
+        self.substreams_control.store(true, Ordering::SeqCst);
     }
 
     /// Close session
     fn close_session(&mut self) {
+        self.session_closed.store(true, Ordering::SeqCst);
+
         self.read_buf
             .push_back(SessionEvent::SessionClose { id: self.id });
         let events = self.read_buf.split_off(0);
@@ -672,11 +698,15 @@ where
 
     fn poll(&mut self) -> Poll<Option<Self::Item>, Self::Error> {
         debug!(
-            "session [{}], [{:?}], proto count [{}], state: {:?} ",
+            "session [{}], [{:?}], proto count [{}], state: {:?} ,\
+             read buf: {}, write buf: {}, high_write_buf: {}",
             self.id,
             self.ty,
             self.sub_streams.len(),
-            self.state
+            self.state,
+            self.read_buf.len(),
+            self.write_buf.len(),
+            self.high_write_buf.len()
         );
 
         // double check here
@@ -705,6 +735,10 @@ where
                 Err(err) => {
                     debug!("session poll error: {:?}", err);
                     self.write_buf.clear();
+                    self.high_write_buf.clear();
+                    if !self.keep_buffer {
+                        self.read_buf.clear()
+                    }
 
                     match err.kind() {
                         ErrorKind::BrokenPipe
@@ -763,6 +797,7 @@ pub(crate) struct SessionMeta {
     // remote_address: ::std::net::SocketAddr,
     // remote_public_key: Option<PublicKey>,
     timeout: Duration,
+    keep_buffer: bool,
 }
 
 impl SessionMeta {
@@ -773,6 +808,7 @@ impl SessionMeta {
             ty,
             protocol_configs: HashMap::new(),
             timeout,
+            keep_buffer: false,
         }
     }
 
@@ -783,6 +819,11 @@ impl SessionMeta {
 
     pub fn config(mut self, config: Config) -> Self {
         self.config = config;
+        self
+    }
+
+    pub fn keep_buffer(mut self, keep: bool) -> Self {
+        self.keep_buffer = keep;
         self
     }
 }
