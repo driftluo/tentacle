@@ -308,6 +308,8 @@ where
                     return;
                 } else {
                     error!("session send to service error: {}", e);
+                    self.read_buf.clear();
+                    return;
                 }
             }
         }
@@ -547,7 +549,7 @@ where
 
     fn recv_substreams(&mut self) -> Option<()> {
         let mut finished = false;
-        for _ in 0..32 {
+        for _ in 0..128 {
             if self.read_buf.len() > self.config.recv_event_size() {
                 break;
             }
@@ -586,7 +588,7 @@ where
 
     fn recv_service(&mut self) -> Option<()> {
         let mut finished = false;
-        for _ in 0..32 {
+        for _ in 0..64 {
             if self.write_buf.len() > self.config.send_event_size() {
                 break;
             }
@@ -721,18 +723,24 @@ where
             self.flush();
         }
 
-        loop {
+        let mut finished = false;
+        for _ in 0..64 {
             if !self.state.is_normal() {
                 break;
             }
             match self.socket.poll() {
                 Ok(Async::Ready(Some(sub_stream))) => self.handle_sub_stream(sub_stream),
                 Ok(Async::Ready(None)) => {
+                    finished = true;
                     self.state = SessionState::RemoteClose;
                     break;
                 }
-                Ok(Async::NotReady) => break,
+                Ok(Async::NotReady) => {
+                    finished = true;
+                    break;
+                }
                 Err(err) => {
+                    finished = true;
                     debug!("session poll error: {:?}", err);
                     self.write_buf.clear();
                     self.high_write_buf.clear();
@@ -747,6 +755,7 @@ where
                         | ErrorKind::NotConnected
                         | ErrorKind::UnexpectedEof => self.state = SessionState::RemoteClose,
                         _ => {
+                            error!("MuxerError: {:?}", err);
                             self.event_output(SessionEvent::MuxerError {
                                 id: self.id,
                                 error: err.into(),
@@ -758,6 +767,9 @@ where
                     break;
                 }
             }
+        }
+        if !finished {
+            self.set_delay();
         }
 
         if self.recv_substreams().is_none() {

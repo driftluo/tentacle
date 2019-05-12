@@ -1,10 +1,14 @@
 use futures::{prelude::*, sync::mpsc};
 use log::warn;
 use std::collections::HashMap;
-use std::sync::{
-    atomic::{AtomicBool, Ordering},
-    Arc,
+use std::{
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    },
+    time::{Duration, Instant},
 };
+use tokio::timer::Delay;
 
 use crate::{
     context::{ProtocolContext, ServiceContext, SessionContext},
@@ -45,6 +49,7 @@ pub struct ServiceProtocolStream<T> {
     sessions: HashMap<SessionId, Arc<SessionContext>>,
     receiver: mpsc::Receiver<ServiceProtocolEvent>,
     shutdown: Arc<AtomicBool>,
+    delay: Arc<AtomicBool>,
 }
 
 impl<T> ServiceProtocolStream<T>
@@ -64,6 +69,7 @@ where
             sessions: HashMap::default(),
             receiver,
             shutdown,
+            delay: Arc::new(AtomicBool::new(false)),
         }
     }
 
@@ -120,6 +126,29 @@ where
             }
         }
     }
+
+    fn set_delay(&mut self) {
+        // Why use `delay` instead of `notify`?
+        //
+        // In fact, on machines that can use multi-core normally, there is almost no problem with the `notify` behavior,
+        // and even the efficiency will be higher.
+        //
+        // However, if you are on a single-core bully machine, `notify` may have a very amazing starvation behavior.
+        //
+        // Under a single-core machine, `notify` may fall into the loop of infinitely preemptive CPU, causing starvation.
+        if !self.delay.load(Ordering::Acquire) {
+            self.delay.store(true, Ordering::Release);
+            let notify = futures::task::current();
+            let delay = self.delay.clone();
+            let delay_task =
+                Delay::new(Instant::now() + Duration::from_millis(200)).then(move |_| {
+                    notify.notify();
+                    delay.store(false, Ordering::Release);
+                    Ok(())
+                });
+            tokio::spawn(delay_task);
+        }
+    }
 }
 
 impl<T> Stream for ServiceProtocolStream<T>
@@ -130,13 +159,17 @@ where
     type Error = ();
 
     fn poll(&mut self) -> Poll<Option<Self::Item>, Self::Error> {
-        loop {
+        let mut finished = false;
+        for _ in 0..64 {
             match self.receiver.poll() {
                 Ok(Async::Ready(Some(event))) => self.handle_event(event),
                 Ok(Async::Ready(None)) => {
                     return Ok(Async::Ready(None));
                 }
-                Ok(Async::NotReady) => break,
+                Ok(Async::NotReady) => {
+                    finished = true;
+                    break;
+                }
                 Err(err) => {
                     warn!(
                         "service proto [{}] handle receive message error: {:?}",
@@ -145,6 +178,9 @@ where
                     return Err(());
                 }
             }
+        }
+        if !finished {
+            self.set_delay();
         }
 
         self.handle.poll(&mut self.handle_context);

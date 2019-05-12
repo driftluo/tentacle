@@ -287,7 +287,8 @@ where
     }
 
     fn recv_event(&mut self) -> Option<()> {
-        loop {
+        let mut finished = false;
+        for _ in 0..64 {
             if self.dead {
                 break;
             }
@@ -305,17 +306,25 @@ where
                     let _ = self.sub_stream.get_mut().shutdown();
                     return None;
                 }
-                Ok(Async::NotReady) => break,
+                Ok(Async::NotReady) => {
+                    finished = true;
+                    break;
+                }
                 Err(_) => {
+                    finished = true;
                     break;
                 }
             }
+        }
+        if !finished {
+            self.set_delay();
         }
         Some(())
     }
 
     fn recv_frame(&mut self) -> Option<()> {
-        loop {
+        let mut finished = false;
+        for _ in 0..64 {
             if self.dead {
                 break;
             }
@@ -340,11 +349,16 @@ where
                     })
                 }
                 Ok(Async::Ready(None)) => {
+                    finished = true;
                     debug!("protocol [{}] close", self.proto_id);
                     self.dead = true;
                 }
-                Ok(Async::NotReady) => break,
+                Ok(Async::NotReady) => {
+                    finished = true;
+                    break;
+                }
                 Err(err) => {
+                    finished = true;
                     debug!("sub stream codec error: {:?}", err);
                     match err.kind() {
                         ErrorKind::BrokenPipe
@@ -359,6 +373,9 @@ where
                     }
                 }
             }
+        }
+        if !finished {
+            self.set_delay();
         }
         Some(())
     }

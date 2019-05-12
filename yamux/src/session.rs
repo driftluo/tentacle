@@ -313,7 +313,7 @@ where
     }
 
     fn send_frame(&mut self, frame: Frame) -> Poll<(), io::Error> {
-        debug!("[{:?}] Session::send_frame({:?})", self.ty, frame);
+        debug!("[{:?}] Session::send_frame()", self.ty);
         self.write_pending_frames.push_back(frame);
         if let Async::NotReady = self.send_all()? {
             return Ok(Async::NotReady);
@@ -444,7 +444,7 @@ where
 
     // Receive frames from low level stream
     fn recv_frames(&mut self) -> Poll<(), io::Error> {
-        loop {
+        for _ in 0..64 {
             if self.is_dead() {
                 return Ok(Async::Ready(()));
             }
@@ -473,10 +473,12 @@ where
                 }
             }
         }
+        self.set_delay();
+        Ok(Async::NotReady)
     }
 
     fn handle_event(&mut self, event: StreamEvent) -> Result<(), io::Error> {
-        debug!("[{:?}] Session::handle_event({:?})", self.ty, event);
+        debug!("[{:?}] Session::handle_event()", self.ty);
         match event {
             StreamEvent::Frame(frame) => {
                 self.send_frame(frame)?;
@@ -505,7 +507,7 @@ where
     // Receive events from sub streams
     // TODO: should handle error
     fn recv_events(&mut self) -> Poll<(), io::Error> {
-        loop {
+        for _ in 0..64 {
             if self.is_dead() {
                 return Ok(Async::Ready(()));
             }
@@ -530,6 +532,8 @@ where
                 }
             }
         }
+        self.set_delay();
+        Ok(Async::NotReady)
     }
 
     #[inline]
@@ -596,7 +600,7 @@ where
 
         // Interval broken or Stream error on here, just break this pipe
         if self.last_read_success.elapsed()
-            > self.config.keepalive_interval + Duration::from_secs(5)
+            > self.config.keepalive_interval + Duration::from_secs(15)
         {
             self.shutdown()?;
             return Err(io::ErrorKind::TimedOut.into());

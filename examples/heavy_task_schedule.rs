@@ -36,8 +36,8 @@ struct PHandle {
 impl ServiceProtocol for PHandle {
     fn init(&mut self, context: &mut ProtocolContext) {
         let proto_id = context.proto_id;
-        context.set_service_notify(proto_id, Duration::from_millis(100), 0);
-        context.set_service_notify(proto_id, Duration::from_millis(200), 1);
+        context.set_service_notify(proto_id, Duration::from_millis(10), 0);
+        context.set_service_notify(proto_id, Duration::from_millis(40), 1);
     }
 
     fn connected(&mut self, context: ProtocolContextMutRef, _version: &str) {
@@ -91,7 +91,12 @@ impl ServiceProtocol for PHandle {
                 }
             }
             1 => {
-                for (session_id, _) in &self.sessions {
+                for session_id in self
+                    .sessions
+                    .iter()
+                    .filter(|(_, session_type)| session_type.is_outbound())
+                    .map(|(session_id, _)| session_id)
+                {
                     info!("> [Client] send to {:?}", session_id);
                     let prefix = "xxxx".repeat(200);
                     let now = Instant::now();
