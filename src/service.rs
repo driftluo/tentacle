@@ -50,7 +50,7 @@ use bytes::Bytes;
 /// If the buffer capacity is greater than u8 max, shrink it
 pub(crate) const BUF_SHRINK_THRESHOLD: usize = u8::max_value() as usize;
 /// Received from remote, aggregate mode, buffer size is 8 times that of any send
-pub(crate) const RECEIVED_SIZE: usize = 256;
+pub(crate) const RECEIVED_SIZE: usize = 2048;
 /// Send to remote, distribute mode, buffer size is less than 8 times the received
 pub(crate) const SEND_SIZE: usize = 32;
 pub(crate) const DELAY_TIME: Duration = Duration::from_millis(300);
@@ -1667,7 +1667,7 @@ where
 
     fn session_poll(&mut self) {
         let mut finished = false;
-        for _ in 0..32 {
+        for _ in 0..512 {
             if self.read_service_buf.len() > self.config.yamux_config.recv_event_size()
                 || self.read_session_buf.len() > self.config.yamux_config.recv_event_size()
             {
@@ -1767,9 +1767,14 @@ where
             self.shutdown.store(true, Ordering::SeqCst);
             return Ok(Async::Ready(None));
         }
+
+        // TODO: figure out why sometimes `Service::poll` not called
+        //       now force set a delay (equals interval) to notify
+        self.set_delay();
+
         debug!(
-            "listens count: {}, state: {:?}, sessions count: {},\
-             pending task: {}, normal_count: {}, quick_count: {}",
+            "> listens count: {}, state: {:?}, sessions count: {},\
+             pending task: {}, normal_count: {}, quick_count: {}, high_write_buf: {}, write_buf: {}, read_service_buf: {}, read_session_buf: {}",
             self.listens.len(),
             self.state,
             self.sessions.len(),
@@ -1781,7 +1786,11 @@ where
             self.service_context
                 .control()
                 .quick_count
-                .load(Ordering::SeqCst)
+                .load(Ordering::SeqCst),
+            self.high_write_buf.len(),
+            self.write_buf.len(),
+            self.read_service_buf.len(),
+            self.read_session_buf.len(),
         );
 
         Ok(Async::NotReady)

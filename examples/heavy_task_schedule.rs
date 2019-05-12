@@ -13,21 +13,6 @@ use tentacle::{
     ProtocolId, SessionId,
 };
 
-pub fn create<F>(secio: bool, meta: ProtocolMeta, shandle: F) -> Service<F>
-where
-    F: ServiceHandle,
-{
-    let builder = ServiceBuilder::default().insert_protocol(meta);
-
-    if secio {
-        builder
-            .key_pair(SecioKeyPair::secp256k1_generated())
-            .build(shandle)
-    } else {
-        builder.build(shandle)
-    }
-}
-
 struct PHandle {
     sessions: HashMap<SessionId, SessionType>,
     count: usize,
@@ -36,8 +21,8 @@ struct PHandle {
 impl ServiceProtocol for PHandle {
     fn init(&mut self, context: &mut ProtocolContext) {
         let proto_id = context.proto_id;
-        context.set_service_notify(proto_id, Duration::from_millis(100), 0);
-        context.set_service_notify(proto_id, Duration::from_millis(200), 1);
+        context.set_service_notify(proto_id, Duration::from_millis(10), 0);
+        context.set_service_notify(proto_id, Duration::from_millis(40), 1);
     }
 
     fn connected(&mut self, context: ProtocolContextMutRef, _version: &str) {
@@ -91,7 +76,12 @@ impl ServiceProtocol for PHandle {
                 }
             }
             1 => {
-                for (session_id, _) in &self.sessions {
+                for session_id in self
+                    .sessions
+                    .iter()
+                    .filter(|(_, session_type)| session_type.is_outbound())
+                    .map(|(session_id, _)| session_id)
+                {
                     info!("> [Client] send to {:?}", session_id);
                     let prefix = "xxxx".repeat(200);
                     let now = Instant::now();
@@ -101,6 +91,21 @@ impl ServiceProtocol for PHandle {
             }
             _ => {}
         }
+    }
+}
+
+pub fn create<F>(secio: bool, meta: ProtocolMeta, shandle: F) -> Service<F>
+where
+    F: ServiceHandle,
+{
+    let builder = ServiceBuilder::default().insert_protocol(meta);
+
+    if secio {
+        builder
+            .key_pair(SecioKeyPair::secp256k1_generated())
+            .build(shandle)
+    } else {
+        builder.build(shandle)
     }
 }
 
@@ -126,7 +131,7 @@ fn main() {
 
     if std::env::args().nth(1) == Some("server".to_string()) {
         let meta = create_meta(1.into());
-        let mut service = create(false, meta, ());
+        let mut service = create(true, meta, ());
         let listen_addr = service
             .listen("/ip4/127.0.0.1/tcp/8900".parse().unwrap())
             .unwrap();
@@ -135,7 +140,7 @@ fn main() {
     } else {
         let listen_addr = std::env::args().nth(1).unwrap().parse().unwrap();
         let meta = create_meta(1.into());
-        let mut service = create(false, meta, ());
+        let mut service = create(true, meta, ());
         service.dial(listen_addr, DialProtocol::All).unwrap();
         tokio::run(service.for_each(|_| Ok(())));
     }

@@ -1,5 +1,5 @@
 use futures::{prelude::*, sync::mpsc};
-use log::debug;
+use log::trace;
 
 use std::thread;
 use std::time::{Duration, Instant};
@@ -55,61 +55,57 @@ impl ServiceControl {
     }
 
     pub(crate) fn normal_count_sub(&self) {
-        let old = self.normal_count.fetch_sub(1, Ordering::SeqCst);
-        debug!("normal sub task number to {}", old - 1);
+        self.normal_count.fetch_sub(1, Ordering::SeqCst);
     }
 
     pub(crate) fn quick_count_sub(&self) {
-        let old = self.quick_count.fetch_sub(1, Ordering::SeqCst);
-        debug!("quick add task number to {}", old - 1);
+        self.quick_count.fetch_sub(1, Ordering::SeqCst);
     }
 
-    /// Send raw event
-    pub(crate) fn send(&self, event: ServiceTask) -> Result<(), Error> {
+    fn block_send(
+        &self,
+        sender: &mpsc::UnboundedSender<ServiceTask>,
+        event: ServiceTask,
+        counter: &Arc<AtomicUsize>,
+        limit: usize,
+    ) -> Result<(), Error> {
         if self.closed.load(Ordering::SeqCst) {
             return Ok(());
         }
         let timeout = Instant::now();
         loop {
-            if self.normal_count.load(Ordering::SeqCst) < RECEIVED_SIZE {
-                let old = self.normal_count.fetch_add(1, Ordering::SeqCst);
-                debug!("normal add task number to {}", old + 1);
-                break self
-                    .service_task_sender
-                    .unbounded_send(event)
-                    .map_err(Into::into);
+            if counter.load(Ordering::SeqCst) < limit {
+                let old = counter.fetch_add(1, Ordering::SeqCst);
+                trace!("normal add task number to {}", old + 1);
+                break sender.unbounded_send(event).map_err(Into::into);
             } else {
-                if timeout.elapsed() > Duration::from_secs(2) {
+                if timeout.elapsed() > Duration::from_secs(6) {
                     return Err(Error::IoError(io::ErrorKind::TimedOut.into()));
                 }
-                thread::sleep(Duration::from_millis(200))
+                thread::sleep(Duration::from_millis(100))
             }
         }
+    }
+
+    /// Send raw event
+    pub(crate) fn send(&self, event: ServiceTask) -> Result<(), Error> {
+        self.block_send(
+            &self.service_task_sender,
+            event,
+            &self.normal_count,
+            RECEIVED_SIZE,
+        )
     }
 
     /// Send raw event on quick channel
     #[inline]
     fn quick_send(&self, event: ServiceTask) -> Result<(), Error> {
-        if self.closed.load(Ordering::SeqCst) {
-            return Ok(());
-        }
-        let timeout = Instant::now();
-        loop {
-            if self.quick_count.load(Ordering::SeqCst) < RECEIVED_SIZE / 2 {
-                let old = self.quick_count.fetch_add(1, Ordering::SeqCst);
-                debug!("quick add task number to {}", old + 1);
-                break self
-                    .quick_task_sender
-                    .unbounded_send(event)
-                    .map_err(Into::into);
-            } else {
-                if timeout.elapsed() > Duration::from_secs(2) {
-                    debug!("quick timeout");
-                    return Err(Error::IoError(io::ErrorKind::TimedOut.into()));
-                }
-                thread::sleep(Duration::from_millis(200))
-            }
-        }
+        self.block_send(
+            &self.quick_task_sender,
+            event,
+            &self.quick_count,
+            RECEIVED_SIZE / 2,
+        )
     }
 
     /// Get service protocol message, Map(ID, Name), but can't modify

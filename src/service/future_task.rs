@@ -4,6 +4,14 @@ use futures::{
 };
 use log::{debug, trace};
 use std::collections::HashMap;
+use std::{
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    },
+    time::{Duration, Instant},
+};
+use tokio::timer::Delay;
 
 use crate::service::SEND_SIZE;
 
@@ -17,6 +25,7 @@ pub(crate) struct FutureTaskManager {
     id_sender: mpsc::Sender<FutureTaskId>,
     id_receiver: mpsc::Receiver<FutureTaskId>,
     task_receiver: mpsc::Receiver<BoxedFutureTask>,
+    delay: Arc<AtomicBool>,
 }
 
 impl FutureTaskManager {
@@ -28,6 +37,7 @@ impl FutureTaskManager {
             id_sender,
             id_receiver,
             task_receiver,
+            delay: Arc::new(AtomicBool::new(false)),
         }
     }
 
@@ -54,6 +64,21 @@ impl FutureTaskManager {
     fn remove_task(&mut self, id: FutureTaskId) {
         self.signals.remove(&id);
     }
+
+    fn set_delay(&mut self) {
+        if !self.delay.load(Ordering::Acquire) {
+            self.delay.store(true, Ordering::Release);
+            let notify = futures::task::current();
+            let delay = self.delay.clone();
+            let delay_task =
+                Delay::new(Instant::now() + Duration::from_millis(100)).then(move |_| {
+                    notify.notify();
+                    delay.store(false, Ordering::Release);
+                    Ok(())
+                });
+            tokio::spawn(delay_task);
+        }
+    }
 }
 
 impl Drop for FutureTaskManager {
@@ -72,26 +97,38 @@ impl Stream for FutureTaskManager {
     type Error = ();
 
     fn poll(&mut self) -> Poll<Option<Self::Item>, Self::Error> {
-        loop {
+        let mut task_finished = false;
+        let mut id_finished = false;
+        for _ in 0..32 {
             match self.task_receiver.poll()? {
                 Async::Ready(Some(task)) => self.add_task(task),
                 Async::Ready(None) => {
                     debug!("future task receiver finished");
                     return Ok(Async::Ready(None));
                 }
-                Async::NotReady => break,
+                Async::NotReady => {
+                    task_finished = true;
+                    break;
+                }
             }
         }
 
-        loop {
+        for _ in 0..32 {
             match self.id_receiver.poll()? {
                 Async::Ready(Some(id)) => self.remove_task(id),
                 Async::Ready(None) => {
                     debug!("future task id receiver finished");
                     return Ok(Async::Ready(None));
                 }
-                Async::NotReady => break,
+                Async::NotReady => {
+                    id_finished = true;
+                    break;
+                }
             }
+        }
+
+        if !task_finished || !id_finished {
+            self.set_delay();
         }
 
         Ok(Async::NotReady)

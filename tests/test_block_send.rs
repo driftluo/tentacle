@@ -41,9 +41,9 @@ impl ServiceProtocol for PHandle {
 
     fn connected(&mut self, context: ProtocolContextMutRef, _version: &str) {
         if context.session.ty.is_inbound() {
-            let prefix = "x".repeat(100);
+            let prefix = "x".repeat(10);
             // NOTE: 256 is the send channel buffer size
-            let length = 1024;
+            let length = 2048 * 2;
             let mut first_256 = Duration::default();
             let mut last_256 = Duration::default();
             for i in 0..length {
@@ -69,7 +69,7 @@ impl ServiceProtocol for PHandle {
         }
         let count_now = self.count.load(Ordering::SeqCst);
         // println!("> receive {}", count_now);
-        if count_now == 1024 {
+        if count_now == 2048 * 2 {
             context.close();
         }
     }
@@ -109,7 +109,7 @@ fn test_block_send(secio: bool) {
     let handle_2 = thread::spawn(|| tokio::run(service.for_each(|_| Ok(()))));
     handle_2.join().unwrap();
 
-    assert_eq!(result.load(Ordering::SeqCst), 1024);
+    assert_eq!(result.load(Ordering::SeqCst), 2048 * 2);
 }
 
 #[test]

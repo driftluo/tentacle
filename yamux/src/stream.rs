@@ -8,10 +8,16 @@ use std::{
 use bytes::{Bytes, BytesMut};
 use futures::{
     sync::mpsc::{Receiver, Sender},
-    task, Async, Poll, Stream,
+    task, Async, Future, Poll, Stream,
 };
+
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
+use std::time::{Duration, Instant};
+
 use log::debug;
 use tokio::prelude::{AsyncRead, AsyncWrite};
+use tokio::timer::Delay;
 
 use crate::{
     error::Error,
@@ -38,6 +44,8 @@ pub struct StreamHandle {
     // Receive frame of current stream from parent session
     // (if the sender closed means session closed the stream should close too)
     frame_receiver: Receiver<Frame>,
+
+    delay: Arc<AtomicBool>,
 }
 
 impl StreamHandle {
@@ -62,6 +70,7 @@ impl StreamHandle {
             window_update_frame_buf: VecDeque::default(),
             event_sender,
             frame_receiver,
+            delay: Arc::new(AtomicBool::new(false)),
         }
     }
 
@@ -106,7 +115,7 @@ impl StreamHandle {
 
     #[inline]
     fn send_event(&mut self, event: StreamEvent) -> Result<(), Error> {
-        debug!("[{}] StreamHandle.send_event({:?})", self.id, event);
+        debug!("[{}] StreamHandle.send_event()", self.id);
         while let Some((flag, delta)) = self.window_update_frame_buf.pop_front() {
             let event = StreamEvent::Frame(Frame::new_window_update(flag, self.id, delta));
             if let Err(e) = self.event_sender.try_send(event) {
@@ -263,7 +272,7 @@ impl StreamHandle {
     }
 
     fn recv_frames(&mut self) -> Poll<(), Error> {
-        loop {
+        for _ in 0..64 {
             match self.state {
                 StreamState::RemoteClosing => {
                     return Err(Error::SubStreamRemoteClosing);
@@ -287,6 +296,31 @@ impl StreamHandle {
                     return Ok(Async::NotReady);
                 }
             }
+        }
+        self.set_delay();
+        Ok(Async::NotReady)
+    }
+
+    fn set_delay(&mut self) {
+        // Why use `delay` instead of `notify`?
+        //
+        // In fact, on machines that can use multi-core normally, there is almost no problem with the `notify` behavior,
+        // and even the efficiency will be higher.
+        //
+        // However, if you are on a single-core bully machine, `notify` may have a very amazing starvation behavior.
+        //
+        // Under a single-core machine, `notify` may fall into the loop of infinitely preemptive CPU, causing starvation.
+        if !self.delay.load(Ordering::Acquire) {
+            self.delay.store(true, Ordering::Release);
+            let notify = futures::task::current();
+            let delay = self.delay.clone();
+            let delay_task =
+                Delay::new(Instant::now() + Duration::from_millis(200)).then(move |_| {
+                    notify.notify();
+                    delay.store(false, Ordering::Release);
+                    Ok(())
+                });
+            tokio::spawn(delay_task);
         }
     }
 
