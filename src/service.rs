@@ -401,15 +401,18 @@ where
             .filter(|(_, control)| control.inner.closed.load(Ordering::SeqCst))
             .map(|(session_id, _)| *session_id)
             .collect::<HashSet<_>>();
+        for id in closed_sessions {
+            self.session_close(id, Source::Internal);
+        }
 
         for (session_id, proto_id, event) in self.read_service_buf.split_off(0) {
-            if let Some(ref session_id) = session_id {
-                if closed_sessions.contains(session_id) {
-                    if let ServiceProtocolEvent::Received { .. } = event {
-                        continue;
-                    }
-                }
-            }
+            //            if let Some(ref session_id) = session_id {
+            //                if closed_sessions.contains(session_id) {
+            //                    if let ServiceProtocolEvent::Received { .. } = event {
+            //                        continue;
+            //                    }
+            //                }
+            //            }
             // Guarantee the order in which messages are sent
             if block_handles.contains(&proto_id) {
                 self.read_service_buf
@@ -1729,10 +1732,6 @@ where
             self.shutdown.store(true, Ordering::SeqCst);
             return Ok(Async::Ready(None));
         }
-
-        // TODO: figure out why sometimes `Service::poll` not called
-        //       now force set a delay (equals interval) to notify
-        self.set_delay();
 
         debug!(
             "> listens count: {}, state: {:?}, sessions count: {},\
