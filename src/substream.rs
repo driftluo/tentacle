@@ -16,7 +16,9 @@ use tokio::{
 };
 
 use crate::{
+    context::SessionContext,
     error::Error,
+    protocol_handle_stream::{ServiceProtocolEvent, SessionProtocolEvent},
     service::{event::Priority, DELAY_TIME},
     traits::Codec,
     yamux::{Config, StreamHandle},
@@ -75,6 +77,9 @@ pub(crate) struct SubStream<U> {
     id: StreamId,
     proto_id: ProtocolId,
 
+    context: Arc<SessionContext>,
+    event: bool,
+
     config: Config,
     /// The buffer will be prioritized for send to underlying network
     high_write_buf: VecDeque<bytes::Bytes>,
@@ -82,6 +87,8 @@ pub(crate) struct SubStream<U> {
     write_buf: VecDeque<bytes::Bytes>,
     // The buffer which will send to user
     read_buf: VecDeque<ProtocolEvent>,
+    service_proto_buf: VecDeque<ServiceProtocolEvent>,
+    session_proto_buf: VecDeque<SessionProtocolEvent>,
     dead: bool,
     keep_buffer: bool,
 
@@ -89,6 +96,10 @@ pub(crate) struct SubStream<U> {
     event_sender: mpsc::Sender<ProtocolEvent>,
     /// Receive events from session
     event_receiver: mpsc::Receiver<ProtocolEvent>,
+
+    service_proto_sender: Option<mpsc::Sender<ServiceProtocolEvent>>,
+    session_proto_sender: Option<mpsc::Sender<SessionProtocolEvent>>,
+
     /// Delay notify with abnormally poor machines
     delay: Arc<AtomicBool>,
 
@@ -99,36 +110,21 @@ impl<U> SubStream<U>
 where
     U: Codec,
 {
-    /// New a protocol sub stream
-    pub fn new(
-        sub_stream: Framed<StreamHandle, U>,
-        event_sender: mpsc::Sender<ProtocolEvent>,
-        event_receiver: mpsc::Receiver<ProtocolEvent>,
-        id: StreamId,
-        proto_id: ProtocolId,
-        config: Config,
-        closed: Arc<AtomicBool>,
-    ) -> Self {
-        SubStream {
-            sub_stream,
-            id,
-            proto_id,
-            config,
-            keep_buffer: false,
-            event_sender,
-            event_receiver,
-            high_write_buf: VecDeque::new(),
-            write_buf: VecDeque::new(),
-            read_buf: VecDeque::new(),
-            delay: Arc::new(AtomicBool::new(false)),
-            dead: false,
-            closed,
+    pub fn proto_open(&mut self, version: String) {
+        if self.service_proto_sender.is_some() {
+            self.service_proto_buf
+                .push_back(ServiceProtocolEvent::Connected {
+                    session: self.context.clone(),
+                    version: version.clone(),
+                })
         }
-    }
 
-    pub fn keep_buffer(mut self, keep: bool) -> Self {
-        self.keep_buffer = keep;
-        self
+        if self.session_proto_sender.is_some() {
+            self.session_proto_buf
+                .push_back(SessionProtocolEvent::Connected { version })
+        }
+
+        self.distribute_to_user_level();
     }
 
     fn push_front(&mut self, priority: Priority, frame: bytes::Bytes) {
@@ -209,6 +205,36 @@ where
         });
         let events = self.read_buf.split_off(0);
 
+        if self.service_proto_sender.is_some() {
+            self.service_proto_buf
+                .push_back(ServiceProtocolEvent::Disconnected {
+                    id: self.context.id,
+                });
+            let events = self.service_proto_buf.split_off(0);
+            tokio::spawn(
+                self.service_proto_sender
+                    .clone()
+                    .unwrap()
+                    .send_all(iter_ok(events))
+                    .map(|_| ())
+                    .map_err(|e| debug!("stream close event send to proto handle error: {:?}", e)),
+            );
+        }
+
+        if self.session_proto_sender.is_some() {
+            self.session_proto_buf
+                .push_back(SessionProtocolEvent::Disconnected);
+            let events = self.session_proto_buf.split_off(0);
+            tokio::spawn(
+                self.session_proto_sender
+                    .clone()
+                    .unwrap()
+                    .send_all(iter_ok(events))
+                    .map(|_| ())
+                    .map_err(|e| debug!("stream close event send to proto handle error: {:?}", e)),
+            );
+        }
+
         tokio::spawn(
             self.event_sender
                 .clone()
@@ -260,6 +286,38 @@ where
                 self.dead = true;
             }
             _ => (),
+        }
+    }
+
+    fn distribute_to_user_level(&mut self) {
+        if let Some(ref mut sender) = self.service_proto_sender {
+            while let Some(event) = self.service_proto_buf.pop_front() {
+                if let Err(e) = sender.try_send(event) {
+                    if e.is_full() {
+                        debug!("service proto [{}] handle is full", self.proto_id);
+                        self.service_proto_buf.push_front(e.into_inner());
+                        self.set_delay();
+                        break;
+                    } else {
+                        self.dead = true;
+                    }
+                }
+            }
+        }
+
+        if let Some(ref mut sender) = self.session_proto_sender {
+            while let Some(event) = self.session_proto_buf.pop_front() {
+                if let Err(e) = sender.try_send(event) {
+                    if e.is_full() {
+                        debug!("service proto [{}] handle is full", self.proto_id);
+                        self.session_proto_buf.push_front(e.into_inner());
+                        self.set_delay();
+                        break;
+                    } else {
+                        self.dead = true;
+                    }
+                }
+            }
         }
     }
 
@@ -341,12 +399,32 @@ where
                         self.proto_id,
                         data.len()
                     );
-                    self.output_event(ProtocolEvent::Message {
-                        id: self.id,
-                        proto_id: self.proto_id,
-                        data: data.into(),
-                        priority: Priority::Normal,
-                    })
+
+                    if self.service_proto_sender.is_some() {
+                        self.service_proto_buf
+                            .push_back(ServiceProtocolEvent::Received {
+                                id: self.context.id,
+                                data: data.clone().freeze(),
+                            })
+                    }
+
+                    if self.session_proto_sender.is_some() {
+                        self.session_proto_buf
+                            .push_back(SessionProtocolEvent::Received {
+                                data: data.clone().freeze(),
+                            })
+                    }
+
+                    self.distribute_to_user_level();
+
+                    if self.event {
+                        self.output_event(ProtocolEvent::Message {
+                            id: self.id,
+                            proto_id: self.proto_id,
+                            data: data.freeze(),
+                            priority: Priority::Normal,
+                        })
+                    }
                 }
                 Ok(Async::Ready(None)) => {
                     finished = true;
@@ -464,5 +542,121 @@ where
         }
 
         Ok(Async::NotReady)
+    }
+}
+
+pub(crate) struct SubstreamBuilder {
+    id: StreamId,
+    proto_id: ProtocolId,
+    keep_buffer: bool,
+    config: Config,
+    event: bool,
+
+    context: Arc<SessionContext>,
+
+    service_proto_sender: Option<mpsc::Sender<ServiceProtocolEvent>>,
+    session_proto_sender: Option<mpsc::Sender<SessionProtocolEvent>>,
+
+    /// Send event to session
+    event_sender: mpsc::Sender<ProtocolEvent>,
+    /// Receive events from session
+    event_receiver: mpsc::Receiver<ProtocolEvent>,
+    closed: Arc<AtomicBool>,
+}
+
+impl SubstreamBuilder {
+    pub fn new(
+        event_sender: mpsc::Sender<ProtocolEvent>,
+        event_receiver: mpsc::Receiver<ProtocolEvent>,
+        closed: Arc<AtomicBool>,
+        context: Arc<SessionContext>,
+    ) -> Self {
+        SubstreamBuilder {
+            service_proto_sender: None,
+            session_proto_sender: None,
+            event_receiver,
+            event_sender,
+            closed,
+            context,
+            id: 0,
+            proto_id: 0.into(),
+            keep_buffer: false,
+            config: Config::default(),
+            event: false,
+        }
+    }
+
+    pub fn stream_id(mut self, id: StreamId) -> Self {
+        self.id = id;
+        self
+    }
+
+    pub fn proto_id(mut self, id: ProtocolId) -> Self {
+        self.proto_id = id;
+        self
+    }
+
+    pub fn config(mut self, config: Config) -> Self {
+        self.config = config;
+        self
+    }
+
+    pub fn keep_buffer(mut self, keep: bool) -> Self {
+        self.keep_buffer = keep;
+        self
+    }
+
+    pub fn event(mut self, event: bool) -> Self {
+        self.event = event;
+        self
+    }
+
+    pub fn service_proto_sender(
+        mut self,
+        sender: Option<mpsc::Sender<ServiceProtocolEvent>>,
+    ) -> Self {
+        self.service_proto_sender = sender;
+        self
+    }
+
+    pub fn session_proto_sender(
+        mut self,
+        sender: Option<mpsc::Sender<SessionProtocolEvent>>,
+    ) -> Self {
+        self.session_proto_sender = sender;
+        self
+    }
+
+    pub fn build<U>(self, sub_stream: Framed<StreamHandle, U>) -> SubStream<U>
+    where
+        U: Codec,
+    {
+        SubStream {
+            sub_stream,
+            id: self.id,
+            proto_id: self.proto_id,
+            config: self.config,
+            context: self.context,
+            event: self.event,
+
+            high_write_buf: VecDeque::new(),
+
+            write_buf: VecDeque::new(),
+            read_buf: VecDeque::new(),
+            service_proto_buf: VecDeque::new(),
+            session_proto_buf: VecDeque::new(),
+            dead: false,
+            keep_buffer: self.keep_buffer,
+
+            event_sender: self.event_sender,
+            event_receiver: self.event_receiver,
+
+            service_proto_sender: self.service_proto_sender,
+            session_proto_sender: self.session_proto_sender,
+
+            delay: Arc::new(AtomicBool::new(false)),
+
+            closed: self.closed,
+        }
     }
 }

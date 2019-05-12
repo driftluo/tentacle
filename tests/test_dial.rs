@@ -135,10 +135,12 @@ impl ServiceProtocol for PHandle {
     }
 
     fn notify(&mut self, context: &mut ProtocolContext, _token: u64) {
-        context.dial(self.dial_addr.as_ref().unwrap().clone(), DialProtocol::All);
-        self.dial_count += 1;
-        if self.dial_count == 10 {
-            self.sender.try_send(self.connected_count).unwrap();
+        if self.dial_addr.is_some() {
+            context.dial(self.dial_addr.as_ref().unwrap().clone(), DialProtocol::All);
+            self.dial_count += 1;
+            if self.dial_count == 10 {
+                self.sender.try_send(self.connected_count).unwrap();
+            }
         }
     }
 }

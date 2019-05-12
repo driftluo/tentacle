@@ -16,22 +16,23 @@ use tokio::{
 };
 
 use crate::{
+    context::SessionContext,
     error::Error,
     multiaddr::Multiaddr,
+    protocol_handle_stream::{ServiceProtocolEvent, SessionProtocolEvent},
     protocol_select::{client_select, server_select, ProtocolInfo},
     secio::{codec::stream_handle::StreamHandle as SecureHandle, PublicKey},
     service::{
         config::Meta, event::Priority, SessionType, BUF_SHRINK_THRESHOLD, DELAY_TIME,
         RECEIVED_SIZE, SEND_SIZE,
     },
-    substream::{ProtocolEvent, SubStream},
+    substream::{ProtocolEvent, SubstreamBuilder},
     transports::{MultiIncoming, MultiStream},
     yamux::{Config, Session as YamuxSession, StreamHandle},
     ProtocolId, SessionId, StreamId,
 };
 
 /// Event generated/received by the Session
-#[derive(Debug)]
 pub(crate) enum SessionEvent {
     /// Session close event
     SessionClose {
@@ -95,6 +96,7 @@ pub(crate) enum SessionEvent {
         proto_id: ProtocolId,
         /// Protocol version
         version: String,
+        session_sender: Option<mpsc::Sender<SessionProtocolEvent>>,
     },
     /// Protocol close event
     ProtocolClose {
@@ -136,19 +138,17 @@ pub(crate) struct Session<T> {
 
     config: Config,
 
-    id: SessionId,
     timeout: Duration,
+
+    event: HashSet<ProtocolId>,
 
     keep_buffer: bool,
 
     state: SessionState,
 
-    // NOTE: Not used yet, may useful later
-    // remote_address: ::std::net::SocketAddr,
-    // remote_public_key: Option<PublicKey>,
+    context: Arc<SessionContext>,
+
     next_stream: StreamId,
-    /// Indicates the identity of the current session
-    ty: SessionType,
 
     /// Sub streams maps a stream id to a sender of sub stream
     sub_streams: HashMap<StreamId, mpsc::Sender<ProtocolEvent>>,
@@ -169,11 +169,14 @@ pub(crate) struct Session<T> {
     service_sender: mpsc::Sender<SessionEvent>,
     /// Receive event from service
     service_receiver: mpsc::Receiver<SessionEvent>,
+
+    service_proto_senders: HashMap<ProtocolId, mpsc::Sender<ServiceProtocolEvent>>,
+    session_proto_senders: HashMap<ProtocolId, mpsc::Sender<SessionProtocolEvent>>,
+
     /// Delay notify with abnormally poor machines
     delay: Arc<AtomicBool>,
 
     substreams_control: Arc<AtomicBool>,
-    session_closed: Arc<AtomicBool>,
 }
 
 impl<T> Session<T>
@@ -186,9 +189,8 @@ where
         service_sender: mpsc::Sender<SessionEvent>,
         service_receiver: mpsc::Receiver<SessionEvent>,
         meta: SessionMeta,
-        session_closed: Arc<AtomicBool>,
     ) -> Self {
-        let socket = YamuxSession::new(socket, meta.config, meta.ty.into());
+        let socket = YamuxSession::new(socket, meta.config, meta.context.ty.into());
         let (proto_event_sender, proto_event_receiver) = mpsc::channel(RECEIVED_SIZE);
         let interval = proto_event_sender.clone();
         tokio::spawn(Delay::new(Instant::now() + meta.timeout).then(|_| {
@@ -205,9 +207,8 @@ where
             socket,
             protocol_configs: meta.protocol_configs,
             config: meta.config,
-            id: meta.id,
             timeout: meta.timeout,
-            ty: meta.ty,
+            context: meta.context,
             keep_buffer: meta.keep_buffer,
             next_stream: 0,
             sub_streams: HashMap::default(),
@@ -219,10 +220,12 @@ where
             proto_event_receiver,
             service_sender,
             service_receiver,
+            service_proto_senders: meta.service_proto_senders,
+            session_proto_senders: meta.session_proto_senders,
             delay: Arc::new(AtomicBool::new(false)),
             state: SessionState::Normal,
             substreams_control: Arc::new(AtomicBool::new(false)),
-            session_closed,
+            event: meta.event,
         }
     }
 
@@ -390,6 +393,59 @@ where
         self.select_procedure(task);
     }
 
+    fn open_protocol(
+        &mut self,
+        name: String,
+        version: String,
+        sub_stream: Box<Framed<StreamHandle, LengthDelimitedCodec>>,
+    ) {
+        let proto = match self.protocol_configs.get(&name) {
+            Some(proto) => proto,
+            None => unreachable!(),
+        };
+
+        let proto_id = proto.id;
+        let raw_part = sub_stream.into_parts();
+        let mut part = FramedParts::new(raw_part.io, (proto.codec)());
+        // Replace buffered data
+        part.read_buf.unsplit(raw_part.read_buf);
+        part.write_buf.unsplit(raw_part.write_buf);
+        let frame = Framed::from_parts(part);
+        let (session_to_proto_sender, session_to_proto_receiver) = mpsc::channel(SEND_SIZE);
+
+        let mut proto_stream = SubstreamBuilder::new(
+            self.proto_event_sender.clone(),
+            session_to_proto_receiver,
+            self.substreams_control.clone(),
+            self.context.clone(),
+        )
+        .proto_id(proto_id)
+        .stream_id(self.next_stream)
+        .config(self.config)
+        .service_proto_sender(self.service_proto_senders.get(&proto_id).cloned())
+        .session_proto_sender(self.session_proto_senders.remove(&proto_id))
+        .keep_buffer(self.keep_buffer)
+        .event(self.event.contains(&proto_id))
+        .build(frame);
+
+        self.sub_streams
+            .insert(self.next_stream, session_to_proto_sender);
+        self.proto_streams.insert(proto_id, self.next_stream);
+
+        proto_stream.proto_open(version.clone());
+
+        self.event_output(SessionEvent::ProtocolOpen {
+            id: self.context.id,
+            proto_id,
+            version,
+            session_sender: None,
+        });
+        self.next_stream += 1;
+
+        debug!("session [{}] proto [{}] open", self.context.id, proto_id);
+        tokio::spawn(proto_stream.for_each(|_| Ok(())));
+    }
+
     /// Handling events uploaded by the protocol stream
     fn handle_stream_event(&mut self, event: ProtocolEvent) {
         match event {
@@ -398,50 +454,14 @@ where
                 sub_stream,
                 version,
             } => {
-                let proto = match self.protocol_configs.get(&proto_name) {
-                    Some(proto) => proto,
-                    None => unreachable!(),
-                };
-
-                let proto_id = proto.id;
-                let raw_part = sub_stream.into_parts();
-                let mut part = FramedParts::new(raw_part.io, (proto.codec)());
-                // Replace buffered data
-                part.read_buf.unsplit(raw_part.read_buf);
-                part.write_buf.unsplit(raw_part.write_buf);
-                let frame = Framed::from_parts(part);
-                let (session_to_proto_sender, session_to_proto_receiver) = mpsc::channel(SEND_SIZE);
-                let proto_stream = SubStream::new(
-                    frame,
-                    self.proto_event_sender.clone(),
-                    session_to_proto_receiver,
-                    self.next_stream,
-                    proto_id,
-                    self.config,
-                    self.substreams_control.clone(),
-                )
-                .keep_buffer(self.keep_buffer);
-                self.sub_streams
-                    .insert(self.next_stream, session_to_proto_sender);
-                self.proto_streams.insert(proto_id, self.next_stream);
-
-                self.event_output(SessionEvent::ProtocolOpen {
-                    id: self.id,
-                    proto_id,
-                    version,
-                });
-                self.next_stream += 1;
-
-                debug!("session [{}] proto [{}] open", self.id, proto_id);
-
-                tokio::spawn(proto_stream.for_each(|_| Ok(())));
+                self.open_protocol(proto_name, version, sub_stream);
             }
             ProtocolEvent::Close { id, proto_id } => {
-                debug!("session [{}] proto [{}] closed", self.id, proto_id);
+                debug!("session [{}] proto [{}] closed", self.context.id, proto_id);
                 self.sub_streams.remove(&id);
                 self.proto_streams.remove(&proto_id);
                 self.event_output(SessionEvent::ProtocolClose {
-                    id: self.id,
+                    id: self.context.id,
                     proto_id,
                 });
             }
@@ -451,7 +471,7 @@ where
                     return;
                 }
                 self.event_output(SessionEvent::ProtocolMessage {
-                    id: self.id,
+                    id: self.context.id,
                     proto_id,
                     data,
                     priority: Priority::Normal,
@@ -459,7 +479,7 @@ where
             }
             ProtocolEvent::SelectError { proto_name } => {
                 self.event_output(SessionEvent::ProtocolSelectError {
-                    id: self.id,
+                    id: self.context.id,
                     proto_name,
                 })
             }
@@ -468,14 +488,16 @@ where
             } => {
                 debug!("Codec error: {:?}", error);
                 self.event_output(SessionEvent::ProtocolError {
-                    id: self.id,
+                    id: self.context.id,
                     proto_id,
                     error,
                 })
             }
             ProtocolEvent::TimeoutCheck => {
                 if self.sub_streams.is_empty() {
-                    self.event_output(SessionEvent::SessionTimeout { id: self.id });
+                    self.event_output(SessionEvent::SessionTimeout {
+                        id: self.context.id,
+                    });
                     self.state = SessionState::LocalClose;
                 }
             }
@@ -483,6 +505,7 @@ where
     }
 
     /// Handling events send by the service
+    #[allow(clippy::map_entry)]
     fn handle_session_event(&mut self, event: SessionEvent) {
         match event {
             SessionEvent::ProtocolMessage {
@@ -512,7 +535,11 @@ where
                     self.close_all_proto();
                 }
             }
-            SessionEvent::ProtocolOpen { proto_id, .. } => {
+            SessionEvent::ProtocolOpen {
+                proto_id,
+                session_sender,
+                ..
+            } => {
                 if self.proto_streams.contains_key(&proto_id) {
                     debug!("proto [{}] has been open", proto_id);
                 } else {
@@ -524,7 +551,12 @@ where
                         }
                     });
                     match name {
-                        Some(name) => self.open_proto_stream(&name),
+                        Some(name) => {
+                            if let Some(session_sender) = session_sender {
+                                self.session_proto_senders.insert(proto_id, session_sender);
+                            }
+                            self.open_proto_stream(&name)
+                        }
                         None => debug!("This protocol [{}] is not supported", proto_id),
                     }
                 }
@@ -636,10 +668,11 @@ where
 
     /// Close session
     fn close_session(&mut self) {
-        self.session_closed.store(true, Ordering::SeqCst);
+        self.context.closed.store(true, Ordering::SeqCst);
 
-        self.read_buf
-            .push_back(SessionEvent::SessionClose { id: self.id });
+        self.read_buf.push_back(SessionEvent::SessionClose {
+            id: self.context.id,
+        });
         let events = self.read_buf.split_off(0);
 
         tokio::spawn(
@@ -702,8 +735,8 @@ where
         debug!(
             "session [{}], [{:?}], proto count [{}], state: {:?} ,\
              read buf: {}, write buf: {}, high_write_buf: {}",
-            self.id,
-            self.ty,
+            self.context.id,
+            self.context.ty,
             self.sub_streams.len(),
             self.state,
             self.read_buf.len(),
@@ -757,7 +790,7 @@ where
                         _ => {
                             error!("MuxerError: {:?}", err);
                             self.event_output(SessionEvent::MuxerError {
-                                id: self.id,
+                                id: self.context.id,
                                 error: err.into(),
                             });
                             self.state = SessionState::Abnormal;
@@ -803,24 +836,26 @@ where
 
 pub(crate) struct SessionMeta {
     config: Config,
-    id: SessionId,
     protocol_configs: HashMap<String, Arc<Meta>>,
-    ty: SessionType,
-    // remote_address: ::std::net::SocketAddr,
-    // remote_public_key: Option<PublicKey>,
+    context: Arc<SessionContext>,
     timeout: Duration,
     keep_buffer: bool,
+    service_proto_senders: HashMap<ProtocolId, mpsc::Sender<ServiceProtocolEvent>>,
+    session_proto_senders: HashMap<ProtocolId, mpsc::Sender<SessionProtocolEvent>>,
+    event: HashSet<ProtocolId>,
 }
 
 impl SessionMeta {
-    pub fn new(id: SessionId, ty: SessionType, timeout: Duration) -> Self {
+    pub fn new(timeout: Duration, context: Arc<SessionContext>) -> Self {
         SessionMeta {
             config: Config::default(),
-            id,
-            ty,
             protocol_configs: HashMap::new(),
+            context,
             timeout,
             keep_buffer: false,
+            service_proto_senders: HashMap::default(),
+            session_proto_senders: HashMap::default(),
+            event: HashSet::new(),
         }
     }
 
@@ -836,6 +871,32 @@ impl SessionMeta {
 
     pub fn keep_buffer(mut self, keep: bool) -> Self {
         self.keep_buffer = keep;
+        self
+    }
+
+    pub fn service_proto_senders(
+        mut self,
+        senders: HashMap<ProtocolId, mpsc::Sender<ServiceProtocolEvent>>,
+    ) -> Self {
+        self.service_proto_senders = senders;
+        self
+    }
+
+    pub fn session_senders(
+        mut self,
+        senders: HashMap<ProtocolId, mpsc::Sender<SessionProtocolEvent>>,
+    ) -> Self {
+        self.session_proto_senders = senders;
+        self
+    }
+
+    pub fn context(mut self, context: Arc<SessionContext>) -> Self {
+        self.context = context;
+        self
+    }
+
+    pub fn event(mut self, event: HashSet<ProtocolId>) -> Self {
+        self.event = event;
         self
     }
 }
