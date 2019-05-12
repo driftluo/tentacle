@@ -1768,7 +1768,10 @@ where
             return Ok(Async::Ready(None));
         }
 
+        // TODO: figure out why sometimes `Service::poll` not called
+        //       now force set a delay (equals interval) to notify
         self.set_delay();
+
         debug!(
             "> listens count: {}, state: {:?}, sessions count: {},\
              pending task: {}, normal_count: {}, quick_count: {}, high_write_buf: {}, write_buf: {}, read_service_buf: {}, read_session_buf: {}",

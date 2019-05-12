@@ -196,7 +196,8 @@ where
 
     #[inline]
     fn recv_frame(&mut self) -> Poll<Option<()>, SecioError> {
-        loop {
+        let mut finished = false;
+        for _ in 0..128 {
             if self.read_buf.len() > self.config.recv_event_size() {
                 self.set_delay();
                 break;
@@ -216,6 +217,7 @@ where
                     return Ok(Async::Ready(None));
                 }
                 Ok(Async::NotReady) => {
+                    finished = true;
                     debug!("receive not ready");
                     break;
                 }
@@ -225,12 +227,16 @@ where
                 }
             };
         }
+        if !finished {
+            self.set_delay();
+        }
         Ok(Async::NotReady)
     }
 
     #[inline]
     fn recv_event(&mut self) {
-        loop {
+        let mut finished = false;
+        for _ in 0..128 {
             if self.pending.len() > self.config.send_event_size() {
                 self.set_delay();
                 break;
@@ -244,14 +250,19 @@ where
                 }
                 Ok(Async::Ready(None)) => unreachable!(),
                 Ok(Async::NotReady) => {
+                    finished = true;
                     debug!("event not ready");
                     break;
                 }
                 Err(err) => {
+                    finished = true;
                     debug!("receive event error: {:?}", err);
                     break;
                 }
             }
+        }
+        if !finished {
+            self.set_delay();
         }
     }
 
