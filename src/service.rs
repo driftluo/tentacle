@@ -1072,6 +1072,7 @@ where
         if let Some(infos) = self.session_service_protos.get_mut(&session_id) {
             infos.remove(&proto_id);
         }
+        self.session_proto_handles.remove(&(session_id, proto_id));
     }
 
     #[inline(always)]
