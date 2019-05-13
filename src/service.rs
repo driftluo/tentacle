@@ -422,7 +422,7 @@ where
                         block_handles.insert(proto_id);
                     } else {
                         debug!(
-                            "channel shutdown, proto [{}] message can't send to user",
+                            "channel shutdown, service proto [{}] message can't send to user",
                             proto_id
                         );
 
@@ -452,7 +452,7 @@ where
                         self.proto_handle_error(proto_id, Some(session_id));
                     } else {
                         debug!(
-                            "channel shutdown, proto [{}] session [{}] message can't send to user",
+                            "channel shutdown, session proto [{}] session [{}] message can't send to user",
                             proto_id, session_id
                         );
 

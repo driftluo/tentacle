@@ -592,6 +592,7 @@ where
         if self.last_read_success.elapsed()
             > self.config.keepalive_interval + Duration::from_secs(15)
         {
+            warn!("yamux timeout");
             self.shutdown()?;
             return Err(io::ErrorKind::TimedOut.into());
         }

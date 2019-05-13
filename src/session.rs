@@ -177,6 +177,7 @@ pub(crate) struct Session<T> {
     delay: Arc<AtomicBool>,
 
     substreams_control: Arc<AtomicBool>,
+    last_sent: Instant,
 }
 
 impl<T> Session<T>
@@ -226,6 +227,7 @@ where
             state: SessionState::Normal,
             substreams_control: Arc::new(AtomicBool::new(false)),
             event: meta.event,
+            last_sent: Instant::now(),
         }
     }
 
@@ -349,6 +351,8 @@ where
                         } else {
                             debug!("session send to sub stream error: {}", e);
                         }
+                    } else {
+                        self.last_sent = Instant::now();
                     }
                 };
             }
@@ -622,7 +626,10 @@ where
         let mut finished = false;
         for _ in 0..64 {
             if self.write_buf.len() > RECEIVED_SIZE {
-                self.state = SessionState::LocalClose;
+                if self.last_sent.elapsed() > Duration::from_secs(5) {
+                    warn!("session send timeout");
+                    self.state = SessionState::LocalClose;
+                }
                 break;
             }
             match self.service_receiver.poll() {

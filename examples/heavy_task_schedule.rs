@@ -46,15 +46,15 @@ impl ServiceProtocol for PHandle {
         let session_type = context.session.ty;
         let session_id = context.session.id;
         if session_type.is_outbound() {
-            thread::sleep(Duration::from_millis(50));
+            thread::sleep(Duration::from_millis(30));
             info!("> [Client] received {}", self.count);
             self.count += 1;
+            if self.count + 1 == 512 {
+                let _ = context.shutdown();
+            }
         } else {
             // thread::sleep(Duration::from_millis(20));
             info!("> [Server] received from {:?}", session_id);
-        }
-        if self.count + 1 == 512 {
-            let _ = context.shutdown();
         }
     }
 
