@@ -8,6 +8,7 @@ use log::{debug, trace, warn};
 use p2p::multiaddr::{Multiaddr, Protocol};
 use p2p::{
     context::ProtocolContextMutRef,
+    error::Error,
     service::{ServiceControl, SessionType},
     utils::multiaddr_to_socketaddr,
     ProtocolId, SessionId,
@@ -82,7 +83,17 @@ impl io::Write for StreamHandle {
         self.sender
             .send_message_to(self.session_id, self.proto_id, Bytes::from(buf))
             .map(|()| buf.len())
-            .map_err(|_| io::ErrorKind::BrokenPipe.into())
+            .map_err(|e| {
+                if let Error::IoError(e) = e {
+                    if e.kind() == io::ErrorKind::WouldBlock {
+                        e
+                    } else {
+                        io::ErrorKind::BrokenPipe.into()
+                    }
+                } else {
+                    io::ErrorKind::BrokenPipe.into()
+                }
+            })
     }
 
     fn flush(&mut self) -> io::Result<()> {

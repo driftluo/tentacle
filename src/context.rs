@@ -3,7 +3,6 @@ use futures::{
     prelude::*,
     sync::{mpsc, oneshot},
 };
-use log::warn;
 use std::{
     collections::HashMap,
     ops::{Deref, DerefMut},
@@ -12,6 +11,7 @@ use std::{
 };
 
 use crate::{
+    error::Error,
     multiaddr::Multiaddr,
     protocol_select::ProtocolInfo,
     secio::{PublicKey, SecioKeyPair},
@@ -77,50 +77,53 @@ impl ServiceContext {
 
     /// Create a new listener
     #[inline]
-    pub fn listen(&self, address: Multiaddr) {
-        if let Err(e) = self.inner.listen(address) {
-            warn!("Service Error: {}", e)
-        }
+    pub fn listen(&self, address: Multiaddr) -> Result<(), Error> {
+        self.inner.listen(address)
     }
 
     /// Initiate a connection request to address
     #[inline]
-    pub fn dial(&self, address: Multiaddr, target: DialProtocol) {
-        if let Err(e) = self.inner.dial(address, target) {
-            warn!("Service Error: {}", e)
-        }
+    pub fn dial(&self, address: Multiaddr, target: DialProtocol) -> Result<(), Error> {
+        self.inner.dial(address, target)
     }
 
     /// Disconnect a connection
     #[inline]
-    pub fn disconnect(&self, session_id: SessionId) {
-        if let Err(e) = self.inner.disconnect(session_id) {
-            warn!("Service Error: {}", e)
-        }
+    pub fn disconnect(&self, session_id: SessionId) -> Result<(), Error> {
+        self.inner.disconnect(session_id)
     }
 
     /// Send message
     #[inline]
-    pub fn send_message_to(&self, session_id: SessionId, proto_id: ProtocolId, data: Bytes) {
-        if let Err(e) = self.inner.send_message_to(session_id, proto_id, data) {
-            warn!("Service Error: {}", e)
-        }
+    pub fn send_message_to(
+        &self,
+        session_id: SessionId,
+        proto_id: ProtocolId,
+        data: Bytes,
+    ) -> Result<(), Error> {
+        self.inner.send_message_to(session_id, proto_id, data)
     }
 
     /// Send message on quick channel
     #[inline]
-    pub fn quick_send_message_to(&self, session_id: SessionId, proto_id: ProtocolId, data: Bytes) {
-        if let Err(e) = self.inner.quick_send_message_to(session_id, proto_id, data) {
-            warn!("Service Error: {}", e)
-        }
+    pub fn quick_send_message_to(
+        &self,
+        session_id: SessionId,
+        proto_id: ProtocolId,
+        data: Bytes,
+    ) -> Result<(), Error> {
+        self.inner.quick_send_message_to(session_id, proto_id, data)
     }
 
     /// Send data to the specified protocol for the specified sessions.
     #[inline]
-    pub fn filter_broadcast(&self, session_ids: TargetSession, proto_id: ProtocolId, data: Bytes) {
-        if let Err(e) = self.inner.filter_broadcast(session_ids, proto_id, data) {
-            warn!("Service Error: {}", e)
-        }
+    pub fn filter_broadcast(
+        &self,
+        session_ids: TargetSession,
+        proto_id: ProtocolId,
+        data: Bytes,
+    ) -> Result<(), Error> {
+        self.inner.filter_broadcast(session_ids, proto_id, data)
     }
 
     /// Send data to the specified protocol for the specified sessions on quick channel.
@@ -130,44 +133,34 @@ impl ServiceContext {
         session_ids: TargetSession,
         proto_id: ProtocolId,
         data: Bytes,
-    ) {
-        if let Err(e) = self
-            .inner
+    ) -> Result<(), Error> {
+        self.inner
             .quick_filter_broadcast(session_ids, proto_id, data)
-        {
-            warn!("Service Error: {}", e)
-        }
     }
 
     /// Send a future task
     #[inline]
-    pub fn future_task<T>(&self, task: T)
+    pub fn future_task<T>(&self, task: T) -> Result<(), Error>
     where
         T: Future<Item = (), Error = ()> + 'static + Send,
     {
-        if let Err(e) = self.inner.future_task(task) {
-            warn!("Service Error: {}", e)
-        }
+        self.inner.future_task(task)
     }
 
     /// Try open a protocol
     ///
     /// If the protocol has been open, do nothing
     #[inline]
-    pub fn open_protocol(&self, session_id: SessionId, proto_id: ProtocolId) {
-        if let Err(e) = self.inner.open_protocol(session_id, proto_id) {
-            warn!("Service Error: {}", e)
-        }
+    pub fn open_protocol(&self, session_id: SessionId, proto_id: ProtocolId) -> Result<(), Error> {
+        self.inner.open_protocol(session_id, proto_id)
     }
 
     /// Try close a protocol
     ///
     /// If the protocol has been closed, do nothing
     #[inline]
-    pub fn close_protocol(&self, session_id: SessionId, proto_id: ProtocolId) {
-        if let Err(e) = self.inner.close_protocol(session_id, proto_id) {
-            warn!("Service Error: {}", e)
-        }
+    pub fn close_protocol(&self, session_id: SessionId, proto_id: ProtocolId) -> Result<(), Error> {
+        self.inner.close_protocol(session_id, proto_id)
     }
 
     /// Get the internal channel sender side handle
@@ -201,10 +194,13 @@ impl ServiceContext {
     }
 
     /// Set a service notify token
-    pub fn set_service_notify(&self, proto_id: ProtocolId, interval: Duration, token: u64) {
-        if let Err(e) = self.inner.set_service_notify(proto_id, interval, token) {
-            warn!("Service Error: {}", e)
-        }
+    pub fn set_service_notify(
+        &self,
+        proto_id: ProtocolId,
+        interval: Duration,
+        token: u64,
+    ) -> Result<(), Error> {
+        self.inner.set_service_notify(proto_id, interval, token)
     }
 
     /// Set a session notify token
@@ -214,30 +210,25 @@ impl ServiceContext {
         proto_id: ProtocolId,
         interval: Duration,
         token: u64,
-    ) {
-        if let Err(e) = self
-            .inner
+    ) -> Result<(), Error> {
+        self.inner
             .set_session_notify(session_id, proto_id, interval, token)
-        {
-            warn!("Service Error: {}", e)
-        }
     }
 
     /// Remove a service timer by a token
-    pub fn remove_service_notify(&self, proto_id: ProtocolId, token: u64) {
-        if let Err(e) = self.inner.remove_service_notify(proto_id, token) {
-            warn!("Service Error: {}", e)
-        }
+    pub fn remove_service_notify(&self, proto_id: ProtocolId, token: u64) -> Result<(), Error> {
+        self.inner.remove_service_notify(proto_id, token)
     }
 
     /// Remove a session timer by a token
-    pub fn remove_session_notify(&self, session_id: SessionId, proto_id: ProtocolId, token: u64) {
-        if let Err(e) = self
-            .inner
+    pub fn remove_session_notify(
+        &self,
+        session_id: SessionId,
+        proto_id: ProtocolId,
+        token: u64,
+    ) -> Result<(), Error> {
+        self.inner
             .remove_session_notify(session_id, proto_id, token)
-        {
-            warn!("Service Error: {}", e)
-        }
     }
 
     /// Close service.
@@ -247,17 +238,13 @@ impl ServiceContext {
     /// 2. try close all session's protocol stream
     /// 3. try close all session
     /// 4. close service
-    pub fn close(&self) {
-        if let Err(e) = self.inner.close() {
-            warn!("Service Error: {}", e)
-        }
+    pub fn close(&self) -> Result<(), Error> {
+        self.inner.close()
     }
 
     /// Shutdown service, don't care anything, may cause partial message loss
-    pub fn shutdown(&self) {
-        if let Err(e) = self.inner.shutdown() {
-            warn!("Service Error: {}", e)
-        }
+    pub fn shutdown(&self) -> Result<(), Error> {
+        self.inner.shutdown()
     }
 
     pub(crate) fn clone_self(&self) -> Self {
@@ -306,14 +293,14 @@ pub struct ProtocolContextMutRef<'a> {
 impl<'a> ProtocolContextMutRef<'a> {
     /// Send message to current protocol current session
     #[inline]
-    pub fn send_message(&self, data: Bytes) {
+    pub fn send_message(&self, data: Bytes) -> Result<(), Error> {
         let proto_id = self.proto_id();
         self.inner.send_message_to(self.session.id, proto_id, data)
     }
 
     /// Send message to current protocol current session on quick channel
     #[inline]
-    pub fn quick_send_message(&self, data: Bytes) {
+    pub fn quick_send_message(&self, data: Bytes) -> Result<(), Error> {
         let proto_id = self.proto_id();
         self.inner
             .quick_send_message_to(self.session.id, proto_id, data)

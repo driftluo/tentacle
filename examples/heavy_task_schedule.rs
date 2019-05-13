@@ -21,8 +21,8 @@ struct PHandle {
 impl ServiceProtocol for PHandle {
     fn init(&mut self, context: &mut ProtocolContext) {
         let proto_id = context.proto_id;
-        context.set_service_notify(proto_id, Duration::from_millis(10), 0);
-        context.set_service_notify(proto_id, Duration::from_millis(40), 1);
+        let _ = context.set_service_notify(proto_id, Duration::from_millis(10), 0);
+        let _ = context.set_service_notify(proto_id, Duration::from_millis(40), 1);
     }
 
     fn connected(&mut self, context: ProtocolContextMutRef, _version: &str) {
@@ -46,15 +46,15 @@ impl ServiceProtocol for PHandle {
         let session_type = context.session.ty;
         let session_id = context.session.id;
         if session_type.is_outbound() {
-            thread::sleep(Duration::from_millis(50));
+            thread::sleep(Duration::from_millis(30));
             info!("> [Client] received {}", self.count);
             self.count += 1;
+            if self.count + 1 == 512 {
+                let _ = context.shutdown();
+            }
         } else {
             // thread::sleep(Duration::from_millis(20));
             info!("> [Server] received from {:?}", session_id);
-        }
-        if self.count + 1 == 512 {
-            context.shutdown();
         }
     }
 
@@ -69,10 +69,10 @@ impl ServiceProtocol for PHandle {
                     .map(|(session_id, _)| session_id)
                 {
                     info!("> [Server] send to {:?}", session_id);
-                    let prefix = "abcde".repeat(800);
+                    let prefix = "abcde".repeat(80000);
                     let now = Instant::now();
                     let data = Bytes::from(format!("{:?} - {}", now, prefix));
-                    context.send_message_to(*session_id, proto_id, data);
+                    let _ = context.send_message_to(*session_id, proto_id, data);
                 }
             }
             1 => {
@@ -83,10 +83,10 @@ impl ServiceProtocol for PHandle {
                     .map(|(session_id, _)| session_id)
                 {
                     info!("> [Client] send to {:?}", session_id);
-                    let prefix = "xxxx".repeat(200);
+                    let prefix = "xxxx".repeat(20000);
                     let now = Instant::now();
                     let data = Bytes::from(format!("{:?} - {}", now, prefix));
-                    context.send_message_to(*session_id, proto_id, data);
+                    let _ = context.send_message_to(*session_id, proto_id, data);
                 }
             }
             _ => {}

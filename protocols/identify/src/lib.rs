@@ -11,7 +11,7 @@ mod protocol;
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
-use log::{debug, error, trace};
+use log::{debug, error, trace, warn};
 use p2p::{
     context::{ProtocolContext, ProtocolContextMutRef, SessionContext},
     multiaddr::{Multiaddr, Protocol},
@@ -131,18 +131,23 @@ impl RemoteInfo {
 impl<T: Callback> ServiceProtocol for IdentifyProtocol<T> {
     fn init(&mut self, context: &mut ProtocolContext) {
         let proto_id = context.proto_id;
-        context.set_service_notify(
-            proto_id,
-            Duration::from_secs(CHECK_TIMEOUT_INTERVAL),
-            CHECK_TIMEOUT_TOKEN,
-        );
+        if context
+            .set_service_notify(
+                proto_id,
+                Duration::from_secs(CHECK_TIMEOUT_INTERVAL),
+                CHECK_TIMEOUT_TOKEN,
+            )
+            .is_err()
+        {
+            warn!("identify start fail")
+        }
     }
 
     fn connected(&mut self, context: ProtocolContextMutRef, _version: &str) {
         let session = context.session;
         if session.remote_pubkey.is_none() {
             error!("IdentifyProtocol require secio enabled!");
-            context.disconnect(session.id);
+            let _ = context.disconnect(session.id);
             self.secio_enabled = false;
             return;
         }
@@ -164,7 +169,7 @@ impl<T: Callback> ServiceProtocol for IdentifyProtocol<T> {
             .cloned()
             .collect();
         let data = IdentifyMessage::ListenAddrs(listen_addrs).encode();
-        context.send_message(data);
+        let _ = context.send_message(data);
 
         let observed_addr = session
             .address
@@ -175,7 +180,7 @@ impl<T: Callback> ServiceProtocol for IdentifyProtocol<T> {
             })
             .collect::<Multiaddr>();
         let data = IdentifyMessage::ObservedAddr(observed_addr).encode();
-        context.send_message(data);
+        let _ = context.send_message(data);
     }
 
     fn disconnected(&mut self, context: ProtocolContextMutRef) {
@@ -208,7 +213,7 @@ impl<T: Callback> ServiceProtocol for IdentifyProtocol<T> {
                         .misbehave(&info.peer_id, Misbehavior::DuplicateListenAddrs)
                         .is_disconnect()
                     {
-                        context.disconnect(session.id);
+                        let _ = context.disconnect(session.id);
                     }
                 } else if addrs.len() > MAX_ADDRS {
                     if self
@@ -216,7 +221,7 @@ impl<T: Callback> ServiceProtocol for IdentifyProtocol<T> {
                         .misbehave(&info.peer_id, Misbehavior::TooManyAddresses(addrs.len()))
                         .is_disconnect()
                     {
-                        context.disconnect(session.id);
+                        let _ = context.disconnect(session.id);
                     }
                 } else {
                     trace!("received listen addresses: {:?}", addrs);
@@ -241,7 +246,7 @@ impl<T: Callback> ServiceProtocol for IdentifyProtocol<T> {
                         .misbehave(&info.peer_id, Misbehavior::DuplicateObservedAddr)
                         .is_disconnect()
                     {
-                        context.disconnect(session.id);
+                        let _ = context.disconnect(session.id);
                     }
                 } else {
                     trace!("received observed address: {}", addr);
@@ -255,7 +260,7 @@ impl<T: Callback> ServiceProtocol for IdentifyProtocol<T> {
                             .add_observed_addr(&info.peer_id, addr.clone(), info.session.ty)
                             .is_disconnect()
                     {
-                        context.disconnect(session.id);
+                        let _ = context.disconnect(session.id);
                         return;
                     }
                     info.observed_addr = Some(addr.clone());
@@ -271,7 +276,7 @@ impl<T: Callback> ServiceProtocol for IdentifyProtocol<T> {
                     .misbehave(&info.peer_id, Misbehavior::InvalidData)
                     .is_disconnect()
                 {
-                    context.disconnect(session.id);
+                    let _ = context.disconnect(session.id);
                 }
             }
         }
@@ -293,7 +298,7 @@ impl<T: Callback> ServiceProtocol for IdentifyProtocol<T> {
                     .misbehave(&info.peer_id, Misbehavior::Timeout)
                     .is_disconnect()
                 {
-                    context.disconnect(*session_id);
+                    let _ = context.disconnect(*session_id);
                 }
             }
         }

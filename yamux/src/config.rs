@@ -9,8 +9,7 @@ pub const DEFAULT_ACCEPT_BACKLOG: usize = 256;
 /// Default max stream count
 pub const DEFAULT_MAX_STREAM_COUNT: usize = 65535;
 /// Default keepalive interval duration
-// pub const DEFAULT_KEEPALIVE_INTERVAL: Duration = Duration::from_secs(30);
-pub const DEFAULT_KEEPALIVE_INTERVAL: Duration = Duration::from_secs(6);
+pub const DEFAULT_KEEPALIVE_INTERVAL: Duration = Duration::from_secs(30);
 /// Default write timeout duration
 pub const DEFAULT_WRITE_TIMEOUT: Duration = Duration::from_secs(10);
 /// Default max buffer size

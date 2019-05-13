@@ -74,7 +74,7 @@ impl ServiceProtocol for PHandle {
 
     fn received(&mut self, context: ProtocolContextMutRef, data: bytes::Bytes) {
         let proto_id = context.proto_id;
-        context.filter_broadcast(TargetSession::All, proto_id, data);
+        let _ = context.filter_broadcast(TargetSession::All, proto_id, data);
     }
 }
 

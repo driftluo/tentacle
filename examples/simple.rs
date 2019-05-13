@@ -46,7 +46,7 @@ struct PHandle {
 impl ServiceProtocol for PHandle {
     fn init(&mut self, context: &mut ProtocolContext) {
         if context.proto_id == 0.into() {
-            context.set_service_notify(0.into(), Duration::from_secs(5), 3);
+            let _ = context.set_service_notify(0.into(), Duration::from_secs(5), 3);
         }
     }
 
@@ -83,7 +83,7 @@ impl ServiceProtocol for PHandle {
                 }
             })
             .map_err(|err| info!("{}", err));
-        context.future_task(interval_task);
+        let _ = context.future_task(interval_task);
     }
 
     fn disconnected(&mut self, context: ProtocolContextMutRef) {
@@ -146,7 +146,7 @@ impl ServiceHandle for SHandle {
                 })
                 .map_err(|err| info!("{}", err));
 
-            context.future_task(Box::new(delay_task));
+            let _ = context.future_task(Box::new(delay_task));
         }
     }
 }

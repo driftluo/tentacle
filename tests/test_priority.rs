@@ -46,9 +46,9 @@ impl ServiceProtocol for PHandle {
         if context.session.ty.is_inbound() {
             for i in 0..1024 {
                 if i == 254 {
-                    context.quick_send_message(Bytes::from("high"));
+                    let _ = context.quick_send_message(Bytes::from("high"));
                 }
-                context.send_message(Bytes::from("normal"));
+                let _ = context.send_message(Bytes::from("normal"));
             }
         }
     }
@@ -61,7 +61,7 @@ impl ServiceProtocol for PHandle {
             if self.count <= 200 {
                 self.test_result.store(true, Ordering::SeqCst);
             }
-            context.close();
+            let _ = context.close();
         }
     }
 }

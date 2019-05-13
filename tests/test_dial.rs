@@ -116,7 +116,7 @@ struct PHandle {
 impl ServiceProtocol for PHandle {
     fn init(&mut self, context: &mut ProtocolContext) {
         let proto_id = context.proto_id;
-        context.set_service_notify(proto_id, Duration::from_secs(1), 3);
+        let _ = context.set_service_notify(proto_id, Duration::from_secs(1), 3);
     }
 
     fn connected(&mut self, context: ProtocolContextMutRef, _version: &str) {
@@ -135,10 +135,12 @@ impl ServiceProtocol for PHandle {
     }
 
     fn notify(&mut self, context: &mut ProtocolContext, _token: u64) {
-        context.dial(self.dial_addr.as_ref().unwrap().clone(), DialProtocol::All);
-        self.dial_count += 1;
-        if self.dial_count == 10 {
-            self.sender.try_send(self.connected_count).unwrap();
+        if self.dial_addr.is_some() {
+            let _ = context.dial(self.dial_addr.as_ref().unwrap().clone(), DialProtocol::All);
+            self.dial_count += 1;
+            if self.dial_count == 10 {
+                self.sender.try_send(self.connected_count).unwrap();
+            }
         }
     }
 }
