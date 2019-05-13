@@ -621,10 +621,10 @@ where
     fn recv_service(&mut self) -> Option<()> {
         let mut finished = false;
         for _ in 0..64 {
-            if self.write_buf.len() > self.config.send_event_size() {
+            if self.write_buf.len() > RECEIVED_SIZE {
+                self.state = SessionState::LocalClose;
                 break;
             }
-
             match self.service_receiver.poll() {
                 Ok(Async::Ready(Some(event))) => {
                     if !self.state.is_normal() {
@@ -680,7 +680,7 @@ where
                 .clone()
                 .send_all(iter_ok(events))
                 .map(|_| ())
-                .map_err(|e| error!("session close event send to service error: {:?}", e)),
+                .map_err(|e| debug!("session close event send to service error: {:?}", e)),
         );
         self.clean();
     }
@@ -788,7 +788,7 @@ where
                         | ErrorKind::NotConnected
                         | ErrorKind::UnexpectedEof => self.state = SessionState::RemoteClose,
                         _ => {
-                            error!("MuxerError: {:?}", err);
+                            warn!("MuxerError: {:?}", err);
                             self.event_output(SessionEvent::MuxerError {
                                 id: self.context.id,
                                 error: err.into(),
