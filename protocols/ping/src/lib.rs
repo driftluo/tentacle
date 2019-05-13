@@ -12,7 +12,7 @@ use flatbuffers::{FlatBufferBuilder, WIPOffset};
 use flatbuffers_verifier::get_root;
 use fnv::FnvHashMap;
 use generic_channel::Sender;
-use log::{debug, error};
+use log::{debug, error, warn};
 use p2p::{
     context::{ProtocolContext, ProtocolContextMutRef},
     secio::PeerId,
@@ -101,8 +101,18 @@ where
     fn init(&mut self, context: &mut ProtocolContext) {
         // periodicly send ping to peers
         let proto_id = context.proto_id;
-        context.set_service_notify(proto_id, self.interval, SEND_PING_TOKEN);
-        context.set_service_notify(proto_id, self.timeout, CHECK_TIMEOUT_TOKEN);
+        if context
+            .set_service_notify(proto_id, self.interval, SEND_PING_TOKEN)
+            .is_err()
+        {
+            warn!("start ping fail");
+        }
+        if context
+            .set_service_notify(proto_id, self.timeout, CHECK_TIMEOUT_TOKEN)
+            .is_err()
+        {
+            warn!("start ping fail");
+        }
     }
 
     fn connected(&mut self, context: ProtocolContextMutRef, version: &str) {
@@ -124,7 +134,9 @@ where
                 debug!("connected sessions are: {:?}", self.connected_session_ids);
             }
             None => {
-                context.disconnect(session.id);
+                if context.disconnect(session.id).is_err() {
+                    debug!("disconnect fail");
+                }
             }
         }
     }
@@ -159,7 +171,12 @@ where
                     let mut fbb = FlatBufferBuilder::new();
                     let msg = PingMessage::build_pong(&mut fbb, ping_msg.nonce());
                     fbb.finish(msg, None);
-                    context.send_message(Bytes::from(fbb.finished_data()));
+                    if context
+                        .send_message(Bytes::from(fbb.finished_data()))
+                        .is_err()
+                    {
+                        debug!("send message fail");
+                    }
                     self.send_event(Event::Ping(peer_id));
                 }
                 PingPayload::Pong => {
@@ -219,11 +236,16 @@ where
                         .map(|(session_id, _)| session_id)
                         .collect();
                     let proto_id = context.proto_id;
-                    context.filter_broadcast(
-                        TargetSession::Multi(peer_ids),
-                        proto_id,
-                        Bytes::from(fbb.finished_data()),
-                    );
+                    if context
+                        .filter_broadcast(
+                            TargetSession::Multi(peer_ids),
+                            proto_id,
+                            Bytes::from(fbb.finished_data()),
+                        )
+                        .is_err()
+                    {
+                        debug!("send message fail");
+                    }
                 }
             }
             CHECK_TIMEOUT_TOKEN => {

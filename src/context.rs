@@ -11,11 +11,12 @@ use std::{
 };
 
 use crate::{
+    error::Error,
     multiaddr::Multiaddr,
     protocol_select::ProtocolInfo,
     secio::{PublicKey, SecioKeyPair},
     service::{event::ServiceTask, DialProtocol, ServiceControl, SessionType, TargetSession},
-    session::SessionEvent, error::Error,
+    session::SessionEvent,
     ProtocolId, SessionId,
 };
 use std::sync::atomic::AtomicBool;
@@ -94,19 +95,34 @@ impl ServiceContext {
 
     /// Send message
     #[inline]
-    pub fn send_message_to(&self, session_id: SessionId, proto_id: ProtocolId, data: Bytes) -> Result<(), Error> {
+    pub fn send_message_to(
+        &self,
+        session_id: SessionId,
+        proto_id: ProtocolId,
+        data: Bytes,
+    ) -> Result<(), Error> {
         self.inner.send_message_to(session_id, proto_id, data)
     }
 
     /// Send message on quick channel
     #[inline]
-    pub fn quick_send_message_to(&self, session_id: SessionId, proto_id: ProtocolId, data: Bytes) -> Result<(), Error> {
+    pub fn quick_send_message_to(
+        &self,
+        session_id: SessionId,
+        proto_id: ProtocolId,
+        data: Bytes,
+    ) -> Result<(), Error> {
         self.inner.quick_send_message_to(session_id, proto_id, data)
     }
 
     /// Send data to the specified protocol for the specified sessions.
     #[inline]
-    pub fn filter_broadcast(&self, session_ids: TargetSession, proto_id: ProtocolId, data: Bytes) -> Result<(), Error> {
+    pub fn filter_broadcast(
+        &self,
+        session_ids: TargetSession,
+        proto_id: ProtocolId,
+        data: Bytes,
+    ) -> Result<(), Error> {
         self.inner.filter_broadcast(session_ids, proto_id, data)
     }
 
@@ -118,8 +134,7 @@ impl ServiceContext {
         proto_id: ProtocolId,
         data: Bytes,
     ) -> Result<(), Error> {
-        self
-            .inner
+        self.inner
             .quick_filter_broadcast(session_ids, proto_id, data)
     }
 
@@ -174,12 +189,17 @@ impl ServiceContext {
 
     /// Update listen list
     #[inline]
-    pub(crate) fn update_listens(&mut self, address_list: Vec<Multiaddr>)  {
+    pub(crate) fn update_listens(&mut self, address_list: Vec<Multiaddr>) {
         self.listens = address_list;
     }
 
     /// Set a service notify token
-    pub fn set_service_notify(&self, proto_id: ProtocolId, interval: Duration, token: u64) -> Result<(), Error> {
+    pub fn set_service_notify(
+        &self,
+        proto_id: ProtocolId,
+        interval: Duration,
+        token: u64,
+    ) -> Result<(), Error> {
         self.inner.set_service_notify(proto_id, interval, token)
     }
 
@@ -191,8 +211,7 @@ impl ServiceContext {
         interval: Duration,
         token: u64,
     ) -> Result<(), Error> {
-        self
-            .inner
+        self.inner
             .set_session_notify(session_id, proto_id, interval, token)
     }
 
@@ -202,9 +221,13 @@ impl ServiceContext {
     }
 
     /// Remove a session timer by a token
-    pub fn remove_session_notify(&self, session_id: SessionId, proto_id: ProtocolId, token: u64) -> Result<(), Error> {
-        self
-            .inner
+    pub fn remove_session_notify(
+        &self,
+        session_id: SessionId,
+        proto_id: ProtocolId,
+        token: u64,
+    ) -> Result<(), Error> {
+        self.inner
             .remove_session_notify(session_id, proto_id, token)
     }
 

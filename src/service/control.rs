@@ -74,7 +74,7 @@ impl ServiceControl {
             counter.fetch_add(1, Ordering::SeqCst);
             sender.unbounded_send(event).map_err(Into::into)
         } else {
-            Err(Error::IoError(io::ErrorKind::TimedOut.into()))
+            Err(Error::IoError(io::ErrorKind::WouldBlock.into()))
         }
     }
 

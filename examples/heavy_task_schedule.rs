@@ -21,8 +21,8 @@ struct PHandle {
 impl ServiceProtocol for PHandle {
     fn init(&mut self, context: &mut ProtocolContext) {
         let proto_id = context.proto_id;
-        context.set_service_notify(proto_id, Duration::from_millis(10), 0);
-        context.set_service_notify(proto_id, Duration::from_millis(40), 1);
+        let _ = context.set_service_notify(proto_id, Duration::from_millis(10), 0);
+        let _ = context.set_service_notify(proto_id, Duration::from_millis(40), 1);
     }
 
     fn connected(&mut self, context: ProtocolContextMutRef, _version: &str) {
@@ -54,7 +54,7 @@ impl ServiceProtocol for PHandle {
             info!("> [Server] received from {:?}", session_id);
         }
         if self.count + 1 == 512 {
-            context.shutdown();
+            let _ = context.shutdown();
         }
     }
 
@@ -69,10 +69,10 @@ impl ServiceProtocol for PHandle {
                     .map(|(session_id, _)| session_id)
                 {
                     info!("> [Server] send to {:?}", session_id);
-                    let prefix = "abcde".repeat(800);
+                    let prefix = "abcde".repeat(80000);
                     let now = Instant::now();
                     let data = Bytes::from(format!("{:?} - {}", now, prefix));
-                    context.send_message_to(*session_id, proto_id, data);
+                    let _ = context.send_message_to(*session_id, proto_id, data);
                 }
             }
             1 => {
@@ -83,10 +83,10 @@ impl ServiceProtocol for PHandle {
                     .map(|(session_id, _)| session_id)
                 {
                     info!("> [Client] send to {:?}", session_id);
-                    let prefix = "xxxx".repeat(200);
+                    let prefix = "xxxx".repeat(20000);
                     let now = Instant::now();
                     let data = Bytes::from(format!("{:?} - {}", now, prefix));
-                    context.send_message_to(*session_id, proto_id, data);
+                    let _ = context.send_message_to(*session_id, proto_id, data);
                 }
             }
             _ => {}

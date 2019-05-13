@@ -6,7 +6,7 @@ use std::{
         Arc,
     },
     thread,
-    time::{Duration, Instant},
+    time::Duration,
 };
 use tentacle::{
     builder::{MetaBuilder, ServiceBuilder},
@@ -43,34 +43,21 @@ impl ServiceProtocol for PHandle {
         if context.session.ty.is_inbound() {
             let prefix = "x".repeat(10);
             // NOTE: 256 is the send channel buffer size
-            let length = 2048 * 2;
-            let mut first_256 = Duration::default();
-            let mut last_256 = Duration::default();
+            let length = 1024;
             for i in 0..length {
-                let now = Instant::now();
-                // println!("> send {}", i);
-                context.send_message(Bytes::from(format!("{}-{}", prefix, i)));
-                if i >= 0 && i < 256 {
-                    first_256 += now.elapsed();
-                } else if i >= length - 256 && i < length {
-                    last_256 += now.elapsed();
-                }
+                let _ = context.send_message(Bytes::from(format!("{}-{}", prefix, i)));
             }
-            let first_256_micros = first_256.as_micros();
-            let last_256_micros = last_256.as_micros();
-
-//            assert!(last_256_micros > first_256_micros * 2);
         }
     }
 
     fn received(&mut self, context: ProtocolContextMutRef, _data: Bytes) {
-        if context.session.ty.is_outbound() {
+        if context.session.ty.is_outbound() && self.count.load(Ordering::SeqCst) < 512 {
             self.count.fetch_add(1, Ordering::SeqCst);
         }
         let count_now = self.count.load(Ordering::SeqCst);
         // println!("> receive {}", count_now);
         if count_now == 512 {
-            context.shutdown();
+            let _ = context.shutdown();
         }
     }
 }

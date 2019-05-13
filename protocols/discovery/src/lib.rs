@@ -74,7 +74,9 @@ impl<M: AddressManager + Send + 'static> ServiceProtocol for DiscoveryProtocol<M
                     })
             })
             .unwrap();
-        context.future_task(discovery_task);
+        if context.future_task(discovery_task).is_err() {
+            warn!("start discovery fail");
+        };
     }
 
     fn connected(&mut self, context: ProtocolContextMutRef, _: &str) {

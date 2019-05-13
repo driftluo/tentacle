@@ -48,7 +48,7 @@ impl ServiceProtocol for PHandle {
             for i in 0..length {
                 let now = Instant::now();
                 println!("> [Server] send {}", i);
-                context.send_message(Bytes::from(format!(
+                let _ = context.send_message(Bytes::from(format!(
                     "{}-000000000000000000000{}",
                     prefix, i
                 )));
@@ -69,13 +69,13 @@ impl ServiceProtocol for PHandle {
         let count_now = self.count.load(Ordering::SeqCst);
         if context.session.ty.is_outbound() {
             println!("> [Client] received {}", count_now);
-            context.send_message(format!("xx-{}", count_now).into());
+            let _ = context.send_message(format!("xx-{}", count_now).into());
             self.count.fetch_add(1, Ordering::SeqCst);
         } else {
             println!("> [Server] received {}", String::from_utf8_lossy(&data));
         }
         if count_now + 1 == 1024 {
-            context.close();
+            let _ = context.close();
         }
     }
 }

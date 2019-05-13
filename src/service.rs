@@ -406,13 +406,6 @@ where
         }
 
         for (session_id, proto_id, event) in self.read_service_buf.split_off(0) {
-            //            if let Some(ref session_id) = session_id {
-            //                if closed_sessions.contains(session_id) {
-            //                    if let ServiceProtocolEvent::Received { .. } = event {
-            //                        continue;
-            //                    }
-            //                }
-            //            }
             // Guarantee the order in which messages are sent
             if block_handles.contains(&proto_id) {
                 self.read_service_buf
@@ -458,7 +451,7 @@ where
                             .push_back((session_id, proto_id, e.into_inner()));
                         self.proto_handle_error(proto_id, Some(session_id));
                     } else {
-                        error!(
+                        debug!(
                             "channel shutdown, proto [{}] session [{}] message can't send to user",
                             proto_id, session_id
                         );

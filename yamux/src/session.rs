@@ -449,11 +449,6 @@ where
                 return Ok(Async::Ready(()));
             }
 
-            if self.read_pending_frames.len() > self.config.recv_event_size() {
-                self.set_delay();
-                return Ok(Async::NotReady);
-            }
-
             debug!("[{:?}] poll from framed_stream", self.ty);
             match self.framed_stream.poll() {
                 Ok(Async::Ready(Some(frame))) => {
@@ -510,11 +505,6 @@ where
         for _ in 0..64 {
             if self.is_dead() {
                 return Ok(Async::Ready(()));
-            }
-
-            if self.write_pending_frames.len() > self.config.send_event_size() {
-                self.set_delay();
-                return Ok(Async::NotReady);
             }
 
             match self.event_receiver.poll() {
