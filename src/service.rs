@@ -364,6 +364,9 @@ where
     /// Distribute event to sessions
     #[inline]
     fn distribute_to_session(&mut self) {
+        if self.shutdown.load(Ordering::SeqCst) {
+            return;
+        }
         let mut block_sessions = HashSet::new();
 
         let high = self.high_write_buf.split_off(0).into_iter();
@@ -386,6 +389,9 @@ where
     /// Distribute event to user level
     #[inline(always)]
     fn distribute_to_user_level(&mut self) {
+        if self.shutdown.load(Ordering::SeqCst) {
+            return;
+        }
         let mut error = false;
         let mut block_handles = HashSet::new();
 
@@ -1401,10 +1407,15 @@ where
                 let sessions = self.sessions.keys().cloned().collect::<Vec<SessionId>>();
 
                 if quick {
+                    self.quick_task_receiver.close();
+                    self.service_task_receiver.close();
+                    self.session_event_receiver.close();
                     // clean buffer
                     self.write_buf.clear();
                     self.read_session_buf.clear();
                     self.read_service_buf.clear();
+                    self.service_proto_handles.clear();
+                    self.session_proto_handles.clear();
 
                     // don't care about any session action
                     sessions
@@ -1464,7 +1475,7 @@ where
     #[inline]
     fn user_task_poll(&mut self) {
         let mut finished = false;
-        for _ in 0..32 {
+        for _ in 0..512 {
             if self.write_buf.len() > self.config.yamux_config.send_event_size()
                 || self.high_write_buf.len() > self.config.yamux_config.send_event_size()
             {
@@ -1505,7 +1516,7 @@ where
 
     fn session_poll(&mut self) {
         let mut finished = false;
-        for _ in 0..512 {
+        for _ in 0..64 {
             if self.read_service_buf.len() > self.config.yamux_config.recv_event_size()
                 || self.read_session_buf.len() > self.config.yamux_config.recv_event_size()
             {

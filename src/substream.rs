@@ -199,12 +199,6 @@ where
         self.event_receiver.close();
         let _ = self.sub_stream.get_mut().shutdown();
 
-        self.read_buf.push_back(ProtocolEvent::Close {
-            id: self.id,
-            proto_id: self.proto_id,
-        });
-        let events = self.read_buf.split_off(0);
-
         if self.service_proto_sender.is_some() {
             self.service_proto_buf
                 .push_back(ServiceProtocolEvent::Disconnected {
@@ -213,7 +207,7 @@ where
             let events = self.service_proto_buf.split_off(0);
             tokio::spawn(
                 self.service_proto_sender
-                    .clone()
+                    .take()
                     .unwrap()
                     .send_all(iter_ok(events))
                     .map(|_| ())
@@ -227,7 +221,7 @@ where
             let events = self.session_proto_buf.split_off(0);
             tokio::spawn(
                 self.session_proto_sender
-                    .clone()
+                    .take()
                     .unwrap()
                     .send_all(iter_ok(events))
                     .map(|_| ())
@@ -235,13 +229,24 @@ where
             );
         }
 
-        tokio::spawn(
-            self.event_sender
-                .clone()
-                .send_all(iter_ok(events))
-                .map(|_| ())
-                .map_err(|e| debug!("stream close event send to session error: {:?}", e)),
-        );
+        self.read_buf.push_back(ProtocolEvent::Close {
+            id: self.id,
+            proto_id: self.proto_id,
+        });
+
+        if !self.closed.load(Ordering::SeqCst) {
+            let events = self.read_buf.split_off(0);
+
+            tokio::spawn(
+                self.event_sender
+                    .clone()
+                    .send_all(iter_ok(events))
+                    .map(|_| ())
+                    .map_err(|e| debug!("stream close event send to session error: {:?}", e)),
+            );
+        } else {
+            self.output();
+        }
     }
 
     /// When send or receive message error, output error and close stream
@@ -344,7 +349,7 @@ where
         }
     }
 
-    fn recv_event(&mut self) -> Option<()> {
+    fn recv_event(&mut self) {
         let mut finished = false;
         for _ in 0..64 {
             if self.dead {
@@ -362,7 +367,7 @@ where
                     // Must be session close
                     self.dead = true;
                     let _ = self.sub_stream.get_mut().shutdown();
-                    return None;
+                    return;
                 }
                 Ok(Async::NotReady) => {
                     finished = true;
@@ -377,10 +382,9 @@ where
         if !finished {
             self.set_delay();
         }
-        Some(())
     }
 
-    fn recv_frame(&mut self) -> Option<()> {
+    fn recv_frame(&mut self) {
         let mut finished = false;
         for _ in 0..64 {
             if self.dead {
@@ -427,9 +431,9 @@ where
                     }
                 }
                 Ok(Async::Ready(None)) => {
-                    finished = true;
                     debug!("protocol [{}] close", self.proto_id);
                     self.dead = true;
+                    return;
                 }
                 Ok(Async::NotReady) => {
                     finished = true;
@@ -446,7 +450,7 @@ where
                         | ErrorKind::UnexpectedEof => self.dead = true,
                         _ => {
                             self.error_close(err);
-                            return None;
+                            return;
                         }
                     }
                 }
@@ -455,7 +459,6 @@ where
         if !finished {
             self.set_delay();
         }
-        Some(())
     }
 
     #[inline]
@@ -525,13 +528,9 @@ where
             self.read_buf.len()
         );
 
-        if self.recv_frame().is_none() {
-            return Ok(Async::Ready(None));
-        }
+        self.recv_frame();
 
-        if self.recv_event().is_none() {
-            return Ok(Async::Ready(None));
-        }
+        self.recv_event();
 
         if self.dead || self.closed.load(Ordering::SeqCst) {
             if !self.keep_buffer {
