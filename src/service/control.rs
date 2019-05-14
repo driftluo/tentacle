@@ -68,7 +68,7 @@ impl ServiceControl {
         limit: usize,
     ) -> Result<(), Error> {
         if self.closed.load(Ordering::SeqCst) {
-            return Ok(());
+            return Err(Error::IoError(io::ErrorKind::BrokenPipe.into()));
         }
         if counter.load(Ordering::SeqCst) < limit {
             counter.fetch_add(1, Ordering::SeqCst);
