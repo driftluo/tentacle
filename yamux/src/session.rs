@@ -84,6 +84,8 @@ pub struct Session<T> {
     last_send_success: Instant,
     /// Last successful read time
     last_read_success: Instant,
+    /// Last ping time
+    last_ping_time: Instant,
 }
 
 /// Session type, client or server
@@ -121,8 +123,10 @@ where
         let framed_stream = Framed::new(raw_stream, FrameCodec::default());
         let keepalive_future = if config.enable_keepalive {
             let (mut interval_sender, interval_receiver) = channel(2);
+            // NOTE: Set a 300ms interval because we want shutdown service quick.
+            //       A Interval/Delay will block tokio runtime from gracefully shutdown.
             tokio::spawn(
-                Interval::new_interval(config.keepalive_interval)
+                Interval::new_interval(Duration::from_millis(300))
                     .map_err(|_| ())
                     .for_each(move |_| match interval_sender.try_send(()) {
                         Ok(_) => Ok(()),
@@ -161,6 +165,7 @@ where
             delay: Arc::new(AtomicBool::new(false)),
             last_send_success: Instant::now(),
             last_read_success: Instant::now(),
+            last_ping_time: Instant::now(),
         }
     }
 
@@ -559,6 +564,7 @@ where
 
     fn poll(&mut self) -> Poll<Option<Self::Item>, Self::Error> {
         if self.is_dead() {
+            debug!("yamux::Session finished because is_dead");
             return Ok(Async::Ready(None));
         }
 
@@ -577,8 +583,10 @@ where
         if let Some(ref mut fut) = self.keepalive_future {
             match fut.poll() {
                 Ok(Async::Ready(Some(_))) => {
-                    // TODO: Handle not ready
-                    let _ = self.keep_alive(Instant::now())?;
+                    if self.last_ping_time.elapsed() > self.config.keepalive_interval {
+                        let _ = self.keep_alive(Instant::now())?;
+                        self.last_ping_time = Instant::now();
+                    }
                 }
                 Ok(Async::Ready(None)) => {}
                 Ok(Async::NotReady) => {}
@@ -604,6 +612,7 @@ where
             debug!("[{:?}] A stream is ready", self.ty);
             return Ok(Async::Ready(Some(stream)));
         } else if self.is_dead() {
+            debug!("YamuxSession finished because is_dead, end");
             return Ok(Async::Ready(None));
         }
 

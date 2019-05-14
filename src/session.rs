@@ -23,8 +23,8 @@ use crate::{
     protocol_select::{client_select, server_select, ProtocolInfo},
     secio::{codec::stream_handle::StreamHandle as SecureHandle, PublicKey},
     service::{
-        config::Meta, event::Priority, SessionType, BUF_SHRINK_THRESHOLD, DELAY_TIME,
-        RECEIVED_SIZE, SEND_SIZE,
+        config::Meta, event::Priority, future_task::BoxedFutureTask, SessionType,
+        BUF_SHRINK_THRESHOLD, DELAY_TIME, RECEIVED_SIZE, SEND_SIZE,
     },
     substream::{ProtocolEvent, SubstreamBuilder},
     transports::{MultiIncoming, MultiStream},
@@ -178,6 +178,7 @@ pub(crate) struct Session<T> {
 
     substreams_control: Arc<AtomicBool>,
     last_sent: Instant,
+    future_task_sender: mpsc::Sender<BoxedFutureTask>,
 }
 
 impl<T> Session<T>
@@ -190,19 +191,40 @@ where
         service_sender: mpsc::Sender<SessionEvent>,
         service_receiver: mpsc::Receiver<SessionEvent>,
         meta: SessionMeta,
+        future_task_sender: mpsc::Sender<BoxedFutureTask>,
     ) -> Self {
         let socket = YamuxSession::new(socket, meta.config, meta.context.ty.into());
         let (proto_event_sender, proto_event_receiver) = mpsc::channel(RECEIVED_SIZE);
         let interval = proto_event_sender.clone();
-        tokio::spawn(Delay::new(Instant::now() + meta.timeout).then(|_| {
-            tokio::spawn(
-                interval
-                    .send(ProtocolEvent::TimeoutCheck)
-                    .map(|_| ())
-                    .map_err(|_| ()),
-            );
-            Ok(())
-        }));
+
+        // NOTE: A Interval/Delay will block tokio runtime from gracefully shutdown.
+        //       So we spawn it in FutureTaskManager
+        let task = Delay::new(Instant::now() + meta.timeout).then({
+            let future_task_sender = future_task_sender.clone();
+            move |_| {
+                let interval_task = Box::new(
+                    interval
+                        .send(ProtocolEvent::TimeoutCheck)
+                        .map(|_| ())
+                        .map_err(|_| ()),
+                );
+                tokio::spawn(
+                    future_task_sender
+                        .clone()
+                        .send(interval_task)
+                        .map(|_| ())
+                        .map_err(|_| ()),
+                );
+                Ok(())
+            }
+        });
+        tokio::spawn(
+            future_task_sender
+                .clone()
+                .send(Box::new(task))
+                .map(|_| ())
+                .map_err(|_| ()),
+        );
 
         Session {
             socket,
@@ -228,6 +250,7 @@ where
             substreams_control: Arc::new(AtomicBool::new(false)),
             event: meta.event,
             last_sent: Instant::now(),
+            future_task_sender,
         }
     }
 
@@ -246,6 +269,9 @@ where
             + 'static,
     ) {
         let event_sender = self.proto_event_sender.clone();
+
+        // NOTE: A Interval/Delay will block tokio runtime from gracefully shutdown.
+        //       So we spawn it in FutureTaskManager
         let task = procedure.timeout(self.timeout).then(|result| {
             match result {
                 Ok((handle, name, version)) => match version {
@@ -282,7 +308,13 @@ where
             Ok(())
         });
 
-        tokio::spawn(task);
+        tokio::spawn(
+            self.future_task_sender
+                .clone()
+                .send(Box::new(task))
+                .map(|_| ())
+                .map_err(|_| ()),
+        );
     }
 
     /// After the session is established, the client is requested to open some custom protocol sub stream.
@@ -752,6 +784,10 @@ where
 
         // double check here
         if self.state.is_local_close() {
+            debug!(
+                "Session({:?}) finished, self.state.is_local_close()",
+                self.context.id
+            );
             return Ok(Async::Ready(None));
         }
 
@@ -817,12 +853,17 @@ where
 
         match self.state {
             SessionState::LocalClose | SessionState::Abnormal => {
+                debug!(
+                    "Session({:?}) finished, LocalClose||Abnormal",
+                    self.context.id
+                );
                 self.close_session();
                 return Ok(Async::Ready(None));
             }
             SessionState::RemoteClose => {
                 // try close all protocol stream, and then close session
                 if self.proto_streams.is_empty() {
+                    debug!("Session({:?}) finished, RemoteClose", self.context.id);
                     self.close_session();
                     return Ok(Async::Ready(None));
                 } else {
