@@ -583,7 +583,7 @@ where
         self.distribute_to_substream();
     }
 
-    fn recv_substreams(&mut self) -> Option<()> {
+    fn recv_substreams(&mut self) {
         let mut finished = false;
         for _ in 0..128 {
             if self.read_buf.len() > self.config.recv_event_size() {
@@ -601,7 +601,8 @@ where
                 }
                 Ok(Async::Ready(None)) => {
                     // Drop by self
-                    return None;
+                    self.state = SessionState::LocalClose;
+                    return;
                 }
                 Ok(Async::NotReady) => {
                     finished = true;
@@ -618,11 +619,9 @@ where
         if !finished {
             self.set_delay();
         }
-
-        Some(())
     }
 
-    fn recv_service(&mut self) -> Option<()> {
+    fn recv_service(&mut self) {
         let mut finished = false;
         for _ in 0..64 {
             if self.write_buf.len() > RECEIVED_SIZE {
@@ -643,7 +642,7 @@ where
                     // Must drop by service
                     self.state = SessionState::LocalClose;
                     self.clean();
-                    return None;
+                    return;
                 }
                 Ok(Async::NotReady) => {
                     finished = true;
@@ -660,8 +659,6 @@ where
         if !finished {
             self.set_delay();
         }
-
-        Some(())
     }
 
     /// Try close all protocol
@@ -671,11 +668,13 @@ where
             self.close_session()
         }
         self.substreams_control.store(true, Ordering::SeqCst);
+        self.set_delay();
     }
 
     /// Close session
     fn close_session(&mut self) {
         self.context.closed.store(true, Ordering::SeqCst);
+        self.substreams_control.store(true, Ordering::SeqCst);
 
         self.read_buf.push_back(SessionEvent::SessionClose {
             id: self.context.id,
@@ -812,13 +811,9 @@ where
             self.set_delay();
         }
 
-        if self.recv_substreams().is_none() {
-            return Ok(Async::Ready(None));
-        }
+        self.recv_substreams();
 
-        if self.recv_service().is_none() {
-            return Ok(Async::Ready(None));
-        }
+        self.recv_service();
 
         match self.state {
             SessionState::LocalClose | SessionState::Abnormal => {

@@ -50,12 +50,16 @@ impl ServiceProtocol for PHandle {
         }
     }
 
+    fn disconnected(&mut self, context: ProtocolContextMutRef) {
+        let _ = context.shutdown();
+    }
+
     fn received(&mut self, context: ProtocolContextMutRef, _data: Bytes) {
         if context.session.ty.is_outbound() && self.count.load(Ordering::SeqCst) < 512 {
             self.count.fetch_add(1, Ordering::SeqCst);
         }
         let count_now = self.count.load(Ordering::SeqCst);
-        // println!("> receive {}", count_now);
+        //        println!("> receive {}", count_now);
         if count_now == 512 {
             let _ = context.shutdown();
         }
@@ -87,7 +91,7 @@ fn test_block_send(secio: bool) {
     let listen_addr = service
         .listen("/ip4/127.0.0.1/tcp/0".parse().unwrap())
         .unwrap();
-    let _handle_1 = thread::spawn(|| tokio::run(service.for_each(|_| Ok(()))));
+    thread::spawn(|| tokio::run(service.for_each(|_| Ok(()))));
     thread::sleep(Duration::from_millis(100));
 
     let (meta, result) = create_meta(1.into());
