@@ -1,8 +1,5 @@
 use bytes::Bytes;
-use futures::{
-    prelude::*,
-    sync::{mpsc, oneshot},
-};
+use futures::{prelude::*, sync::mpsc};
 use std::{
     collections::HashMap,
     ops::{Deref, DerefMut},
@@ -23,7 +20,6 @@ use std::sync::atomic::AtomicBool;
 
 pub(crate) struct SessionControl {
     pub(crate) inner: Arc<SessionContext>,
-    pub(crate) notify_signals: HashMap<ProtocolId, HashMap<u64, oneshot::Sender<()>>>,
     pub(crate) event_sender: mpsc::Sender<SessionEvent>,
 }
 

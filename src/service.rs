@@ -1,7 +1,4 @@
-use futures::{
-    prelude::*,
-    sync::{mpsc, oneshot},
-};
+use futures::{prelude::*, sync::mpsc};
 use log::{debug, error, trace, warn};
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::{
@@ -97,8 +94,6 @@ pub struct Service<T> {
     // TODO: use this to spawn every task
     future_task_sender: mpsc::Sender<BoxedFutureTask>,
 
-    service_notify_signals: HashMap<ProtocolId, HashMap<u64, oneshot::Sender<()>>>,
-
     // The service protocols open with the session
     session_service_protos: HashMap<SessionId, HashSet<ProtocolId>>,
 
@@ -157,7 +152,6 @@ where
             multi_transport: MultiTransport::new(config.timeout),
             future_task_sender,
             future_task_manager: Some(FutureTaskManager::new(future_task_receiver)),
-            service_notify_signals: HashMap::default(),
             sessions: HashMap::default(),
             session_service_protos: HashMap::default(),
             service_proto_handles: HashMap::default(),
@@ -816,7 +810,6 @@ where
         let session_closed = Arc::new(AtomicBool::new(false));
         let (service_event_sender, service_event_receiver) = mpsc::channel(SEND_SIZE);
         let session_control = SessionControl {
-            notify_signals: HashMap::default(),
             event_sender: service_event_sender,
             inner: Arc::new(SessionContext {
                 id: self.next_session,
@@ -1331,49 +1324,23 @@ where
                 token,
             } => {
                 // TODO: if not contains should call handle_error let user know
-                if self.service_proto_handles.contains_key(&proto_id)
-                    || self.config.event.contains(&proto_id)
-                {
-                    let (signal_sender, mut signal_receiver) = oneshot::channel::<()>();
-                    let interval_sender = self.service_context.control().clone();
-                    let fut = Interval::new(Instant::now(), interval)
-                        .map_err(|_| ())
-                        .for_each(move |_| {
-                            if signal_receiver.poll() == Ok(Async::NotReady) {
-                                match interval_sender
-                                    .send(ServiceTask::ProtocolNotify { proto_id, token })
-                                {
-                                    Ok(_) => Ok(()),
-                                    Err(e) => {
-                                        if let Error::TaskDisconnect = e {
-                                            Err(())
-                                        } else {
-                                            Ok(())
-                                        }
-                                    }
-                                }
-                            } else {
-                                Err(())
-                            }
-                        })
-                        .map_err(|_| debug!("notify close"));
-
-                    // If set more than once, the older task will stop when sender dropped
-                    self.service_notify_signals
-                        .entry(proto_id)
-                        .or_default()
-                        .insert(token, signal_sender);
-                    self.send_future_task(Box::new(fut));
+                if self.service_proto_handles.contains_key(&proto_id) {
+                    self.read_service_buf.push_back((
+                        None,
+                        proto_id,
+                        ServiceProtocolEvent::SetNotify { interval, token },
+                    ));
+                    self.distribute_to_user_level();
                 }
             }
             ServiceTask::RemoveProtocolNotify { proto_id, token } => {
-                if let Some(signals) = self.service_notify_signals.get_mut(&proto_id) {
-                    signals
-                        .remove(&token)
-                        .and_then(|signal| signal.send(()).ok());
-                    if signals.is_empty() {
-                        self.service_notify_signals.remove(&proto_id);
-                    }
+                if self.service_proto_handles.contains_key(&proto_id) {
+                    self.read_service_buf.push_back((
+                        None,
+                        proto_id,
+                        ServiceProtocolEvent::RemoveNotify { token },
+                    ));
+                    self.distribute_to_user_level();
                 }
             }
             ServiceTask::SetProtocolSessionNotify {
@@ -1386,43 +1353,13 @@ where
                 if self
                     .session_proto_handles
                     .contains_key(&(session_id, proto_id))
-                    || self.config.event.contains(&proto_id)
                 {
-                    let (signal_sender, mut signal_receiver) = oneshot::channel::<()>();
-                    let interval_sender = self.service_context.control().clone();
-                    let fut = Interval::new(Instant::now(), interval)
-                        .map_err(|_| ())
-                        .for_each(move |_| {
-                            if signal_receiver.poll() == Ok(Async::NotReady) {
-                                match interval_sender.send(ServiceTask::ProtocolSessionNotify {
-                                    session_id,
-                                    proto_id,
-                                    token,
-                                }) {
-                                    Ok(_) => Ok(()),
-                                    Err(e) => {
-                                        if let Error::TaskDisconnect = e {
-                                            Err(())
-                                        } else {
-                                            Ok(())
-                                        }
-                                    }
-                                }
-                            } else {
-                                Err(())
-                            }
-                        })
-                        .map_err(|_| debug!("session notify close"));
-
-                    // If set more than once, the older task will stop when sender dropped
-                    if let Some(session) = self.sessions.get_mut(&session_id) {
-                        session
-                            .notify_signals
-                            .entry(proto_id)
-                            .or_default()
-                            .insert(token, signal_sender);
-                    }
-                    self.send_future_task(Box::new(fut));
+                    self.read_session_buf.push_back((
+                        session_id,
+                        proto_id,
+                        SessionProtocolEvent::SetNotify { interval, token },
+                    ));
+                    self.distribute_to_user_level();
                 }
             }
             ServiceTask::RemoveProtocolSessionNotify {
@@ -1430,72 +1367,15 @@ where
                 proto_id,
                 token,
             } => {
-                if let Some(session) = self.sessions.get_mut(&session_id) {
-                    if let Some(signals) = session.notify_signals.get_mut(&proto_id) {
-                        signals
-                            .remove(&token)
-                            .and_then(|signal| signal.send(()).ok());
-                        if signals.is_empty() {
-                            session.notify_signals.remove(&proto_id);
-                        }
-                    }
-                }
-            }
-            ServiceTask::ProtocolNotify { proto_id, token } => {
-                if self.config.event.contains(&proto_id) {
-                    // event output
-                    self.handle.handle_proto(
-                        &mut self.service_context,
-                        ProtocolEvent::ProtocolNotify { proto_id, token },
-                    )
-                }
-                if self.service_proto_handles.contains_key(&proto_id) {
-                    // callback output
-                    self.read_service_buf.push_back((
-                        None,
-                        proto_id,
-                        ServiceProtocolEvent::Notify { token },
-                    ));
-                    self.distribute_to_user_level();
-                }
-            }
-            ServiceTask::ProtocolSessionNotify {
-                session_id,
-                proto_id,
-                token,
-            } => {
                 if self
-                    .session_service_protos
-                    .get(&session_id)
-                    .map(|protos| protos.contains(&proto_id))
-                    .unwrap_or_else(|| false)
+                    .session_proto_handles
+                    .contains_key(&(session_id, proto_id))
                 {
-                    if self.config.event.contains(&proto_id) {
-                        if let Some(session_control) = self.sessions.get(&session_id) {
-                            // event output
-                            self.handle.handle_proto(
-                                &mut self.service_context,
-                                ProtocolEvent::ProtocolSessionNotify {
-                                    proto_id,
-                                    session_context: Arc::clone(&session_control.inner),
-                                    token,
-                                },
-                            )
-                        }
-                    }
-
-                    if self
-                        .session_proto_handles
-                        .contains_key(&(session_id, proto_id))
-                    {
-                        // callback output
-                        self.read_session_buf.push_back((
-                            session_id,
-                            proto_id,
-                            SessionProtocolEvent::Notify { token },
-                        ));
-                        self.distribute_to_user_level();
-                    }
+                    self.read_session_buf.push_back((
+                        session_id,
+                        proto_id,
+                        SessionProtocolEvent::RemoveNotify { token },
+                    ));
                 }
             }
             ServiceTask::ProtocolOpen {

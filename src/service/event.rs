@@ -121,22 +121,6 @@ pub enum ProtocolEvent {
         /// session context
         session_context: Arc<SessionContext>,
     },
-    /// Service-level notify
-    ProtocolNotify {
-        /// Protocol id
-        proto_id: ProtocolId,
-        /// token
-        token: u64,
-    },
-    /// Session-level notify task
-    ProtocolSessionNotify {
-        /// Session context
-        session_context: Arc<SessionContext>,
-        /// Protocol id
-        proto_id: ProtocolId,
-        /// Notify token
-        token: u64,
-    },
 }
 
 /// Task received by the Service.
@@ -168,22 +152,6 @@ pub(crate) enum ServiceTask {
         session_id: SessionId,
         /// protocol id
         proto_id: ProtocolId,
-    },
-    /// Service-level notify task
-    ProtocolNotify {
-        /// Protocol id
-        proto_id: ProtocolId,
-        /// Notify token
-        token: u64,
-    },
-    /// Session-level notify task
-    ProtocolSessionNotify {
-        /// Session id
-        session_id: SessionId,
-        /// Protocol id
-        proto_id: ProtocolId,
-        /// Notify token
-        token: u64,
     },
     /// Set service notify task
     SetProtocolNotify {
@@ -286,18 +254,6 @@ impl fmt::Debug for ServiceTask {
                 f,
                 "remove protocol({}) session({}) notify({})",
                 proto_id, session_id, token
-            ),
-            ProtocolNotify { proto_id, token } => {
-                write!(f, "protocol id: {}, token: {}", proto_id, token)
-            }
-            ProtocolSessionNotify {
-                session_id,
-                proto_id,
-                token,
-            } => write!(
-                f,
-                "session id: {}, protocol id: {}, token: {}",
-                session_id, proto_id, token
             ),
             FutureTask { .. } => write!(f, "Future task"),
             Disconnect { session_id } => write!(f, "Disconnect session [{}]", session_id),
