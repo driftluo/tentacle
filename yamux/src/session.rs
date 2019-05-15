@@ -287,8 +287,9 @@ where
                     if self.last_send_success.elapsed() > TIMEOUT {
                         return Err(io::ErrorKind::TimedOut.into());
                     }
-                    if self.poll_complete()? {
-                        break;
+
+                    if !self.poll_complete()? {
+                        return Ok(Async::NotReady);
                     }
                 }
                 Ok(AsyncSink::Ready) => {
