@@ -830,7 +830,7 @@ where
                         | ErrorKind::NotConnected
                         | ErrorKind::UnexpectedEof => self.state = SessionState::RemoteClose,
                         _ => {
-                            warn!("MuxerError: {:?}", err);
+                            warn!("session {}, MuxerError: {:?}", self.context.id, err);
                             self.event_output(SessionEvent::MuxerError {
                                 id: self.context.id,
                                 error: err.into(),
