@@ -3,7 +3,7 @@ use futures::{prelude::*, sync::mpsc};
 use std::{
     collections::HashMap,
     ops::{Deref, DerefMut},
-    sync::Arc,
+    sync::{atomic::AtomicBool, Arc},
     time::Duration,
 };
 
@@ -12,15 +12,28 @@ use crate::{
     multiaddr::Multiaddr,
     protocol_select::ProtocolInfo,
     secio::{PublicKey, SecioKeyPair},
-    service::{event::ServiceTask, DialProtocol, ServiceControl, SessionType, TargetSession},
+    service::{
+        event::{Priority, ServiceTask},
+        DialProtocol, ServiceControl, SessionType, TargetSession,
+    },
     session::SessionEvent,
     ProtocolId, SessionId,
 };
-use std::sync::atomic::AtomicBool;
 
 pub(crate) struct SessionControl {
     pub(crate) inner: Arc<SessionContext>,
     pub(crate) event_sender: mpsc::Sender<SessionEvent>,
+    pub(crate) quick_sender: mpsc::Sender<SessionEvent>,
+}
+
+impl SessionControl {
+    pub(crate) fn sender(&mut self, priority: Priority) -> &mut mpsc::Sender<SessionEvent> {
+        if priority.is_high() {
+            &mut self.quick_sender
+        } else {
+            &mut self.event_sender
+        }
+    }
 }
 
 /// Session context, contains basic information about the current connection

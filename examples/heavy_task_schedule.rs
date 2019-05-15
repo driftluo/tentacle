@@ -6,9 +6,12 @@ use std::thread;
 use std::time::{Duration, Instant};
 use tentacle::{
     builder::{MetaBuilder, ServiceBuilder},
-    context::{ProtocolContext, ProtocolContextMutRef},
+    context::{ProtocolContext, ProtocolContextMutRef, ServiceContext},
     secio::SecioKeyPair,
-    service::{DialProtocol, ProtocolHandle, ProtocolMeta, Service, SessionType},
+    service::{
+        DialProtocol, ProtocolHandle, ProtocolMeta, Service, ServiceError, ServiceEvent,
+        SessionType,
+    },
     traits::{ServiceHandle, ServiceProtocol},
     ProtocolId, SessionId,
 };
@@ -94,6 +97,17 @@ impl ServiceProtocol for PHandle {
     }
 }
 
+struct SHandle;
+
+impl ServiceHandle for SHandle {
+    fn handle_error(&mut self, _context: &mut ServiceContext, error: ServiceError) {
+        info!("service error: {:?}", error);
+    }
+    fn handle_event(&mut self, _context: &mut ServiceContext, event: ServiceEvent) {
+        info!("service event: {:?}", event);
+    }
+}
+
 pub fn create<F>(secio: bool, meta: ProtocolMeta, shandle: F) -> Service<F>
 where
     F: ServiceHandle,
@@ -131,7 +145,7 @@ fn main() {
 
     if std::env::args().nth(1) == Some("server".to_string()) {
         let meta = create_meta(1.into());
-        let mut service = create(true, meta, ());
+        let mut service = create(true, meta, SHandle);
         let listen_addr = service
             .listen("/ip4/127.0.0.1/tcp/8900".parse().unwrap())
             .unwrap();
@@ -140,7 +154,7 @@ fn main() {
     } else {
         let listen_addr = std::env::args().nth(1).unwrap().parse().unwrap();
         let meta = create_meta(1.into());
-        let mut service = create(true, meta, ());
+        let mut service = create(true, meta, SHandle);
         service.dial(listen_addr, DialProtocol::All).unwrap();
         tokio::run(service.for_each(|_| Ok(())));
     }

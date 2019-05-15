@@ -345,7 +345,7 @@ where
                     }
                 }
 
-                if let Err(e) = session.event_sender.try_send(event) {
+                if let Err(e) = session.sender(priority).try_send(event) {
                     if e.is_full() {
                         block_sessions.insert(id);
                         debug!("session [{}] is full", id);
@@ -378,6 +378,17 @@ where
         if self.sessions.len() > block_sessions.len() {
             let normal = self.write_buf.split_off(0).into_iter();
             self.distribute_to_session_process(normal, Priority::Normal, &mut block_sessions);
+        }
+
+        for id in block_sessions {
+            if let Some(control) = self.sessions.get(&id) {
+                self.handle.handle_error(
+                    &mut self.service_context,
+                    ServiceError::SessionBlocked {
+                        session_context: control.inner.clone(),
+                    },
+                );
+            }
         }
 
         if self.write_buf.capacity() > BUF_SHRINK_THRESHOLD {
@@ -825,7 +836,9 @@ where
 
         let session_closed = Arc::new(AtomicBool::new(false));
         let (service_event_sender, service_event_receiver) = mpsc::channel(SEND_SIZE);
+        let (quick_event_sender, quick_event_receiver) = mpsc::channel(SEND_SIZE);
         let session_control = SessionControl {
+            quick_sender: quick_event_sender,
             event_sender: service_event_sender,
             inner: Arc::new(SessionContext {
                 id: self.next_session,
@@ -884,6 +897,7 @@ where
             handle,
             self.session_event_sender.clone(),
             service_event_receiver,
+            quick_event_receiver,
             meta,
             self.future_task_sender.clone(),
         );
@@ -1491,7 +1505,7 @@ where
         let mut finished = false;
         for _ in 0..512 {
             if self.write_buf.len() > self.config.yamux_config.send_event_size()
-                || self.high_write_buf.len() > self.config.yamux_config.send_event_size()
+                && self.high_write_buf.len() > self.config.yamux_config.send_event_size()
             {
                 break;
             }
@@ -1505,14 +1519,20 @@ where
                 Ok(Async::NotReady) => None,
                 Err(_) => None,
             }
-            .or_else(|| match self.service_task_receiver.poll() {
-                Ok(Async::Ready(Some(task))) => {
-                    self.service_context.control().normal_count_sub();
-                    Some(task)
+            .or_else(|| {
+                if self.write_buf.len() <= self.config.yamux_config.send_event_size() {
+                    match self.service_task_receiver.poll() {
+                        Ok(Async::Ready(Some(task))) => {
+                            self.service_context.control().normal_count_sub();
+                            Some(task)
+                        }
+                        Ok(Async::Ready(None)) => None,
+                        Ok(Async::NotReady) => None,
+                        Err(_) => None,
+                    }
+                } else {
+                    None
                 }
-                Ok(Async::Ready(None)) => None,
-                Ok(Async::NotReady) => None,
-                Err(_) => None,
             });
 
             match task {
