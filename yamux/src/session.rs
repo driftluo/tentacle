@@ -77,7 +77,7 @@ pub struct Session<T> {
     // For receive events from sub streams
     event_receiver: Receiver<StreamEvent>,
 
-    keepalive_future: Option<Receiver<()>>,
+    keepalive_receiver: Option<Receiver<()>>,
     /// Delay notify with abnormally poor network status
     delay: Arc<AtomicBool>,
     /// Last successful send time
@@ -121,7 +121,7 @@ where
         };
         let (event_sender, event_receiver) = channel(32);
         let framed_stream = Framed::new(raw_stream, FrameCodec::default());
-        let keepalive_future = if config.enable_keepalive {
+        let keepalive_receiver = if config.enable_keepalive {
             let (mut interval_sender, interval_receiver) = channel(2);
             // NOTE: Set a 300ms interval because we want shutdown service quick.
             //       A Interval/Delay will block tokio runtime from gracefully shutdown.
@@ -161,7 +161,7 @@ where
             read_pending_frames: VecDeque::default(),
             event_sender,
             event_receiver,
-            keepalive_future,
+            keepalive_receiver,
             delay: Arc::new(AtomicBool::new(false)),
             last_send_success: Instant::now(),
             last_read_success: Instant::now(),
@@ -580,18 +580,24 @@ where
             self.read_pending_frames.len()
         );
 
-        if let Some(ref mut fut) = self.keepalive_future {
-            match fut.poll() {
-                Ok(Async::Ready(Some(_))) => {
-                    if self.last_ping_time.elapsed() > self.config.keepalive_interval {
-                        let _ = self.keep_alive(Instant::now())?;
-                        self.last_ping_time = Instant::now();
+        loop {
+            if let Some(ref mut receiver) = self.keepalive_receiver {
+                match receiver.poll() {
+                    Ok(Async::Ready(Some(_))) => {
+                        if self.last_ping_time.elapsed() > self.config.keepalive_interval {
+                            let _ = self.keep_alive(Instant::now())?;
+                            self.last_ping_time = Instant::now();
+                        }
                     }
-                }
-                Ok(Async::Ready(None)) => {}
-                Ok(Async::NotReady) => {}
-                Err(_) => {
-                    warn!("poll keepalive_future error");
+                    Ok(Async::Ready(None)) => {
+                        debug!("poll keepalive_receiver finished");
+                        break;
+                    }
+                    Ok(Async::NotReady) => break,
+                    Err(_) => {
+                        debug!("poll keepalive_receiver error");
+                        break;
+                    }
                 }
             }
         }
@@ -612,7 +618,7 @@ where
             debug!("[{:?}] A stream is ready", self.ty);
             return Ok(Async::Ready(Some(stream)));
         } else if self.is_dead() {
-            debug!("YamuxSession finished because is_dead, end");
+            debug!("yamux::Session finished because is_dead, end");
             return Ok(Async::Ready(None));
         }
 
