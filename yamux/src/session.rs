@@ -618,12 +618,12 @@ where
         self.recv_frames()?;
         self.recv_events()?;
 
-        if let Some(stream) = self.pending_streams.pop_front() {
-            debug!("[{:?}] A stream is ready", self.ty);
-            return Ok(Async::Ready(Some(stream)));
-        } else if self.is_dead() {
+        if self.is_dead() {
             debug!("yamux::Session finished because is_dead, end");
             return Ok(Async::Ready(None));
+        } else if let Some(stream) = self.pending_streams.pop_front() {
+            debug!("[{:?}] A stream is ready", self.ty);
+            return Ok(Async::Ready(Some(stream)));
         }
 
         Ok(Async::NotReady)
