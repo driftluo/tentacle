@@ -13,7 +13,7 @@ use tentacle::{
     context::{ProtocolContext, ProtocolContextMutRef},
     secio::SecioKeyPair,
     service::{DialProtocol, ProtocolHandle, ProtocolMeta, Service},
-    traits::{ServiceHandle, ServiceProtocol},
+    traits::{ServiceHandle, ServiceProtocol, SessionProtocol},
     ProtocolId,
 };
 
@@ -66,13 +66,57 @@ impl ServiceProtocol for PHandle {
     }
 }
 
-fn create_meta(id: ProtocolId) -> (ProtocolMeta, Arc<AtomicUsize>) {
+impl SessionProtocol for PHandle {
+    fn connected(&mut self, context: ProtocolContextMutRef, _version: &str) {
+        if context.session.ty.is_inbound() {
+            let prefix = "x".repeat(10);
+            // NOTE: 256 is the send channel buffer size
+            let length = 1024;
+            for i in 0..length {
+                let _ = context.send_message(Bytes::from(format!("{}-{}", prefix, i)));
+            }
+        }
+    }
+
+    fn disconnected(&mut self, context: ProtocolContextMutRef) {
+        let _ = context.shutdown();
+    }
+
+    fn received(&mut self, context: ProtocolContextMutRef, _data: bytes::Bytes) {
+        if context.session.ty.is_outbound() && self.count.load(Ordering::SeqCst) < 512 {
+            self.count.fetch_add(1, Ordering::SeqCst);
+        }
+        let count_now = self.count.load(Ordering::SeqCst);
+        //        println!("> receive {}", count_now);
+        log::warn!("count_now: {}", count_now);
+        if count_now == 512 {
+            let _ = context.shutdown();
+        }
+    }
+}
+
+fn create_meta(id: ProtocolId, session_protocol: bool) -> (ProtocolMeta, Arc<AtomicUsize>) {
     let count = Arc::new(AtomicUsize::new(0));
     let count_clone = count.clone();
-    (
-        MetaBuilder::new()
-            .id(id)
-            .service_handle(move || {
+    let meta = MetaBuilder::new().id(id);
+    if session_protocol {
+        (
+            meta.session_handle(move || {
+                if id == 0.into() {
+                    ProtocolHandle::Neither
+                } else {
+                    let handle = Box::new(PHandle {
+                        count: count_clone.clone(),
+                    });
+                    ProtocolHandle::Callback(handle)
+                }
+            })
+            .build(),
+            count,
+        )
+    } else {
+        (
+            meta.service_handle(move || {
                 if id == 0.into() {
                     ProtocolHandle::Neither
                 } else {
@@ -81,12 +125,13 @@ fn create_meta(id: ProtocolId) -> (ProtocolMeta, Arc<AtomicUsize>) {
                 }
             })
             .build(),
-        count,
-    )
+            count,
+        )
+    }
 }
 
-fn test_block_send(secio: bool) {
-    let (meta, _) = create_meta(1.into());
+fn test_block_send(secio: bool, session_protocol: bool) {
+    let (meta, _) = create_meta(1.into(), session_protocol);
     let mut service = create(secio, meta, ());
     let listen_addr = service
         .listen("/ip4/127.0.0.1/tcp/0".parse().unwrap())
@@ -94,7 +139,7 @@ fn test_block_send(secio: bool) {
     thread::spawn(|| tokio::run(service.for_each(|_| Ok(()))));
     thread::sleep(Duration::from_millis(100));
 
-    let (meta, result) = create_meta(1.into());
+    let (meta, result) = create_meta(1.into(), session_protocol);
     let mut service = create(secio, meta, ());
     service.dial(listen_addr, DialProtocol::All).unwrap();
     let handle_2 = thread::spawn(|| tokio::run(service.for_each(|_| Ok(()))));
@@ -105,10 +150,20 @@ fn test_block_send(secio: bool) {
 
 #[test]
 fn test_block_send_with_secio() {
-    test_block_send(true)
+    test_block_send(true, false)
 }
 
 #[test]
 fn test_block_send_with_no_secio() {
-    test_block_send(false)
+    test_block_send(false, false)
+}
+
+#[test]
+fn test_block_send_with_secio_session() {
+    test_block_send(true, true)
+}
+
+#[test]
+fn test_block_send_with_no_secio_session() {
+    test_block_send(false, true)
 }

@@ -829,6 +829,12 @@ where
             }),
         };
 
+        let session_context = session_control.inner.clone();
+
+        // must insert here, otherwise, the session protocol handle cannot be opened
+        self.sessions
+            .insert(session_control.inner.id, session_control);
+
         // Open all session protocol handles
         let proto_ids = self
             .protocol_configs
@@ -842,7 +848,7 @@ where
             }
         }
 
-        let meta = SessionMeta::new(self.config.timeout, session_control.inner.clone())
+        let meta = SessionMeta::new(self.config.timeout, session_context.clone())
             .protocol(
                 self.protocol_configs
                     .iter()
@@ -864,7 +870,7 @@ where
                     })
                     .collect(),
             )
-            .context(session_control.inner.clone())
+            .context(session_context.clone())
             .event(self.config.event.clone());
 
         let mut session = Session::new(
@@ -904,12 +910,9 @@ where
         self.handle.handle_event(
             &mut self.service_context,
             ServiceEvent::SessionOpen {
-                session_context: Arc::clone(&session_control.inner),
+                session_context: Arc::clone(&session_context),
             },
         );
-
-        self.sessions
-            .insert(session_control.inner.id, session_control);
     }
 
     /// Close the specified session, clean up the handle
