@@ -185,9 +185,9 @@ where
         if self.is_dead() {
             return Ok(Async::Ready(()));
         }
-        if !self.write_pending_frames.is_empty() {
-            self.send_all()?;
-        }
+
+        // Ignore frames remaining in pending queue
+        self.write_pending_frames.clear();
         self.send_go_away()?;
         Ok(Async::Ready(()))
     }
