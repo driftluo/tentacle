@@ -301,8 +301,11 @@ where
                 }
             }
         }
-        self.poll_complete()?;
-        Ok(Async::Ready(()))
+        if self.poll_complete()? {
+            Ok(Async::Ready(()))
+        } else {
+            Ok(Async::NotReady)
+        }
     }
 
     /// https://docs.rs/tokio/0.1.19/tokio/prelude/trait.Sink.html
@@ -313,9 +316,9 @@ where
     fn poll_complete(&mut self) -> Result<bool, io::Error> {
         if self.framed_stream.poll_complete()?.is_not_ready() {
             self.set_delay();
-            return Ok(true);
+            return Ok(false);
         }
-        Ok(false)
+        Ok(true)
     }
 
     fn send_frame(&mut self, frame: Frame) -> Poll<(), io::Error> {
