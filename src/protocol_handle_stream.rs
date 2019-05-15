@@ -1,5 +1,5 @@
 use futures::{prelude::*, sync::mpsc};
-use log::warn;
+use log::{debug, warn};
 use std::collections::HashMap;
 use std::{
     sync::{
@@ -13,6 +13,7 @@ use tokio::timer::Delay;
 use crate::{
     context::{ProtocolContext, ServiceContext, SessionContext},
     multiaddr::Multiaddr,
+    service::future_task::BoxedFutureTask,
     traits::{ServiceProtocol, SessionProtocol},
     ProtocolId, SessionId,
 };
@@ -56,8 +57,9 @@ pub struct ServiceProtocolStream<T> {
     notify: HashMap<u64, Duration>,
     notify_sender: mpsc::Sender<u64>,
     notify_receiver: mpsc::Receiver<u64>,
-    shutdown: Arc<AtomicBool>,
     delay: Arc<AtomicBool>,
+    shutdown: Arc<AtomicBool>,
+    future_task_sender: mpsc::Sender<BoxedFutureTask>,
 }
 
 impl<T> ServiceProtocolStream<T>
@@ -69,7 +71,7 @@ where
         service_context: ServiceContext,
         receiver: mpsc::Receiver<ServiceProtocolEvent>,
         proto_id: ProtocolId,
-        shutdown: Arc<AtomicBool>,
+        (shutdown, future_task_sender): (Arc<AtomicBool>, mpsc::Sender<BoxedFutureTask>),
     ) -> Self {
         let (notify_sender, notify_receiver) = mpsc::channel(16);
         ServiceProtocolStream {
@@ -80,8 +82,9 @@ where
             notify_sender,
             notify_receiver,
             notify: HashMap::new(),
-            shutdown,
             delay: Arc::new(AtomicBool::new(false)),
+            shutdown,
+            future_task_sender,
         }
     }
 
@@ -146,11 +149,19 @@ where
     fn set_notify(&mut self, token: u64) {
         if let Some(interval) = self.notify.get(&token) {
             let sender = self.notify_sender.clone();
+            // NOTE: A Interval/Delay will block tokio runtime from gracefully shutdown.
+            //       So we spawn it in FutureTaskManager
             let task = Delay::new(Instant::now() + *interval).then(move |_| {
                 tokio::spawn(sender.send(token).map(|_| ()).map_err(|_| ()));
                 Ok(())
             });
-            tokio::spawn(task);
+            tokio::spawn(
+                self.future_task_sender
+                    .clone()
+                    .send(Box::new(task))
+                    .map(|_| ())
+                    .map_err(|_| ()),
+            );
         }
     }
 
@@ -191,6 +202,10 @@ where
             match self.receiver.poll() {
                 Ok(Async::Ready(Some(event))) => self.handle_event(event),
                 Ok(Async::Ready(None)) => {
+                    debug!(
+                        "ServiceProtocolStream({:?}) finished",
+                        self.handle_context.proto_id
+                    );
                     return Ok(Async::Ready(None));
                 }
                 Ok(Async::NotReady) => {
@@ -270,8 +285,9 @@ pub struct SessionProtocolStream<T> {
     notify: HashMap<u64, Duration>,
     notify_sender: mpsc::Sender<u64>,
     notify_receiver: mpsc::Receiver<u64>,
-    shutdown: Arc<AtomicBool>,
     delay: Arc<AtomicBool>,
+    shutdown: Arc<AtomicBool>,
+    future_task_sender: mpsc::Sender<BoxedFutureTask>,
 }
 
 impl<T> SessionProtocolStream<T>
@@ -284,7 +300,7 @@ where
         context: Arc<SessionContext>,
         receiver: mpsc::Receiver<SessionProtocolEvent>,
         proto_id: ProtocolId,
-        shutdown: Arc<AtomicBool>,
+        (shutdown, future_task_sender): (Arc<AtomicBool>, mpsc::Sender<BoxedFutureTask>),
     ) -> Self {
         let (notify_sender, notify_receiver) = mpsc::channel(16);
         SessionProtocolStream {
@@ -297,6 +313,7 @@ where
             context,
             shutdown,
             delay: Arc::new(AtomicBool::new(false)),
+            future_task_sender,
         }
     }
 
@@ -345,11 +362,19 @@ where
     fn set_notify(&mut self, token: u64) {
         if let Some(interval) = self.notify.get(&token) {
             let sender = self.notify_sender.clone();
+            // NOTE: A Interval/Delay will block tokio runtime from gracefully shutdown.
+            //       So we spawn it in FutureTaskManager
             let task = Delay::new(Instant::now() + *interval).then(move |_| {
                 tokio::spawn(sender.send(token).map(|_| ()).map_err(|_| ()));
                 Ok(())
             });
-            tokio::spawn(task);
+            tokio::spawn(
+                self.future_task_sender
+                    .clone()
+                    .send(Box::new(task))
+                    .map(|_| ())
+                    .map_err(|_| ()),
+            );
         }
     }
 

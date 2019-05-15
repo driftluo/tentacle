@@ -23,7 +23,10 @@ test:
 examples:
 	cargo build --examples --all
 
-ci: fmt clippy test examples
+bench_p2p:
+	cd bench && cargo run --release && cd ..
+
+ci: fmt clippy test examples bench_p2p
 	git diff --exit-code Cargo.lock
 
 check-cfbc-version:

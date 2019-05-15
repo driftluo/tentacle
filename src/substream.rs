@@ -505,6 +505,10 @@ where
     fn poll(&mut self) -> Poll<Option<Self::Item>, Self::Error> {
         // double check here
         if self.dead || self.closed.load(Ordering::SeqCst) {
+            debug!(
+                "SubStream({}) finished, self.dead || self.closed.load(Ordering::SeqCst), head",
+                self.id
+            );
             self.close_proto_stream();
             return Ok(Async::Ready(None));
         }
@@ -514,13 +518,25 @@ where
             || !self.high_write_buf.is_empty()
         {
             if let Err(err) = self.flush() {
+                debug!(
+                    "SubStream({}) finished with flush error: {:?}",
+                    self.id, err
+                );
                 self.error_close(err);
                 return Err(());
             }
         }
 
-        self.poll_complete()
-            .map_err(|e| debug!("poll complete error: {}", e))?;
+        if let Err(err) = self
+            .poll_complete()
+            .map_err(|e| debug!("poll complete error: {}", e))
+        {
+            debug!(
+                "SubStream({}) finished with poll_complete error: {:?}",
+                self.id, err
+            );
+            return Err(());
+        }
 
         debug!(
             "write buf: {}, read buf: {}",
@@ -533,6 +549,10 @@ where
         self.recv_event();
 
         if self.dead || self.closed.load(Ordering::SeqCst) {
+            debug!(
+                "SubStream({}) finished, self.dead || self.closed.load(Ordering::SeqCst), tail",
+                self.id
+            );
             if !self.keep_buffer {
                 self.read_buf.clear()
             }

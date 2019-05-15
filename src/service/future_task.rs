@@ -26,10 +26,14 @@ pub(crate) struct FutureTaskManager {
     id_receiver: mpsc::Receiver<FutureTaskId>,
     task_receiver: mpsc::Receiver<BoxedFutureTask>,
     delay: Arc<AtomicBool>,
+    shutdown: Arc<AtomicBool>,
 }
 
 impl FutureTaskManager {
-    pub(crate) fn new(task_receiver: mpsc::Receiver<BoxedFutureTask>) -> FutureTaskManager {
+    pub(crate) fn new(
+        task_receiver: mpsc::Receiver<BoxedFutureTask>,
+        shutdown: Arc<AtomicBool>,
+    ) -> FutureTaskManager {
         let (id_sender, id_receiver) = mpsc::channel(SEND_SIZE);
         FutureTaskManager {
             signals: HashMap::default(),
@@ -38,6 +42,7 @@ impl FutureTaskManager {
             id_receiver,
             task_receiver,
             delay: Arc::new(AtomicBool::new(false)),
+            shutdown,
         }
     }
 
@@ -86,7 +91,8 @@ impl Drop for FutureTaskManager {
         // Because of https://docs.rs/futures/0.1.26/src/futures/sync/oneshot.rs.html#205-209
         // just drop may can't notify the receiver, and receiver will block on runtime, we use send to drop
         // all future task as soon as possible
-        self.signals.drain().for_each(|(_, sender)| {
+        self.signals.drain().for_each(|(id, sender)| {
+            trace!("future task send stop signal to {}", id);
             let _ = sender.send(());
         })
     }
@@ -100,6 +106,11 @@ impl Stream for FutureTaskManager {
         let mut task_finished = false;
         let mut id_finished = false;
         for _ in 0..32 {
+            if self.shutdown.load(Ordering::SeqCst) {
+                debug!("future task finished because service shutdown");
+                return Ok(Async::Ready(None));
+            }
+
             match self.task_receiver.poll()? {
                 Async::Ready(Some(task)) => self.add_task(task),
                 Async::Ready(None) => {
@@ -114,6 +125,11 @@ impl Stream for FutureTaskManager {
         }
 
         for _ in 0..32 {
+            if self.shutdown.load(Ordering::SeqCst) {
+                debug!("future task finished because service shutdown");
+                return Ok(Async::Ready(None));
+            }
+
             match self.id_receiver.poll()? {
                 Async::Ready(Some(id)) => self.remove_task(id),
                 Async::Ready(None) => {
@@ -137,7 +153,7 @@ impl Stream for FutureTaskManager {
 
 #[cfg(test)]
 mod test {
-    use super::{BoxedFutureTask, FutureTaskManager};
+    use super::{Arc, AtomicBool, BoxedFutureTask, FutureTaskManager};
 
     use std::{thread, time};
 
@@ -152,7 +168,8 @@ mod test {
     #[test]
     fn test_manager_drop() {
         let (sender, receiver) = channel(128);
-        let manager = FutureTaskManager::new(receiver);
+        let shutdown = Arc::new(AtomicBool::new(false));
+        let manager = FutureTaskManager::new(receiver, shutdown.clone());
         let tasks = iter_ok(
             (1..100)
                 .map(|_| Box::new(empty()) as BoxedFutureTask)

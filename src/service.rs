@@ -151,7 +151,10 @@ where
             handle,
             multi_transport: MultiTransport::new(config.timeout),
             future_task_sender,
-            future_task_manager: Some(FutureTaskManager::new(future_task_receiver)),
+            future_task_manager: Some(FutureTaskManager::new(
+                future_task_receiver,
+                shutdown.clone(),
+            )),
             sessions: HashMap::default(),
             session_service_protos: HashMap::default(),
             service_proto_handles: HashMap::default(),
@@ -527,7 +530,7 @@ where
                     self.service_context.clone_self(),
                     receiver,
                     proto_id,
-                    self.shutdown.clone(),
+                    (self.shutdown.clone(), self.future_task_sender.clone()),
                 );
 
                 self.service_proto_handles
@@ -551,7 +554,7 @@ where
                         Arc::clone(&session_control.inner),
                         receiver,
                         proto_id,
-                        self.shutdown.clone(),
+                        (self.shutdown.clone(), self.future_task_sender.clone()),
                     );
 
                     tokio::spawn(stream.for_each(|_| Ok(())).map_err(|_| ()));
@@ -869,6 +872,7 @@ where
             self.session_event_sender.clone(),
             service_event_receiver,
             meta,
+            self.future_task_sender.clone(),
         );
 
         if ty.is_outbound() {
@@ -1561,6 +1565,7 @@ where
                 delay.store(false, Ordering::SeqCst);
                 Ok(())
             });
+
             tokio::spawn(delay_task);
         }
     }
@@ -1579,6 +1584,7 @@ where
             && self.sessions.is_empty()
             && self.pending_tasks.is_empty()
         {
+            debug!("shutdown because all state is empty head");
             self.shutdown.store(true, Ordering::SeqCst);
             return Ok(Async::Ready(None));
         }
@@ -1614,6 +1620,7 @@ where
             && self.sessions.is_empty()
             && self.pending_tasks.is_empty()
         {
+            debug!("shutdown because all state is empty tail");
             self.shutdown.store(true, Ordering::SeqCst);
             return Ok(Async::Ready(None));
         }
