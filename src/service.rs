@@ -688,7 +688,7 @@ where
             let key_pair = key_pair.clone();
             let sender = self.session_event_sender.clone();
 
-            let task = Config::new(key_pair)
+            let handshake_task = Config::new(key_pair)
                 .max_frame_length(self.config.max_frame_length)
                 .handshake(socket)
                 .timeout(self.config.timeout)
@@ -734,7 +734,14 @@ where
                     Ok(())
                 });
 
-            tokio::spawn(task);
+            let future_task = self
+                .future_task_sender
+                .clone()
+                .send(Box::new(handshake_task))
+                .map(|_| ())
+                .map_err(|_| ());
+
+            tokio::spawn(future_task);
         } else {
             self.session_open(socket, None, remote_address, ty);
         }
@@ -829,6 +836,12 @@ where
             }),
         };
 
+        let session_context = session_control.inner.clone();
+
+        // must insert here, otherwise, the session protocol handle cannot be opened
+        self.sessions
+            .insert(session_control.inner.id, session_control);
+
         // Open all session protocol handles
         let proto_ids = self
             .protocol_configs
@@ -842,7 +855,7 @@ where
             }
         }
 
-        let meta = SessionMeta::new(self.config.timeout, session_control.inner.clone())
+        let meta = SessionMeta::new(self.config.timeout, session_context.clone())
             .protocol(
                 self.protocol_configs
                     .iter()
@@ -864,7 +877,7 @@ where
                     })
                     .collect(),
             )
-            .context(session_control.inner.clone())
+            .context(session_context.clone())
             .event(self.config.event.clone());
 
         let mut session = Session::new(
@@ -904,12 +917,9 @@ where
         self.handle.handle_event(
             &mut self.service_context,
             ServiceEvent::SessionOpen {
-                session_context: Arc::clone(&session_control.inner),
+                session_context: Arc::clone(&session_context),
             },
         );
-
-        self.sessions
-            .insert(session_control.inner.id, session_control);
     }
 
     /// Close the specified session, clean up the handle
