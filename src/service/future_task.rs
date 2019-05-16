@@ -105,7 +105,7 @@ impl Stream for FutureTaskManager {
     fn poll(&mut self) -> Poll<Option<Self::Item>, Self::Error> {
         let mut task_finished = false;
         let mut id_finished = false;
-        for _ in 0..32 {
+        for _ in 0..128 {
             if self.shutdown.load(Ordering::SeqCst) {
                 debug!("future task finished because service shutdown");
                 return Ok(Async::Ready(None));
@@ -124,7 +124,7 @@ impl Stream for FutureTaskManager {
             }
         }
 
-        for _ in 0..32 {
+        for _ in 0..64 {
             if self.shutdown.load(Ordering::SeqCst) {
                 debug!("future task finished because service shutdown");
                 return Ok(Async::Ready(None));

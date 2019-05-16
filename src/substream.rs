@@ -527,14 +527,12 @@ where
             }
         }
 
-        if let Err(err) = self
-            .poll_complete()
-            .map_err(|e| debug!("poll complete error: {}", e))
-        {
+        if let Err(err) = self.poll_complete() {
             debug!(
                 "SubStream({}) finished with poll_complete error: {:?}",
                 self.id, err
             );
+            self.error_close(err);
             return Err(());
         }
 
