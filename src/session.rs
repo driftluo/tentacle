@@ -707,68 +707,75 @@ where
         }
     }
 
-    fn quick_recv_service(&mut self) {
-        let mut finished = false;
-        for _ in 0..64 {
-            match self.quick_receiver.poll() {
-                Ok(Async::Ready(Some(event))) => {
-                    if !self.state.is_normal() {
-                        continue;
-                    }
-                    self.handle_session_event(event)
-                }
-                Ok(Async::Ready(None)) => {
-                    // Must drop by service
-                    self.state = SessionState::LocalClose;
-                    self.clean();
-                    return;
-                }
-                Ok(Async::NotReady) => {
-                    finished = true;
-                    break;
-                }
-                Err(_) => {
-                    warn!("receive service message error");
-                    finished = true;
-                    break;
-                }
-            }
-        }
-
-        if !finished {
-            self.set_delay();
-        }
-    }
-
     fn recv_service(&mut self) {
         let mut finished = false;
         for _ in 0..64 {
-            if self.write_buf.len() > RECEIVED_SIZE {
-                if self.last_sent.elapsed() > Duration::from_secs(5) {
-                    warn!("session send timeout");
-                    self.state = SessionState::LocalClose;
-                }
+            if self.high_write_buf.len() > RECEIVED_SIZE && self.write_buf.len() > RECEIVED_SIZE {
                 break;
             }
-            match self.service_receiver.poll() {
+
+            let task = match self.quick_receiver.poll() {
                 Ok(Async::Ready(Some(event))) => {
                     if !self.state.is_normal() {
-                        continue;
+                        None
+                    } else {
+                        Some(event)
                     }
-                    self.handle_session_event(event)
                 }
                 Ok(Async::Ready(None)) => {
                     // Must drop by service
                     self.state = SessionState::LocalClose;
                     self.clean();
-                    return;
+                    None
                 }
                 Ok(Async::NotReady) => {
                     finished = true;
-                    break;
+                    None
                 }
                 Err(_) => {
                     warn!("receive service message error");
+                    finished = true;
+                    None
+                }
+            }
+            .or_else(|| {
+                if self.write_buf.len() > RECEIVED_SIZE {
+                    if self.last_sent.elapsed() > Duration::from_secs(5) {
+                        warn!("session send timeout");
+                        self.state = SessionState::LocalClose;
+                    }
+                    None
+                } else {
+                    match self.service_receiver.poll() {
+                        Ok(Async::Ready(Some(event))) => {
+                            if !self.state.is_normal() {
+                                None
+                            } else {
+                                Some(event)
+                            }
+                        }
+                        Ok(Async::Ready(None)) => {
+                            // Must drop by service
+                            self.state = SessionState::LocalClose;
+                            self.clean();
+                            None
+                        }
+                        Ok(Async::NotReady) => {
+                            finished = true;
+                            None
+                        }
+                        Err(_) => {
+                            warn!("receive service message error");
+                            finished = true;
+                            None
+                        }
+                    }
+                }
+            });
+
+            match task {
+                Some(task) => self.handle_session_event(task),
+                None => {
                     finished = true;
                     break;
                 }
@@ -889,7 +896,6 @@ where
 
         self.recv_substreams();
 
-        self.quick_recv_service();
         self.recv_service();
 
         match self.state {

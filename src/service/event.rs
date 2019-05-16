@@ -66,7 +66,8 @@ pub enum ServiceError {
         /// Protocol id
         proto_id: ProtocolId,
     },
-    /// Session blocked, can't send message, may blocking global system
+    /// Session blocked, can't send message, may blocking global system,
+    /// If the task is too heavy in a short time, it may be repeated multiple times.
     SessionBlocked {
         /// Session context
         session_context: Arc<SessionContext>,
