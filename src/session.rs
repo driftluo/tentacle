@@ -169,6 +169,7 @@ pub(crate) struct Session<T> {
     service_sender: mpsc::Sender<SessionEvent>,
     /// Receive event from service
     service_receiver: mpsc::Receiver<SessionEvent>,
+    quick_receiver: mpsc::Receiver<SessionEvent>,
 
     service_proto_senders: HashMap<ProtocolId, mpsc::Sender<ServiceProtocolEvent>>,
     session_proto_senders: HashMap<ProtocolId, mpsc::Sender<SessionProtocolEvent>>,
@@ -190,6 +191,7 @@ where
         socket: T,
         service_sender: mpsc::Sender<SessionEvent>,
         service_receiver: mpsc::Receiver<SessionEvent>,
+        quick_receiver: mpsc::Receiver<SessionEvent>,
         meta: SessionMeta,
         future_task_sender: mpsc::Sender<BoxedFutureTask>,
     ) -> Self {
@@ -243,6 +245,7 @@ where
             proto_event_receiver,
             service_sender,
             service_receiver,
+            quick_receiver,
             service_proto_senders: meta.service_proto_senders,
             session_proto_senders: meta.session_proto_senders,
             delay: Arc::new(AtomicBool::new(false)),
@@ -615,6 +618,57 @@ where
         self.distribute_to_substream();
     }
 
+    fn poll_inner_socket(&mut self) {
+        let mut finished = false;
+        for _ in 0..64 {
+            if !self.state.is_normal() {
+                break;
+            }
+            match self.socket.poll() {
+                Ok(Async::Ready(Some(sub_stream))) => self.handle_sub_stream(sub_stream),
+                Ok(Async::Ready(None)) => {
+                    finished = true;
+                    self.state = SessionState::RemoteClose;
+                    break;
+                }
+                Ok(Async::NotReady) => {
+                    finished = true;
+                    break;
+                }
+                Err(err) => {
+                    finished = true;
+                    debug!("session poll error: {:?}", err);
+                    self.write_buf.clear();
+                    self.high_write_buf.clear();
+                    if !self.keep_buffer {
+                        self.read_buf.clear()
+                    }
+
+                    match err.kind() {
+                        ErrorKind::BrokenPipe
+                        | ErrorKind::ConnectionAborted
+                        | ErrorKind::ConnectionReset
+                        | ErrorKind::NotConnected
+                        | ErrorKind::UnexpectedEof => self.state = SessionState::RemoteClose,
+                        _ => {
+                            warn!("MuxerError: {:?}", err);
+                            self.event_output(SessionEvent::MuxerError {
+                                id: self.context.id,
+                                error: err.into(),
+                            });
+                            self.state = SessionState::Abnormal;
+                        }
+                    }
+
+                    break;
+                }
+            }
+        }
+        if !finished {
+            self.set_delay();
+        }
+    }
+
     fn recv_substreams(&mut self) {
         let mut finished = false;
         for _ in 0..128 {
@@ -656,32 +710,72 @@ where
     fn recv_service(&mut self) {
         let mut finished = false;
         for _ in 0..64 {
-            if self.write_buf.len() > RECEIVED_SIZE {
-                if self.last_sent.elapsed() > Duration::from_secs(5) {
-                    warn!("session send timeout");
-                    self.state = SessionState::LocalClose;
-                }
+            if self.high_write_buf.len() > RECEIVED_SIZE && self.write_buf.len() > RECEIVED_SIZE {
                 break;
             }
-            match self.service_receiver.poll() {
+
+            let task = match self.quick_receiver.poll() {
                 Ok(Async::Ready(Some(event))) => {
                     if !self.state.is_normal() {
-                        continue;
+                        None
+                    } else {
+                        Some(event)
                     }
-                    self.handle_session_event(event)
                 }
                 Ok(Async::Ready(None)) => {
                     // Must drop by service
                     self.state = SessionState::LocalClose;
                     self.clean();
-                    return;
+                    None
                 }
                 Ok(Async::NotReady) => {
                     finished = true;
-                    break;
+                    None
                 }
                 Err(_) => {
                     warn!("receive service message error");
+                    finished = true;
+                    None
+                }
+            }
+            .or_else(|| {
+                if self.write_buf.len() > RECEIVED_SIZE {
+                    if self.last_sent.elapsed() > Duration::from_secs(5) {
+                        warn!("session send timeout");
+                        self.state = SessionState::LocalClose;
+                    }
+                    None
+                } else {
+                    match self.service_receiver.poll() {
+                        Ok(Async::Ready(Some(event))) => {
+                            if !self.state.is_normal() {
+                                None
+                            } else {
+                                Some(event)
+                            }
+                        }
+                        Ok(Async::Ready(None)) => {
+                            // Must drop by service
+                            self.state = SessionState::LocalClose;
+                            self.clean();
+                            None
+                        }
+                        Ok(Async::NotReady) => {
+                            finished = true;
+                            None
+                        }
+                        Err(_) => {
+                            warn!("receive service message error");
+                            finished = true;
+                            None
+                        }
+                    }
+                }
+            });
+
+            match task {
+                Some(task) => self.handle_session_event(task),
+                None => {
                     finished = true;
                     break;
                 }
@@ -798,54 +892,7 @@ where
             self.flush();
         }
 
-        let mut finished = false;
-        for _ in 0..64 {
-            if !self.state.is_normal() {
-                break;
-            }
-            match self.socket.poll() {
-                Ok(Async::Ready(Some(sub_stream))) => self.handle_sub_stream(sub_stream),
-                Ok(Async::Ready(None)) => {
-                    finished = true;
-                    self.state = SessionState::RemoteClose;
-                    break;
-                }
-                Ok(Async::NotReady) => {
-                    finished = true;
-                    break;
-                }
-                Err(err) => {
-                    finished = true;
-                    debug!("session poll error: {:?}", err);
-                    self.write_buf.clear();
-                    self.high_write_buf.clear();
-                    if !self.keep_buffer {
-                        self.read_buf.clear()
-                    }
-
-                    match err.kind() {
-                        ErrorKind::BrokenPipe
-                        | ErrorKind::ConnectionAborted
-                        | ErrorKind::ConnectionReset
-                        | ErrorKind::NotConnected
-                        | ErrorKind::UnexpectedEof => self.state = SessionState::RemoteClose,
-                        _ => {
-                            warn!("session {}, MuxerError: {:?}", self.context.id, err);
-                            self.event_output(SessionEvent::MuxerError {
-                                id: self.context.id,
-                                error: err.into(),
-                            });
-                            self.state = SessionState::Abnormal;
-                        }
-                    }
-
-                    break;
-                }
-            }
-        }
-        if !finished {
-            self.set_delay();
-        }
+        self.poll_inner_socket();
 
         self.recv_substreams();
 
