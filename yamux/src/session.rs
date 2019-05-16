@@ -185,9 +185,9 @@ where
         if self.is_dead() {
             return Ok(Async::Ready(()));
         }
-        if !self.write_pending_frames.is_empty() {
-            self.send_all()?;
-        }
+
+        // Ignore frames remaining in pending queue
+        self.write_pending_frames.clear();
         self.send_go_away()?;
         Ok(Async::Ready(()))
     }
@@ -287,8 +287,9 @@ where
                     if self.last_send_success.elapsed() > TIMEOUT {
                         return Err(io::ErrorKind::TimedOut.into());
                     }
-                    if self.poll_complete()? {
-                        break;
+
+                    if !self.poll_complete()? {
+                        return Ok(Async::NotReady);
                     }
                 }
                 Ok(AsyncSink::Ready) => {
@@ -300,8 +301,11 @@ where
                 }
             }
         }
-        self.poll_complete()?;
-        Ok(Async::Ready(()))
+        if self.poll_complete()? {
+            Ok(Async::Ready(()))
+        } else {
+            Ok(Async::NotReady)
+        }
     }
 
     /// https://docs.rs/tokio/0.1.19/tokio/prelude/trait.Sink.html
@@ -312,9 +316,9 @@ where
     fn poll_complete(&mut self) -> Result<bool, io::Error> {
         if self.framed_stream.poll_complete()?.is_not_ready() {
             self.set_delay();
-            return Ok(true);
+            return Ok(false);
         }
-        Ok(false)
+        Ok(true)
     }
 
     fn send_frame(&mut self, frame: Frame) -> Poll<(), io::Error> {
@@ -614,12 +618,12 @@ where
         self.recv_frames()?;
         self.recv_events()?;
 
-        if let Some(stream) = self.pending_streams.pop_front() {
-            debug!("[{:?}] A stream is ready", self.ty);
-            return Ok(Async::Ready(Some(stream)));
-        } else if self.is_dead() {
+        if self.is_dead() {
             debug!("yamux::Session finished because is_dead, end");
             return Ok(Async::Ready(None));
+        } else if let Some(stream) = self.pending_streams.pop_front() {
+            debug!("[{:?}] A stream is ready", self.ty);
+            return Ok(Async::Ready(Some(stream)));
         }
 
         Ok(Async::NotReady)
