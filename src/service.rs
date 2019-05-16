@@ -112,7 +112,7 @@ pub struct Service<T> {
     service_task_receiver: mpsc::UnboundedReceiver<ServiceTask>,
     quick_task_receiver: mpsc::UnboundedReceiver<ServiceTask>,
 
-    pending_tasks: VecDeque<ServiceTask>,
+    pending_tasks: VecDeque<BoxedFutureTask>,
     /// When handle channel full, set a deadline(30 second) to notify user
     handles_error_count: HashMap<(ProtocolId, Option<SessionId>), Option<Instant>>,
     /// Delay notify with abnormally poor machines
@@ -244,9 +244,7 @@ where
                 }))
             }
         });
-        self.pending_tasks.push_back(ServiceTask::FutureTask {
-            task: Box::new(task),
-        });
+        self.pending_tasks.push_back(Box::new(task));
         self.state.increase();
         Ok(listen_addr)
     }
@@ -300,9 +298,7 @@ where
             }
         });
 
-        self.pending_tasks.push_back(ServiceTask::FutureTask {
-            task: Box::new(task),
-        });
+        self.pending_tasks.push_back(Box::new(task));
         self.state.increase();
         Ok(())
     }
@@ -1105,20 +1101,20 @@ where
     #[inline(always)]
     fn send_pending_task(&mut self) {
         while let Some(task) = self.pending_tasks.pop_front() {
-            self.handle_service_task(task);
+            if let Err(err) = self.future_task_sender.try_send(task) {
+                if err.is_full() {
+                    self.pending_tasks.push_front(err.into_inner());
+                    self.set_delay();
+                    break;
+                }
+            }
         }
     }
 
     #[inline]
     fn send_future_task(&mut self, task: BoxedFutureTask) {
-        if let Err(err) = self.future_task_sender.try_send(task) {
-            if err.is_full() {
-                let task = ServiceTask::FutureTask {
-                    task: err.into_inner(),
-                };
-                self.pending_tasks.push_back(task);
-            }
-        }
+        self.pending_tasks.push_back(task);
+        self.send_pending_task();
     }
 
     /// check queue if full
