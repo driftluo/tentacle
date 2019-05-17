@@ -49,7 +49,7 @@ pub(crate) const BUF_SHRINK_THRESHOLD: usize = u8::max_value() as usize;
 /// Received from remote, aggregate mode, buffer size is 8 times that of any send
 pub(crate) const RECEIVED_SIZE: usize = 2048;
 /// Send to remote, distribute mode, buffer size is less than 8 times the received
-pub(crate) const SEND_SIZE: usize = 32;
+pub(crate) const SEND_SIZE: usize = 512;
 pub(crate) const DELAY_TIME: Duration = Duration::from_millis(300);
 
 /// Protocol handle value
