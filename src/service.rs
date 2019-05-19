@@ -11,7 +11,7 @@ use tokio::prelude::{AsyncRead, AsyncWrite, FutureExt};
 use tokio::timer::{Delay, Interval};
 
 use crate::{
-    context::{ServiceContext, SessionContext, SessionControl},
+    context::{ServiceContext, SessionContext},
     error::Error,
     multiaddr::{multihash::Multihash, Multiaddr, Protocol},
     protocol_handle_stream::{
@@ -37,6 +37,7 @@ mod control;
 pub(crate) mod event;
 pub(crate) mod future_task;
 
+use crate::context::SessionController;
 pub use crate::service::{
     config::{DialProtocol, ProtocolHandle, ProtocolMeta, TargetSession},
     control::ServiceControl,
@@ -66,7 +67,7 @@ pub(crate) enum InnerProtocolHandle {
 pub struct Service<T> {
     protocol_configs: HashMap<String, ProtocolMeta>,
 
-    sessions: HashMap<SessionId, SessionControl>,
+    sessions: HashMap<SessionId, SessionController>,
 
     multi_transport: MultiTransport,
 
@@ -343,7 +344,7 @@ where
                     }
                 }
 
-                if let Err(e) = session.sender(priority).try_send(event) {
+                if let Err(e) = session.try_send(priority, event) {
                     if e.is_full() {
                         block_sessions.insert(id);
                         debug!("session [{}] is full", id);
@@ -821,17 +822,17 @@ where
         let session_closed = Arc::new(AtomicBool::new(false));
         let (service_event_sender, service_event_receiver) = mpsc::channel(SEND_SIZE);
         let (quick_event_sender, quick_event_receiver) = mpsc::channel(SEND_SIZE);
-        let session_control = SessionControl {
-            quick_sender: quick_event_sender,
-            event_sender: service_event_sender,
-            inner: Arc::new(SessionContext {
+        let session_control = SessionController::new(
+            quick_event_sender,
+            service_event_sender,
+            Arc::new(SessionContext {
                 id: self.next_session,
                 address,
                 ty,
                 remote_pubkey,
                 closed: session_closed.clone(),
             }),
-        };
+        );
 
         let session_context = session_control.inner.clone();
 

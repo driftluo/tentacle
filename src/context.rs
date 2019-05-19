@@ -7,31 +7,46 @@ use std::{
     time::Duration,
 };
 
+use crate::service::event::Priority;
+use crate::session::SessionEvent;
 use crate::{
     error::Error,
     multiaddr::Multiaddr,
     protocol_select::ProtocolInfo,
     secio::{PublicKey, SecioKeyPair},
-    service::{
-        event::{Priority, ServiceTask},
-        DialProtocol, ServiceControl, SessionType, TargetSession,
-    },
-    session::SessionEvent,
+    service::{event::ServiceTask, DialProtocol, ServiceControl, SessionType, TargetSession},
     ProtocolId, SessionId,
 };
+use futures::sync::mpsc::TrySendError;
 
-pub(crate) struct SessionControl {
+pub(crate) struct SessionController {
+    quick_sender: mpsc::Sender<SessionEvent>,
+    event_sender: mpsc::Sender<SessionEvent>,
     pub(crate) inner: Arc<SessionContext>,
-    pub(crate) event_sender: mpsc::Sender<SessionEvent>,
-    pub(crate) quick_sender: mpsc::Sender<SessionEvent>,
 }
 
-impl SessionControl {
-    pub(crate) fn sender(&mut self, priority: Priority) -> &mut mpsc::Sender<SessionEvent> {
+impl SessionController {
+    pub(crate) fn new(
+        quick_sender: mpsc::Sender<SessionEvent>,
+        event_sender: mpsc::Sender<SessionEvent>,
+        inner: Arc<SessionContext>,
+    ) -> Self {
+        Self {
+            quick_sender,
+            event_sender,
+            inner,
+        }
+    }
+
+    pub(crate) fn try_send(
+        &mut self,
+        priority: Priority,
+        event: SessionEvent,
+    ) -> Result<(), TrySendError<SessionEvent>> {
         if priority.is_high() {
-            &mut self.quick_sender
+            self.quick_sender.try_send(event)
         } else {
-            &mut self.event_sender
+            self.event_sender.try_send(event)
         }
     }
 }
