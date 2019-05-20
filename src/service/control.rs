@@ -14,7 +14,7 @@ use crate::{
     error::Error,
     multiaddr::Multiaddr,
     protocol_select::ProtocolInfo,
-    service::{event::Priority, DialProtocol, ServiceTask, TargetSession, RECEIVED_SIZE},
+    service::{event::Priority, DialProtocol, ServiceTask, TargetSession, RECEIVED_BUFFER_SIZE},
     ProtocolId, SessionId,
 };
 use bytes::Bytes;
@@ -84,7 +84,7 @@ impl ServiceControl {
             &self.service_task_sender,
             event,
             &self.normal_count,
-            RECEIVED_SIZE,
+            RECEIVED_BUFFER_SIZE,
         )
     }
 
@@ -95,7 +95,7 @@ impl ServiceControl {
             &self.quick_task_sender,
             event,
             &self.quick_count,
-            RECEIVED_SIZE / 2,
+            RECEIVED_BUFFER_SIZE / 2,
         )
     }
 

@@ -24,7 +24,7 @@ use crate::{
     secio::{codec::stream_handle::StreamHandle as SecureHandle, PublicKey},
     service::{
         config::Meta, event::Priority, future_task::BoxedFutureTask, SessionType,
-        BUF_SHRINK_THRESHOLD, DELAY_TIME, RECEIVED_SIZE, SEND_SIZE,
+        BUF_SHRINK_THRESHOLD, DELAY_TIME, RECEIVED_BUFFER_SIZE, RECEIVED_SIZE, SEND_SIZE,
     },
     substream::{ProtocolEvent, SubstreamBuilder},
     transports::{MultiIncoming, MultiStream},
@@ -710,7 +710,9 @@ where
     fn recv_service(&mut self) {
         let mut finished = false;
         for _ in 0..64 {
-            if self.high_write_buf.len() > RECEIVED_SIZE && self.write_buf.len() > RECEIVED_SIZE {
+            if self.high_write_buf.len() > RECEIVED_BUFFER_SIZE
+                && self.write_buf.len() > RECEIVED_BUFFER_SIZE
+            {
                 break;
             }
 
@@ -739,7 +741,7 @@ where
                 }
             }
             .or_else(|| {
-                if self.write_buf.len() > RECEIVED_SIZE {
+                if self.write_buf.len() > RECEIVED_BUFFER_SIZE {
                     if self.last_sent.elapsed() > Duration::from_secs(5) {
                         warn!("session send timeout");
                         self.state = SessionState::LocalClose;

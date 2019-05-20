@@ -46,9 +46,11 @@ use bytes::Bytes;
 
 /// If the buffer capacity is greater than u8 max, shrink it
 pub(crate) const BUF_SHRINK_THRESHOLD: usize = u8::max_value() as usize;
-/// Received from remote, aggregate mode, buffer size is 8 times that of any send
-pub(crate) const RECEIVED_SIZE: usize = 2048;
-/// Send to remote, distribute mode, buffer size is less than 8 times the received
+/// Received from user, aggregate mode
+pub(crate) const RECEIVED_BUFFER_SIZE: usize = 2048;
+/// Use to receive open/close event, no need too large
+pub(crate) const RECEIVED_SIZE: usize = 128;
+/// Send to remote, distribute mode
 pub(crate) const SEND_SIZE: usize = 512;
 pub(crate) const DELAY_TIME: Duration = Duration::from_millis(300);
 
@@ -113,8 +115,6 @@ pub struct Service<T> {
     quick_task_receiver: mpsc::UnboundedReceiver<ServiceTask>,
 
     pending_tasks: VecDeque<BoxedFutureTask>,
-    /// When handle channel full, set a deadline(30 second) to notify user
-    handles_error_count: HashMap<(ProtocolId, Option<SessionId>), Option<Instant>>,
     /// Delay notify with abnormally poor machines
     delay: Arc<AtomicBool>,
 
@@ -181,7 +181,6 @@ where
             service_task_receiver,
             quick_task_receiver,
             pending_tasks: VecDeque::default(),
-            handles_error_count: HashMap::default(),
             delay: Arc::new(AtomicBool::new(false)),
             shutdown,
         }
@@ -496,28 +495,14 @@ where
     /// When proto handle channel is full, call here
     #[inline]
     fn proto_handle_error(&mut self, proto_id: ProtocolId, session_id: Option<SessionId>) {
-        let delay = self
-            .handles_error_count
-            .entry((proto_id, session_id))
-            .or_insert_with(|| Some(Instant::now()));
-
-        match delay.take() {
-            Some(inner) => {
-                if inner.elapsed() > Duration::from_secs(30) {
-                    let error = session_id
-                        .map(Error::SessionProtoHandleBlock)
-                        .unwrap_or(Error::ServiceProtoHandleBlock);
-                    self.set_delay();
-                    self.handle.handle_error(
-                        &mut self.service_context,
-                        ServiceError::ProtocolHandleError { proto_id, error },
-                    );
-                } else {
-                    *delay = Some(inner);
-                }
-            }
-            None => *delay = Some(Instant::now()),
-        }
+        let error = session_id
+            .map(Error::SessionProtoHandleBlock)
+            .unwrap_or(Error::ServiceProtoHandleBlock);
+        self.set_delay();
+        self.handle.handle_error(
+            &mut self.service_context,
+            ServiceError::ProtocolHandleError { proto_id, error },
+        );
     }
 
     /// Spawn protocol handle
@@ -554,7 +539,7 @@ where
                 let id = id.unwrap();
                 if let Some(session_control) = self.sessions.get(&id) {
                     debug!("init session [{}] level proto [{}] handle", id, proto_id);
-                    let (sender, receiver) = mpsc::channel(32);
+                    let (sender, receiver) = mpsc::channel(RECEIVED_SIZE);
                     let stream = SessionProtocolStream::new(
                         handle,
                         self.service_context.clone_self(),
@@ -1125,8 +1110,8 @@ where
         let task = Interval::new(Instant::now(), Duration::from_millis(200))
             .map_err(|_| ())
             .for_each(move |_| {
-                if quick_count.load(Ordering::SeqCst) > RECEIVED_SIZE / 4
-                    || normal_count.load(Ordering::SeqCst) > RECEIVED_SIZE / 2
+                if quick_count.load(Ordering::SeqCst) > RECEIVED_BUFFER_SIZE / 4
+                    || normal_count.load(Ordering::SeqCst) > RECEIVED_BUFFER_SIZE / 2
                 {
                     notify.notify();
                 }
