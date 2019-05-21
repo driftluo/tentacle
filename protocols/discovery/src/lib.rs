@@ -15,7 +15,7 @@ use p2p::{
 };
 use rand::seq::SliceRandom;
 
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 mod addr;
 mod protocol;
@@ -219,10 +219,7 @@ impl<M: AddressManager> Stream for Discovery<M> {
 
         let mut announce_multiaddrs = Vec::new();
         for (key, value) in self.substreams.iter_mut() {
-            if let Err(err) = value.check_timer() {
-                debug!("substream {:?} poll timer_future error: {:?}", key, err);
-                self.dead_keys.insert(key.clone());
-            }
+            value.check_timer();
 
             match value.receive_messages(&mut self.addr_mgr) {
                 Ok(Some((session_id, nodes_list))) => {
@@ -256,6 +253,7 @@ impl<M: AddressManager> Stream for Discovery<M> {
                     announce_multiaddrs.push(addr.clone());
                 }
                 value.announce = false;
+                value.last_announce = Instant::now();
             }
         }
 
