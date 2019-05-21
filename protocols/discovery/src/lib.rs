@@ -18,7 +18,7 @@ use tokio::timer::Interval;
 
 use std::time::{Duration, Instant};
 
-const CHECK_INTERVAL: Duration = Duration::from_secs(5);
+const CHECK_INTERVAL: Duration = Duration::from_secs(3);
 
 mod addr;
 mod protocol;
@@ -278,7 +278,7 @@ impl<M: AddressManager> Stream for Discovery<M> {
                     announce_multiaddrs.push(addr.clone());
                 }
                 value.announce = false;
-                value.last_announce = Instant::now();
+                value.last_announce = Some(Instant::now());
             }
         }
 
@@ -297,12 +297,19 @@ impl<M: AddressManager> Stream for Discovery<M> {
 
         let mut rng = rand::thread_rng();
         let mut remain_keys = self.substreams.keys().cloned().collect::<Vec<_>>();
+        debug!("announce_multiaddrs: {:?}", announce_multiaddrs);
         for announce_multiaddr in announce_multiaddrs.into_iter() {
             let announce_addr = RawAddr::from(announce_multiaddr.clone());
             remain_keys.shuffle(&mut rng);
             for i in 0..2 {
                 if let Some(key) = remain_keys.get(i) {
                     if let Some(value) = self.substreams.get_mut(key) {
+                        debug!(
+                            ">> send {} to: {:?}, contains: {}",
+                            announce_multiaddr,
+                            value.remote_addr,
+                            value.addr_known.contains(&announce_addr)
+                        );
                         if value.announce_multiaddrs.len() < 10
                             && !value.addr_known.contains(&announce_addr)
                         {

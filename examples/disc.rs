@@ -19,13 +19,14 @@ use discovery::{AddressManager, Discovery, DiscoveryProtocol, MisbehaveResult, M
 
 fn main() {
     env_logger::init();
-    let meta = create_meta(1.into(), 0);
+    let meta = create_meta(1.into(), 1400);
     let mut service = ServiceBuilder::default()
         .insert_protocol(meta)
         .forever(true)
         .build(SHandle {});
 
-    if std::env::args().nth(1) == Some("server".to_string()) {
+    let first_arg = std::env::args().nth(1).unwrap();
+    if first_arg == "server" {
         debug!("Starting server ......");
         let _ = service.listen("/ip4/0.0.0.0/tcp/1337".parse().unwrap());
         tokio::run(service.for_each(|_| Ok(())))
@@ -36,7 +37,7 @@ fn main() {
             "/ip4/127.0.0.1/tcp/1337".parse().unwrap(),
             DialProtocol::All,
         );
-        let _ = service.listen("/ip4/0.0.0.0/tcp/1338".parse().unwrap());
+        let _ = service.listen(format!("/ip4/0.0.0.0/tcp/{}", first_arg).parse().unwrap());
         tokio::run(service.for_each(|_| Ok(())))
     }
 }

@@ -114,7 +114,7 @@ pub struct SubstreamValue {
     // FIXME: Remote listen address, resolved by id protocol
     pub(crate) remote_addr: RemoteAddress,
     pub(crate) announce: bool,
-    pub(crate) last_announce: Instant,
+    pub(crate) last_announce: Option<Instant>,
     pub(crate) announce_multiaddrs: Vec<Multiaddr>,
     session_id: SessionId,
     announce_interval: Duration,
@@ -151,7 +151,7 @@ impl SubstreamValue {
 
         SubstreamValue {
             framed_stream: Framed::new(substream.stream, DiscoveryCodec::default()),
-            last_announce: Instant::now(),
+            last_announce: None,
             announce_interval: query_cycle
                 .unwrap_or_else(|| Duration::from_secs(ANNOUNCE_INTERVAL)),
             pending_messages,
@@ -171,7 +171,12 @@ impl SubstreamValue {
     }
 
     pub(crate) fn check_timer(&mut self) {
-        if self.last_announce.elapsed() > self.announce_interval {
+        if self
+            .last_announce
+            .map(|time| time.elapsed() > self.announce_interval)
+            .unwrap_or(true)
+        {
+            debug!("announce this session: {:?}", self.session_id);
             self.announce = true;
         }
     }
