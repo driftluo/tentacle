@@ -14,8 +14,11 @@ use p2p::{
     SessionId,
 };
 use rand::seq::SliceRandom;
+use tokio::timer::Interval;
 
 use std::time::{Duration, Instant};
+
+const CHECK_INTERVAL: Duration = Duration::from_secs(5);
 
 mod addr;
 mod protocol;
@@ -147,6 +150,8 @@ pub struct Discovery<M> {
     dead_keys: FnvHashSet<SubstreamKey>,
 
     dynamic_query_cycle: Option<Duration>,
+
+    check_interval: Interval,
 }
 
 #[derive(Clone)]
@@ -158,7 +163,9 @@ impl<M: AddressManager> Discovery<M> {
     /// Query cycle means checking and synchronizing the cycle time of the currently connected node, default is 24 hours
     pub fn new(addr_mgr: M, query_cycle: Option<Duration>) -> Discovery<M> {
         let (substream_sender, substream_receiver) = channel(8);
+        let check_interval = Interval::new_interval(CHECK_INTERVAL);
         Discovery {
+            check_interval,
             max_known: DEFAULT_MAX_KNOWN,
             addr_mgr,
             pending_nodes: VecDeque::default(),
@@ -207,6 +214,23 @@ impl<M: AddressManager> Discovery<M> {
         }
         Ok(())
     }
+
+    fn check_interval(&mut self) {
+        loop {
+            match self.check_interval.poll() {
+                Ok(Async::Ready(Some(_))) => {}
+                Ok(Async::Ready(None)) => {
+                    debug!("Discovery check_interval poll finished");
+                    break;
+                }
+                Ok(Async::NotReady) => break,
+                Err(err) => {
+                    debug!("Discovery check_interval poll error: {:?}", err);
+                    break;
+                }
+            }
+        }
+    }
 }
 
 impl<M: AddressManager> Stream for Discovery<M> {
@@ -216,6 +240,7 @@ impl<M: AddressManager> Stream for Discovery<M> {
     fn poll(&mut self) -> Poll<Option<Self::Item>, Self::Error> {
         debug!("Discovery.poll()");
         self.recv_substreams()?;
+        self.check_interval();
 
         let mut announce_multiaddrs = Vec::new();
         for (key, value) in self.substreams.iter_mut() {
