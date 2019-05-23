@@ -1,6 +1,6 @@
 use std::collections::VecDeque;
 use std::io;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use bytes::{BufMut, BytesMut};
 use futures::{sync::mpsc::Receiver, Async, AsyncSink, Poll, Sink, Stream};
@@ -15,7 +15,6 @@ use p2p::{
 };
 use tokio::codec::Framed;
 use tokio::io::{AsyncRead, AsyncWrite};
-use tokio::timer::Interval;
 
 use crate::addr::{AddrKnown, AddressManager, Misbehavior, RawAddr};
 use crate::protocol::{DiscoveryCodec, DiscoveryMessage, Node, Nodes};
@@ -115,9 +114,10 @@ pub struct SubstreamValue {
     // FIXME: Remote listen address, resolved by id protocol
     pub(crate) remote_addr: RemoteAddress,
     pub(crate) announce: bool,
+    pub(crate) last_announce: Option<Instant>,
     pub(crate) announce_multiaddrs: Vec<Multiaddr>,
     session_id: SessionId,
-    timer_future: Interval,
+    announce_interval: Duration,
     received_get_nodes: bool,
     received_nodes: bool,
     remote_closed: bool,
@@ -151,9 +151,9 @@ impl SubstreamValue {
 
         SubstreamValue {
             framed_stream: Framed::new(substream.stream, DiscoveryCodec::default()),
-            timer_future: Interval::new_interval(
-                query_cycle.unwrap_or_else(|| Duration::from_secs(ANNOUNCE_INTERVAL)),
-            ),
+            last_announce: None,
+            announce_interval: query_cycle
+                .unwrap_or_else(|| Duration::from_secs(ANNOUNCE_INTERVAL)),
             pending_messages,
             addr_known,
             remote_addr,
@@ -170,19 +170,15 @@ impl SubstreamValue {
         multiaddr_to_socketaddr(self.remote_addr.to_inner()).map(RawAddr::from)
     }
 
-    pub(crate) fn check_timer(&mut self) -> Result<(), tokio::timer::Error> {
-        loop {
-            match self.timer_future.poll()? {
-                Async::Ready(Some(_announce_at)) => {
-                    self.announce = true;
-                }
-                Async::Ready(None) => unreachable!(),
-                Async::NotReady => {
-                    break;
-                }
-            }
+    pub(crate) fn check_timer(&mut self) {
+        if self
+            .last_announce
+            .map(|time| time.elapsed() > self.announce_interval)
+            .unwrap_or(true)
+        {
+            debug!("announce this session: {:?}", self.session_id);
+            self.announce = true;
         }
-        Ok(())
     }
 
     pub(crate) fn send_messages(&mut self) -> Result<(), io::Error> {

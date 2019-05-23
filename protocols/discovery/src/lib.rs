@@ -14,8 +14,11 @@ use p2p::{
     SessionId,
 };
 use rand::seq::SliceRandom;
+use tokio::timer::Interval;
 
-use std::time::Duration;
+use std::time::{Duration, Instant};
+
+const CHECK_INTERVAL: Duration = Duration::from_secs(3);
 
 mod addr;
 mod protocol;
@@ -147,6 +150,8 @@ pub struct Discovery<M> {
     dead_keys: FnvHashSet<SubstreamKey>,
 
     dynamic_query_cycle: Option<Duration>,
+
+    check_interval: Interval,
 }
 
 #[derive(Clone)]
@@ -158,7 +163,9 @@ impl<M: AddressManager> Discovery<M> {
     /// Query cycle means checking and synchronizing the cycle time of the currently connected node, default is 24 hours
     pub fn new(addr_mgr: M, query_cycle: Option<Duration>) -> Discovery<M> {
         let (substream_sender, substream_receiver) = channel(8);
+        let check_interval = Interval::new_interval(CHECK_INTERVAL);
         Discovery {
+            check_interval,
             max_known: DEFAULT_MAX_KNOWN,
             addr_mgr,
             pending_nodes: VecDeque::default(),
@@ -207,6 +214,23 @@ impl<M: AddressManager> Discovery<M> {
         }
         Ok(())
     }
+
+    fn check_interval(&mut self) {
+        loop {
+            match self.check_interval.poll() {
+                Ok(Async::Ready(Some(_))) => {}
+                Ok(Async::Ready(None)) => {
+                    debug!("Discovery check_interval poll finished");
+                    break;
+                }
+                Ok(Async::NotReady) => break,
+                Err(err) => {
+                    debug!("Discovery check_interval poll error: {:?}", err);
+                    break;
+                }
+            }
+        }
+    }
 }
 
 impl<M: AddressManager> Stream for Discovery<M> {
@@ -216,13 +240,11 @@ impl<M: AddressManager> Stream for Discovery<M> {
     fn poll(&mut self) -> Poll<Option<Self::Item>, Self::Error> {
         debug!("Discovery.poll()");
         self.recv_substreams()?;
+        self.check_interval();
 
         let mut announce_multiaddrs = Vec::new();
         for (key, value) in self.substreams.iter_mut() {
-            if let Err(err) = value.check_timer() {
-                debug!("substream {:?} poll timer_future error: {:?}", key, err);
-                self.dead_keys.insert(key.clone());
-            }
+            value.check_timer();
 
             match value.receive_messages(&mut self.addr_mgr) {
                 Ok(Some((session_id, nodes_list))) => {
@@ -256,6 +278,7 @@ impl<M: AddressManager> Stream for Discovery<M> {
                     announce_multiaddrs.push(addr.clone());
                 }
                 value.announce = false;
+                value.last_announce = Some(Instant::now());
             }
         }
 
@@ -274,12 +297,19 @@ impl<M: AddressManager> Stream for Discovery<M> {
 
         let mut rng = rand::thread_rng();
         let mut remain_keys = self.substreams.keys().cloned().collect::<Vec<_>>();
+        debug!("announce_multiaddrs: {:?}", announce_multiaddrs);
         for announce_multiaddr in announce_multiaddrs.into_iter() {
             let announce_addr = RawAddr::from(announce_multiaddr.clone());
             remain_keys.shuffle(&mut rng);
             for i in 0..2 {
                 if let Some(key) = remain_keys.get(i) {
                     if let Some(value) = self.substreams.get_mut(key) {
+                        debug!(
+                            ">> send {} to: {:?}, contains: {}",
+                            announce_multiaddr,
+                            value.remote_addr,
+                            value.addr_known.contains(&announce_addr)
+                        );
                         if value.announce_multiaddrs.len() < 10
                             && !value.addr_known.contains(&announce_addr)
                         {
