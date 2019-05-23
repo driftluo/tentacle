@@ -49,7 +49,7 @@ pub(crate) const BUF_SHRINK_THRESHOLD: usize = u8::max_value() as usize;
 /// Received from user, aggregate mode
 pub(crate) const RECEIVED_BUFFER_SIZE: usize = 2048;
 /// Use to receive open/close event, no need too large
-pub(crate) const RECEIVED_SIZE: usize = 128;
+pub(crate) const RECEIVED_SIZE: usize = 512;
 /// Send to remote, distribute mode
 pub(crate) const SEND_SIZE: usize = 512;
 pub(crate) const DELAY_TIME: Duration = Duration::from_millis(300);
@@ -78,6 +78,8 @@ pub struct Service<T> {
     state: State,
 
     next_session: SessionId,
+
+    before_sends: HashMap<ProtocolId, Box<dyn Fn(bytes::Bytes) -> bytes::Bytes + Send + 'static>>,
 
     /// Can be upgrade to list service level protocols
     handle: T,
@@ -148,6 +150,7 @@ where
 
         Service {
             protocol_configs,
+            before_sends: HashMap::default(),
             handle,
             multi_transport: MultiTransport::new(config.timeout),
             future_task_sender,
@@ -1121,15 +1124,18 @@ where
         self.send_future_task(Box::new(task))
     }
 
-    fn start_service_proto_handles(&mut self) {
+    fn init_proto_handles(&mut self) {
         let ids = self
             .protocol_configs
-            .values()
-            .map(ProtocolMeta::id)
-            .collect::<Vec<ProtocolId>>();
-        for id in ids {
+            .values_mut()
+            .map(|meta| (meta.id(), meta.before_send.take()))
+            .collect::<Vec<(ProtocolId, _)>>();
+        for (id, before_send) in ids {
             if let Some(handle) = self.proto_handle(false, id) {
                 self.handle_open(handle, id, None);
+            }
+            if let Some(function) = before_send {
+                self.before_sends.insert(id, function);
             }
         }
     }
@@ -1290,11 +1296,19 @@ where
                 proto_id,
                 priority,
                 data,
-            } => match target {
-                TargetSession::Single(id) => self.send_message_to(id, proto_id, priority, data),
-                TargetSession::Multi(ids) => self.filter_broadcast(ids, proto_id, priority, data),
-                TargetSession::All => self.broadcast(proto_id, priority, data),
-            },
+            } => {
+                let data = match self.before_sends.get(&proto_id) {
+                    Some(function) => function(data),
+                    None => data,
+                };
+                match target {
+                    TargetSession::Single(id) => self.send_message_to(id, proto_id, priority, data),
+                    TargetSession::Multi(ids) => {
+                        self.filter_broadcast(ids, proto_id, priority, data)
+                    }
+                    TargetSession::All => self.broadcast(proto_id, priority, data),
+                }
+            }
             ServiceTask::Dial { address, target } => {
                 if !self.dial_protocols.contains_key(&address) {
                     if let Err(e) = self.dial_inner(address.clone(), target) {
@@ -1603,7 +1617,7 @@ where
         if let Some(stream) = self.future_task_manager.take() {
             tokio::spawn(stream.for_each(|_| Ok(())));
             self.notify_queue();
-            self.start_service_proto_handles();
+            self.init_proto_handles();
         }
 
         if !self.write_buf.is_empty()

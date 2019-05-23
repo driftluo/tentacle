@@ -1,5 +1,5 @@
 use crate::{
-    builder::{CodecFn, NameFn, SelectVersionFn, SessionHandleFn},
+    builder::{BeforeReceiveFn, CodecFn, NameFn, SelectVersionFn, SessionHandleFn},
     traits::{Codec, ServiceProtocol, SessionProtocol},
     yamux::config::Config as YamuxConfig,
     ProtocolId, SessionId,
@@ -56,6 +56,7 @@ pub struct ProtocolMeta {
     pub(crate) inner: Arc<Meta>,
     pub(crate) service_handle: ProtocolHandle<Box<dyn ServiceProtocol + Send + 'static>>,
     pub(crate) session_handle: SessionHandleFn,
+    pub(crate) before_send: Option<Box<dyn Fn(bytes::Bytes) -> bytes::Bytes + Send + 'static>>,
 }
 
 impl ProtocolMeta {
@@ -122,6 +123,7 @@ pub(crate) struct Meta {
     pub(crate) support_versions: Vec<String>,
     pub(crate) codec: CodecFn,
     pub(crate) select_version: SelectVersionFn,
+    pub(crate) before_receive: BeforeReceiveFn,
 }
 
 /// Protocol handle

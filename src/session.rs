@@ -444,6 +444,7 @@ where
         };
 
         let proto_id = proto.id;
+        let before_receive_fn = (proto.before_receive)();
         let raw_part = sub_stream.into_parts();
         let mut part = FramedParts::new(raw_part.io, (proto.codec)());
         // Replace buffered data
@@ -465,6 +466,7 @@ where
         .session_proto_sender(self.session_proto_senders.remove(&proto_id))
         .keep_buffer(self.keep_buffer)
         .event(self.event.contains(&proto_id))
+        .before_receive(before_receive_fn)
         .build(frame);
 
         self.sub_streams

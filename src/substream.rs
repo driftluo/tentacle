@@ -16,6 +16,7 @@ use tokio::{
 };
 
 use crate::{
+    builder::BeforeReceive,
     context::SessionContext,
     error::Error,
     protocol_handle_stream::{ServiceProtocolEvent, SessionProtocolEvent},
@@ -99,6 +100,7 @@ pub(crate) struct SubStream<U> {
 
     service_proto_sender: Option<mpsc::Sender<ServiceProtocolEvent>>,
     session_proto_sender: Option<mpsc::Sender<SessionProtocolEvent>>,
+    before_receive: Option<BeforeReceive>,
 
     /// Delay notify with abnormally poor machines
     delay: Arc<AtomicBool>,
@@ -404,19 +406,28 @@ where
                         data.len()
                     );
 
+                    let data = match self.before_receive {
+                        Some(ref function) => match function(data) {
+                            Ok(data) => data,
+                            Err(err) => {
+                                self.error_close(err);
+                                return;
+                            }
+                        },
+                        None => data.freeze(),
+                    };
+
                     if self.service_proto_sender.is_some() {
                         self.service_proto_buf
                             .push_back(ServiceProtocolEvent::Received {
                                 id: self.context.id,
-                                data: data.clone().freeze(),
+                                data: data.clone(),
                             })
                     }
 
                     if self.session_proto_sender.is_some() {
                         self.session_proto_buf
-                            .push_back(SessionProtocolEvent::Received {
-                                data: data.clone().freeze(),
-                            })
+                            .push_back(SessionProtocolEvent::Received { data: data.clone() })
                     }
 
                     self.distribute_to_user_level();
@@ -425,7 +436,7 @@ where
                         self.output_event(ProtocolEvent::Message {
                             id: self.id,
                             proto_id: self.proto_id,
-                            data: data.freeze(),
+                            data,
                             priority: Priority::Normal,
                         })
                     }
@@ -573,6 +584,7 @@ pub(crate) struct SubstreamBuilder {
 
     service_proto_sender: Option<mpsc::Sender<ServiceProtocolEvent>>,
     session_proto_sender: Option<mpsc::Sender<SessionProtocolEvent>>,
+    before_receive: Option<BeforeReceive>,
 
     /// Send event to session
     event_sender: mpsc::Sender<ProtocolEvent>,
@@ -591,6 +603,7 @@ impl SubstreamBuilder {
         SubstreamBuilder {
             service_proto_sender: None,
             session_proto_sender: None,
+            before_receive: None,
             event_receiver,
             event_sender,
             closed,
@@ -644,6 +657,11 @@ impl SubstreamBuilder {
         self
     }
 
+    pub fn before_receive(mut self, f: Option<BeforeReceive>) -> Self {
+        self.before_receive = f;
+        self
+    }
+
     pub fn build<U>(self, sub_stream: Framed<StreamHandle, U>) -> SubStream<U>
     where
         U: Codec,
@@ -670,6 +688,7 @@ impl SubstreamBuilder {
 
             service_proto_sender: self.service_proto_sender,
             session_proto_sender: self.session_proto_sender,
+            before_receive: self.before_receive,
 
             delay: Arc::new(AtomicBool::new(false)),
 

@@ -1,5 +1,5 @@
 use bytes::Bytes;
-use futures::{Future, Stream};
+use futures::Stream;
 use std::{
     sync::{
         atomic::{AtomicUsize, Ordering},
@@ -137,12 +137,7 @@ fn test_block_send(secio: bool, session_protocol: bool) {
         .listen("/ip4/127.0.0.1/tcp/0".parse().unwrap())
         .unwrap();
     thread::spawn(|| {
-        let mut runtime = tokio::runtime::Builder::new()
-            .core_threads(4)
-            .build()
-            .expect("Network tokio runtime init failed");
-        runtime.spawn(service.for_each(|_| Ok(())));
-        runtime.shutdown_on_idle().wait().unwrap();
+        tokio::runtime::current_thread::run(service.for_each(|_| Ok(())));
     });
     thread::sleep(Duration::from_millis(100));
 
@@ -150,12 +145,7 @@ fn test_block_send(secio: bool, session_protocol: bool) {
     let mut service = create(secio, meta, ());
     service.dial(listen_addr, DialProtocol::All).unwrap();
     let handle_2 = thread::spawn(|| {
-        let mut runtime = tokio::runtime::Builder::new()
-            .core_threads(4)
-            .build()
-            .expect("Network tokio runtime init failed");
-        runtime.spawn(service.for_each(|_| Ok(())));
-        runtime.shutdown_on_idle().wait().unwrap();
+        tokio::runtime::current_thread::run(service.for_each(|_| Ok(())));
     });
     handle_2.join().unwrap();
 

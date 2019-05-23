@@ -64,6 +64,8 @@ $ RUST_LOG=simple=info,tentacle=debug cargo run --example simple
 
 4. Now you can see some data interaction information on the terminal.
 
+You can see more detailed example in these two repos: [ckb](https://github.com/nervosnetwork/ckb)/[cita](https://github.com/cryptape/cita).
+
 ## Why?
 
 Because when I use `rust-libp2p`, I have encountered some difficult problems,

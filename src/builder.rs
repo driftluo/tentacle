@@ -1,6 +1,5 @@
-use std::collections::HashMap;
-use std::sync::Arc;
-use std::time::Duration;
+use std::{collections::HashMap, io, sync::Arc, time::Duration};
+
 use tokio::codec::LengthDelimitedCodec;
 
 use crate::{
@@ -130,6 +129,9 @@ pub(crate) type CodecFn = Box<Fn() -> Box<dyn Codec + Send + 'static> + Send + S
 pub(crate) type SessionHandleFn =
     Box<FnMut() -> ProtocolHandle<Box<dyn SessionProtocol + Send + 'static>> + Send>;
 pub(crate) type SelectVersionFn = Box<dyn Fn() -> Option<SelectFn<String>> + Send + Sync + 'static>;
+pub(crate) type BeforeReceiveFn = Box<dyn Fn() -> Option<BeforeReceive> + Send + Sync + 'static>;
+pub(crate) type BeforeReceive =
+    Box<dyn Fn(bytes::BytesMut) -> Result<bytes::Bytes, io::Error> + Send + 'static>;
 
 /// Builder for protocol meta
 pub struct MetaBuilder {
@@ -140,6 +142,8 @@ pub struct MetaBuilder {
     service_handle: ProtocolHandle<Box<dyn ServiceProtocol + Send + 'static>>,
     session_handle: SessionHandleFn,
     select_version: SelectVersionFn,
+    before_send: Option<Box<dyn Fn(bytes::Bytes) -> bytes::Bytes + Send + 'static>>,
+    before_receive: BeforeReceiveFn,
 }
 
 impl MetaBuilder {
@@ -220,6 +224,24 @@ impl MetaBuilder {
         self
     }
 
+    /// Unified processing of messages before they are sent
+    pub fn before_send<T>(mut self, f: T) -> Self
+    where
+        T: Fn(bytes::Bytes) -> bytes::Bytes + 'static + Send,
+    {
+        self.before_send = Some(Box::new(f));
+        self
+    }
+
+    /// Unified processing of messages before user received
+    pub fn before_receive<T>(mut self, f: T) -> Self
+    where
+        T: Fn() -> Option<BeforeReceive> + Send + Sync + 'static,
+    {
+        self.before_receive = Box::new(f);
+        self
+    }
+
     /// Combine the configuration of this builder to create a ProtocolMeta
     pub fn build(self) -> ProtocolMeta {
         let meta = Meta {
@@ -228,11 +250,13 @@ impl MetaBuilder {
             support_versions: self.support_versions,
             codec: self.codec,
             select_version: self.select_version,
+            before_receive: self.before_receive,
         };
         ProtocolMeta {
             inner: Arc::new(meta),
             service_handle: self.service_handle,
             session_handle: self.session_handle,
+            before_send: self.before_send,
         }
     }
 }
@@ -247,6 +271,8 @@ impl Default for MetaBuilder {
             service_handle: ProtocolHandle::Neither,
             session_handle: Box::new(|| ProtocolHandle::Neither),
             select_version: Box::new(|| None),
+            before_send: None,
+            before_receive: Box::new(|| None),
         }
     }
 }
