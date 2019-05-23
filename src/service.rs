@@ -49,7 +49,7 @@ pub(crate) const BUF_SHRINK_THRESHOLD: usize = u8::max_value() as usize;
 /// Received from user, aggregate mode
 pub(crate) const RECEIVED_BUFFER_SIZE: usize = 2048;
 /// Use to receive open/close event, no need too large
-pub(crate) const RECEIVED_SIZE: usize = 128;
+pub(crate) const RECEIVED_SIZE: usize = 512;
 /// Send to remote, distribute mode
 pub(crate) const SEND_SIZE: usize = 512;
 pub(crate) const DELAY_TIME: Duration = Duration::from_millis(300);
@@ -1124,7 +1124,7 @@ where
         self.send_future_task(Box::new(task))
     }
 
-    fn start_service_proto_handles(&mut self) {
+    fn init_proto_handles(&mut self) {
         let ids = self
             .protocol_configs
             .values_mut()
@@ -1617,7 +1617,7 @@ where
         if let Some(stream) = self.future_task_manager.take() {
             tokio::spawn(stream.for_each(|_| Ok(())));
             self.notify_queue();
-            self.start_service_proto_handles();
+            self.init_proto_handles();
         }
 
         if !self.write_buf.is_empty()
