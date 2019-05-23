@@ -149,11 +149,11 @@ fn test_block_send(secio: bool, session_protocol: bool) {
 }
 
 #[test]
-fn test_block_send_with_secio() {
-    test_block_send(true, false)
+fn test_block_send_with_secio_session() {
+    test_block_send(true, true)
 }
 
 #[test]
-fn test_block_send_with_no_secio() {
-    test_block_send(false, false)
+fn test_block_send_with_no_secio_session() {
+    test_block_send(false, true)
 }
