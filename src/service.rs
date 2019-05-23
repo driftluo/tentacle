@@ -79,6 +79,8 @@ pub struct Service<T> {
 
     next_session: SessionId,
 
+    before_sends: HashMap<ProtocolId, Box<dyn Fn(bytes::Bytes) -> bytes::Bytes + Send + 'static>>,
+
     /// Can be upgrade to list service level protocols
     handle: T,
     /// The buffer will be prioritized for distribution to session
@@ -148,6 +150,7 @@ where
 
         Service {
             protocol_configs,
+            before_sends: HashMap::default(),
             handle,
             multi_transport: MultiTransport::new(config.timeout),
             future_task_sender,
@@ -1124,12 +1127,15 @@ where
     fn start_service_proto_handles(&mut self) {
         let ids = self
             .protocol_configs
-            .values()
-            .map(ProtocolMeta::id)
-            .collect::<Vec<ProtocolId>>();
-        for id in ids {
+            .values_mut()
+            .map(|meta| (meta.id(), meta.before_send.take()))
+            .collect::<Vec<(ProtocolId, _)>>();
+        for (id, before_send) in ids {
             if let Some(handle) = self.proto_handle(false, id) {
                 self.handle_open(handle, id, None);
+            }
+            if let Some(function) = before_send {
+                self.before_sends.insert(id, function);
             }
         }
     }
@@ -1290,11 +1296,19 @@ where
                 proto_id,
                 priority,
                 data,
-            } => match target {
-                TargetSession::Single(id) => self.send_message_to(id, proto_id, priority, data),
-                TargetSession::Multi(ids) => self.filter_broadcast(ids, proto_id, priority, data),
-                TargetSession::All => self.broadcast(proto_id, priority, data),
-            },
+            } => {
+                let data = match self.before_sends.get(&proto_id) {
+                    Some(function) => function(data),
+                    None => data,
+                };
+                match target {
+                    TargetSession::Single(id) => self.send_message_to(id, proto_id, priority, data),
+                    TargetSession::Multi(ids) => {
+                        self.filter_broadcast(ids, proto_id, priority, data)
+                    }
+                    TargetSession::All => self.broadcast(proto_id, priority, data),
+                }
+            }
             ServiceTask::Dial { address, target } => {
                 if !self.dial_protocols.contains_key(&address) {
                     if let Err(e) = self.dial_inner(address.clone(), target) {
