@@ -1,6 +1,6 @@
 use futures::{prelude::*, sync::mpsc};
 use log::{debug, error, trace, warn};
-use std::collections::{HashMap, HashSet, vec_deque::VecDeque};
+use std::collections::{vec_deque::VecDeque, HashMap, HashSet};
 use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc,
@@ -521,6 +521,8 @@ where
             InnerProtocolHandle::Service(handle) => {
                 debug!("init service level [{}] proto handle", proto_id);
                 let (sender, receiver) = mpsc::channel(RECEIVED_SIZE);
+                self.service_proto_handles.insert(proto_id, sender);
+
                 let mut stream = ServiceProtocolStream::new(
                     handle,
                     self.service_context.clone_self(),
@@ -528,14 +530,7 @@ where
                     proto_id,
                     (self.shutdown.clone(), self.future_task_sender.clone()),
                 );
-
-                self.service_proto_handles
-                    .entry(proto_id)
-                    .and_modify(|old| *old = sender.clone())
-                    .or_insert(sender);
-
                 stream.handle_event(ServiceProtocolEvent::Init);
-
                 tokio::spawn(stream.for_each(|_| Ok(())).map_err(|_| ()));
             }
 
@@ -544,6 +539,8 @@ where
                 if let Some(session_control) = self.sessions.get(&id) {
                     debug!("init session [{}] level proto [{}] handle", id, proto_id);
                     let (sender, receiver) = mpsc::channel(RECEIVED_SIZE);
+                    self.session_proto_handles.insert((id, proto_id), sender);
+
                     let stream = SessionProtocolStream::new(
                         handle,
                         self.service_context.clone_self(),
@@ -552,13 +549,7 @@ where
                         proto_id,
                         (self.shutdown.clone(), self.future_task_sender.clone()),
                     );
-
                     tokio::spawn(stream.for_each(|_| Ok(())).map_err(|_| ()));
-
-                    self.session_proto_handles
-                        .entry((id, proto_id))
-                        .and_modify(|old| *old = sender.clone())
-                        .or_insert(sender);
                 }
             }
         }
