@@ -1,6 +1,6 @@
 use futures::{prelude::*, sync::mpsc};
 use log::{debug, error, trace, warn};
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{HashMap, HashSet, vec_deque::VecDeque};
 use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc,
@@ -1621,12 +1621,10 @@ where
             self.init_proto_handles();
         }
 
-        if !self.write_buf.is_empty()
-            || !self.high_write_buf.is_empty()
-            || !self.read_service_buf.is_empty()
-            || !self.read_session_buf.is_empty()
-        {
+        if !self.write_buf.is_empty() || !self.high_write_buf.is_empty() {
             self.distribute_to_session();
+        }
+        if !self.read_service_buf.is_empty() || !self.read_session_buf.is_empty() {
             self.distribute_to_user_level();
         }
 
