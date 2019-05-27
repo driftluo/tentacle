@@ -11,7 +11,7 @@ use tokio::prelude::{AsyncRead, AsyncWrite, FutureExt};
 use tokio::timer::{Delay, Interval};
 
 use crate::{
-    context::{ServiceContext, SessionContext},
+    context::{ServiceContext, SessionContext, SessionController},
     error::Error,
     multiaddr::{multihash::Multihash, Multiaddr, Protocol},
     protocol_handle_stream::{
@@ -37,7 +37,6 @@ mod control;
 pub(crate) mod event;
 pub(crate) mod future_task;
 
-use crate::context::SessionController;
 pub use crate::service::{
     config::{DialProtocol, ProtocolHandle, ProtocolMeta, TargetSession},
     control::ServiceControl,

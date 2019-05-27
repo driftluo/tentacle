@@ -7,17 +7,18 @@ use std::{
     time::Duration,
 };
 
-use crate::service::event::Priority;
-use crate::session::SessionEvent;
 use crate::{
     error::Error,
     multiaddr::Multiaddr,
     protocol_select::ProtocolInfo,
     secio::{PublicKey, SecioKeyPair},
-    service::{event::ServiceTask, DialProtocol, ServiceControl, SessionType, TargetSession},
+    service::{
+        event::{Priority, ServiceTask},
+        DialProtocol, ServiceControl, SessionType, TargetSession,
+    },
+    session::SessionEvent,
     ProtocolId, SessionId,
 };
-use futures::sync::mpsc::TrySendError;
 
 pub(crate) struct SessionController {
     quick_sender: mpsc::Sender<SessionEvent>,
@@ -42,7 +43,7 @@ impl SessionController {
         &mut self,
         priority: Priority,
         event: SessionEvent,
-    ) -> Result<(), TrySendError<SessionEvent>> {
+    ) -> Result<(), mpsc::TrySendError<SessionEvent>> {
         if priority.is_high() {
             self.quick_sender.try_send(event)
         } else {
