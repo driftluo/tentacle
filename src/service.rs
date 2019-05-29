@@ -1,6 +1,6 @@
 use futures::{prelude::*, sync::mpsc};
 use log::{debug, error, trace, warn};
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{vec_deque::VecDeque, HashMap, HashSet};
 use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc,
@@ -11,7 +11,7 @@ use tokio::prelude::{AsyncRead, AsyncWrite, FutureExt};
 use tokio::timer::{Delay, Interval};
 
 use crate::{
-    context::{ServiceContext, SessionContext, SessionControl},
+    context::{ServiceContext, SessionContext, SessionController},
     error::Error,
     multiaddr::{multihash::Multihash, Multiaddr, Protocol},
     protocol_handle_stream::{
@@ -66,7 +66,7 @@ pub(crate) enum InnerProtocolHandle {
 pub struct Service<T> {
     protocol_configs: HashMap<String, ProtocolMeta>,
 
-    sessions: HashMap<SessionId, SessionControl>,
+    sessions: HashMap<SessionId, SessionController>,
 
     multi_transport: MultiTransport,
 
@@ -343,7 +343,7 @@ where
                     }
                 }
 
-                if let Err(e) = session.sender(priority).try_send(event) {
+                if let Err(e) = session.try_send(priority, event) {
                     if e.is_full() {
                         block_sessions.insert(id);
                         debug!("session [{}] is full", id);
@@ -520,6 +520,8 @@ where
             InnerProtocolHandle::Service(handle) => {
                 debug!("init service level [{}] proto handle", proto_id);
                 let (sender, receiver) = mpsc::channel(RECEIVED_SIZE);
+                self.service_proto_handles.insert(proto_id, sender);
+
                 let mut stream = ServiceProtocolStream::new(
                     handle,
                     self.service_context.clone_self(),
@@ -527,14 +529,7 @@ where
                     proto_id,
                     (self.shutdown.clone(), self.future_task_sender.clone()),
                 );
-
-                self.service_proto_handles
-                    .entry(proto_id)
-                    .and_modify(|old| *old = sender.clone())
-                    .or_insert(sender);
-
                 stream.handle_event(ServiceProtocolEvent::Init);
-
                 tokio::spawn(stream.for_each(|_| Ok(())).map_err(|_| ()));
             }
 
@@ -543,6 +538,8 @@ where
                 if let Some(session_control) = self.sessions.get(&id) {
                     debug!("init session [{}] level proto [{}] handle", id, proto_id);
                     let (sender, receiver) = mpsc::channel(RECEIVED_SIZE);
+                    self.session_proto_handles.insert((id, proto_id), sender);
+
                     let stream = SessionProtocolStream::new(
                         handle,
                         self.service_context.clone_self(),
@@ -551,13 +548,7 @@ where
                         proto_id,
                         (self.shutdown.clone(), self.future_task_sender.clone()),
                     );
-
                     tokio::spawn(stream.for_each(|_| Ok(())).map_err(|_| ()));
-
-                    self.session_proto_handles
-                        .entry((id, proto_id))
-                        .and_modify(|old| *old = sender.clone())
-                        .or_insert(sender);
                 }
             }
         }
@@ -821,17 +812,17 @@ where
         let session_closed = Arc::new(AtomicBool::new(false));
         let (service_event_sender, service_event_receiver) = mpsc::channel(SEND_SIZE);
         let (quick_event_sender, quick_event_receiver) = mpsc::channel(SEND_SIZE);
-        let session_control = SessionControl {
-            quick_sender: quick_event_sender,
-            event_sender: service_event_sender,
-            inner: Arc::new(SessionContext {
+        let session_control = SessionController::new(
+            quick_event_sender,
+            service_event_sender,
+            Arc::new(SessionContext {
                 id: self.next_session,
                 address,
                 ty,
                 remote_pubkey,
                 closed: session_closed.clone(),
             }),
-        };
+        );
 
         let session_context = session_control.inner.clone();
 
@@ -1620,12 +1611,10 @@ where
             self.init_proto_handles();
         }
 
-        if !self.write_buf.is_empty()
-            || !self.high_write_buf.is_empty()
-            || !self.read_service_buf.is_empty()
-            || !self.read_session_buf.is_empty()
-        {
+        if !self.write_buf.is_empty() || !self.high_write_buf.is_empty() {
             self.distribute_to_session();
+        }
+        if !self.read_service_buf.is_empty() || !self.read_session_buf.is_empty() {
             self.distribute_to_user_level();
         }
 
