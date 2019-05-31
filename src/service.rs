@@ -27,6 +27,7 @@ use crate::{
     session::{Session, SessionEvent, SessionMeta},
     traits::{ServiceHandle, ServiceProtocol, SessionProtocol},
     transports::{MultiIncoming, MultiTransport, Transport, TransportError},
+    upnp::IGDClient,
     utils::extract_peer_id,
     yamux::{session::SessionType as YamuxType, Config as YamuxConfig},
     ProtocolId, SessionId,
@@ -71,6 +72,8 @@ pub struct Service<T> {
     multi_transport: MultiTransport,
 
     listens: Vec<(Multiaddr, MultiIncoming)>,
+
+    igd_client: Option<IGDClient>,
 
     dial_protocols: HashMap<Multiaddr, DialProtocol>,
     config: ServiceConfig,
@@ -147,6 +150,7 @@ where
             .collect();
         let (future_task_sender, future_task_receiver) = mpsc::channel(SEND_SIZE);
         let shutdown = Arc::new(AtomicBool::new(false));
+        let igd_client = if config.upnp { IGDClient::new() } else { None };
 
         Service {
             protocol_configs,
@@ -163,6 +167,7 @@ where
             service_proto_handles: HashMap::default(),
             session_proto_handles: HashMap::default(),
             listens: Vec::new(),
+            igd_client,
             dial_protocols: HashMap::default(),
             state: State::new(forever),
             next_session: SessionId::default(),
@@ -1267,6 +1272,9 @@ where
                         address: listen_address.clone(),
                     },
                 );
+                if let Some(client) = self.igd_client.as_mut() {
+                    client.register(&listen_address)
+                }
                 self.listens.push((listen_address, incoming));
                 self.state.decrease();
                 self.update_listens();
@@ -1416,6 +1424,10 @@ where
                         ServiceEvent::ListenClose { address },
                     )
                 }
+                // clear upnp register
+                if let Some(client) = self.igd_client.as_mut() {
+                    client.clear()
+                };
                 self.pending_tasks.clear();
 
                 let sessions = self.sessions.keys().cloned().collect::<Vec<SessionId>>();
@@ -1456,6 +1468,9 @@ where
                 }
                 Ok(Async::Ready(None)) => {
                     update = true;
+                    if let Some(client) = self.igd_client.as_mut() {
+                        client.remove(&address)
+                    }
                     self.handle.handle_event(
                         &mut self.service_context,
                         ServiceEvent::ListenClose { address },
@@ -1473,6 +1488,9 @@ where
                             error: err.into(),
                         },
                     );
+                    if let Some(client) = self.igd_client.as_mut() {
+                        client.remove(&address)
+                    }
                     self.handle.handle_event(
                         &mut self.service_context,
                         ServiceEvent::ListenClose { address },
@@ -1483,6 +1501,10 @@ where
 
         if update || self.service_context.listens().is_empty() {
             self.update_listens()
+        }
+
+        if let Some(client) = self.igd_client.as_mut() {
+            client.process_only_leases_support()
         }
     }
 

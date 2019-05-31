@@ -50,6 +50,8 @@ pub(crate) mod transports;
 /// Some useful functions
 pub mod utils;
 
+pub(crate) mod upnp;
+
 use std::{fmt, ops::AddAssign};
 
 /// Index of sub/protocol stream
