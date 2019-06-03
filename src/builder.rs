@@ -106,6 +106,22 @@ impl ServiceBuilder {
         self
     }
 
+    /// Whether to allow tentative registration upnp, default is disable(false)
+    ///
+    /// upnp: https://en.wikipedia.org/wiki/Universal_Plug_and_Play
+    /// TCP Hole Punching: http://bford.info/pub/net/p2pnat/
+    ///
+    /// Upnp is a simple solution to nat penetration, which requires routing support for registration mapping.
+    ///
+    /// The function provided here is that if the external ip of the query route is a public network,
+    /// then an attempt is made to register the local listener port into the mapping so that it can
+    /// receive the access request of the external network, and if the external ip of the route is not the public network,
+    /// Then do nothing
+    pub fn upnp(mut self, enable: bool) -> Self {
+        self.config.upnp = enable;
+        self
+    }
+
     /// Clear all protocols
     pub fn clear(&mut self) {
         self.inner.clear();
