@@ -3,8 +3,7 @@ use flatbuffers_verifier::get_root;
 
 use crate::protocol_generated::p2p::identify::{
     Address as FbsAddress, AddressBuilder, IdentifyMessage as FbsIdentifyMessage,
-    IdentifyMessageBuilder, IdentifyPayload as FbsIdentifyPayload, ListenAddrs as FbsListenAddrs,
-    ListenAddrsBuilder, ObservedAddr as FbsObservedAddr, ObservedAddrBuilder,
+    IdentifyMessageBuilder,
 };
 use bytes::Bytes;
 use p2p::multiaddr::Multiaddr;
@@ -12,65 +11,73 @@ use p2p::multiaddr::Multiaddr;
 use std::convert::TryFrom;
 
 #[derive(Clone, PartialEq, Eq, Debug)]
-pub enum IdentifyMessage {
-    ListenAddrs(Vec<Multiaddr>),
-    ObservedAddr(Multiaddr),
+pub struct IdentifyMessage {
+    pub(crate) listen_addrs: Vec<Multiaddr>,
+    pub(crate) observed_addr: Multiaddr,
+    pub(crate) identify: Vec<u8>,
 }
 
 impl IdentifyMessage {
+    pub(crate) fn new(
+        listen_addrs: Vec<Multiaddr>,
+        observed_addr: Multiaddr,
+        identify: Vec<u8>,
+    ) -> Self {
+        IdentifyMessage {
+            listen_addrs,
+            observed_addr,
+            identify,
+        }
+    }
+
     pub(crate) fn encode(&self) -> Bytes {
         let mut fbb = FlatBufferBuilder::new();
-        let offset = match self {
-            IdentifyMessage::ListenAddrs(addrs) => {
-                let mut vec_addrs = Vec::new();
-                for addr in addrs {
-                    vec_addrs.push(addr_to_offset(&mut fbb, addr));
-                }
-                let fbs_addrs = fbb.create_vector(&vec_addrs);
-                let mut listen_addrs_builder = ListenAddrsBuilder::new(&mut fbb);
-                listen_addrs_builder.add_addrs(fbs_addrs);
-                let listen_addrs = listen_addrs_builder.finish();
 
-                let mut builder = IdentifyMessageBuilder::new(&mut fbb);
-                builder.add_payload_type(FbsIdentifyPayload::ListenAddrs);
-                builder.add_payload(listen_addrs.as_union_value());
-                builder.finish()
-            }
-            IdentifyMessage::ObservedAddr(addr) => {
-                let addr_offset = addr_to_offset(&mut fbb, &addr);
-                let mut observed_addr_builder = ObservedAddrBuilder::new(&mut fbb);
-                observed_addr_builder.add_addr(addr_offset);
-                let observed_addr = observed_addr_builder.finish();
+        let mut listens = Vec::new();
+        for addr in self.listen_addrs.as_slice() {
+            listens.push(addr_to_offset(&mut fbb, &addr));
+        }
+        let listens_vec = fbb.create_vector(&listens);
 
-                let mut builder = IdentifyMessageBuilder::new(&mut fbb);
-                builder.add_payload_type(FbsIdentifyPayload::ObservedAddr);
-                builder.add_payload(observed_addr.as_union_value());
-                builder.finish()
-            }
-        };
-        fbb.finish(offset, None);
+        let observed = addr_to_offset(&mut fbb, &self.observed_addr);
+
+        let identify = fbb.create_vector(self.identify.as_slice());
+
+        let mut builder = IdentifyMessageBuilder::new(&mut fbb);
+
+        builder.add_listen_addrs(listens_vec);
+        builder.add_observed_addr(observed);
+        builder.add_identify(identify);
+
+        let data = builder.finish();
+
+        fbb.finish(data, None);
         Bytes::from(fbb.finished_data())
     }
 
     pub(crate) fn decode(data: &[u8]) -> Option<Self> {
         let fbs_message = get_root::<FbsIdentifyMessage>(data).ok()?;
-        let payload = fbs_message.payload()?;
-        match fbs_message.payload_type() {
-            FbsIdentifyPayload::ListenAddrs => {
-                let fbs_listen_addrs = FbsListenAddrs::init_from_table(payload);
-                let fbs_addrs = fbs_listen_addrs.addrs()?;
-                let mut addrs = Vec::new();
-                for i in 0..fbs_addrs.len() {
-                    let addr = fbs_addrs.get(i);
-                    addrs.push(fbs_to_addr(&addr)?);
+
+        match (
+            fbs_message.listen_addrs(),
+            fbs_message.observed_addr(),
+            fbs_message.identify(),
+        ) {
+            (Some(raw_listens), Some(raw_observed), Some(raw_identify)) => {
+                let mut listen_addrs = Vec::with_capacity(raw_listens.len());
+                for i in 0..raw_listens.len() {
+                    listen_addrs.push(fbs_to_addr(&raw_listens.get(i))?);
                 }
-                Some(IdentifyMessage::ListenAddrs(addrs))
-            }
-            FbsIdentifyPayload::ObservedAddr => {
-                let fbs_observed_addr = FbsObservedAddr::init_from_table(payload);
-                let fbs_addr = fbs_observed_addr.addr()?;
-                let addr = fbs_to_addr(&fbs_addr)?;
-                Some(IdentifyMessage::ObservedAddr(addr))
+
+                let observed_addr = fbs_to_addr(&raw_observed)?;
+
+                let identify = raw_identify.to_owned();
+
+                Some(IdentifyMessage {
+                    listen_addrs,
+                    observed_addr,
+                    identify,
+                })
             }
             _ => None,
         }

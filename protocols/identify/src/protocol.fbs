@@ -1,22 +1,14 @@
 namespace P2P.Identify;
 
-union IdentifyPayload {
-    ListenAddrs,
-    ObservedAddr,
+table Address {
+    bytes: [ubyte];
 }
 
 table IdentifyMessage {
-    payload: IdentifyPayload;
-}
-
-table ListenAddrs {
-    addrs: [Address];
-}
-
-table ObservedAddr {
-    addr: Address;
-}
-
-table Address {
-    bytes: [ubyte];
+    // These are the addresses on which the peer is listening as multi-addresses.
+    listen_addrs: [Address];
+    // Observed each other's ip
+    observed_addr: Address;
+    // Custom message to indicate self ability, such as list protocols supported
+    identify: [ubyte];
 }

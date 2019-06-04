@@ -14,6 +14,8 @@ use tokio::prelude::{AsyncRead, AsyncWrite};
 
 #[rustfmt::skip]
 #[allow(clippy::all)]
+#[allow(dead_code)]
+#[allow(unused_imports)]
 mod protocol_select_generated;
 #[rustfmt::skip]
 #[allow(clippy::all)]

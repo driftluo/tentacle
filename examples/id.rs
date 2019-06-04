@@ -5,7 +5,7 @@ use futures::{future::lazy, prelude::*};
 use identify::{Callback, IdentifyProtocol, MisbehaveResult, Misbehavior};
 use tentacle::{
     builder::{MetaBuilder, ServiceBuilder},
-    context::ServiceContext,
+    context::{ProtocolContextMutRef, ServiceContext},
     multiaddr::Multiaddr,
     secio::{PeerId, SecioKeyPair},
     service::{DialProtocol, ProtocolHandle, ServiceError, ServiceEvent, SessionType},
@@ -56,6 +56,14 @@ struct IdentifyCallback {
 }
 
 impl Callback for IdentifyCallback {
+    fn identify(&mut self) -> Vec<u8> {
+        Vec::from("Identify message")
+    }
+
+    fn received_identify(&mut self, _context: &mut ProtocolContextMutRef, identify: Vec<u8>) {
+        log::info!("{}", String::from_utf8_lossy(&identify));
+    }
+
     /// Get local listen addresses
     fn local_listen_addrs(&mut self) -> Vec<Multiaddr> {
         self.local_listen_addrs.clone()
