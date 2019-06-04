@@ -72,9 +72,13 @@ impl MisbehaveResult {
 /// The trait to communicate with underlying peer storage
 pub trait Callback: Clone + Send {
     /// Received custom message
-    fn received_identify(&mut self, context: &mut ProtocolContextMutRef, identify: Vec<u8>);
+    fn received_identify(
+        &mut self,
+        context: &mut ProtocolContextMutRef,
+        identify: &[u8],
+    ) -> MisbehaveResult;
     /// Get custom identify message
-    fn identify(&mut self) -> Vec<u8>;
+    fn identify(&mut self) -> &[u8];
     /// Get local listen addresses
     fn local_listen_addrs(&mut self) -> Vec<Multiaddr>;
     /// Add remote peer's listen addresses
@@ -106,7 +110,11 @@ impl<T: Callback> IdentifyProtocol<T> {
         }
     }
 
-    fn process_listens(&mut self, context: &mut ProtocolContextMutRef, listens: Vec<Multiaddr>) {
+    fn process_listens(
+        &mut self,
+        context: &mut ProtocolContextMutRef,
+        listens: Vec<Multiaddr>,
+    ) -> MisbehaveResult {
         let session = context.session;
         let info = self
             .remote_infos
@@ -115,21 +123,11 @@ impl<T: Callback> IdentifyProtocol<T> {
 
         if info.listen_addrs.is_some() {
             debug!("remote({:?}) repeat send observed address", info.peer_id);
-            if self
-                .callback
+            self.callback
                 .misbehave(&info.peer_id, Misbehavior::DuplicateListenAddrs)
-                .is_disconnect()
-            {
-                let _ = context.disconnect(session.id);
-            }
         } else if listens.len() > MAX_ADDRS {
-            if self
-                .callback
+            self.callback
                 .misbehave(&info.peer_id, Misbehavior::TooManyAddresses(listens.len()))
-                .is_disconnect()
-            {
-                let _ = context.disconnect(session.id);
-            }
         } else {
             trace!("received listen addresses: {:?}", listens);
             let reachable_addrs = listens
@@ -143,10 +141,15 @@ impl<T: Callback> IdentifyProtocol<T> {
             self.callback
                 .add_remote_listen_addrs(&info.peer_id, reachable_addrs.clone());
             info.listen_addrs = Some(reachable_addrs);
+            MisbehaveResult::Continue
         }
     }
 
-    fn process_observed(&mut self, context: &mut ProtocolContextMutRef, observed: Multiaddr) {
+    fn process_observed(
+        &mut self,
+        context: &mut ProtocolContextMutRef,
+        observed: Multiaddr,
+    ) -> MisbehaveResult {
         let session = context.session;
         let mut info = self
             .remote_infos
@@ -155,13 +158,8 @@ impl<T: Callback> IdentifyProtocol<T> {
 
         if info.observed_addr.is_some() {
             debug!("remote({:?}) repeat send listen addresses", info.peer_id);
-            if self
-                .callback
+            self.callback
                 .misbehave(&info.peer_id, Misbehavior::DuplicateObservedAddr)
-                .is_disconnect()
-            {
-                let _ = context.disconnect(session.id);
-            }
         } else {
             trace!("received observed address: {}", observed);
 
@@ -174,9 +172,10 @@ impl<T: Callback> IdentifyProtocol<T> {
                     .add_observed_addr(&info.peer_id, observed.clone(), info.session.ty)
                     .is_disconnect()
             {
-                let _ = context.disconnect(session.id);
+                return MisbehaveResult::Disconnect;
             }
             info.observed_addr = Some(observed.clone());
+            MisbehaveResult::Continue
         }
     }
 }
@@ -278,15 +277,26 @@ impl<T: Callback> ServiceProtocol for IdentifyProtocol<T> {
             return;
         }
 
+        let session = context.session;
+
         match IdentifyMessage::decode(&data) {
             Some(message) => {
-                self.callback
-                    .received_identify(&mut context, message.identify);
-                self.process_listens(&mut context, message.listen_addrs);
-                self.process_observed(&mut context, message.observed_addr);
+                // Need to interrupt processing, avoid pollution
+                if self
+                    .callback
+                    .received_identify(&mut context, message.identify)
+                    .is_disconnect()
+                    || self
+                        .process_listens(&mut context, message.listen_addrs)
+                        .is_disconnect()
+                    || self
+                        .process_observed(&mut context, message.observed_addr)
+                        .is_disconnect()
+                {
+                    let _ = context.disconnect(session.id);
+                }
             }
             None => {
-                let session = context.session;
                 let info = self
                     .remote_infos
                     .get(&session.id)

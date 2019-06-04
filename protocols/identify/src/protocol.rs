@@ -11,17 +11,17 @@ use p2p::multiaddr::Multiaddr;
 use std::convert::TryFrom;
 
 #[derive(Clone, PartialEq, Eq, Debug)]
-pub struct IdentifyMessage {
+pub struct IdentifyMessage<'a> {
     pub(crate) listen_addrs: Vec<Multiaddr>,
     pub(crate) observed_addr: Multiaddr,
-    pub(crate) identify: Vec<u8>,
+    pub(crate) identify: &'a [u8],
 }
 
-impl IdentifyMessage {
+impl<'a> IdentifyMessage<'a> {
     pub(crate) fn new(
         listen_addrs: Vec<Multiaddr>,
         observed_addr: Multiaddr,
-        identify: Vec<u8>,
+        identify: &'a [u8],
     ) -> Self {
         IdentifyMessage {
             listen_addrs,
@@ -41,7 +41,7 @@ impl IdentifyMessage {
 
         let observed = addr_to_offset(&mut fbb, &self.observed_addr);
 
-        let identify = fbb.create_vector(self.identify.as_slice());
+        let identify = fbb.create_vector(self.identify);
 
         let mut builder = IdentifyMessageBuilder::new(&mut fbb);
 
@@ -55,7 +55,7 @@ impl IdentifyMessage {
         Bytes::from(fbb.finished_data())
     }
 
-    pub(crate) fn decode(data: &[u8]) -> Option<Self> {
+    pub(crate) fn decode(data: &'a [u8]) -> Option<Self> {
         let fbs_message = get_root::<FbsIdentifyMessage>(data).ok()?;
 
         match (
@@ -63,15 +63,13 @@ impl IdentifyMessage {
             fbs_message.observed_addr(),
             fbs_message.identify(),
         ) {
-            (Some(raw_listens), Some(raw_observed), Some(raw_identify)) => {
+            (Some(raw_listens), Some(raw_observed), Some(identify)) => {
                 let mut listen_addrs = Vec::with_capacity(raw_listens.len());
                 for i in 0..raw_listens.len() {
                     listen_addrs.push(fbs_to_addr(&raw_listens.get(i))?);
                 }
 
                 let observed_addr = fbs_to_addr(&raw_observed)?;
-
-                let identify = raw_identify.to_owned();
 
                 Some(IdentifyMessage {
                     listen_addrs,

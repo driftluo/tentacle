@@ -56,12 +56,17 @@ struct IdentifyCallback {
 }
 
 impl Callback for IdentifyCallback {
-    fn identify(&mut self) -> Vec<u8> {
-        Vec::from("Identify message")
+    fn identify(&mut self) -> &[u8] {
+        "Identify message".as_bytes()
     }
 
-    fn received_identify(&mut self, _context: &mut ProtocolContextMutRef, identify: Vec<u8>) {
-        log::info!("{}", String::from_utf8_lossy(&identify));
+    fn received_identify(
+        &mut self,
+        _context: &mut ProtocolContextMutRef,
+        identify: &[u8],
+    ) -> MisbehaveResult {
+        log::info!("{}", String::from_utf8_lossy(identify));
+        MisbehaveResult::Continue
     }
 
     /// Get local listen addresses
