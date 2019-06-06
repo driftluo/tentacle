@@ -973,10 +973,10 @@ where
             // The following 3 conditions must be met at the same time to send an event:
             //
             // 1. session must open
-            // 2. session protocol must does't open
-            // 3. session protocol handle must doesn't exist
+            // 2. session protocol mustn't open
+            // 3. session protocol handle mustn't exist
             //
-            // Satisfy 2 but not satisfied 3 may cause an error, causing the service's session handle sender
+            // Satisfy 2 but not 3 may cause an error, leading to the service's session handle sender
             // to be inconsistent with the substream's sender, opened two different session protocol handles
             if self.sessions.contains_key(&id)
                 && !self
