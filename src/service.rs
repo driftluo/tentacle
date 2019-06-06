@@ -39,7 +39,7 @@ pub(crate) mod event;
 pub(crate) mod future_task;
 
 pub use crate::service::{
-    config::{DialProtocol, ProtocolHandle, ProtocolMeta, TargetSession},
+    config::{DialProtocol, ProtocolHandle, ProtocolMeta, TargetProtocol, TargetSession},
     control::ServiceControl,
     event::{ProtocolEvent, ServiceError, ServiceEvent},
 };
@@ -75,7 +75,7 @@ pub struct Service<T> {
 
     igd_client: Option<IGDClient>,
 
-    dial_protocols: HashMap<Multiaddr, DialProtocol>,
+    dial_protocols: HashMap<Multiaddr, TargetProtocol>,
     config: ServiceConfig,
     /// service state
     state: State,
@@ -262,13 +262,13 @@ where
         address: Multiaddr,
         target: DialProtocol,
     ) -> Result<&mut Self, io::Error> {
-        self.dial_inner(address, target)?;
+        self.dial_inner(address, target.into())?;
         Ok(self)
     }
 
     /// Use by inner
     #[inline(always)]
-    fn dial_inner(&mut self, address: Multiaddr, target: DialProtocol) -> Result<(), io::Error> {
+    fn dial_inner(&mut self, address: Multiaddr, target: TargetProtocol) -> Result<(), io::Error> {
         self.dial_protocols.insert(address.clone(), target);
         let dial_future = self
             .multi_transport
@@ -755,7 +755,7 @@ where
         let target = self
             .dial_protocols
             .remove(&address)
-            .unwrap_or_else(|| DialProtocol::All);
+            .unwrap_or_else(|| TargetProtocol::All);
         if let Some(ref key) = remote_pubkey {
             // If the public key exists, the connection has been established
             // and then the useless connection needs to be closed.
@@ -884,12 +884,12 @@ where
 
         if ty.is_outbound() {
             match target {
-                DialProtocol::All => {
+                TargetProtocol::All => {
                     self.protocol_configs
                         .keys()
                         .for_each(|name| session.open_proto_stream(name));
                 }
-                DialProtocol::Single(proto_id) => {
+                TargetProtocol::Single(proto_id) => {
                     self.protocol_configs
                         .values()
                         .find(|meta| meta.id() == proto_id)
@@ -898,7 +898,7 @@ where
                             Some(())
                         });
                 }
-                DialProtocol::Multi(proto_ids) => self
+                TargetProtocol::Multi(proto_ids) => self
                     .protocol_configs
                     .values()
                     .filter(|meta| proto_ids.contains(&meta.id()))
@@ -1406,10 +1406,24 @@ where
                     ));
                 }
             }
-            ServiceTask::ProtocolOpen {
-                session_id,
-                proto_id,
-            } => self.protocol_open(session_id, proto_id, String::default(), Source::External),
+            ServiceTask::ProtocolOpen { session_id, target } => match target {
+                TargetProtocol::All => {
+                    let ids = self
+                        .protocol_configs
+                        .values()
+                        .map(ProtocolMeta::id)
+                        .collect::<Vec<_>>();
+                    ids.into_iter().for_each(|id| {
+                        self.protocol_open(session_id, id, String::default(), Source::External)
+                    });
+                }
+                TargetProtocol::Single(id) => {
+                    self.protocol_open(session_id, id, String::default(), Source::External)
+                }
+                TargetProtocol::Multi(ids) => ids.into_iter().for_each(|id| {
+                    self.protocol_open(session_id, id, String::default(), Source::External)
+                }),
+            },
             ServiceTask::ProtocolClose {
                 session_id,
                 proto_id,
