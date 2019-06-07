@@ -7,7 +7,7 @@ use crate::{
     context::SessionContext,
     error::Error,
     multiaddr::Multiaddr,
-    service::{DialProtocol, TargetSession},
+    service::{TargetProtocol, TargetSession},
     ProtocolId, SessionId,
 };
 use bytes::Bytes;
@@ -150,7 +150,7 @@ pub(crate) enum ServiceTask {
         /// Session id
         session_id: SessionId,
         /// protocol id
-        proto_id: ProtocolId,
+        target: TargetProtocol,
     },
     /// Close specify protocol
     ProtocolClose {
@@ -210,7 +210,7 @@ pub(crate) enum ServiceTask {
         /// Remote address
         address: Multiaddr,
         /// Dial protocols
-        target: DialProtocol,
+        target: TargetProtocol,
     },
     /// Listen task
     Listen {
@@ -265,10 +265,9 @@ impl fmt::Debug for ServiceTask {
             Disconnect { session_id } => write!(f, "Disconnect session [{}]", session_id),
             Dial { address, .. } => write!(f, "Dial address: {}", address),
             Listen { address } => write!(f, "Listen address: {}", address),
-            ProtocolOpen {
-                session_id,
-                proto_id,
-            } => write!(f, "Open session [{}] proto [{}]", session_id, proto_id),
+            ProtocolOpen { session_id, target } => {
+                write!(f, "Open session [{}] proto [{:?}]", session_id, target)
+            }
             ProtocolClose {
                 session_id,
                 proto_id,

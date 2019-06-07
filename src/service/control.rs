@@ -14,7 +14,10 @@ use crate::{
     error::Error,
     multiaddr::Multiaddr,
     protocol_select::ProtocolInfo,
-    service::{event::Priority, DialProtocol, ServiceTask, TargetSession, RECEIVED_BUFFER_SIZE},
+    service::{
+        event::Priority, DialProtocol, ServiceTask, TargetProtocol, TargetSession,
+        RECEIVED_BUFFER_SIZE,
+    },
     ProtocolId, SessionId,
 };
 use bytes::Bytes;
@@ -114,7 +117,10 @@ impl ServiceControl {
     /// Initiate a connection request to address
     #[inline]
     pub fn dial(&self, address: Multiaddr, target: DialProtocol) -> Result<(), Error> {
-        self.quick_send(ServiceTask::Dial { address, target })
+        self.quick_send(ServiceTask::Dial {
+            address,
+            target: target.into(),
+        })
     }
 
     /// Disconnect a connection
@@ -195,8 +201,20 @@ impl ServiceControl {
     pub fn open_protocol(&self, session_id: SessionId, proto_id: ProtocolId) -> Result<(), Error> {
         self.quick_send(ServiceTask::ProtocolOpen {
             session_id,
-            proto_id,
+            target: proto_id.into(),
         })
+    }
+
+    /// Try open protocol
+    ///
+    /// If the protocol has been open, do nothing
+    #[inline]
+    pub fn open_protocols(
+        &self,
+        session_id: SessionId,
+        target: TargetProtocol,
+    ) -> Result<(), Error> {
+        self.quick_send(ServiceTask::ProtocolOpen { session_id, target })
     }
 
     /// Try close a protocol

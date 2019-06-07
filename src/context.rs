@@ -14,7 +14,7 @@ use crate::{
     secio::{PublicKey, SecioKeyPair},
     service::{
         event::{Priority, ServiceTask},
-        DialProtocol, ServiceControl, SessionType, TargetSession,
+        DialProtocol, ServiceControl, SessionType, TargetProtocol, TargetSession,
     },
     session::SessionEvent,
     ProtocolId, SessionId,
@@ -178,6 +178,18 @@ impl ServiceContext {
     #[inline]
     pub fn open_protocol(&self, session_id: SessionId, proto_id: ProtocolId) -> Result<(), Error> {
         self.inner.open_protocol(session_id, proto_id)
+    }
+
+    /// Try open protocol
+    ///
+    /// If the protocol has been open, do nothing
+    #[inline]
+    pub fn open_protocols(
+        &self,
+        session_id: SessionId,
+        target: TargetProtocol,
+    ) -> Result<(), Error> {
+        self.inner.open_protocols(session_id, target)
     }
 
     /// Try close a protocol
