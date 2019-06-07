@@ -970,7 +970,22 @@ where
     ) {
         if source == Source::External {
             debug!("try open session [{}] proto [{}]", id, proto_id);
-            if self.sessions.contains_key(&id) {
+            // The following 3 conditions must be met at the same time to send an event:
+            //
+            // 1. session must open
+            // 2. session protocol mustn't open
+            // 3. session protocol handle mustn't exist
+            //
+            // Satisfy 2 but not 3 may cause an error, leading to the service's session handle sender
+            // to be inconsistent with the substream's sender, opened two different session protocol handles
+            if self.sessions.contains_key(&id)
+                && !self
+                    .session_service_protos
+                    .get(&id)
+                    .map(|protos| protos.contains(&proto_id))
+                    .unwrap_or_default()
+                && !self.session_proto_handles.contains_key(&(id, proto_id))
+            {
                 if let Some(handle) = self.proto_handle(true, proto_id) {
                     self.handle_open(handle, proto_id, Some(self.next_session))
                 };
@@ -984,8 +999,8 @@ where
                     },
                 ));
                 self.distribute_to_session();
-                return;
             }
+            return;
         }
 
         debug!("service session [{}] proto [{}] open", id, proto_id);

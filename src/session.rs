@@ -444,6 +444,10 @@ where
         };
 
         let proto_id = proto.id;
+        // open twice at the same protocol, ignore it
+        if self.proto_streams.contains_key(&proto_id) {
+            return;
+        }
         let before_receive_fn = (proto.before_receive)();
         let raw_part = sub_stream.into_parts();
         let mut part = FramedParts::new(raw_part.io, (proto.codec)());
