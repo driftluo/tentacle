@@ -1,5 +1,5 @@
 use futures::{Async, Future, Poll};
-use std::{io, net::ToSocketAddrs};
+use std::{io, net::SocketAddr, net::ToSocketAddrs, vec::IntoIter};
 
 use crate::{
     multiaddr::{multihash::Multihash, Multiaddr, Protocol},
@@ -55,6 +55,31 @@ impl DNSResolver {
             _ => None,
         }
     }
+
+    fn new_addr(
+        &mut self,
+        mut iter: IntoIter<SocketAddr>,
+    ) -> Poll<Multiaddr, (Multiaddr, io::Error)> {
+        match iter.next() {
+            Some(address) => {
+                let mut address = socketaddr_to_multiaddr(address);
+
+                if self.ws {
+                    address.push(Protocol::Ws);
+                }
+                if let Some(peer_id) = self.peer_id.take() {
+                    address.push(Protocol::P2p(
+                        Multihash::from_bytes(peer_id.into_bytes()).expect("Invalid peer id"),
+                    ))
+                }
+                Ok(Async::Ready(address))
+            }
+            None => Err((
+                self.source_address.clone(),
+                io::ErrorKind::InvalidData.into(),
+            )),
+        }
+    }
 }
 
 impl Future for DNSResolver {
@@ -63,31 +88,16 @@ impl Future for DNSResolver {
 
     fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
         match tokio_threadpool::blocking(|| (self.domain.as_str(), self.port).to_socket_addrs()) {
-            Ok(Async::Ready(Ok(mut iter))) => match iter.next() {
-                Some(address) => {
-                    let mut address = socketaddr_to_multiaddr(address);
-
-                    if self.ws {
-                        address.push(Protocol::Ws);
-                    }
-                    if let Some(peer_id) = self.peer_id.take() {
-                        address.push(Protocol::P2p(
-                            Multihash::from_bytes(peer_id.into_bytes()).expect("Invalid peer id"),
-                        ))
-                    }
-                    Ok(Async::Ready(address))
-                }
-                None => Err((
-                    self.source_address.clone(),
-                    io::ErrorKind::InvalidData.into(),
-                )),
-            },
+            Ok(Async::Ready(Ok(iter))) => self.new_addr(iter),
             Ok(Async::Ready(Err(e))) => Err((self.source_address.clone(), e)),
             Ok(Async::NotReady) => Ok(Async::NotReady),
-            Err(e) => Err((
-                self.source_address.clone(),
-                io::Error::new(io::ErrorKind::Other, e),
-            )),
+            // https://docs.rs/tokio-threadpool/0.1.14/tokio_threadpool/fn.blocking.html#return
+            // In this case, the big probability is that the tokio runtime is current thread runtime,
+            // so just use block search here
+            Err(_) => match (self.domain.as_str(), self.port).to_socket_addrs() {
+                Ok(iter) => self.new_addr(iter),
+                Err(e) => Err((self.source_address.clone(), e)),
+            },
         }
     }
 }
@@ -104,6 +114,21 @@ mod test {
         let future: DNSResolver =
             DNSResolver::new("/dns4/localhost/tcp/80".parse().unwrap()).unwrap();
         let mut rt = tokio::runtime::Runtime::new().unwrap();
+        let addr = rt.block_on(future).unwrap();
+        match addr.iter().next().unwrap() {
+            Protocol::Ip4(_) => {
+                assert_eq!("/ip4/127.0.0.1/tcp/80".parse::<Multiaddr>().unwrap(), addr)
+            }
+            Protocol::Ip6(_) => assert_eq!("/ip6/::1/tcp/80".parse::<Multiaddr>().unwrap(), addr),
+            _ => panic!("Dns resolver fail"),
+        }
+    }
+
+    #[test]
+    fn dns_parser_current_thread_runtime() {
+        let future: DNSResolver =
+            DNSResolver::new("/dns4/localhost/tcp/80".parse().unwrap()).unwrap();
+        let mut rt = tokio::runtime::current_thread::Runtime::new().unwrap();
         let addr = rt.block_on(future).unwrap();
         match addr.iter().next().unwrap() {
             Protocol::Ip4(_) => {
