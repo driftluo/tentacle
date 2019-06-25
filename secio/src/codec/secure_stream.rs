@@ -39,6 +39,9 @@ pub struct SecureStream<T> {
     /// denotes a sequence of bytes which are expected to be
     /// found at the beginning of the stream and are checked for equality
     nonce: Vec<u8>,
+
+    current_decode: Option<BytesMut>,
+    current_encode: Option<BytesMut>,
     /// Send buffer
     pending: VecDeque<Bytes>,
     /// Read buffer
@@ -76,6 +79,8 @@ where
             encode_hmac,
             read_buf: VecDeque::default(),
             nonce,
+            current_decode: None,
+            current_encode: None,
             pending: VecDeque::default(),
             frame_sender: None,
             event_sender,
@@ -127,12 +132,14 @@ where
     }
 
     #[inline]
-    fn handle_event(&mut self, event: StreamEvent) -> Result<(), io::Error> {
+    fn handle_event(&mut self, event: StreamEvent) -> Poll<(), io::Error> {
         match event {
-            StreamEvent::Frame(mut frame) => {
+            StreamEvent::Frame(frame) => {
                 debug!("start send data: {:?}", frame);
-                self.encode(&mut frame);
-                self.pending.push_back(frame.freeze());
+                self.current_encode = Some(frame);
+                if let Async::NotReady = self.encode() {
+                    return Ok(Async::NotReady);
+                }
                 self.send_frame()?;
             }
             StreamEvent::Close => {
@@ -144,7 +151,7 @@ where
                 debug!("secure stream flushed");
             }
         }
-        Ok(())
+        Ok(Async::Ready(()))
     }
 
     #[inline]
@@ -152,11 +159,12 @@ where
         let mut finished = false;
         for _ in 0..128 {
             match self.socket.poll() {
-                Ok(Async::Ready(Some(mut t))) => {
+                Ok(Async::Ready(Some(t))) => {
                     trace!("receive raw data size: {:?}", t.len());
-                    self.decode(&mut t)?;
-                    debug!("receive data size: {:?}", t.len());
-                    self.read_buf.push_back(StreamEvent::Frame(t));
+                    self.current_decode = Some(t.clone());
+                    if let Async::NotReady = self.decode()? {
+                        break;
+                    }
                     self.send_to_handle()?;
                 }
                 Ok(Async::Ready(None)) => {
@@ -185,13 +193,18 @@ where
     fn recv_event(&mut self) {
         let mut finished = false;
         for _ in 0..128 {
+            if self.dead {
+                return;
+            }
             match self.event_receiver.poll() {
-                Ok(Async::Ready(Some(event))) => {
-                    if let Err(err) = self.handle_event(event) {
+                Ok(Async::Ready(Some(event))) => match self.handle_event(event) {
+                    Err(err) => {
                         debug!("send message error: {:?}", err);
                         break;
                     }
-                }
+                    Ok(Async::NotReady) => break,
+                    _ => (),
+                },
                 Ok(Async::Ready(None)) => unreachable!(),
                 Ok(Async::NotReady) => {
                     finished = true;
@@ -275,7 +288,7 @@ where
 
     /// Decoding data
     #[inline]
-    fn decode(&mut self, frame: &mut BytesMut) -> Result<(), SecioError> {
+    fn decode_inner(&mut self, mut frame: BytesMut) -> Result<BytesMut, SecioError> {
         if frame.len() < self.decode_hmac.num_bytes() {
             debug!("frame too short when decoding secio frame");
             return Err(SecioError::FrameTooShort);
@@ -293,7 +306,7 @@ where
         }
 
         frame.truncate(content_length);
-        self.decode_cipher.decrypt(frame);
+        self.decode_cipher.decrypt(&mut frame);
 
         if !self.nonce.is_empty() {
             let n = min(frame.len(), self.nonce.len());
@@ -303,15 +316,51 @@ where
             self.nonce.drain(..n);
             frame.split_to(n);
         }
-        Ok(())
+        Ok(frame)
+    }
+
+    fn decode(&mut self) -> Poll<(), SecioError> {
+        if self.current_decode.is_none() {
+            return Ok(Async::Ready(()));
+        }
+        let data = self.current_decode.clone().unwrap();
+        let t = match tokio_threadpool::blocking(|| self.decode_inner(data.clone())) {
+            Ok(Async::Ready(res)) => res?,
+            Ok(Async::NotReady) => return Ok(Async::NotReady),
+            Err(_) => self.decode_inner(data)?,
+        };
+        self.current_decode.take();
+        debug!("receive data size: {:?}", t.len());
+        self.read_buf.push_back(StreamEvent::Frame(t));
+        Ok(Async::Ready(()))
     }
 
     /// Encoding data
     #[inline]
-    fn encode(&mut self, data: &mut BytesMut) {
+    fn encode_inner(&mut self, mut data: BytesMut) -> BytesMut {
         self.encode_cipher.encrypt(&mut data[..]);
         let signature = self.encode_hmac.sign(&data[..]);
         data.extend_from_slice(signature.as_ref());
+        data
+    }
+
+    fn encode(&mut self) -> Async<()> {
+        if self.current_encode.is_none() {
+            return Async::Ready(());
+        }
+
+        let data = self.current_encode.clone().unwrap();
+
+        let frame = match tokio_threadpool::blocking(|| self.encode_inner(data.clone())) {
+            Ok(Async::Ready(res)) => res,
+            Ok(Async::NotReady) => return Async::NotReady,
+            Err(_) => self.encode_inner(data),
+        };
+
+        self.pending.push_back(frame.freeze());
+        self.current_encode.take();
+
+        Async::Ready(())
     }
 }
 
@@ -333,6 +382,16 @@ where
         }
 
         self.poll_complete()?;
+
+        if let Async::NotReady = self.decode().map_err::<io::Error, _>(Into::into)? {
+            self.set_delay();
+            return Ok(Async::NotReady);
+        }
+
+        if let Async::NotReady = self.encode() {
+            self.set_delay();
+            return Ok(Async::NotReady);
+        }
 
         match self.recv_frame() {
             Ok(Async::Ready(None)) => {
