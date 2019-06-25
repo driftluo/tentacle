@@ -25,6 +25,7 @@ use crate::{
 };
 
 const DELAY_TIME: Duration = Duration::from_millis(300);
+const BLOCK_BOUNDARY: usize = 1024 * 256;
 
 /// Encrypted stream
 pub struct SecureStream<T> {
@@ -324,11 +325,16 @@ where
             return Ok(Async::Ready(()));
         }
         let data = self.current_decode.clone().unwrap();
-        let t = match tokio_threadpool::blocking(|| self.decode_inner(data.clone())) {
-            Ok(Async::Ready(res)) => res?,
-            Ok(Async::NotReady) => return Ok(Async::NotReady),
-            Err(_) => self.decode_inner(data)?,
+        let t = if data.len() > BLOCK_BOUNDARY {
+            match tokio_threadpool::blocking(|| self.decode_inner(data.clone())) {
+                Ok(Async::Ready(res)) => res?,
+                Ok(Async::NotReady) => return Ok(Async::NotReady),
+                Err(_) => self.decode_inner(data)?,
+            }
+        } else {
+            self.decode_inner(data)?
         };
+
         self.current_decode.take();
         debug!("receive data size: {:?}", t.len());
         self.read_buf.push_back(StreamEvent::Frame(t));
@@ -351,10 +357,14 @@ where
 
         let data = self.current_encode.clone().unwrap();
 
-        let frame = match tokio_threadpool::blocking(|| self.encode_inner(data.clone())) {
-            Ok(Async::Ready(res)) => res,
-            Ok(Async::NotReady) => return Async::NotReady,
-            Err(_) => self.encode_inner(data),
+        let frame = if data.len() > BLOCK_BOUNDARY {
+            match tokio_threadpool::blocking(|| self.encode_inner(data.clone())) {
+                Ok(Async::Ready(res)) => res,
+                Ok(Async::NotReady) => return Async::NotReady,
+                Err(_) => self.encode_inner(data),
+            }
+        } else {
+            self.encode_inner(data)
         };
 
         self.pending.push_back(frame.freeze());

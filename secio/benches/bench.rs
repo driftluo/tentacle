@@ -1,6 +1,6 @@
 use bytes::BytesMut;
 use criterion::{criterion_group, criterion_main, Bencher, Criterion};
-use secio::{
+use tentacle_secio::{
     codec::Hmac,
     stream_cipher::{ctr_init, Cipher},
     Digest,
@@ -45,7 +45,9 @@ fn bench_test(bench: &mut Bencher, cipher: Cipher, data: &[u8]) {
 }
 
 fn criterion_benchmark(bench: &mut Criterion) {
-    let data = (0..1024).map(|_| rand::random::<u8>()).collect::<Vec<_>>();
+    let data = (0..1024 * 256)
+        .map(|_| rand::random::<u8>())
+        .collect::<Vec<_>>();
     bench.bench_function("1kb_aes128", {
         let data = data.clone();
         move |b| bench_test(b, Cipher::Aes128, &data)
