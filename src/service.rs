@@ -1154,6 +1154,9 @@ where
     /// When listen update, call here
     #[inline]
     fn update_listens(&mut self) {
+        if self.listens.len() == self.service_context.listens().len() {
+            return;
+        }
         let new_listens = self
             .listens
             .iter()
@@ -1338,20 +1341,14 @@ where
             }
             ServiceTask::Listen { address } => {
                 if !self.listens.iter().any(|(addr, _)| addr == &address) {
-                    match self.listen(address.clone()) {
-                        Ok(_) => {
-                            self.update_listens();
-                            self.listen_poll();
-                        }
-                        Err(e) => {
-                            self.handle.handle_error(
-                                &mut self.service_context,
-                                ServiceError::ListenError {
-                                    address,
-                                    error: e.into(),
-                                },
-                            );
-                        }
+                    if let Err(e) = self.listen(address.clone()) {
+                        self.handle.handle_error(
+                            &mut self.service_context,
+                            ServiceError::ListenError {
+                                address,
+                                error: e.into(),
+                            },
+                        );
                     }
                 }
             }

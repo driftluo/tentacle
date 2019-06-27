@@ -1,3 +1,14 @@
+## 0.2.2
+
+### Refactor
+
+- Use blocking thread to avoid the problem that the reactor is not timely
+
+### Bug Fix
+
+- Allow dns resolver on current thread runtime
+- Listen address update too frequently
+
 ## 0.2.1
 
 ### Features
