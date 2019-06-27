@@ -18,6 +18,7 @@ use crate::{
     ProtocolId, SessionId,
 };
 
+#[derive(Clone)]
 pub enum ServiceProtocolEvent {
     Init,
     Connected {
@@ -43,6 +44,9 @@ pub enum ServiceProtocolEvent {
     RemoveNotify {
         token: u64,
     },
+    Notify {
+        token: u64,
+    },
     Update {
         listen_addrs: Vec<Multiaddr>,
     },
@@ -57,6 +61,7 @@ pub struct ServiceProtocolStream<T> {
     notify: HashMap<u64, Duration>,
     notify_sender: mpsc::Sender<u64>,
     notify_receiver: mpsc::Receiver<u64>,
+    current_task: Option<ServiceProtocolEvent>,
     delay: Arc<AtomicBool>,
     shutdown: Arc<AtomicBool>,
     future_task_sender: mpsc::Sender<BoxedFutureTask>,
@@ -82,6 +87,7 @@ where
             notify_sender,
             notify_receiver,
             notify: HashMap::new(),
+            current_task: Some(ServiceProtocolEvent::Init),
             delay: Arc::new(AtomicBool::new(false)),
             shutdown,
             future_task_sender,
@@ -89,13 +95,20 @@ where
     }
 
     #[inline]
-    pub fn handle_event(&mut self, event: ServiceProtocolEvent) {
+    pub fn handle_event(&mut self) -> Async<()> {
         use self::ServiceProtocolEvent::*;
 
+        if self.current_task.is_none() {
+            return Async::Ready(());
+        }
+
         if self.shutdown.load(Ordering::SeqCst) {
-            match event {
+            match self.current_task.as_ref().unwrap() {
                 Disconnected { .. } => (),
-                _ => return,
+                _ => {
+                    self.current_task.take();
+                    return Async::Ready(());
+                }
             }
         }
 
@@ -112,28 +125,62 @@ where
             }
         }
 
-        match event {
+        match self.current_task.clone().unwrap() {
             Init => self.handle.init(&mut self.handle_context),
             Connected { session, version } => {
-                self.handle
-                    .connected(self.handle_context.as_mut(&session), &version);
+                match tokio_threadpool::blocking(|| {
+                    self.handle
+                        .connected(self.handle_context.as_mut(&session), &version)
+                }) {
+                    Ok(Async::Ready(_)) => (),
+                    Ok(Async::NotReady) => return Async::NotReady,
+                    Err(_) => self
+                        .handle
+                        .connected(self.handle_context.as_mut(&session), &version),
+                }
                 self.sessions.insert(session.id, session);
             }
             Disconnected { id } => {
                 if let Some(session) = self.sessions.remove(&id) {
-                    self.handle
-                        .disconnected(self.handle_context.as_mut(&session));
-                }
-            }
-            Received { id, data } => {
-                if let Some(session) = self.sessions.get(&id) {
-                    if !session.closed.load(Ordering::SeqCst) {
+                    match tokio_threadpool::blocking(|| {
                         self.handle
-                            .received(self.handle_context.as_mut(&session), data);
+                            .disconnected(self.handle_context.as_mut(&session))
+                    }) {
+                        Ok(Async::Ready(_)) => (),
+                        Ok(Async::NotReady) => return Async::NotReady,
+                        Err(_) => self
+                            .handle
+                            .disconnected(self.handle_context.as_mut(&session)),
                     }
                 }
             }
-            SetNotify { token, interval } => {
+            Received { id, data } => {
+                if let Some(session) = self.sessions.get(&id).cloned() {
+                    if !session.closed.load(Ordering::SeqCst) {
+                        match tokio_threadpool::blocking(|| {
+                            self.handle
+                                .received(self.handle_context.as_mut(&session), data.clone())
+                        }) {
+                            Ok(Async::Ready(_)) => (),
+                            Ok(Async::NotReady) => return Async::NotReady,
+                            Err(_) => self
+                                .handle
+                                .received(self.handle_context.as_mut(&session), data),
+                        }
+                    }
+                }
+            }
+            Notify { token } => {
+                match tokio_threadpool::blocking(|| {
+                    self.handle.notify(&mut self.handle_context, token)
+                }) {
+                    Ok(Async::Ready(_)) => (),
+                    Ok(Async::NotReady) => return Async::NotReady,
+                    Err(_) => self.handle.notify(&mut self.handle_context, token),
+                }
+                self.set_notify(token);
+            }
+            SetNotify { interval, token } => {
                 self.notify.entry(token).or_insert(interval);
                 self.set_notify(token);
             }
@@ -144,6 +191,8 @@ where
                 self.handle_context.update_listens(listen_addrs);
             }
         }
+        self.current_task.take();
+        Async::Ready(())
     }
 
     fn set_notify(&mut self, token: u64) {
@@ -197,10 +246,19 @@ where
     type Error = ();
 
     fn poll(&mut self) -> Poll<Option<Self::Item>, Self::Error> {
+        if let Async::NotReady = self.handle_event() {
+            self.set_delay();
+            return Ok(Async::NotReady);
+        }
         let mut finished = false;
         for _ in 0..64 {
             match self.receiver.poll() {
-                Ok(Async::Ready(Some(event))) => self.handle_event(event),
+                Ok(Async::Ready(Some(event))) => {
+                    self.current_task = Some(event);
+                    if let Async::NotReady = self.handle_event() {
+                        break;
+                    }
+                }
                 Ok(Async::Ready(None)) => {
                     debug!(
                         "ServiceProtocolStream({:?}) finished",
@@ -228,8 +286,11 @@ where
         loop {
             match self.notify_receiver.poll() {
                 Ok(Async::Ready(Some(token))) => {
-                    self.handle.notify(&mut self.handle_context, token);
-                    self.set_notify(token);
+                    self.current_task = Some(ServiceProtocolEvent::Notify { token });
+                    if let Async::NotReady = self.handle_event() {
+                        self.set_delay();
+                        break;
+                    }
                 }
                 Ok(Async::Ready(None)) => unreachable!(),
                 Ok(Async::NotReady) => {
@@ -252,6 +313,7 @@ where
     }
 }
 
+#[derive(Clone)]
 pub enum SessionProtocolEvent {
     Connected {
         version: String,
@@ -261,6 +323,9 @@ pub enum SessionProtocolEvent {
     Received {
         /// Data
         data: bytes::Bytes,
+    },
+    Notify {
+        token: u64,
     },
     SetNotify {
         /// Timer interval
@@ -285,6 +350,7 @@ pub struct SessionProtocolStream<T> {
     notify: HashMap<u64, Duration>,
     notify_sender: mpsc::Sender<u64>,
     notify_receiver: mpsc::Receiver<u64>,
+    current_task: Option<SessionProtocolEvent>,
     delay: Arc<AtomicBool>,
     shutdown: Arc<AtomicBool>,
     future_task_sender: mpsc::Sender<BoxedFutureTask>,
@@ -311,6 +377,7 @@ where
             notify_receiver,
             notify: HashMap::new(),
             context,
+            current_task: None,
             shutdown,
             delay: Arc::new(AtomicBool::new(false)),
             future_task_sender,
@@ -318,33 +385,76 @@ where
     }
 
     #[inline]
-    fn handle_event(&mut self, mut event: SessionProtocolEvent) {
+    fn handle_event(&mut self) -> Async<()> {
         use self::SessionProtocolEvent::*;
 
+        if self.current_task.is_none() {
+            return Async::Ready(());
+        }
         if self.shutdown.load(Ordering::SeqCst) {
-            match event {
+            match self.current_task.as_ref().unwrap() {
                 Disconnected {} => (),
-                _ => return,
+                _ => {
+                    self.current_task.take();
+                    return Async::Ready(());
+                }
             }
         }
 
         if self.context.closed.load(Ordering::SeqCst) {
-            event = SessionProtocolEvent::Disconnected;
+            self.current_task = Some(SessionProtocolEvent::Disconnected);
         }
 
-        match event {
+        match self.current_task.clone().unwrap() {
             Connected { version } => {
-                self.handle
-                    .connected(self.handle_context.as_mut(&self.context), &version);
+                match tokio_threadpool::blocking(|| {
+                    self.handle
+                        .connected(self.handle_context.as_mut(&self.context), &version)
+                }) {
+                    Ok(Async::Ready(_)) => (),
+                    Ok(Async::NotReady) => return Async::NotReady,
+                    Err(_) => self
+                        .handle
+                        .connected(self.handle_context.as_mut(&self.context), &version),
+                }
             }
             Disconnected => {
-                self.handle
-                    .disconnected(self.handle_context.as_mut(&self.context));
+                match tokio_threadpool::blocking(|| {
+                    self.handle
+                        .disconnected(self.handle_context.as_mut(&self.context))
+                }) {
+                    Ok(Async::Ready(_)) => (),
+                    Ok(Async::NotReady) => return Async::NotReady,
+                    Err(_) => self
+                        .handle
+                        .disconnected(self.handle_context.as_mut(&self.context)),
+                }
                 self.close();
             }
             Received { data } => {
-                self.handle
-                    .received(self.handle_context.as_mut(&self.context), data);
+                match tokio_threadpool::blocking(|| {
+                    self.handle
+                        .received(self.handle_context.as_mut(&self.context), data.clone())
+                }) {
+                    Ok(Async::Ready(_)) => (),
+                    Ok(Async::NotReady) => return Async::NotReady,
+                    Err(_) => self
+                        .handle
+                        .received(self.handle_context.as_mut(&self.context), data),
+                }
+            }
+            Notify { token } => {
+                match tokio_threadpool::blocking(|| {
+                    self.handle
+                        .notify(self.handle_context.as_mut(&self.context), token)
+                }) {
+                    Ok(Async::Ready(_)) => (),
+                    Ok(Async::NotReady) => return Async::NotReady,
+                    Err(_) => self
+                        .handle
+                        .notify(self.handle_context.as_mut(&self.context), token),
+                }
+                self.set_notify(token);
             }
             SetNotify { token, interval } => {
                 self.notify.entry(token).or_insert(interval);
@@ -357,6 +467,8 @@ where
                 self.handle_context.update_listens(listen_addrs);
             }
         }
+        self.current_task.take();
+        Async::Ready(())
     }
 
     fn set_notify(&mut self, token: u64) {
@@ -415,9 +527,19 @@ where
     type Error = ();
 
     fn poll(&mut self) -> Poll<Option<Self::Item>, Self::Error> {
+        if let Async::NotReady = self.handle_event() {
+            self.set_delay();
+            return Ok(Async::NotReady);
+        }
         loop {
             match self.receiver.poll() {
-                Ok(Async::Ready(Some(event))) => self.handle_event(event),
+                Ok(Async::Ready(Some(event))) => {
+                    self.current_task = Some(event);
+                    if let Async::NotReady = self.handle_event() {
+                        self.set_delay();
+                        break;
+                    }
+                }
                 Ok(Async::Ready(None)) => {
                     self.close();
                     return Ok(Async::Ready(None));
@@ -439,9 +561,11 @@ where
         loop {
             match self.notify_receiver.poll() {
                 Ok(Async::Ready(Some(token))) => {
-                    self.handle
-                        .notify(self.handle_context.as_mut(&self.context), token);
-                    self.set_notify(token);
+                    self.current_task = Some(SessionProtocolEvent::Notify { token });
+                    if let Async::NotReady = self.handle_event() {
+                        self.set_delay();
+                        break;
+                    }
                 }
                 Ok(Async::Ready(None)) => unreachable!(),
                 Ok(Async::NotReady) => {

@@ -534,7 +534,7 @@ where
                     proto_id,
                     (self.shutdown.clone(), self.future_task_sender.clone()),
                 );
-                stream.handle_event(ServiceProtocolEvent::Init);
+                stream.handle_event();
                 tokio::spawn(stream.for_each(|_| Ok(())).map_err(|_| ()));
             }
 
