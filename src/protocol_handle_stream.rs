@@ -307,10 +307,7 @@ where
             }
         }
 
-        match tokio_threadpool::blocking(|| self.handle.poll(&mut self.handle_context)) {
-            Ok(_) => (),
-            Err(_) => self.handle.poll(&mut self.handle_context),
-        }
+        self.handle.poll(&mut self.handle_context);
 
         Ok(Async::NotReady)
     }
@@ -585,12 +582,7 @@ where
             }
         }
 
-        match tokio_threadpool::blocking(|| {
-            self.handle.poll(self.handle_context.as_mut(&self.context))
-        }) {
-            Ok(_) => (),
-            Err(_) => self.handle.poll(self.handle_context.as_mut(&self.context)),
-        }
+        self.handle.poll(self.handle_context.as_mut(&self.context));
 
         Ok(Async::NotReady)
     }
