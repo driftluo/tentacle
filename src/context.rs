@@ -3,7 +3,10 @@ use futures::{prelude::*, sync::mpsc};
 use std::{
     collections::HashMap,
     ops::{Deref, DerefMut},
-    sync::{atomic::AtomicBool, Arc},
+    sync::{
+        atomic::{AtomicBool, AtomicUsize, Ordering},
+        Arc,
+    },
     time::Duration,
 };
 
@@ -66,6 +69,22 @@ pub struct SessionContext {
     pub remote_pubkey: Option<PublicKey>,
     /// Session is closed
     pub closed: Arc<AtomicBool>,
+    /// Session pending data size
+    pub pending_data_size: Arc<AtomicUsize>,
+}
+
+impl SessionContext {
+    // Increase when data pushed to Service's write buffer
+    pub(crate) fn incr_pending_data_size(&self, data_size: usize) {
+        self.pending_data_size
+            .fetch_add(data_size, Ordering::SeqCst);
+    }
+
+    // Decrease when data sent to underlying Yamux Stream
+    pub(crate) fn decr_pending_data_size(&self, data_size: usize) {
+        self.pending_data_size
+            .fetch_sub(data_size, Ordering::SeqCst);
+    }
 }
 
 /// The Service runtime can send some instructions to the inside of the handle.
