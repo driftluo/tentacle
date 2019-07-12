@@ -2,7 +2,7 @@ use futures::{prelude::*, sync::mpsc};
 use log::{debug, error, trace, warn};
 use std::collections::{vec_deque::VecDeque, HashMap, HashSet};
 use std::sync::{
-    atomic::{AtomicBool, Ordering},
+    atomic::{AtomicBool, AtomicUsize, Ordering},
     Arc,
 };
 use std::time::{Duration, Instant};
@@ -559,17 +559,16 @@ where
         }
     }
 
-    /// Send data to the specified protocol for the specified session.
-    #[inline]
-    fn send_message_to(
+    fn push_session_message(
         &mut self,
         session_id: SessionId,
         proto_id: ProtocolId,
         priority: Priority,
         data: Bytes,
     ) {
-        if !self.sessions.contains_key(&session_id) {
-            return;
+        let data_size = data.len();
+        if let Some(controller) = self.sessions.get(&session_id) {
+            controller.inner.incr_pending_data_size(data_size);
         }
         let message_event = SessionEvent::ProtocolMessage {
             id: session_id,
@@ -578,57 +577,57 @@ where
             data,
         };
         self.push_back(priority, session_id, message_event);
-
-        self.distribute_to_session();
     }
 
-    /// Send data to the specified protocol for the specified sessions.
-    #[inline]
-    fn filter_broadcast(
+    fn handle_message(
         &mut self,
-        ids: Vec<SessionId>,
+        target: TargetSession,
         proto_id: ProtocolId,
         priority: Priority,
         data: Bytes,
     ) {
-        for id in self.sessions.keys().cloned().collect::<Vec<SessionId>>() {
-            if ids.contains(&id) {
+        let data = match self.before_sends.get(&proto_id) {
+            Some(function) => function(data),
+            None => data,
+        };
+        match target {
+            // Send data to the specified protocol for the specified session.
+            TargetSession::Single(id) => {
+                if !self.sessions.contains_key(&id) {
+                    return;
+                }
+                self.push_session_message(id, proto_id, priority, data);
+            }
+            // Send data to the specified protocol for the specified sessions.
+            TargetSession::Multi(ids) => {
+                for id in self
+                    .sessions
+                    .keys()
+                    .filter(|id| ids.contains(id))
+                    .cloned()
+                    .collect::<Vec<SessionId>>()
+                {
+                    debug!(
+                        "send message to session [{}], proto [{}], data len: {}",
+                        id,
+                        proto_id,
+                        data.len()
+                    );
+                    self.push_session_message(id, proto_id, priority, data.clone());
+                }
+            }
+            // Broadcast data for a specified protocol.
+            TargetSession::All => {
                 debug!(
-                    "send message to session [{}], proto [{}], data len: {}",
-                    id,
+                    "broadcast message, peer count: {}, proto_id: {}, data len: {}",
+                    self.sessions.len(),
                     proto_id,
                     data.len()
                 );
-
-                let message_event = SessionEvent::ProtocolMessage {
-                    id,
-                    proto_id,
-                    priority,
-                    data: data.clone(),
-                };
-                self.push_back(priority, id, message_event);
+                for id in self.sessions.keys().cloned().collect::<Vec<SessionId>>() {
+                    self.push_session_message(id, proto_id, priority, data.clone());
+                }
             }
-        }
-        self.distribute_to_session();
-    }
-
-    /// Broadcast data for a specified protocol.
-    #[inline]
-    fn broadcast(&mut self, proto_id: ProtocolId, priority: Priority, data: Bytes) {
-        debug!(
-            "broadcast message, peer count: {}, proto_id: {}, data len: {}",
-            self.sessions.len(),
-            proto_id,
-            data.len()
-        );
-        for id in self.sessions.keys().cloned().collect::<Vec<SessionId>>() {
-            let message_event = SessionEvent::ProtocolMessage {
-                id,
-                proto_id,
-                priority,
-                data: data.clone(),
-            };
-            self.push_back(priority, id, message_event);
         }
         self.distribute_to_session();
     }
@@ -815,18 +814,20 @@ where
         }
 
         let session_closed = Arc::new(AtomicBool::new(false));
+        let pending_data_size = Arc::new(AtomicUsize::new(0));
         let (service_event_sender, service_event_receiver) = mpsc::channel(SEND_SIZE);
         let (quick_event_sender, quick_event_receiver) = mpsc::channel(SEND_SIZE);
         let session_control = SessionController::new(
             quick_event_sender,
             service_event_sender,
-            Arc::new(SessionContext {
-                id: self.next_session,
+            Arc::new(SessionContext::new(
+                self.next_session,
                 address,
                 ty,
                 remote_pubkey,
-                closed: session_closed.clone(),
-            }),
+                session_closed.clone(),
+                pending_data_size,
+            )),
         );
 
         let session_context = session_control.inner.clone();
@@ -1314,17 +1315,7 @@ where
                 priority,
                 data,
             } => {
-                let data = match self.before_sends.get(&proto_id) {
-                    Some(function) => function(data),
-                    None => data,
-                };
-                match target {
-                    TargetSession::Single(id) => self.send_message_to(id, proto_id, priority, data),
-                    TargetSession::Multi(ids) => {
-                        self.filter_broadcast(ids, proto_id, priority, data)
-                    }
-                    TargetSession::All => self.broadcast(proto_id, priority, data),
-                }
+                self.handle_message(target, proto_id, priority, data);
             }
             ServiceTask::Dial { address, target } => {
                 if !self.dial_protocols.contains_key(&address) {

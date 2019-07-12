@@ -149,13 +149,17 @@ where
     /// Sink `start_send` NotReady -> buffer full need poll complete
     #[inline]
     fn send_inner(&mut self, frame: bytes::Bytes, priority: Priority) -> Result<bool, io::Error> {
+        let data_size = frame.len();
         match self.sub_stream.start_send(frame) {
             Ok(AsyncSink::NotReady(frame)) => {
                 debug!("framed_stream NotReady, frame len: {:?}", frame.len());
                 self.push_front(priority, frame);
                 Ok(true)
             }
-            Ok(AsyncSink::Ready) => Ok(false),
+            Ok(AsyncSink::Ready) => {
+                self.context.decr_pending_data_size(data_size);
+                Ok(false)
+            }
             Err(err) => {
                 debug!("framed_stream send error: {:?}", err);
                 Err(err)

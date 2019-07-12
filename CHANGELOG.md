@@ -1,3 +1,9 @@
+## 0.2.3 
+
+### Features
+
+- Record pending data size in SessionContext
+
 ## 0.2.2
 
 ### Refactor

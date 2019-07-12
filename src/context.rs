@@ -3,7 +3,10 @@ use futures::{prelude::*, sync::mpsc};
 use std::{
     collections::HashMap,
     ops::{Deref, DerefMut},
-    sync::{atomic::AtomicBool, Arc},
+    sync::{
+        atomic::{AtomicBool, AtomicUsize, Ordering},
+        Arc,
+    },
     time::Duration,
 };
 
@@ -64,8 +67,49 @@ pub struct SessionContext {
     // TODO: use reference?
     /// Remote public key
     pub remote_pubkey: Option<PublicKey>,
+    pub(crate) closed: Arc<AtomicBool>,
+    pending_data_size: Arc<AtomicUsize>,
+}
+
+impl SessionContext {
+    pub(crate) fn new(
+        id: SessionId,
+        address: Multiaddr,
+        ty: SessionType,
+        remote_pubkey: Option<PublicKey>,
+        closed: Arc<AtomicBool>,
+        pending_data_size: Arc<AtomicUsize>,
+    ) -> SessionContext {
+        SessionContext {
+            id,
+            address,
+            ty,
+            remote_pubkey,
+            closed,
+            pending_data_size,
+        }
+    }
+
+    // Increase when data pushed to Service's write buffer
+    pub(crate) fn incr_pending_data_size(&self, data_size: usize) {
+        self.pending_data_size
+            .fetch_add(data_size, Ordering::Relaxed);
+    }
+
+    // Decrease when data sent to underlying Yamux Stream
+    pub(crate) fn decr_pending_data_size(&self, data_size: usize) {
+        self.pending_data_size
+            .fetch_sub(data_size, Ordering::Relaxed);
+    }
+
     /// Session is closed
-    pub closed: Arc<AtomicBool>,
+    pub fn closed(&self) -> bool {
+        self.closed.load(Ordering::SeqCst)
+    }
+    /// Session pending data size
+    pub fn pending_data_size(&self) -> usize {
+        self.pending_data_size.load(Ordering::Relaxed)
+    }
 }
 
 /// The Service runtime can send some instructions to the inside of the handle.
