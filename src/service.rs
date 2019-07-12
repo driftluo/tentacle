@@ -820,14 +820,14 @@ where
         let session_control = SessionController::new(
             quick_event_sender,
             service_event_sender,
-            Arc::new(SessionContext {
-                id: self.next_session,
+            Arc::new(SessionContext::new(
+                self.next_session,
                 address,
                 ty,
                 remote_pubkey,
-                closed: session_closed.clone(),
+                session_closed.clone(),
                 pending_data_size,
-            }),
+            )),
         );
 
         let session_context = session_control.inner.clone();
