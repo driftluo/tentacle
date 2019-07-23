@@ -1,7 +1,6 @@
-use std::collections::VecDeque;
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::io;
 
-use fnv::{FnvHashMap, FnvHashSet};
 use futures::{
     prelude::*,
     sync::mpsc::{channel, Receiver, Sender},
@@ -43,7 +42,7 @@ use crate::{addr::DEFAULT_MAX_KNOWN, substream::RemoteAddress};
 pub struct DiscoveryProtocol<M> {
     discovery: Option<Discovery<M>>,
     discovery_handle: DiscoveryHandle,
-    discovery_senders: FnvHashMap<SessionId, Sender<Vec<u8>>>,
+    discovery_senders: HashMap<SessionId, Sender<Vec<u8>>>,
 }
 
 impl<M: AddressManager> DiscoveryProtocol<M> {
@@ -52,7 +51,7 @@ impl<M: AddressManager> DiscoveryProtocol<M> {
         DiscoveryProtocol {
             discovery: Some(discovery),
             discovery_handle,
-            discovery_senders: FnvHashMap::default(),
+            discovery_senders: HashMap::default(),
         }
     }
 }
@@ -140,14 +139,14 @@ pub struct Discovery<M> {
     pending_nodes: VecDeque<(SubstreamKey, SessionId, Nodes)>,
 
     // For manage those substreams
-    substreams: FnvHashMap<SubstreamKey, SubstreamValue>,
+    substreams: HashMap<SubstreamKey, SubstreamValue>,
 
     // For add new substream to Discovery
     substream_sender: Sender<Substream>,
     // For add new substream to Discovery
     substream_receiver: Receiver<Substream>,
 
-    dead_keys: FnvHashSet<SubstreamKey>,
+    dead_keys: HashSet<SubstreamKey>,
 
     dynamic_query_cycle: Option<Duration>,
 
@@ -169,10 +168,10 @@ impl<M: AddressManager> Discovery<M> {
             max_known: DEFAULT_MAX_KNOWN,
             addr_mgr,
             pending_nodes: VecDeque::default(),
-            substreams: FnvHashMap::default(),
+            substreams: HashMap::default(),
             substream_sender,
             substream_receiver,
-            dead_keys: FnvHashSet::default(),
+            dead_keys: HashSet::default(),
             dynamic_query_cycle: query_cycle,
         }
     }

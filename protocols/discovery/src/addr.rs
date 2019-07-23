@@ -1,8 +1,7 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::net::{IpAddr, SocketAddr};
 use std::time::Instant;
 
-use fnv::{FnvHashMap, FnvHashSet};
 use p2p::{
     multiaddr::Multiaddr,
     utils::{is_reachable, multiaddr_to_socketaddr},
@@ -62,8 +61,8 @@ pub trait AddressManager {
 // bitcoin: bloom.h, bloom.cpp => CRollingBloomFilter
 pub struct AddrKnown {
     max_known: usize,
-    addrs: FnvHashSet<RawAddr>,
-    addr_times: FnvHashMap<RawAddr, Instant>,
+    addrs: HashSet<RawAddr>,
+    addr_times: HashMap<RawAddr, Instant>,
     time_addrs: BTreeMap<Instant, RawAddr>,
 }
 
@@ -71,8 +70,8 @@ impl AddrKnown {
     pub(crate) fn new(max_known: usize) -> AddrKnown {
         AddrKnown {
             max_known,
-            addrs: FnvHashSet::default(),
-            addr_times: FnvHashMap::default(),
+            addrs: HashSet::default(),
+            addr_times: HashMap::default(),
             time_addrs: BTreeMap::default(),
         }
     }
