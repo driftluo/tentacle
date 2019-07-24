@@ -13,7 +13,6 @@ edition = "2018"
 p2p = { path = "../..", version = "0.2.0", package = "tentacle" }
 bytes = "0.4"
 byteorder = "1.2"
-fnv = "1.0"
 futures = "0.1"
 tokio = "0.1"
 log = "0.4"

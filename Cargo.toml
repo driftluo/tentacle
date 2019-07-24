@@ -35,7 +35,6 @@ features = ["minwindef", "ws2def", "winerror"]
 
 [dev-dependencies]
 env_logger = "0.6.0"
-fnv = "1.0"
 crossbeam-channel = "0.3.6"
 generic-channel = { version = "0.2.0", features = ["all"] }
 systemstat = "0.1.3"

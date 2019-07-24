@@ -10,7 +10,6 @@ use crate::protocol_generated::p2p::ping::*;
 use bytes::Bytes;
 use flatbuffers::{FlatBufferBuilder, WIPOffset};
 use flatbuffers_verifier::get_root;
-use fnv::FnvHashMap;
 use generic_channel::Sender;
 use log::{debug, error, warn};
 use p2p::{
@@ -21,6 +20,7 @@ use p2p::{
     SessionId,
 };
 use std::{
+    collections::HashMap,
     str,
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
@@ -48,7 +48,7 @@ pub enum Event {
 pub struct PingHandler<S: Sender<Event>> {
     interval: Duration,
     timeout: Duration,
-    connected_session_ids: FnvHashMap<SessionId, PingStatus>,
+    connected_session_ids: HashMap<SessionId, PingStatus>,
     event_sender: S,
 }
 

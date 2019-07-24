@@ -1,8 +1,10 @@
 use env_logger;
 use log::debug;
 
-use fnv::FnvHashMap;
-use std::{collections::HashSet, time::Duration};
+use std::{
+    collections::{HashMap, HashSet},
+    time::Duration,
+};
 
 use futures::prelude::*;
 
@@ -46,7 +48,7 @@ fn create_meta(id: ProtocolId, start: u16) -> ProtocolMeta {
     let addrs: HashSet<Multiaddr> = (start..start + 3333)
         .map(|port| format!("/ip4/127.0.0.1/tcp/{}", port).parse().unwrap())
         .collect();
-    let mut peers = FnvHashMap::default();
+    let mut peers = HashMap::default();
     peers.insert(0.into(), (100, addrs));
     let addr_mgr = SimpleAddressManager { peers };
     MetaBuilder::default()
@@ -72,7 +74,7 @@ impl ServiceHandle for SHandle {
 
 #[derive(Default, Clone, Debug)]
 pub struct SimpleAddressManager {
-    pub peers: FnvHashMap<SessionId, (i32, HashSet<Multiaddr>)>,
+    pub peers: HashMap<SessionId, (i32, HashSet<Multiaddr>)>,
 }
 
 impl AddressManager for SimpleAddressManager {

@@ -1,6 +1,6 @@
 //! The session, can open and manage substreams
 
-use std::collections::{BTreeMap, HashSet, VecDeque};
+use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::io;
 use std::{
     sync::{
@@ -10,7 +10,6 @@ use std::{
     time::{Duration, Instant},
 };
 
-use fnv::{FnvHashMap, FnvHashSet};
 use futures::{
     future::Future,
     sync::mpsc::{channel, Receiver, Sender},
@@ -62,9 +61,9 @@ pub struct Session<T> {
     ping_id: u32,
 
     // streams maps a stream id to a sender of stream,
-    streams: FnvHashMap<StreamId, Sender<Frame>>,
+    streams: HashMap<StreamId, Sender<Frame>>,
     // inflight has an entry for any outgoing stream that has not yet been established.
-    inflight: FnvHashSet<StreamId>,
+    inflight: HashSet<StreamId>,
     // The StreamHandle not yet been polled
     pending_streams: VecDeque<StreamHandle>,
     // The buffer which will send to underlying network
@@ -154,8 +153,8 @@ where
             config,
             pings: BTreeMap::default(),
             ping_id: 0,
-            streams: FnvHashMap::default(),
-            inflight: FnvHashSet::default(),
+            streams: HashMap::default(),
+            inflight: HashSet::default(),
             pending_streams: VecDeque::default(),
             write_pending_frames: VecDeque::default(),
             read_pending_frames: VecDeque::default(),
