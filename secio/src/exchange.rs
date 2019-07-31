@@ -3,7 +3,6 @@
 use log::debug;
 use ring::agreement;
 use ring::rand as ring_rand;
-use untrusted::Input;
 
 use crate::error::SecioError;
 
@@ -55,8 +54,7 @@ pub fn agree(
 ) -> Result<Vec<u8>, SecioError> {
     agreement::agree_ephemeral(
         my_private_key,
-        algorithm.into(),
-        Input::from(other_public_key),
+        &agreement::UnparsedPublicKey::new(algorithm.into(), other_public_key),
         SecioError::SecretGenerationFailed,
         |key_material| Ok(key_material.to_vec()),
     )
