@@ -131,7 +131,7 @@ where
                     }
                 };
 
-                exchanges.signature = signature;
+                exchanges.signature = signature.to_vec();
                 exchanges
             };
             let local_exchanges = exchanges.encode();
