@@ -670,8 +670,13 @@ where
 
     /// Handshake
     #[inline]
-    fn handshake<H>(&mut self, socket: H, ty: SessionType, remote_address: Multiaddr)
-    where
+    fn handshake<H>(
+        &mut self,
+        socket: H,
+        ty: SessionType,
+        remote_address: Multiaddr,
+        listen_address: Option<Multiaddr>,
+    ) where
         H: AsyncRead + AsyncWrite + Send + 'static,
     {
         if let Some(key_pair) = self.service_context.key_pair() {
@@ -690,6 +695,7 @@ where
                                 public_key,
                                 address: remote_address,
                                 ty,
+                                listen_address,
                             })
                         }
                         Err(err) => {
@@ -733,7 +739,7 @@ where
 
             tokio::spawn(future_task);
         } else {
-            self.session_open(socket, None, remote_address, ty);
+            self.session_open(socket, None, remote_address, ty, listen_address);
         }
     }
 
@@ -745,6 +751,7 @@ where
         remote_pubkey: Option<PublicKey>,
         mut address: Multiaddr,
         ty: SessionType,
+        listen_addr: Option<Multiaddr>,
     ) where
         H: AsyncRead + AsyncWrite + Send + 'static,
     {
@@ -779,7 +786,7 @@ where
                             &mut self.service_context,
                             ServiceError::ListenError {
                                 error: Error::RepeatedConnection(context.inner.id),
-                                address,
+                                address: listen_addr.expect("listen address must exist"),
                             },
                         );
                     }
@@ -1197,8 +1204,9 @@ where
                 public_key,
                 address,
                 ty,
+                listen_address,
             } => {
-                self.session_open(handle, Some(public_key), address, ty);
+                self.session_open(handle, Some(public_key), address, ty, listen_address);
             }
             SessionEvent::HandshakeFail { ty, error, address } => {
                 if ty.is_outbound() {
@@ -1302,7 +1310,7 @@ where
             SessionEvent::DialStart {
                 remote_address,
                 stream,
-            } => self.handshake(stream, SessionType::Outbound, remote_address),
+            } => self.handshake(stream, SessionType::Outbound, remote_address, None),
         }
     }
 
@@ -1480,7 +1488,12 @@ where
         for (address, mut listen) in self.listens.split_off(0) {
             match listen.poll() {
                 Ok(Async::Ready(Some((remote_address, socket)))) => {
-                    self.handshake(socket, SessionType::Inbound, remote_address);
+                    self.handshake(
+                        socket,
+                        SessionType::Inbound,
+                        remote_address,
+                        Some(address.clone()),
+                    );
                     self.listens.push((address, listen));
                 }
                 Ok(Async::Ready(None)) => {

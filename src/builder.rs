@@ -140,10 +140,10 @@ impl Default for ServiceBuilder {
     }
 }
 
-pub(crate) type NameFn = Box<Fn(ProtocolId) -> String + Send + Sync>;
-pub(crate) type CodecFn = Box<Fn() -> Box<dyn Codec + Send + 'static> + Send + Sync>;
+pub(crate) type NameFn = Box<dyn Fn(ProtocolId) -> String + Send + Sync>;
+pub(crate) type CodecFn = Box<dyn Fn() -> Box<dyn Codec + Send + 'static> + Send + Sync>;
 pub(crate) type SessionHandleFn =
-    Box<FnMut() -> ProtocolHandle<Box<dyn SessionProtocol + Send + 'static>> + Send>;
+    Box<dyn FnMut() -> ProtocolHandle<Box<dyn SessionProtocol + Send + 'static>> + Send>;
 pub(crate) type SelectVersionFn = Box<dyn Fn() -> Option<SelectFn<String>> + Send + Sync + 'static>;
 pub(crate) type BeforeReceiveFn = Box<dyn Fn() -> Option<BeforeReceive> + Send + Sync + 'static>;
 pub(crate) type BeforeReceive =
