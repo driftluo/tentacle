@@ -5,7 +5,6 @@ use crate::{
     PublicKey, SecioKeyPair,
 };
 
-use futures::Future;
 use tokio::prelude::{AsyncRead, AsyncWrite};
 
 #[cfg(all(feature = "flatc", feature = "molc"))]
@@ -93,13 +92,13 @@ impl Config {
     ///
     /// On success, produces a `SecureStream` that can then be used to encode/decode
     /// communications, plus the public key of the remote, plus the ephemeral public key.
-    pub fn handshake<T>(
+    pub async fn handshake<T>(
         self,
         socket: T,
-    ) -> impl Future<Item = (StreamHandle, PublicKey, EphemeralPublicKey), Error = SecioError>
+    ) -> Result<(StreamHandle, PublicKey, EphemeralPublicKey), SecioError>
     where
-        T: AsyncRead + AsyncWrite + Send + 'static,
+        T: AsyncRead + AsyncWrite + Send + 'static + Unpin,
     {
-        handshake(socket, self)
+        handshake(socket, self).await
     }
 }

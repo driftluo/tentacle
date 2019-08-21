@@ -1,9 +1,15 @@
 use bytes::BytesMut;
-use futures::prelude::*;
-use futures::sync::mpsc::{Receiver, Sender};
+use futures::{
+    channel::mpsc::{Receiver, Sender},
+    Stream,
+};
 use tokio::prelude::{AsyncRead, AsyncWrite};
 
-use std::io;
+use std::{
+    io,
+    pin::Pin,
+    task::{Context, Poll},
+};
 
 /// Stream handle
 #[derive(Debug)]
@@ -27,11 +33,11 @@ impl StreamHandle {
         }
     }
 
-    fn handle_event(&mut self, event: StreamEvent) -> Result<(), io::Error> {
+    fn handle_event(&mut self, _cx: &mut Context, event: StreamEvent) -> Result<(), io::Error> {
         match event {
             StreamEvent::Frame(frame) => self.read_buf.extend_from_slice(&frame),
             StreamEvent::Close => {
-                self.shutdown()?;
+                let _ = self.shutdown()?;
             }
             _ => (),
         }
@@ -39,87 +45,94 @@ impl StreamHandle {
     }
 
     /// Receive frames from secure stream
-    fn recv_frames(&mut self) -> Poll<(), io::Error> {
+    fn recv_frames(&mut self, cx: &mut Context) -> Result<(), io::Error> {
         loop {
-            match self.frame_receiver.poll() {
-                Ok(Async::Ready(Some(event))) => self.handle_event(event)?,
-                Ok(Async::Ready(None)) => {
+            match Pin::new(&mut self.frame_receiver).poll_next(cx) {
+                Poll::Ready(Some(event)) => self.handle_event(cx, event)?,
+                Poll::Ready(None) => {
                     return Err(io::ErrorKind::BrokenPipe.into());
                 }
-                Ok(Async::NotReady) => break,
-                Err(_) => return Err(io::ErrorKind::BrokenPipe.into()),
+                Poll::Pending => break,
             }
         }
-        Ok(Async::NotReady)
+        Ok(())
+    }
+
+    fn shutdown(&mut self) -> Poll<io::Result<()>> {
+        if let Err(e) = self.event_sender.try_send(StreamEvent::Close) {
+            if e.is_full() {
+                return Poll::Pending;
+            } else {
+                return Poll::Ready(Err(io::ErrorKind::BrokenPipe.into()));
+            }
+        }
+        Poll::Ready(Ok(()))
     }
 }
 
-impl io::Read for StreamHandle {
-    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
-        if let Err(e) = self.recv_frames() {
+impl AsyncRead for StreamHandle {
+    fn poll_read(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context,
+        buf: &mut [u8],
+    ) -> Poll<io::Result<usize>> {
+        if let Err(e) = self.recv_frames(cx) {
             if self.read_buf.is_empty() {
-                return Err(e);
+                return Poll::Ready(Err(e));
             }
         }
 
         let n = ::std::cmp::min(buf.len(), self.read_buf.len());
 
         if n == 0 {
-            return Err(io::ErrorKind::WouldBlock.into());
+            return Poll::Pending;
         }
 
         let b = self.read_buf.split_to(n);
 
         buf[..n].copy_from_slice(&b);
-        Ok(n)
+        Poll::Ready(Ok(n))
     }
 }
 
-impl io::Write for StreamHandle {
-    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-        self.recv_frames()?;
+impl AsyncWrite for StreamHandle {
+    fn poll_write(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context,
+        buf: &[u8],
+    ) -> Poll<io::Result<usize>> {
+        self.recv_frames(cx)?;
 
         let byte = BytesMut::from(buf);
         match self.event_sender.try_send(StreamEvent::Frame(byte)) {
-            Ok(_) => Ok(buf.len()),
+            Ok(_) => Poll::Ready(Ok(buf.len())),
             Err(e) => {
                 if e.is_full() {
-                    Err(io::ErrorKind::WouldBlock.into())
+                    Poll::Pending
                 } else {
-                    Err(io::ErrorKind::BrokenPipe.into())
+                    Poll::Ready(Err(io::ErrorKind::BrokenPipe.into()))
                 }
             }
         }
     }
 
-    fn flush(&mut self) -> io::Result<()> {
-        self.recv_frames()?;
+    fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<io::Result<()>> {
+        self.recv_frames(cx)?;
 
         match self.event_sender.try_send(StreamEvent::Flush) {
-            Ok(_) => Ok(()),
+            Ok(_) => Poll::Ready(Ok(())),
             Err(e) => {
                 if e.is_full() {
-                    Err(io::ErrorKind::WouldBlock.into())
+                    Poll::Pending
                 } else {
-                    Err(io::ErrorKind::BrokenPipe.into())
+                    Poll::Ready(Err(io::ErrorKind::BrokenPipe.into()))
                 }
             }
         }
     }
-}
 
-impl AsyncRead for StreamHandle {}
-
-impl AsyncWrite for StreamHandle {
-    fn shutdown(&mut self) -> Poll<(), io::Error> {
-        if let Err(e) = self.event_sender.try_send(StreamEvent::Close) {
-            if e.is_full() {
-                return Err(io::ErrorKind::WouldBlock.into());
-            } else {
-                return Err(io::ErrorKind::BrokenPipe.into());
-            }
-        }
-        Ok(Async::Ready(()))
+    fn poll_shutdown(mut self: Pin<&mut Self>, _cx: &mut Context) -> Poll<io::Result<()>> {
+        self.shutdown()
     }
 }
 

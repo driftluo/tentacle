@@ -2,14 +2,16 @@
 ///
 /// Some panic logic has been removed, some error handling has been removed, and an error has been added.
 ///
-use futures::{future, prelude::*, Future};
+use bytes::Bytes;
+use futures::prelude::*;
+use futures::{SinkExt, StreamExt};
 use log::{debug, trace};
-use std::{
-    cmp::Ordering,
-    io::{self, Write},
+use std::{cmp::Ordering, io};
+use tokio::{
+    codec::length_delimited::Builder,
+    io::AsyncWriteExt,
+    prelude::{AsyncRead, AsyncWrite},
 };
-use tokio::codec::length_delimited::Builder;
-use tokio::prelude::{AsyncRead, AsyncWrite};
 
 use crate::{
     codec::{secure_stream::SecureStream, stream_handle::StreamHandle, Hmac},
@@ -33,279 +35,249 @@ use crate::{
 /// On success, returns an object that implements the `AsyncWrite` and `AsyncRead` trait,
 /// plus the public key of the remote, plus the ephemeral public key used during
 /// negotiation.
-pub(in crate::handshake) fn handshake<T>(
+pub(in crate::handshake) async fn handshake<T>(
     socket: T,
     config: Config,
-) -> impl Future<Item = (StreamHandle, PublicKey, EphemeralPublicKey), Error = SecioError>
+) -> Result<(StreamHandle, PublicKey, EphemeralPublicKey), SecioError>
 where
-    T: AsyncRead + AsyncWrite + Send + 'static,
+    T: AsyncRead + AsyncWrite + Send + 'static + Unpin,
 {
     // The handshake messages all start with a 4-bytes message length prefix.
-    let socket = Builder::new()
+    let mut socket = Builder::new()
         .big_endian()
         .length_field_length(4)
         .max_frame_length(config.max_frame_length)
         .new_framed(socket);
 
-    future::ok::<_, SecioError>(HandshakeContext::new(config))
-        .and_then(|empty_context| {
-            // Generate our nonce.
-            let context = empty_context.with_local();
-            trace!(
-                "starting handshake; local nonce = {:?}",
-                context.state.nonce
-            );
-            Ok(context)
-        })
-        .and_then(|local_context| {
-            trace!("sending proposition to remote");
-            socket
-                .send(local_context.state.proposition_bytes.clone())
-                .from_err()
-                .map(|socket| (socket, local_context))
-        })
-        .and_then(move |(socket, local_context)| {
-            // Receive the remote's proposition.
-            socket.into_future().map_err(|(e, _)| e.into()).and_then(
-                move |(remote_propose, socket)| {
-                    let context = match remote_propose {
-                        Some(p) => local_context.with_remote(p)?,
-                        None => {
-                            let err =
-                                io::Error::new(io::ErrorKind::UnexpectedEof, "unexpected eof");
-                            debug!("unexpected eof while waiting for remote's proposition");
-                            return Err(err.into());
-                        }
-                    };
-                    trace!(
-                        "received proposition from remote; pubkey = {:?}; nonce = {:?}",
-                        context.state.public_key,
-                        context.state.nonce
-                    );
-                    Ok((socket, context))
-                },
-            )
-        })
-        .and_then(|(socket, remote_context)| {
-            // Generate an ephemeral key for the negotiation.
-            exchange::generate_agreement(remote_context.state.chosen_exchange).map(
-                move |(tmp_priv_key, tmp_pub_key)| {
-                    (socket, remote_context, tmp_priv_key, tmp_pub_key)
-                },
-            )
-        })
-        .and_then(|(socket, remote_context, tmp_priv, tmp_pub_key)| {
-            // Send the ephemeral pub key to the remote in an `Exchange` struct. The `Exchange` also
-            // contains a signature of the two propositions encoded with our static public key.
-            let ephemeral_context = remote_context.with_ephemeral(tmp_priv, tmp_pub_key.clone());
-            let exchanges = {
-                let mut exchanges = Exchange::new();
+    // Generate our nonce.
+    let local_context = HandshakeContext::new(config).with_local();
+    trace!(
+        "starting handshake; local nonce = {:?}",
+        local_context.state.nonce
+    );
 
-                let mut data_to_sign = ephemeral_context
-                    .state
-                    .remote
-                    .local
-                    .proposition_bytes
-                    .clone();
-                data_to_sign.extend_from_slice(&ephemeral_context.state.remote.proposition_bytes);
-                data_to_sign.extend_from_slice(&tmp_pub_key);
+    trace!("sending proposition to remote");
+    socket
+        .send(Bytes::from(local_context.state.proposition_bytes.clone()))
+        .await?;
 
-                exchanges.epubkey = tmp_pub_key;
+    // Receive the remote's proposition.
+    let remote_context = match socket.next().await {
+        Some(p) => local_context.with_remote(p?)?,
+        None => {
+            let err = io::Error::new(io::ErrorKind::UnexpectedEof, "unexpected eof");
+            debug!("unexpected eof while waiting for remote's proposition");
+            return Err(err.into());
+        }
+    };
 
-                let data_to_sign = ring::digest::digest(&ring::digest::SHA256, &data_to_sign);
-                let message = match secp256k1::Message::from_slice(data_to_sign.as_ref()) {
-                    Ok(msg) => msg,
-                    Err(_) => {
-                        debug!("message has wrong format");
-                        return Err(SecioError::InvalidMessage);
-                    }
-                };
+    trace!(
+        "received proposition from remote; pubkey = {:?}; nonce = {:?}",
+        remote_context.state.public_key,
+        remote_context.state.nonce
+    );
 
-                let secp256k1_key = secp256k1::Secp256k1::signing_only();
-                let signature = match ephemeral_context.config.key.inner {
-                    KeyPairInner::Secp256k1 { ref private } => {
-                        secp256k1_key.sign(&message, private).serialize_der()
-                    }
-                };
+    // Generate an ephemeral key for the negotiation.
+    let (tmp_priv_key, tmp_pub_key) =
+        exchange::generate_agreement(remote_context.state.chosen_exchange)?;
 
-                exchanges.signature = signature.to_vec();
-                exchanges
-            };
-            let local_exchanges = exchanges.encode();
+    // Send the ephemeral pub key to the remote in an `Exchange` struct. The `Exchange` also
+    // contains a signature of the two propositions encoded with our static public key.
+    let ephemeral_context = remote_context.with_ephemeral(tmp_priv_key, tmp_pub_key.clone());
 
-            Ok((socket, local_exchanges, ephemeral_context))
-        })
-        .and_then(|(socket, local_exchanges, ephemeral_context)| {
-            // Send our local `Exchange`.
-            trace!("sending exchange to remote");
-            socket
-                .send(local_exchanges)
-                .from_err()
-                .map(|socket| (socket, ephemeral_context))
-        })
-        .and_then(|(socket, ephemeral_context)| {
-            // Receive the remote's `Exchange`.
-            socket
-                .into_future()
-                .map_err(|(e, _)| e.into())
-                .and_then(|(raw_exchanges, socket)| {
-                    let raw_exchanges = match raw_exchanges {
-                        Some(raw) => raw,
-                        None => {
-                            let err = io::Error::new(io::ErrorKind::BrokenPipe, "unexpected eof");
-                            debug!("unexpected eof while waiting for remote's proposition");
-                            return Err(err.into());
-                        }
-                    };
+    let exchanges = {
+        let mut exchanges = Exchange::new();
 
-                    let remote_exchanges = match Exchange::decode(&raw_exchanges) {
-                        Some(e) => e,
-                        None => {
-                            debug!("failed to parse remote's exchange");
-                            return Err(SecioError::HandshakeParsingFailure);
-                        }
-                    };
+        let mut data_to_sign = ephemeral_context
+            .state
+            .remote
+            .local
+            .proposition_bytes
+            .clone();
+        data_to_sign.extend_from_slice(&ephemeral_context.state.remote.proposition_bytes);
+        data_to_sign.extend_from_slice(&tmp_pub_key);
 
-                    trace!("received and decoded the remote's exchange");
-                    Ok((remote_exchanges, socket, ephemeral_context))
-                })
-        })
-        .and_then(|(remote_exchanges, socket, ephemeral_context)| {
-            // Check the validity of the remote's `Exchange`. This verifies that the remote was really
-            // the sender of its proposition, and that it is the owner of both its global and ephemeral
-            // keys.
+        exchanges.epubkey = tmp_pub_key;
 
-            let mut data_to_verify = ephemeral_context.state.remote.proposition_bytes.clone();
-            data_to_verify
-                .extend_from_slice(&ephemeral_context.state.remote.local.proposition_bytes);
-            data_to_verify.extend_from_slice(&remote_exchanges.epubkey);
+        let data_to_sign = ring::digest::digest(&ring::digest::SHA256, &data_to_sign);
+        let message = match secp256k1::Message::from_slice(data_to_sign.as_ref()) {
+            Ok(msg) => msg,
+            Err(_) => {
+                debug!("message has wrong format");
+                return Err(SecioError::InvalidMessage);
+            }
+        };
 
-            let data_to_verify = ring::digest::digest(&ring::digest::SHA256, &data_to_verify);
+        let secp256k1_key = secp256k1::Secp256k1::signing_only();
+        let signature = match ephemeral_context.config.key.inner {
+            KeyPairInner::Secp256k1 { ref private } => {
+                secp256k1_key.sign(&message, private).serialize_der()
+            }
+        };
 
-            let message = match secp256k1::Message::from_slice(data_to_verify.as_ref()) {
-                Ok(msg) => msg,
-                Err(_) => {
-                    debug!("remote's message has wrong format");
-                    return Err(SecioError::InvalidMessage);
-                }
-            };
+        exchanges.signature = signature.to_vec();
+        exchanges
+    };
+    let local_exchanges = exchanges.encode();
 
-            let secp256k1 = secp256k1::Secp256k1::verification_only();
-            let signature = secp256k1::Signature::from_der(&remote_exchanges.signature);
-            let remote_public_key = match ephemeral_context.state.remote.public_key {
-                PublicKey::Secp256k1(ref key) => secp256k1::key::PublicKey::from_slice(key),
-            };
+    // Send our local `Exchange`.
+    trace!("sending exchange to remote");
 
-            if let (Ok(signature), Ok(remote_public_key)) = (signature, remote_public_key) {
-                match secp256k1.verify(&message, &signature, &remote_public_key) {
-                    Ok(()) => (),
-                    Err(_) => {
-                        debug!("failed to verify the remote's signature");
-                        return Err(SecioError::SignatureVerificationFailed);
-                    }
-                }
-            } else {
-                debug!("remote's secp256k1 signature has wrong format");
+    socket.send(Bytes::from(local_exchanges)).await?;
+
+    // Receive the remote's `Exchange`.
+    let raw_exchanges = match socket.next().await {
+        Some(raw) => raw?,
+        None => {
+            let err = io::Error::new(io::ErrorKind::BrokenPipe, "unexpected eof");
+            debug!("unexpected eof while waiting for remote's proposition");
+            return Err(err.into());
+        }
+    };
+
+    let remote_exchanges = match Exchange::decode(&raw_exchanges) {
+        Some(e) => e,
+        None => {
+            debug!("failed to parse remote's exchange");
+            return Err(SecioError::HandshakeParsingFailure);
+        }
+    };
+
+    trace!("received and decoded the remote's exchange");
+
+    // Check the validity of the remote's `Exchange`. This verifies that the remote was really
+    // the sender of its proposition, and that it is the owner of both its global and ephemeral
+    // keys.
+
+    let mut data_to_verify = ephemeral_context.state.remote.proposition_bytes.clone();
+    data_to_verify.extend_from_slice(&ephemeral_context.state.remote.local.proposition_bytes);
+    data_to_verify.extend_from_slice(&remote_exchanges.epubkey);
+
+    let data_to_verify = ring::digest::digest(&ring::digest::SHA256, &data_to_verify);
+
+    let message = match secp256k1::Message::from_slice(data_to_verify.as_ref()) {
+        Ok(msg) => msg,
+        Err(_) => {
+            debug!("remote's message has wrong format");
+            return Err(SecioError::InvalidMessage);
+        }
+    };
+
+    let secp256k1 = secp256k1::Secp256k1::verification_only();
+    let signature = secp256k1::Signature::from_der(&remote_exchanges.signature);
+    let remote_public_key = match ephemeral_context.state.remote.public_key {
+        PublicKey::Secp256k1(ref key) => secp256k1::key::PublicKey::from_slice(key),
+    };
+
+    if let (Ok(signature), Ok(remote_public_key)) = (signature, remote_public_key) {
+        match secp256k1.verify(&message, &signature, &remote_public_key) {
+            Ok(()) => (),
+            Err(_) => {
+                debug!("failed to verify the remote's signature");
                 return Err(SecioError::SignatureVerificationFailed);
             }
+        }
+    } else {
+        debug!("remote's secp256k1 signature has wrong format");
+        return Err(SecioError::SignatureVerificationFailed);
+    }
 
-            trace!("successfully verified the remote's signature");
-            Ok((remote_exchanges, socket, ephemeral_context))
-        })
-        .and_then(|(remote_exchanges, socket, ephemeral_context)| {
-            // Generate a key from the local ephemeral private key and the remote ephemeral public key,
-            // derive from it a cipher key, an iv, and a hmac key, and build the encoder/decoder.
+    trace!("successfully verified the remote's signature");
 
-            let (pub_ephemeral_context, local_priv_key) = ephemeral_context.take_private_key();
-            exchange::agree(
-                pub_ephemeral_context.state.remote.chosen_exchange,
-                local_priv_key,
-                &remote_exchanges.epubkey,
-            )
-            .map(move |key_material| (socket, pub_ephemeral_context, key_material))
-        })
-        .and_then(|(socket, pub_ephemeral_context, key_material)| {
-            // Generate a key from the local ephemeral private key and the remote ephemeral public key,
-            // derive from it a cipher key, an iv, and a hmac key, and build the encoder/decoder.
+    // Generate a key from the local ephemeral private key and the remote ephemeral public key,
+    // derive from it a cipher key, an iv, and a hmac key, and build the encoder/decoder.
 
-            let chosen_cipher = pub_ephemeral_context.state.remote.chosen_cipher;
-            let cipher_key_size = chosen_cipher.key_size();
-            let iv_size = chosen_cipher.iv_size();
+    let (pub_ephemeral_context, local_priv_key) = ephemeral_context.take_private_key();
+    let key_material = exchange::agree(
+        pub_ephemeral_context.state.remote.chosen_exchange,
+        local_priv_key,
+        &remote_exchanges.epubkey,
+    )?;
 
-            let key = Hmac::from_key(
-                pub_ephemeral_context.state.remote.chosen_hash,
-                &key_material,
-            );
-            let mut longer_key = vec![0u8; 2 * (iv_size + cipher_key_size + 20)];
-            stretch_key(key, &mut longer_key);
+    // Generate a key from the local ephemeral private key and the remote ephemeral public key,
+    // derive from it a cipher key, an iv, and a hmac key, and build the encoder/decoder.
 
-            let (local_infos, remote_infos) = {
-                let (first_half, second_half) = longer_key.split_at(longer_key.len() / 2);
-                match pub_ephemeral_context.state.remote.hashes_ordering {
-                    Ordering::Equal => {
-                        let msg = "equal digest of public key and nonce for local and remote";
-                        return Err(SecioError::InvalidProposition(msg));
-                    }
-                    Ordering::Less => (second_half, first_half),
-                    Ordering::Greater => (first_half, second_half),
-                }
-            };
+    let chosen_cipher = pub_ephemeral_context.state.remote.chosen_cipher;
+    let cipher_key_size = chosen_cipher.key_size();
+    let iv_size = chosen_cipher.iv_size();
 
-            trace!(
-                "local info: {:?}, remote_info: {:?}",
-                local_infos,
-                remote_infos
-            );
+    let key = Hmac::from_key(
+        pub_ephemeral_context.state.remote.chosen_hash,
+        &key_material,
+    );
+    let mut longer_key = vec![0u8; 2 * (iv_size + cipher_key_size + 20)];
+    stretch_key(key, &mut longer_key);
 
-            let (encode_cipher, encode_hmac) = generate_stream_cipher_and_hmac(
-                chosen_cipher,
-                pub_ephemeral_context.state.remote.chosen_hash,
-                CryptoMode::Encrypt,
-                local_infos,
-                cipher_key_size,
-                iv_size,
-            );
-
-            let (decode_cipher, decode_hmac) = generate_stream_cipher_and_hmac(
-                chosen_cipher,
-                pub_ephemeral_context.state.remote.chosen_hash,
-                CryptoMode::Decrypt,
-                remote_infos,
-                cipher_key_size,
-                iv_size,
-            );
-
-            let secure_stream = SecureStream::new(
-                socket,
-                decode_cipher,
-                decode_hmac,
-                encode_cipher,
-                encode_hmac,
-                pub_ephemeral_context.state.remote.local.nonce.to_vec(),
-            );
-            Ok((secure_stream, pub_ephemeral_context))
-        })
-        .and_then(|(mut secure_stream, pub_ephemeral_context)| {
-            let mut handle = secure_stream.create_handle().unwrap();
-
-            tokio::spawn(
-                secure_stream
-                    .for_each(|_| Ok(()))
-                    .map_err(|err| debug!("Abnormal disconnection: {:?}", err)),
-            );
-
-            // We send back their nonce to check if the connection works.
-            trace!("checking encryption by sending back remote's nonce");
-            match handle.write_all(&pub_ephemeral_context.state.remote.nonce) {
-                Ok(_) => (),
-                Err(e) => return Err(e.into()),
+    let (local_infos, remote_infos) = {
+        let (first_half, second_half) = longer_key.split_at(longer_key.len() / 2);
+        match pub_ephemeral_context.state.remote.hashes_ordering {
+            Ordering::Equal => {
+                let msg = "equal digest of public key and nonce for local and remote";
+                return Err(SecioError::InvalidProposition(msg));
             }
-            Ok((
-                handle,
-                pub_ephemeral_context.state.remote.public_key,
-                pub_ephemeral_context.state.local_tmp_pub_key,
-            ))
-        })
+            Ordering::Less => (second_half, first_half),
+            Ordering::Greater => (first_half, second_half),
+        }
+    };
+
+    trace!(
+        "local info: {:?}, remote_info: {:?}",
+        local_infos,
+        remote_infos
+    );
+
+    let (encode_cipher, encode_hmac) = generate_stream_cipher_and_hmac(
+        chosen_cipher,
+        pub_ephemeral_context.state.remote.chosen_hash,
+        CryptoMode::Encrypt,
+        local_infos,
+        cipher_key_size,
+        iv_size,
+    );
+
+    let (decode_cipher, decode_hmac) = generate_stream_cipher_and_hmac(
+        chosen_cipher,
+        pub_ephemeral_context.state.remote.chosen_hash,
+        CryptoMode::Decrypt,
+        remote_infos,
+        cipher_key_size,
+        iv_size,
+    );
+
+    let mut secure_stream = SecureStream::new(
+        socket,
+        decode_cipher,
+        decode_hmac,
+        encode_cipher,
+        encode_hmac,
+        pub_ephemeral_context.state.remote.local.nonce.to_vec(),
+    );
+
+    let mut handle = secure_stream.create_handle().unwrap();
+
+    tokio::spawn(async move {
+        loop {
+            match secure_stream.next().await {
+                Some(Err(err)) => {
+                    debug!("Abnormal disconnection: {:?}", err);
+                    break;
+                }
+                None => break,
+                _ => (),
+            }
+        }
+    });
+
+    // We send back their nonce to check if the connection works.
+    trace!("checking encryption by sending back remote's nonce");
+    handle
+        .write_all(&pub_ephemeral_context.state.remote.nonce)
+        .await?;
+    Ok((
+        handle,
+        pub_ephemeral_context.state.remote.public_key,
+        pub_ephemeral_context.state.local_tmp_pub_key,
+    ))
 }
 
 /// Custom algorithm translated from reference implementations. Needs to be the same algorithm
@@ -361,64 +333,42 @@ mod tests {
     use crate::{codec::Hmac, handshake::Config, Digest, SecioKeyPair};
 
     use bytes::BytesMut;
-    use futures::{prelude::*, sync};
-    use std::io::Write;
-    use std::{thread, time};
-    use tokio::net::{TcpListener, TcpStream};
+    use futures::{channel, StreamExt};
+    use tokio::{
+        io::{AsyncReadExt, AsyncWriteExt},
+        net::{TcpListener, TcpStream},
+    };
 
     fn handshake_with_self_success(config_1: Config, config_2: Config, data: &'static [u8]) {
         let listener = TcpListener::bind(&"127.0.0.1:0".parse().unwrap()).unwrap();
         let listener_addr = listener.local_addr().unwrap();
 
-        let (sender, receiver) = sync::oneshot::channel::<bytes::BytesMut>();
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let (sender, receiver) = channel::oneshot::channel::<bytes::BytesMut>();
 
-        let server = listener
-            .incoming()
-            .into_future()
-            .map_err(|(e, _)| e.into())
-            .and_then(move |(connect, _)| config_1.handshake(connect.unwrap()))
-            .and_then(|(handle, _, _)| {
-                let task = tokio::io::read_exact(handle, [0u8; 11])
-                    .and_then(move |(mut handle, data)| {
-                        let _ = handle.write_all(&data);
-                        // wait test finish, don't drop handle
-                        thread::sleep(time::Duration::from_secs(10));
-                        Ok(())
-                    })
-                    .map_err(|_| ());
-                tokio::spawn(task);
-                Ok(())
-            })
-            .map_err(|_| ());
-
-        let client = TcpStream::connect(&listener_addr)
-            .map_err(Into::into)
-            .and_then(move |stream| config_2.handshake(stream))
-            .and_then(move |(mut handle, _, _)| {
-                let _ = handle.write_all(data);
-
-                let task = tokio::io::read_exact(handle, [0u8; 11])
-                    .and_then(move |(_, data)| {
-                        let _ = sender.send(BytesMut::from(data.to_vec()));
-                        Ok(())
-                    })
-                    .map_err(|_| ());
-                tokio::spawn(task);
-
-                Ok(())
-            })
-            .map_err(|_| ());
-
-        thread::spawn(|| {
-            tokio::run(server);
+        rt.spawn(async move {
+            let (connect, _stream) = listener.incoming().into_future().await;
+            let (mut handle, _, _) = config_1.handshake(connect.unwrap().unwrap()).await.unwrap();
+            let mut data = [0u8; 11];
+            handle.read_exact(&mut data).await.unwrap();
+            handle.write_all(&data).await.unwrap();
         });
 
-        thread::spawn(|| {
-            tokio::run(client);
+        rt.spawn(async move {
+            let connect = TcpStream::connect(&listener_addr).await.unwrap();
+            let (mut handle, _, _) = config_2.handshake(connect).await.unwrap();
+            handle.write_all(data).await.unwrap();
+            let mut data = [0u8; 11];
+            handle.read_exact(&mut data).await.unwrap();
+            let _ = sender.send(BytesMut::from(data.to_vec()));
         });
 
-        let received = receiver.wait().unwrap();
-        assert_eq!(received.to_vec(), data);
+        rt.spawn(async move {
+            let received = receiver.await.unwrap();
+            assert_eq!(received.to_vec(), data);
+        });
+
+        rt.shutdown_on_idle()
     }
 
     #[test]
