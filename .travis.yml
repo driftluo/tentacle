@@ -9,23 +9,34 @@ script:
   - cargo build --examples --all
 stages:
   - Check
-  - Test
+  - Clippy Check
+  - Test Molc
+  - Test Flatc
 jobs:
   include:
     - stage: Check
       name: Format
       script:
         - cargo fmt --all -- --check
-    - stage: Check
+    - stage: Clippy Check
       name: Clippy
       script:
-        - RUSTFLAGS='-F warnings' cargo clippy --all --tests
-    - stage: Test
+        - make clippy
+    - stage: Test Molc
       name: Unitest
       script:
-        - RUSTFLAGS='-F warnings' RUST_BACKTRACE=full cargo test --all
-    - stage: Test
+        - RUSTFLAGS='-F warnings' RUST_BACKTRACE=full cargo test --all --features molc
+    - stage: Test Molc
       name: Bench
       script:
         - cd bench
-        - cargo run --release
+        - cargo run --release --features molc
+    - stage: Test Flatc
+      name: Unitest
+      script:
+        - RUSTFLAGS='-F warnings' RUST_BACKTRACE=full cargo test --all --features flatc
+    - stage: Test Flatc
+      name: Bench
+      script:
+        - cd bench
+        - cargo run --release --features flatc

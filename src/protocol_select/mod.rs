@@ -1,10 +1,14 @@
+#[cfg(all(feature = "flatc", feature = "molc"))]
+compile_error!("features `flatc` and `molc` are mutually exclusive");
+
+#[cfg(feature = "flatc")]
 use crate::protocol_select::protocol_select_generated::p2p::protocol_select::{
     ProtocolInfo as FBSProtocolInfo, ProtocolInfoBuilder,
 };
+#[cfg(feature = "molc")]
+use molecule::prelude::{Builder, Entity, Reader};
 
 use bytes::Bytes;
-use flatbuffers::FlatBufferBuilder;
-use flatbuffers_verifier::get_root;
 use futures::{future, prelude::*};
 use log::debug;
 use std::cmp::Ordering;
@@ -12,15 +16,22 @@ use std::{collections::HashMap, io};
 use tokio::codec::{length_delimited::LengthDelimitedCodec, Framed};
 use tokio::prelude::{AsyncRead, AsyncWrite};
 
+#[cfg(feature = "flatc")]
 #[rustfmt::skip]
 #[allow(clippy::all)]
 #[allow(dead_code)]
 #[allow(unused_imports)]
 mod protocol_select_generated;
+#[cfg(feature = "flatc")]
 #[rustfmt::skip]
 #[allow(clippy::all)]
 #[allow(dead_code)]
 mod protocol_select_generated_verifier;
+#[cfg(feature = "molc")]
+#[rustfmt::skip]
+#[allow(clippy::all)]
+#[allow(dead_code)]
+mod protocol_select_mol;
 
 /// Function for protocol version select
 pub type SelectFn<T> = Box<dyn Fn(&[T], &[T]) -> Option<T> + Send + 'static>;
@@ -43,9 +54,12 @@ impl ProtocolInfo {
         }
     }
 
+    // TODO: return type change to Bytes on 0.3
+
     /// Encode to flatbuffer
+    #[cfg(feature = "flatc")]
     pub fn encode(&self) -> Vec<u8> {
-        let mut fbb = FlatBufferBuilder::new();
+        let mut fbb = flatbuffers::FlatBufferBuilder::new();
         let name = fbb.create_string(&self.name);
         let versions = &self
             .support_versions
@@ -64,8 +78,9 @@ impl ProtocolInfo {
     }
 
     /// Decode from flatbuffer
+    #[cfg(feature = "flatc")]
     pub fn decode(data: &[u8]) -> Option<Self> {
-        let fbs_protocol_info = get_root::<FBSProtocolInfo>(data).ok()?;
+        let fbs_protocol_info = flatbuffers_verifier::get_root::<FBSProtocolInfo>(data).ok()?;
         match (
             fbs_protocol_info.name(),
             fbs_protocol_info.support_versions(),
@@ -82,6 +97,49 @@ impl ProtocolInfo {
             }
             _ => None,
         }
+    }
+
+    /// Encode with molecule
+    #[cfg(feature = "molc")]
+    pub fn encode(self) -> Vec<u8> {
+        let name = protocol_select_mol::String::new_builder()
+            .set(self.name.into_bytes())
+            .build();
+        let mut versions = Vec::new();
+        for version in self.support_versions {
+            versions.push(
+                protocol_select_mol::String::new_builder()
+                    .set(version.into_bytes())
+                    .build(),
+            );
+        }
+
+        let versions = protocol_select_mol::StringVec::new_builder()
+            .set(versions)
+            .build();
+
+        protocol_select_mol::ProtocolInfo::new_builder()
+            .name(name)
+            .support_versions(versions)
+            .build()
+            .as_slice()
+            .to_vec()
+    }
+
+    /// Decode with molecule
+    #[cfg(feature = "molc")]
+    pub fn decode(data: &[u8]) -> Option<Self> {
+        let reader = protocol_select_mol::ProtocolInfoReader::from_slice(data).ok()?;
+
+        let mut supports = Vec::new();
+        for version in reader.support_versions().iter() {
+            supports.push(String::from_utf8(version.raw_data().to_owned()).ok()?)
+        }
+
+        Some(ProtocolInfo {
+            name: String::from_utf8(reader.name().raw_data().to_owned()).ok()?,
+            support_versions: supports,
+        })
     }
 }
 
@@ -234,7 +292,7 @@ mod tests {
         message.name = "test".to_owned();
         message.support_versions = vec!["1.0.0".to_string(), "1.1.1".to_string()];
 
-        let byte = message.encode();
+        let byte = message.clone().encode();
         assert_eq!(message, ProtocolInfo::decode(&byte).unwrap())
     }
 

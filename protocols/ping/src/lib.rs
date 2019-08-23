@@ -1,15 +1,25 @@
+#[cfg(all(feature = "flatc", feature = "molc"))]
+compile_error!("features `flatc` and `molc` are mutually exclusive");
+
+#[cfg(feature = "flatc")]
 #[rustfmt::skip]
 #[allow(clippy::all)]
 mod protocol_generated;
+#[cfg(feature = "flatc")]
 #[rustfmt::skip]
 #[allow(clippy::all)]
 #[allow(dead_code)]
 mod protocol_generated_verifier;
 
-use crate::protocol_generated::p2p::ping::*;
+#[cfg(feature = "molc")]
+#[rustfmt::skip]
+#[allow(clippy::all)]
+#[allow(dead_code)]
+mod protocol_mol;
+#[cfg(feature = "molc")]
+use molecule::prelude::{Builder, Entity, Reader};
+
 use bytes::Bytes;
-use flatbuffers::{FlatBufferBuilder, WIPOffset};
-use flatbuffers_verifier::get_root;
 use generic_channel::Sender;
 use log::{debug, error, warn};
 use p2p::{
@@ -157,53 +167,45 @@ where
             .get(&session.id)
             .map(|ps| ps.peer_id.clone())
         {
-            let msg = match get_root::<PingMessage>(data.as_ref()) {
-                Ok(msg) => msg,
-                Err(e) => {
-                    error!("decode message error: {:?}", e);
+            match PingMessage::decode(data.as_ref()) {
+                None => {
+                    error!("decode message error");
                     self.send_event(Event::UnexpectedError(peer_id));
-                    return;
                 }
-            };
-            match msg.payload_type() {
-                PingPayload::Ping => {
-                    let ping_msg = msg.payload_as_ping().unwrap();
-                    let mut fbb = FlatBufferBuilder::new();
-                    let msg = PingMessage::build_pong(&mut fbb, ping_msg.nonce());
-                    fbb.finish(msg, None);
-                    if context
-                        .send_message(Bytes::from(fbb.finished_data()))
-                        .is_err()
-                    {
-                        debug!("send message fail");
-                    }
-                    self.send_event(Event::Ping(peer_id));
-                }
-                PingPayload::Pong => {
-                    let pong_msg = msg.payload_as_pong().unwrap();
-                    // check pong
-                    if self
-                        .connected_session_ids
-                        .get(&session.id)
-                        .map(|ps| (ps.processing, ps.nonce()))
-                        == Some((true, pong_msg.nonce()))
-                    {
-                        let ping_time = match self.connected_session_ids.get_mut(&session.id) {
-                            Some(ps) => {
-                                ps.processing = false;
-                                ps.elapsed()
+                Some(msg) => {
+                    match msg {
+                        PingPayload::Ping(nonce) => {
+                            if context
+                                .send_message(PingMessage::build_pong(nonce))
+                                .is_err()
+                            {
+                                debug!("send message fail");
                             }
-                            None => return,
-                        };
-                        self.send_event(Event::Pong(peer_id, ping_time));
-                    } else {
-                        // ignore if nonce is incorrect
-                        self.send_event(Event::UnexpectedError(peer_id));
+                            self.send_event(Event::Ping(peer_id));
+                        }
+                        PingPayload::Pong(nonce) => {
+                            // check pong
+                            if self
+                                .connected_session_ids
+                                .get(&session.id)
+                                .map(|ps| (ps.processing, ps.nonce()))
+                                == Some((true, nonce))
+                            {
+                                let ping_time =
+                                    match self.connected_session_ids.get_mut(&session.id) {
+                                        Some(ps) => {
+                                            ps.processing = false;
+                                            ps.elapsed()
+                                        }
+                                        None => return,
+                                    };
+                                self.send_event(Event::Pong(peer_id, ping_time));
+                            } else {
+                                // ignore if nonce is incorrect
+                                self.send_event(Event::UnexpectedError(peer_id));
+                            }
+                        }
                     }
-                }
-                PingPayload::NONE => {
-                    // can't decode msg
-                    self.send_event(Event::UnexpectedError(peer_id));
                 }
             }
         }
@@ -228,20 +230,14 @@ where
                     })
                     .collect();
                 if !peers.is_empty() {
-                    let mut fbb = FlatBufferBuilder::new();
-                    let msg = PingMessage::build_ping(&mut fbb, peers[0].1);
-                    fbb.finish(msg, None);
+                    let ping_msg = PingMessage::build_ping(peers[0].1);
                     let peer_ids: Vec<SessionId> = peers
                         .into_iter()
                         .map(|(session_id, _)| session_id)
                         .collect();
                     let proto_id = context.proto_id;
                     if context
-                        .filter_broadcast(
-                            TargetSession::Multi(peer_ids),
-                            proto_id,
-                            Bytes::from(fbb.finished_data()),
-                        )
+                        .filter_broadcast(TargetSession::Multi(peer_ids), proto_id, ping_msg)
                         .is_err()
                     {
                         debug!("send message fail");
@@ -266,34 +262,102 @@ where
     }
 }
 
-impl<'a> PingMessage<'a> {
-    pub fn build_ping<'b>(
-        fbb: &mut FlatBufferBuilder<'b>,
-        nonce: u32,
-    ) -> WIPOffset<PingMessage<'b>> {
+enum PingPayload {
+    Ping(u32),
+    Pong(u32),
+}
+
+struct PingMessage;
+
+impl PingMessage {
+    #[cfg(feature = "flatc")]
+    fn build_ping(nonce: u32) -> Bytes {
+        let mut fbb = flatbuffers::FlatBufferBuilder::new();
         let ping = {
-            let mut ping = PingBuilder::new(fbb);
+            let mut ping = protocol_generated::p2p::ping::PingBuilder::new(&mut fbb);
             ping.add_nonce(nonce);
             ping.finish()
         };
-        let mut builder = PingMessageBuilder::new(fbb);
-        builder.add_payload_type(PingPayload::Ping);
+
+        let mut builder = protocol_generated::p2p::ping::PingMessageBuilder::new(&mut fbb);
+        builder.add_payload_type(protocol_generated::p2p::ping::PingPayload::Ping);
         builder.add_payload(ping.as_union_value());
-        builder.finish()
+        builder.finish();
+        Bytes::from(fbb.finished_data())
     }
 
-    pub fn build_pong<'b>(
-        fbb: &mut FlatBufferBuilder<'b>,
-        nonce: u32,
-    ) -> WIPOffset<PingMessage<'b>> {
+    #[cfg(feature = "flatc")]
+    fn build_pong(nonce: u32) -> Bytes {
+        let mut fbb = flatbuffers::FlatBufferBuilder::new();
         let pong = {
-            let mut pong = PongBuilder::new(fbb);
+            let mut pong = protocol_generated::p2p::ping::PongBuilder::new(&mut fbb);
             pong.add_nonce(nonce);
             pong.finish()
         };
-        let mut builder = PingMessageBuilder::new(fbb);
-        builder.add_payload_type(PingPayload::Pong);
+        let mut builder = protocol_generated::p2p::ping::PingMessageBuilder::new(&mut fbb);
+        builder.add_payload_type(protocol_generated::p2p::ping::PingPayload::Pong);
         builder.add_payload(pong.as_union_value());
-        builder.finish()
+        builder.finish();
+        Bytes::from(fbb.finished_data())
+    }
+
+    #[cfg(feature = "flatc")]
+    fn decode(data: &[u8]) -> Option<PingPayload> {
+        let msg = flatbuffers_verifier::get_root::<protocol_generated::p2p::ping::PingMessage>(
+            data,
+        )
+        .ok()?;
+        match msg.payload_type() {
+            protocol_generated::p2p::ping::PingPayload::Ping => {
+                Some(PingPayload::Ping(msg.payload_as_ping().unwrap().nonce()))
+            }
+            protocol_generated::p2p::ping::PingPayload::Pong => {
+                Some(PingPayload::Pong(msg.payload_as_pong().unwrap().nonce()))
+            }
+            protocol_generated::p2p::ping::PingPayload::NONE => None,
+        }
+    }
+
+    #[cfg(feature = "molc")]
+    fn build_ping(nonce: u32) -> Bytes {
+        let nonce = protocol_mol::Uint32::new_builder()
+            .set(nonce.to_le_bytes())
+            .build();
+        let ping = protocol_mol::Ping::new_builder().nonce(nonce).build();
+        let payload = protocol_mol::PingPayload::new_builder().set(ping).build();
+        protocol_mol::PingMessage::new_builder()
+            .payload(payload)
+            .build()
+            .as_bytes()
+    }
+
+    #[cfg(feature = "molc")]
+    fn build_pong(nonce: u32) -> Bytes {
+        let nonce = protocol_mol::Uint32::new_builder()
+            .set(nonce.to_le_bytes())
+            .build();
+        let pong = protocol_mol::Pong::new_builder().nonce(nonce).build();
+        let payload = protocol_mol::PingPayload::new_builder().set(pong).build();
+        protocol_mol::PingMessage::new_builder()
+            .payload(payload)
+            .build()
+            .as_bytes()
+    }
+
+    #[cfg(feature = "molc")]
+    #[allow(clippy::cast_ptr_alignment)]
+    fn decode(data: &[u8]) -> Option<PingPayload> {
+        let reader = protocol_mol::PingMessageReader::from_slice(data).ok()?;
+        match reader.payload().to_enum() {
+            protocol_mol::PingPayloadUnionReader::Ping(reader) => {
+                let le = reader.nonce().raw_data().as_ptr() as *const u32;
+                Some(PingPayload::Ping(u32::from_le(unsafe { *le })))
+            }
+            protocol_mol::PingPayloadUnionReader::Pong(reader) => {
+                let le = reader.nonce().raw_data().as_ptr() as *const u32;
+                Some(PingPayload::Pong(u32::from_le(unsafe { *le })))
+            }
+            protocol_mol::PingPayloadUnionReader::NotSet => None
+        }
     }
 }

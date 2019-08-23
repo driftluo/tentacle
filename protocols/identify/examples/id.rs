@@ -2,8 +2,8 @@ use env_logger;
 use log::debug;
 
 use futures::{future::lazy, prelude::*};
-use identify::{Callback, IdentifyProtocol, MisbehaveResult, Misbehavior};
-use tentacle::{
+use tentacle_identify::{Callback, IdentifyProtocol, MisbehaveResult, Misbehavior};
+use p2p::{
     builder::{MetaBuilder, ServiceBuilder},
     context::{ProtocolContextMutRef, ServiceContext},
     multiaddr::Multiaddr,

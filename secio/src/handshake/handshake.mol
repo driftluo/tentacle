@@ -1,0 +1,20 @@
+vector Secp256k1 <byte>;
+vector Bytes <byte>;
+vector String <byte>;
+
+union PublicKey {
+    Secp256k1,
+}
+
+table Propose {
+    rand: Bytes,
+    pubkey: Bytes,
+    exchanges: String,
+    ciphers: String,
+    hashes: String,
+}
+
+table Exchange {
+	epubkey: Bytes,
+	signature: Bytes,
+}

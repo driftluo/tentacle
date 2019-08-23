@@ -1,18 +1,24 @@
+#[cfg(all(feature = "flatc", feature = "molc"))]
+compile_error!("features `flatc` and `molc` are mutually exclusive");
+
 use std::{convert::TryFrom, io};
 
 use bytes::{Bytes, BytesMut};
-use flatbuffers::FlatBufferBuilder;
-use flatbuffers_verifier::get_root;
 use log::debug;
 use p2p::multiaddr::Multiaddr;
 use tokio::codec::length_delimited::LengthDelimitedCodec;
 use tokio::codec::{Decoder, Encoder};
 
+#[cfg(feature = "flatc")]
 use crate::protocol_generated::p2p::discovery::{
     BytesBuilder, DiscoveryMessage as FbsDiscoveryMessage, DiscoveryMessageBuilder,
     DiscoveryPayload as FbsDiscoveryPayload, GetNodes as FbsGetNodes, GetNodesBuilder, NodeBuilder,
     Nodes as FbsNodes, NodesBuilder,
 };
+#[cfg(feature = "molc")]
+use crate::protocol_mol;
+#[cfg(feature = "molc")]
+use molecule::prelude::{Builder, Entity, Reader};
 
 pub(crate) struct DiscoveryCodec {
     inner: LengthDelimitedCodec,
@@ -54,9 +60,7 @@ impl Encoder for DiscoveryCodec {
     type Error = io::Error;
 
     fn encode(&mut self, item: Self::Item, dst: &mut BytesMut) -> Result<(), Self::Error> {
-        // TODO: more error information
-        let data = DiscoveryMessage::encode(&item);
-        self.inner.encode(Bytes::from(data), dst)
+        self.inner.encode(item.encode(), dst)
     }
 }
 
@@ -71,8 +75,9 @@ pub enum DiscoveryMessage {
 }
 
 impl DiscoveryMessage {
-    pub fn encode(&self) -> Vec<u8> {
-        let mut fbb = FlatBufferBuilder::new();
+    #[cfg(feature = "flatc")]
+    pub fn encode(&self) -> Bytes {
+        let mut fbb = flatbuffers::FlatBufferBuilder::new();
         let offset = match self {
             DiscoveryMessage::GetNodes {
                 version,
@@ -119,11 +124,12 @@ impl DiscoveryMessage {
             }
         };
         fbb.finish(offset, None);
-        fbb.finished_data().to_vec()
+        Bytes::from(fbb.finished_data())
     }
 
+    #[cfg(feature = "flatc")]
     pub fn decode(data: &[u8]) -> Option<Self> {
-        let fbs_message = get_root::<FbsDiscoveryMessage>(data).ok()?;
+        let fbs_message = flatbuffers_verifier::get_root::<FbsDiscoveryMessage>(data).ok()?;
         let payload = fbs_message.payload()?;
         match fbs_message.payload_type() {
             FbsDiscoveryPayload::GetNodes => {
@@ -160,6 +166,112 @@ impl DiscoveryMessage {
                 }))
             }
             _ => None,
+        }
+    }
+
+    #[cfg(feature = "molc")]
+    pub fn encode(self) -> Bytes {
+        let playload = match self {
+            DiscoveryMessage::GetNodes {
+                version,
+                count,
+                listen_port,
+            } => {
+                let version = protocol_mol::Uint32::new_builder()
+                    .set(version.to_le_bytes())
+                    .build();
+                let count = protocol_mol::Uint32::new_builder()
+                    .set(count.to_le_bytes())
+                    .build();
+                let listen_port = protocol_mol::PortOpt::new_builder()
+                    .set(listen_port.map(|port| {
+                        protocol_mol::Uint16::new_builder()
+                            .set(port.to_le_bytes())
+                            .build()
+                    }))
+                    .build();
+                let get_node = protocol_mol::GetNodes::new_builder()
+                    .listen_port(listen_port)
+                    .count(count)
+                    .version(version)
+                    .build();
+                protocol_mol::DiscoveryPayload::new_builder()
+                    .set(get_node)
+                    .build()
+            }
+            DiscoveryMessage::Nodes(Nodes { announce, items }) => {
+                let bool_ = if announce { 1u8 } else { 0 };
+                let announce = protocol_mol::Bool::new_builder().set([bool_]).build();
+                let mut item_vec = Vec::with_capacity(items.len());
+                for item in items {
+                    let mut vec_addrs = Vec::with_capacity(item.addresses.len());
+                    for addr in item.addresses {
+                        vec_addrs.push(
+                            protocol_mol::Bytes::new_builder()
+                                .set(addr.to_vec())
+                                .build(),
+                        )
+                    }
+                    let bytes_vec = protocol_mol::BytesVec::new_builder().set(vec_addrs).build();
+                    let node = protocol_mol::Node::new_builder()
+                        .addresses(bytes_vec)
+                        .build();
+                    item_vec.push(node)
+                }
+                let items = protocol_mol::NodeVec::new_builder().set(item_vec).build();
+                let nodes = protocol_mol::Nodes::new_builder()
+                    .announce(announce)
+                    .items(items)
+                    .build();
+                protocol_mol::DiscoveryPayload::new_builder()
+                    .set(nodes)
+                    .build()
+            }
+        };
+        protocol_mol::DiscoveryMessage::new_builder()
+            .payload(playload)
+            .build()
+            .as_bytes()
+    }
+
+    #[cfg(feature = "molc")]
+    #[allow(clippy::cast_ptr_alignment)]
+    pub fn decode(data: &[u8]) -> Option<Self> {
+        let reader = protocol_mol::DiscoveryMessageReader::from_slice(data).ok()?;
+        match reader.payload().to_enum() {
+            protocol_mol::DiscoveryPayloadUnionReader::GetNodes(reader) => {
+                let le = reader.version().raw_data().as_ptr() as *const u32;
+                let version = u32::from_le(unsafe { *le });
+                let le = reader.count().raw_data().as_ptr() as *const u32;
+                let count = u32::from_le(unsafe { *le });
+                let listen_port = reader.listen_port().to_opt().map(|port_reader| {
+                    let le = port_reader.raw_data().as_ptr() as *const u16;
+                    u16::from_le(unsafe { *le })
+                });
+                Some(DiscoveryMessage::GetNodes {
+                    version,
+                    count,
+                    listen_port,
+                })
+            }
+            protocol_mol::DiscoveryPayloadUnionReader::Nodes(reader) => {
+                let announce = match reader.announce().as_slice()[0] {
+                    0 => false,
+                    1 => true,
+                    _ => return None,
+                };
+                let mut items = Vec::with_capacity(reader.items().len());
+                for node_reader in reader.items().iter() {
+                    let mut addresses = Vec::with_capacity(node_reader.addresses().len());
+                    for address_reader in node_reader.addresses().iter() {
+                        addresses
+                            .push(Multiaddr::try_from(address_reader.raw_data().to_vec()).ok()?)
+                    }
+                    items.push(Node { addresses })
+                }
+                Some(DiscoveryMessage::Nodes(Nodes { announce, items }))
+            }
+            protocol_mol::DiscoveryPayloadUnionReader::NotSet => None,
         }
     }
 }

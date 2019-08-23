@@ -23,13 +23,20 @@ mod addr;
 mod protocol;
 mod substream;
 
+#[cfg(feature = "flatc")]
 #[rustfmt::skip]
 #[allow(clippy::all)]
 mod protocol_generated;
+#[cfg(feature = "flatc")]
 #[rustfmt::skip]
 #[allow(clippy::all)]
 #[allow(dead_code)]
 mod protocol_generated_verifier;
+#[cfg(feature = "molc")]
+#[rustfmt::skip]
+#[allow(clippy::all)]
+#[allow(dead_code)]
+mod protocol_mol;
 
 pub use crate::{
     addr::{AddrKnown, AddressManager, MisbehaveResult, Misbehavior, RawAddr},

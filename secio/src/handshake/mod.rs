@@ -8,14 +8,25 @@ use crate::{
 use futures::Future;
 use tokio::prelude::{AsyncRead, AsyncWrite};
 
-mod handshake_context;
+#[cfg(all(feature = "flatc", feature = "molc"))]
+compile_error!("features `flatc` and `molc` are mutually exclusive");
+
+#[cfg(feature = "flatc")]
 #[rustfmt::skip]
 #[allow(clippy::all)]
 mod handshake_generated;
+#[cfg(feature = "flatc")]
 #[rustfmt::skip]
 #[allow(clippy::all)]
 #[allow(dead_code)]
 mod handshake_generated_verifier;
+#[cfg(feature = "molc")]
+#[rustfmt::skip]
+#[allow(clippy::all)]
+#[allow(dead_code)]
+mod handshake_mol;
+
+mod handshake_context;
 pub(crate) mod handshake_struct;
 mod procedure;
 

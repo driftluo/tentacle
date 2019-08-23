@@ -1,0 +1,19 @@
+array Uint32 [byte; 4];
+
+union PingPayload {
+    Ping,
+    Pong,
+}
+
+table PingMessage {
+    payload:        PingPayload,
+}
+
+table Ping {
+    nonce: Uint32,
+}
+
+table Pong {
+    nonce: Uint32,
+}
+

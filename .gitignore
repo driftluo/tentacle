@@ -3,3 +3,5 @@
 .idea/
 Cargo.lock
 */target
+*/*/Cargo.lock
+*/*/*/Cargo.lock
