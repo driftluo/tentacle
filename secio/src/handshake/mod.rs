@@ -10,6 +10,8 @@ use tokio::prelude::{AsyncRead, AsyncWrite};
 
 #[cfg(all(feature = "flatc", feature = "molc"))]
 compile_error!("features `flatc` and `molc` are mutually exclusive");
+#[cfg(all(not(feature = "flatc"), not(feature = "molc")))]
+compile_error!("Please choose a serialization format via feature. Possible choices: flatc, molc");
 
 #[cfg(feature = "flatc")]
 #[rustfmt::skip]
