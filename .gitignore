@@ -2,6 +2,3 @@
 **/*.rs.bk
 .idea/
 Cargo.lock
-*/target
-*/*/Cargo.lock
-*/*/*/Cargo.lock
