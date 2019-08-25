@@ -378,7 +378,7 @@ impl Substream {
                 .iter()
                 .map(|address| multiaddr_to_socketaddr(address).unwrap())
                 .filter_map(|address| {
-                    if !address.ip().is_loopback() || RawAddr::from(address).is_reachable() {
+                    if RawAddr::from(address).is_reachable() || address.ip().is_unspecified() {
                         Some(address.port())
                     } else {
                         None
