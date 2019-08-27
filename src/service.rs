@@ -1311,6 +1311,14 @@ where
                 remote_address,
                 stream,
             } => self.handshake(stream, SessionType::Outbound, remote_address, None),
+            SessionEvent::ProtocolHandleError { error, proto_id } => {
+                self.handle.handle_error(
+                    &mut self.service_context,
+                    ServiceError::ProtocolHandleError { error, proto_id },
+                );
+                // if handle panic, close service
+                self.handle_service_task(ServiceTask::Shutdown(false));
+            }
         }
     }
 
