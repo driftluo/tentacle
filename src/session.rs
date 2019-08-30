@@ -130,6 +130,13 @@ pub(crate) enum SessionEvent {
         id: SessionId,
         error: Error,
     },
+    /// Protocol handle error, will cause memory leaks/abnormal CPU usage
+    ProtocolHandleError {
+        /// Error message
+        error: Error,
+        /// Protocol id
+        proto_id: ProtocolId,
+    },
 }
 
 /// Wrapper for real data streams, such as TCP stream
@@ -547,6 +554,9 @@ where
                     });
                     self.state = SessionState::LocalClose;
                 }
+            }
+            ProtocolEvent::ProtocolHandleError { error, proto_id } => {
+                self.event_output(SessionEvent::ProtocolHandleError { error, proto_id });
             }
         }
     }
