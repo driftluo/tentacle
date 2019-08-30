@@ -237,6 +237,19 @@ where
     }
 
     fn keep_alive(&mut self, ping_at: Instant) -> Poll<(), io::Error> {
+        // If the remote peer does not follow the protocol, doesn't ack ping message,
+        // there may be a memory leak, yamux does not clearly define how this should be handled.
+        // According to the authoritative [spec](https://tools.ietf.org/html/rfc6455#section-5.5.2)
+        // of websocket, the keep alive message **must** respond. If it is not responding,
+        // it is a protocol exception and should be disconnected.
+        if self
+            .pings
+            .iter()
+            .any(|(_id, time)| time.elapsed() > TIMEOUT)
+        {
+            return Err(io::ErrorKind::TimedOut.into());
+        }
+
         let ping_id = try_ready!(self.send_ping(None));
         debug!("[{:?}] sent keep_alive ping (id={:?})", self.ty, ping_id);
         self.pings.insert(ping_id, ping_at);
@@ -422,6 +435,9 @@ where
             self.send_ping(Some(frame.length()))?;
         } else if flags.contains(Flag::Ack) {
             self.pings.remove(&frame.length());
+            // If the remote peer does not follow the protocol,
+            // there may be a memory leak, so here need to discard all ping ids below the ack.
+            self.pings = self.pings.split_off(&frame.length());
         } else {
             // TODO: unexpected case, send a GoAwayCode::ProtocolError ?
         }
