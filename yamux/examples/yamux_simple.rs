@@ -1,10 +1,9 @@
-use futures::Future;
-use futures::Stream;
-use log::{error, info};
-use std::io::Write;
-use tokio::io as tokio_io;
-use tokio::io::AsyncWrite;
-use tokio::net::TcpListener;
+use futures::prelude::*;
+use log::info;
+use tokio::{
+    io::{AsyncReadExt, AsyncWriteExt},
+    net::{TcpListener, TcpStream},
+};
 use tokio_yamux::{config::Config, session::Session};
 
 fn main() {
@@ -19,90 +18,69 @@ fn main() {
 }
 
 fn run_server() {
-    // Bind the server's socket.
-    let addr = "127.0.0.1:12345".parse().unwrap();
-    let listener = TcpListener::bind(&addr).expect("unable to bind TCP listener");
+    let rt = tokio::runtime::Runtime::new().unwrap();
 
-    // Pull out a stream of sockets for incoming connections
-    let server = listener
-        .incoming()
-        .map_err(|e| eprintln!("accept failed = {:?}", e))
-        .for_each(|sock| {
-            info!("accepted a socket: {:?}", sock.peer_addr());
-            let session = Session::new_server(sock, Config::default());
-            // Split up the reading and writing parts of the
-            // socket.
-            let fut = session
-                .for_each(|stream| {
+    rt.spawn(async move {
+        let mut incoming = TcpListener::bind("127.0.0.1:12345")
+            .await
+            .unwrap()
+            .incoming();
+
+        while let Some(Ok(socket)) = incoming.next().await {
+            info!("accepted a socket: {:?}", socket.peer_addr());
+            let mut session = Session::new_server(socket, Config::default());
+            tokio::spawn(async move {
+                while let Some(Ok(mut stream)) = session.next().await {
                     info!("Server accept a stream from client: id={}", stream.id());
-                    let fut = tokio_io::read_exact(stream, [0u8; 3])
-                        .and_then(|(stream, data)| {
-                            info!("[server] read data: {:?}", data);
-                            Ok(stream)
-                        })
-                        .and_then(|mut stream| {
-                            info!("[server] send 'def' to remote");
-                            stream.write(b"def").unwrap();
-                            stream.flush().unwrap();
-                            Ok(stream)
-                        })
-                        .and_then(|stream| {
-                            tokio_io::read_exact(stream, [0u8; 2]).and_then(|(stream, data)| {
-                                info!("[server] read again: {:?}", data);
-                                Ok(stream)
-                            })
-                        })
-                        .map_err(|err| {
-                            error!("server stream error: {:?}", err);
-                            ()
-                        })
-                        .map(|_| ());
-                    tokio::spawn(fut);
-                    Ok(())
-                })
-                .map_err(|err| {
-                    error!("server stream error: {:?}", err);
-                    ()
-                });
+                    tokio::spawn(async move {
+                        let mut data = [0u8; 3];
+                        stream.read_exact(&mut data).await.unwrap();
+                        info!("[server] read data: {:?}", data);
 
-            // Spawn the future as a concurrent task.
-            tokio::spawn(fut)
-        });
+                        info!("[server] send 'def' to remote");
+                        stream.write_all(b"def").await.unwrap();
 
-    // Start the Tokio runtime
-    tokio::run(server);
+                        let mut data = [0u8; 2];
+                        stream.read_exact(&mut data).await.unwrap();
+                        info!("[server] read again: {:?}", data);
+                    });
+                }
+            });
+        }
+    });
+
+    rt.shutdown_on_idle()
 }
 
 fn run_client() {
-    use tokio::net::TcpStream;
-    let addr = "127.0.0.1:12345".parse().unwrap();
-    let socket = TcpStream::connect(&addr)
-        .and_then(|sock| {
-            info!("[client] connected to server: {:?}", sock.peer_addr());
-            let mut session = Session::new_client(sock, Config::default());
+    let rt = tokio::runtime::Runtime::new().unwrap();
 
-            let mut stream = session.open_stream().unwrap();
-            info!("[client] send 'abc' to remote");
-            stream.write(b"abc").unwrap();
+    rt.spawn(async move {
+        let socket = TcpStream::connect("127.0.0.1:12345").await.unwrap();
+        info!("[client] connected to server: {:?}", socket.peer_addr());
+        let mut session = Session::new_client(socket, Config::default());
+        let mut stream = session.open_stream().unwrap();
 
-            info!("[client] reading data");
-            let fut = tokio_io::read_exact(stream, [0u8; 3])
-                .and_then(|(mut stream, data)| {
-                    info!("[client] read data: {:?}", data);
-                    stream.shutdown().unwrap();
-                    Ok(())
-                })
-                .map_err(|_| ());
-            tokio::spawn(fut);
-
-            session.for_each(|stream| {
-                info!("[client] accept a stream from server: id={}", stream.id());
-                Ok(())
-            })
-        })
-        .map_err(|err| {
-            error!("[client] error: {:?}", err);
-            ()
+        tokio::spawn(async move {
+            loop {
+                match session.next().await {
+                    Some(_) => (),
+                    None => break,
+                }
+            }
         });
-    tokio::run(socket);
+
+        info!("[client] send 'abc' to remote");
+        stream.write_all(b"abc").await.unwrap();
+
+        info!("[client] reading data");
+        let mut data = [0u8; 3];
+        stream.read_exact(&mut data).await.unwrap();
+        info!("[client] read data: {:?}", data);
+
+        info!("[client] send 'dd' to remote");
+        stream.write_all(b"dd").await.unwrap();
+        stream.shutdown().await.unwrap();
+    });
+    rt.shutdown_on_idle()
 }

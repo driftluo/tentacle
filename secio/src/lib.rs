@@ -1,7 +1,6 @@
 //! Aes Encrypted communication and handshake process implementation
 
 #![deny(missing_docs)]
-#![feature(async_await)]
 
 use secp256k1::key::SecretKey;
 

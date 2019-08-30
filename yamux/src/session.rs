@@ -1,24 +1,25 @@
 //! The session, can open and manage substreams
 
-use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
-use std::io;
 use std::{
+    collections::{BTreeMap, HashMap, HashSet, VecDeque},
+    io,
+    pin::Pin,
     sync::{
         atomic::{AtomicBool, Ordering},
         Arc,
     },
+    task::{Context, Poll},
     time::{Duration, Instant},
 };
 
 use futures::{
-    future::Future,
-    sync::mpsc::{channel, Receiver, Sender},
-    try_ready, Async, AsyncSink, Poll, Sink, Stream,
+    channel::mpsc::{channel, Receiver, Sender},
+    Sink, SinkExt, Stream,
 };
 use log::{debug, warn};
 use tokio::codec::Framed;
 use tokio::prelude::{AsyncRead, AsyncWrite};
-use tokio::timer::{Delay, Interval};
+use tokio::timer::Interval;
 
 use crate::{
     config::Config,
@@ -110,7 +111,7 @@ impl SessionType {
 
 impl<T> Session<T>
 where
-    T: AsyncRead + AsyncWrite,
+    T: AsyncRead + AsyncWrite + Unpin,
 {
     /// Create a new session from a low level stream
     pub fn new(raw_stream: T, config: Config, ty: SessionType) -> Session<T> {
@@ -127,20 +128,23 @@ where
             let (mut interval_sender, interval_receiver) = channel(2);
             // NOTE: Set a 300ms interval because we want shutdown service quick.
             //       A Interval/Delay will block tokio runtime from gracefully shutdown.
-            tokio::spawn(
-                Interval::new_interval(Duration::from_millis(300))
-                    .map_err(|_| ())
-                    .for_each(move |_| match interval_sender.try_send(()) {
-                        Ok(_) => Ok(()),
+            let mut interval = Interval::new_interval(Duration::from_millis(300));
+            tokio::spawn(async move {
+                loop {
+                    match interval.next().await {
+                        Some(_) => (),
+                        None => break,
+                    }
+                    match interval_sender.send(()).await {
+                        Ok(_) => (),
                         Err(e) => {
-                            if e.is_full() {
-                                Ok(())
-                            } else {
-                                Err(())
+                            if !e.is_full() {
+                                break;
                             }
                         }
-                    }),
-            );
+                    }
+                }
+            });
             Some(interval_receiver)
         } else {
             None
@@ -183,22 +187,22 @@ where
 
     /// shutdown is used to close the session and all streams.
     /// Attempts to send a GoAway before closing the connection.
-    pub fn shutdown(&mut self) -> Poll<(), io::Error> {
+    pub fn shutdown(&mut self, cx: &mut Context) -> Result<(), io::Error> {
         if self.is_dead() {
-            return Ok(Async::Ready(()));
+            return Ok(());
         }
 
         // Ignore frames remaining in pending queue
         self.write_pending_frames.clear();
-        self.send_go_away()?;
-        Ok(Async::Ready(()))
+        self.send_go_away(cx)?;
+        Ok(())
     }
 
     // Send all pending frames to remote streams
-    fn flush(&mut self) -> Result<(), io::Error> {
-        self.recv_events()?;
-        self.send_all()?;
-        self.distribute_to_substream()?;
+    fn flush(&mut self, cx: &mut Context) -> Result<(), io::Error> {
+        self.recv_events(cx)?;
+        self.send_all(cx)?;
+        self.distribute_to_substream(cx)?;
         Ok(())
     }
 
@@ -206,7 +210,7 @@ where
         self.remote_go_away && self.local_go_away || self.eof
     }
 
-    fn send_ping(&mut self, ping_id: Option<u32>) -> Poll<u32, io::Error> {
+    fn send_ping(&mut self, cx: &mut Context, ping_id: Option<u32>) -> Result<u32, io::Error> {
         let (flag, ping_id) = match ping_id {
             Some(ping_id) => (Flag::Ack, ping_id),
             None => {
@@ -215,15 +219,15 @@ where
             }
         };
         let frame = Frame::new_ping(Flags::from(flag), ping_id);
-        self.send_frame(frame).map(|_| Async::Ready(ping_id))
+        self.send_frame(cx, frame).map(|_| ping_id)
     }
 
     /// GoAway can be used to prevent accepting further
     /// connections. It does not close the underlying conn.
-    pub fn send_go_away(&mut self) -> Poll<(), io::Error> {
+    pub fn send_go_away(&mut self, cx: &mut Context) -> Result<(), io::Error> {
         self.local_go_away = true;
         let frame = Frame::new_go_away(GoAwayCode::Normal);
-        self.send_frame(frame)
+        self.send_frame(cx, frame)
     }
 
     /// Open a new stream to remote session
@@ -239,7 +243,7 @@ where
         }
     }
 
-    fn keep_alive(&mut self, ping_at: Instant) -> Poll<(), io::Error> {
+    fn keep_alive(&mut self, cx: &mut Context, ping_at: Instant) -> Result<(), io::Error> {
         // If the remote peer does not follow the protocol, doesn't ack ping message,
         // there may be a memory leak, yamux does not clearly define how this should be handled.
         // According to the authoritative [spec](https://tools.ietf.org/html/rfc6455#section-5.5.2)
@@ -253,10 +257,10 @@ where
             return Err(io::ErrorKind::TimedOut.into());
         }
 
-        let ping_id = try_ready!(self.send_ping(None));
+        let ping_id = self.send_ping(cx, None)?;
         debug!("[{:?}] sent keep_alive ping (id={:?})", self.ty, ping_id);
         self.pings.insert(ping_id, ping_at);
-        Ok(Async::Ready(()))
+        Ok(())
     }
 
     fn create_stream(&mut self, stream_id: Option<StreamId>) -> Result<StreamHandle, Error> {
@@ -290,14 +294,20 @@ where
     /// Sink `start_send` Ready -> data in buffer or send
     /// Sink `start_send` NotReady -> buffer full need poll complete
     #[inline]
-    fn send_all(&mut self) -> Poll<(), io::Error> {
+    fn send_all(&mut self, cx: &mut Context) -> Result<bool, io::Error> {
         while let Some(frame) = self.write_pending_frames.pop_front() {
             if self.is_dead() {
                 break;
             }
 
-            match self.framed_stream.start_send(frame) {
-                Ok(AsyncSink::NotReady(frame)) => {
+            let mut sink = Pin::new(&mut self.framed_stream);
+
+            match sink.as_mut().poll_ready(cx)? {
+                Poll::Ready(()) => {
+                    sink.as_mut().start_send(frame)?;
+                    self.last_send_success = Instant::now();
+                }
+                Poll::Pending => {
                     debug!("[{:?}] framed_stream NotReady, frame: {:?}", self.ty, frame);
                     self.write_pending_frames.push_front(frame);
                     // No message has been sent for 30 seconds,
@@ -306,24 +316,14 @@ where
                         return Err(io::ErrorKind::TimedOut.into());
                     }
 
-                    if !self.poll_complete()? {
-                        return Ok(Async::NotReady);
+                    if self.poll_complete(cx)? {
+                        return Ok(true);
                     }
-                }
-                Ok(AsyncSink::Ready) => {
-                    self.last_send_success = Instant::now();
-                }
-                Err(err) => {
-                    debug!("[{:?}] framed_stream error: {:?}", self.ty, err);
-                    return Err(err);
                 }
             }
         }
-        if self.poll_complete()? {
-            Ok(Async::Ready(()))
-        } else {
-            Ok(Async::NotReady)
-        }
+        self.poll_complete(cx)?;
+        Ok(false)
     }
 
     /// https://docs.rs/tokio/0.1.19/tokio/prelude/trait.Sink.html
@@ -331,42 +331,46 @@ where
     ///
     /// Sink `poll_complete` Ready -> no buffer remain, flush all
     /// Sink `poll_complete` NotReady -> there is more work left to do, may wake up next poll
-    fn poll_complete(&mut self) -> Result<bool, io::Error> {
-        if self.framed_stream.poll_complete()?.is_not_ready() {
-            self.set_delay();
-            return Ok(false);
+    fn poll_complete(&mut self, cx: &mut Context) -> Result<bool, io::Error> {
+        match Pin::new(&mut self.framed_stream).poll_flush(cx) {
+            Poll::Pending => {
+                self.set_delay(cx);
+                Ok(true)
+            }
+            Poll::Ready(res) => {
+                res?;
+                Ok(false)
+            }
         }
-        Ok(true)
     }
 
-    fn send_frame(&mut self, frame: Frame) -> Poll<(), io::Error> {
+    fn send_frame(&mut self, cx: &mut Context, frame: Frame) -> Result<(), io::Error> {
         debug!("[{:?}] Session::send_frame()", self.ty);
         self.write_pending_frames.push_back(frame);
-        if let Async::NotReady = self.send_all()? {
-            return Ok(Async::NotReady);
+        if self.send_all(cx)? {
+            debug!("[{:?}] Session::send_frame() finished", self.ty);
         }
-        debug!("[{:?}] Session::send_frame() finished", self.ty);
-        Ok(Async::Ready(()))
+        Ok(())
     }
 
-    fn handle_frame(&mut self, frame: Frame) -> Result<(), io::Error> {
+    fn handle_frame(&mut self, cx: &mut Context, frame: Frame) -> Result<(), io::Error> {
         debug!("[{:?}] Session::handle_frame({:?})", self.ty, frame.ty());
         match frame.ty() {
             Type::Data | Type::WindowUpdate => {
-                self.handle_stream_message(frame)?;
+                self.handle_stream_message(cx, frame)?;
             }
             Type::Ping => {
-                self.handle_ping(&frame)?;
+                self.handle_ping(cx, &frame)?;
             }
             Type::GoAway => {
-                self.handle_go_away(&frame)?;
+                self.handle_go_away(cx, &frame)?;
             }
         }
         Ok(())
     }
 
     /// Try send buffer to all sub streams
-    fn distribute_to_substream(&mut self) -> Result<(), io::Error> {
+    fn distribute_to_substream(&mut self, cx: &mut Context) -> Result<(), io::Error> {
         let mut block_substream = HashSet::new();
 
         for frame in self.read_pending_frames.split_off(0) {
@@ -380,7 +384,7 @@ where
                 if self.local_go_away {
                     let flags = Flags::from(Flag::Rst);
                     let frame = Frame::new_window_update(flags, stream_id, 0);
-                    self.send_frame(frame)?;
+                    self.send_frame(cx, frame)?;
                     debug!(
                         "[{:?}] local go away send Reset to remote stream_id={}",
                         self.ty, stream_id
@@ -402,7 +406,7 @@ where
                         Err(err) => {
                             if err.is_full() {
                                 self.read_pending_frames.push_back(err.into_inner());
-                                self.set_delay();
+                                self.set_delay(cx);
                                 block_substream.insert(stream_id);
                                 false
                             } else {
@@ -430,17 +434,17 @@ where
     }
 
     // Send message to stream (Data/WindowUpdate)
-    fn handle_stream_message(&mut self, frame: Frame) -> Result<(), io::Error> {
+    fn handle_stream_message(&mut self, cx: &mut Context, frame: Frame) -> Result<(), io::Error> {
         self.read_pending_frames.push_back(frame);
-        self.distribute_to_substream()?;
+        self.distribute_to_substream(cx)?;
         Ok(())
     }
 
-    fn handle_ping(&mut self, frame: &Frame) -> Result<(), io::Error> {
+    fn handle_ping(&mut self, cx: &mut Context, frame: &Frame) -> Result<(), io::Error> {
         let flags = frame.flags();
         if flags.contains(Flag::Syn) {
             // Send ping back
-            self.send_ping(Some(frame.length()))?;
+            self.send_ping(cx, Some(frame.length()))?;
         } else if flags.contains(Flag::Ack) {
             self.pings.remove(&frame.length());
             // If the remote peer does not follow the protocol,
@@ -452,12 +456,12 @@ where
         Ok(())
     }
 
-    fn handle_go_away(&mut self, frame: &Frame) -> Result<(), io::Error> {
+    fn handle_go_away(&mut self, cx: &mut Context, frame: &Frame) -> Result<(), io::Error> {
         let mut close = || -> Result<(), io::Error> {
             self.remote_go_away = true;
             self.write_pending_frames.clear();
             if !self.local_go_away {
-                self.send_go_away()?;
+                self.send_go_away(cx)?;
             }
             Ok(())
         };
@@ -475,40 +479,40 @@ where
     }
 
     // Receive frames from low level stream
-    fn recv_frames(&mut self) -> Poll<(), io::Error> {
+    fn recv_frames(&mut self, cx: &mut Context) -> Result<(), io::Error> {
         for _ in 0..64 {
             if self.is_dead() {
-                return Ok(Async::Ready(()));
+                return Ok(());
             }
 
             debug!("[{:?}] poll from framed_stream", self.ty);
-            match self.framed_stream.poll() {
-                Ok(Async::Ready(Some(frame))) => {
-                    self.handle_frame(frame)?;
+            match Pin::new(&mut self.framed_stream).as_mut().poll_next(cx) {
+                Poll::Ready(Some(Ok(frame))) => {
+                    self.handle_frame(cx, frame)?;
                     self.last_read_success = Instant::now();
                 }
-                Ok(Async::Ready(None)) => {
+                Poll::Ready(None) => {
                     self.eof = true;
                 }
-                Ok(Async::NotReady) => {
+                Poll::Pending => {
                     debug!("[{:?}] poll framed_stream NotReady", self.ty);
-                    return Ok(Async::NotReady);
+                    return Ok(());
                 }
-                Err(err) => {
+                Poll::Ready(Some(Err(err))) => {
                     debug!("[{:?}] Session recv_frames error: {:?}", self.ty, err);
                     return Err(err);
                 }
             }
         }
-        self.set_delay();
-        Ok(Async::NotReady)
+        self.set_delay(cx);
+        Ok(())
     }
 
-    fn handle_event(&mut self, event: StreamEvent) -> Result<(), io::Error> {
+    fn handle_event(&mut self, cx: &mut Context, event: StreamEvent) -> Result<(), io::Error> {
         debug!("[{:?}] Session::handle_event()", self.ty);
         match event {
             StreamEvent::Frame(frame) => {
-                self.send_frame(frame)?;
+                self.send_frame(cx, frame)?;
             }
             StreamEvent::StateChanged((stream_id, state)) => {
                 match state {
@@ -524,7 +528,7 @@ where
             }
             StreamEvent::Flush(stream_id) => {
                 debug!("[{}] session flushing.....", stream_id);
-                self.flush()?;
+                self.flush(cx)?;
                 debug!("[{}] session flushed", stream_id);
             }
         }
@@ -533,33 +537,30 @@ where
 
     // Receive events from sub streams
     // TODO: should handle error
-    fn recv_events(&mut self) -> Poll<(), io::Error> {
+    fn recv_events(&mut self, cx: &mut Context) -> Result<(), io::Error> {
         for _ in 0..64 {
             if self.is_dead() {
-                return Ok(Async::Ready(()));
+                return Ok(());
             }
 
-            match self.event_receiver.poll() {
-                Ok(Async::Ready(Some(event))) => self.handle_event(event)?,
-                Ok(Async::Ready(None)) => {
+            match Pin::new(&mut self.event_receiver).as_mut().poll_next(cx) {
+                Poll::Ready(Some(event)) => self.handle_event(cx, event)?,
+                Poll::Ready(None) => {
                     // Since session hold one event sender,
                     // the channel can not be disconnected.
                     unreachable!()
                 }
-                Ok(Async::NotReady) => {
-                    return Ok(Async::NotReady);
-                }
-                Err(()) => {
-                    // TODO: When would happend?
+                Poll::Pending => {
+                    return Ok(());
                 }
             }
         }
-        self.set_delay();
-        Ok(Async::NotReady)
+        self.set_delay(cx);
+        Ok(())
     }
 
     #[inline]
-    fn set_delay(&mut self) {
+    fn set_delay(&mut self, cx: &mut Context) {
         // Why use `delay` instead of `notify`?
         //
         // In fact, on machines that can use multi-core normally, there is almost no problem with the `notify` behavior,
@@ -570,36 +571,34 @@ where
         // Under a single-core machine, `notify` may fall into the loop of infinitely preemptive CPU, causing starvation.
         if !self.delay.load(Ordering::Acquire) {
             self.delay.store(true, Ordering::Release);
-            let notify = futures::task::current();
+            let waker = cx.waker().clone();
             let delay = self.delay.clone();
-            let delay_task = Delay::new(Instant::now() + DELAY_TIME).then(move |_| {
-                notify.notify();
+            tokio::spawn(async move {
+                tokio::timer::delay(Instant::now() + DELAY_TIME).await;
+                waker.wake();
                 delay.store(false, Ordering::Release);
-                Ok(())
             });
-            tokio::spawn(delay_task);
         }
     }
 }
 
 impl<T> Stream for Session<T>
 where
-    T: AsyncRead + AsyncWrite,
+    T: AsyncRead + AsyncWrite + Unpin,
 {
-    type Item = StreamHandle;
-    type Error = io::Error;
+    type Item = Result<StreamHandle, io::Error>;
 
-    fn poll(&mut self) -> Poll<Option<Self::Item>, Self::Error> {
+    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Option<Self::Item>> {
         if self.is_dead() {
             debug!("yamux::Session finished because is_dead");
-            return Ok(Async::Ready(None));
+            return Poll::Ready(None);
         }
 
         if !self.read_pending_frames.is_empty() || !self.write_pending_frames.is_empty() {
-            self.flush()?;
+            self.flush(cx)?;
         }
 
-        self.poll_complete()?;
+        self.poll_complete(cx)?;
 
         debug!(
             "send buf: {}, read buf: {}",
@@ -608,22 +607,18 @@ where
         );
 
         while let Some(ref mut receiver) = self.keepalive_receiver {
-            match receiver.poll() {
-                Ok(Async::Ready(Some(_))) => {
+            match Pin::new(receiver).as_mut().poll_next(cx) {
+                Poll::Ready(Some(_)) => {
                     if self.last_ping_time.elapsed() > self.config.keepalive_interval {
-                        let _ = self.keep_alive(Instant::now())?;
+                        let _ = self.keep_alive(cx, Instant::now())?;
                         self.last_ping_time = Instant::now();
                     }
                 }
-                Ok(Async::Ready(None)) => {
+                Poll::Ready(None) => {
                     debug!("poll keepalive_receiver finished");
                     break;
                 }
-                Ok(Async::NotReady) => break,
-                Err(_) => {
-                    debug!("poll keepalive_receiver error");
-                    break;
-                }
+                Poll::Pending => break,
             }
         }
 
@@ -632,21 +627,21 @@ where
             > self.config.keepalive_interval + Duration::from_secs(15)
         {
             warn!("yamux timeout");
-            self.shutdown()?;
-            return Err(io::ErrorKind::TimedOut.into());
+            self.shutdown(cx)?;
+            return Poll::Ready(Some(Err(io::ErrorKind::TimedOut.into())));
         }
 
-        self.recv_frames()?;
-        self.recv_events()?;
+        self.recv_frames(cx)?;
+        self.recv_events(cx)?;
 
         if self.is_dead() {
             debug!("yamux::Session finished because is_dead, end");
-            return Ok(Async::Ready(None));
+            return Poll::Ready(None);
         } else if let Some(stream) = self.pending_streams.pop_front() {
             debug!("[{:?}] A stream is ready", self.ty);
-            return Ok(Async::Ready(Some(stream)));
+            return Poll::Ready(Some(Ok(stream)));
         }
 
-        Ok(Async::NotReady)
+        Poll::Pending
     }
 }

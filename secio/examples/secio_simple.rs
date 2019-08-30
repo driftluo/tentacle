@@ -1,5 +1,3 @@
-#![feature(async_await)]
-
 use bytes::BytesMut;
 use env_logger;
 use futures::prelude::*;
@@ -26,12 +24,13 @@ fn server() {
     let key = SecioKeyPair::secp256k1_generated();
     let config = Config::new(key);
 
-    let listener = TcpListener::bind(&"127.0.0.1:1337".parse().unwrap()).unwrap();
-
     let rt = tokio::runtime::Runtime::new().unwrap();
 
     rt.spawn(async move {
-        let mut incoming = listener.incoming();
+        let mut incoming = TcpListener::bind("127.0.0.1:1337")
+            .await
+            .unwrap()
+            .incoming();
 
         while let Some(Ok(socket)) = incoming.next().await {
             let config = config.clone();
@@ -57,9 +56,7 @@ fn client() {
     let rt = tokio::runtime::Runtime::new().unwrap();
 
     rt.spawn(async move {
-        let stream = TcpStream::connect(&"127.0.0.1:1337".parse().unwrap())
-            .await
-            .unwrap();
+        let stream = TcpStream::connect("127.0.0.1:1337").await.unwrap();
         let (mut handle, _, _) = config.handshake(stream).await.unwrap();
         match handle.write_all(data).await {
             Ok(_) => info!("send all"),

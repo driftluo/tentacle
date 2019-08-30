@@ -10,8 +10,8 @@ edition = "2018"
 [dependencies]
 bytes = "0.4"
 byteorder = "1.2"
-futures = "0.1"
-tokio = "0.1"
+futures = { version = "0.3.0-alpha.18", package = "futures-preview" }
+tokio = "0.2.0-alpha.3"
 log = "0.4"
 
 [dev-dependencies]

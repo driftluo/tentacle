@@ -9,7 +9,6 @@ use tokio::{
     codec::{length_delimited::LengthDelimitedCodec, Framed},
     prelude::Sink,
     prelude::{AsyncRead, AsyncWrite},
-    timer::Delay,
 };
 
 use std::{
@@ -137,7 +136,7 @@ where
         match Pin::new(&mut self.socket).poll_flush(cx) {
             Poll::Pending => {
                 self.set_delay(cx);
-                return Ok(true);
+                Ok(true)
             }
             Poll::Ready(res) => {
                 res?;
@@ -269,7 +268,7 @@ where
             let waker = cx.waker().clone();
             let delay = self.delay.clone();
             tokio::spawn(async move {
-                Delay::new(Instant::now() + DELAY_TIME).await;
+                tokio::timer::delay(Instant::now() + DELAY_TIME).await;
                 waker.wake();
                 delay.store(false, Ordering::Release);
             });
