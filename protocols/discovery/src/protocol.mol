@@ -1,0 +1,31 @@
+vector Bytes <byte>;
+vector BytesVec <Bytes>;
+vector NodeVec <Node>;
+array Uint32 [byte; 4];
+array Uint16 [byte; 2];
+array Bool [byte; 1];
+option PortOpt (Uint16);
+
+union DiscoveryPayload {
+    GetNodes,
+    Nodes,
+}
+
+table DiscoveryMessage {
+    payload: DiscoveryPayload,
+}
+
+table GetNodes {
+    version: Uint32,
+    count: Uint32,
+    listen_port: PortOpt,
+}
+
+table Nodes {
+    announce: Bool,
+    items: NodeVec,
+}
+
+table Node {
+    addresses: BytesVec,
+}

@@ -8,7 +8,7 @@ use std::{
 
 use futures::prelude::*;
 
-use tentacle::{
+use p2p::{
     builder::{MetaBuilder, ServiceBuilder},
     context::ServiceContext,
     multiaddr::Multiaddr,
@@ -17,7 +17,7 @@ use tentacle::{
     ProtocolId, SessionId,
 };
 
-use discovery::{AddressManager, Discovery, DiscoveryProtocol, MisbehaveResult, Misbehavior};
+use tentacle_discovery::{AddressManager, Discovery, DiscoveryProtocol, MisbehaveResult, Misbehavior};
 
 fn main() {
     env_logger::init();

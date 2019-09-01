@@ -19,13 +19,22 @@ jobs:
     - stage: Check
       name: Clippy
       script:
-        - RUSTFLAGS='-F warnings' cargo clippy --all --tests
+        - make clippy
     - stage: Test
-      name: Unitest
+      name: Unitest(molc)
       script:
-        - RUSTFLAGS='-F warnings' RUST_BACKTRACE=full cargo test --all
+        - RUSTFLAGS='-F warnings' RUST_BACKTRACE=full cargo test --all --features molc
     - stage: Test
-      name: Bench
+      name: Bench(molc)
       script:
         - cd bench
-        - cargo run --release
+        - cargo run --release --features molc
+    - stage: Test
+      name: Unitest(flatc)
+      script:
+        - RUSTFLAGS='-F warnings' RUST_BACKTRACE=full cargo test --all --features flatc
+    - stage: Test
+      name: Bench(flatc)
+      script:
+        - cd bench
+        - cargo run --release --features flatc

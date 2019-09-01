@@ -1,0 +1,15 @@
+vector Bytes <byte>;
+vector AddressVec <Address>;
+
+table Address {
+    bytes: Bytes,
+}
+
+table IdentifyMessage {
+    // These are the addresses on which the peer is listening as multi-addresses.
+    listen_addrs: AddressVec,
+    // Observed each other's ip
+    observed_addr: Address,
+    // Custom message to indicate self ability, such as list protocols supported
+    identify: Bytes,
+}

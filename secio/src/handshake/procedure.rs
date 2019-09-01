@@ -2,7 +2,6 @@
 ///
 /// Some panic logic has been removed, some error handling has been removed, and an error has been added.
 ///
-use bytes::Bytes;
 use futures::{future, prelude::*, Future};
 use hmac::digest::{generic_array::ArrayLength, BlockInput, Digest, FixedOutput, Input, Reset};
 use log::{debug, trace};
@@ -63,7 +62,7 @@ where
         .and_then(|local_context| {
             trace!("sending proposition to remote");
             socket
-                .send(Bytes::from(local_context.state.proposition_bytes.clone()))
+                .send(local_context.state.proposition_bytes.clone())
                 .from_err()
                 .map(|socket| (socket, local_context))
         })
@@ -142,7 +141,7 @@ where
             // Send our local `Exchange`.
             trace!("sending exchange to remote");
             socket
-                .send(Bytes::from(local_exchanges))
+                .send(local_exchanges)
                 .from_err()
                 .map(|socket| (socket, ephemeral_context))
         })

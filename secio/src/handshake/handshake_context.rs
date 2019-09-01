@@ -11,7 +11,7 @@ use crate::{
     stream_cipher, support, Digest,
 };
 
-use bytes::BytesMut;
+use bytes::{Bytes, BytesMut};
 use log::{debug, trace};
 use rand;
 use ring::agreement;
@@ -33,7 +33,7 @@ pub struct Local {
     // Our local public key flatbuffer bytes:
     pub(crate) public_key: Vec<u8>,
     // Our local proposition's raw bytes:
-    pub(crate) proposition_bytes: Vec<u8>,
+    pub(crate) proposition_bytes: Bytes,
 }
 
 // HandshakeContext<Local> --with_remote-> HandshakeContext<Remote>
@@ -90,7 +90,7 @@ impl HandshakeContext<()> {
         // Send our proposition with our nonce, public key and supported protocols.
         let mut proposition = Propose::new();
         proposition.rand = nonce.to_vec();
-        proposition.pubkey = public_key.encode();
+        proposition.pubkey = public_key.clone().encode();
 
         proposition.exchange = self
             .config
@@ -119,7 +119,7 @@ impl HandshakeContext<()> {
             config: self.config,
             state: Local {
                 nonce,
-                public_key: public_key.inner_ref().to_owned(),
+                public_key: public_key.inner(),
                 proposition_bytes,
             },
         }

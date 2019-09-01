@@ -5,8 +5,8 @@ use std::time::Duration;
 
 use futures::{future::lazy, prelude::*, sync::mpsc::channel};
 use generic_channel::Sender;
-use ping::{Event, PingHandler};
-use tentacle::{
+use tentacle_ping::{Event, PingHandler};
+use p2p::{
     builder::{MetaBuilder, ServiceBuilder},
     context::ServiceContext,
     service::{DialProtocol, ProtocolHandle, ProtocolMeta, ServiceError, ServiceEvent},

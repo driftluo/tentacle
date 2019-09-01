@@ -1,0 +1,7 @@
+vector String <byte>;
+vector StringVec <String>;
+
+table ProtocolInfo {
+    name: String,
+    support_versions: StringVec,
+}
