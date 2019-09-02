@@ -599,24 +599,22 @@ where
             self.read_pending_frames.len()
         );
 
-        loop {
-            if let Some(ref mut receiver) = self.keepalive_receiver {
-                match receiver.poll() {
-                    Ok(Async::Ready(Some(_))) => {
-                        if self.last_ping_time.elapsed() > self.config.keepalive_interval {
-                            let _ = self.keep_alive(Instant::now())?;
-                            self.last_ping_time = Instant::now();
-                        }
+        while let Some(ref mut receiver) = self.keepalive_receiver {
+            match receiver.poll() {
+                Ok(Async::Ready(Some(_))) => {
+                    if self.last_ping_time.elapsed() > self.config.keepalive_interval {
+                        let _ = self.keep_alive(Instant::now())?;
+                        self.last_ping_time = Instant::now();
                     }
-                    Ok(Async::Ready(None)) => {
-                        debug!("poll keepalive_receiver finished");
-                        break;
-                    }
-                    Ok(Async::NotReady) => break,
-                    Err(_) => {
-                        debug!("poll keepalive_receiver error");
-                        break;
-                    }
+                }
+                Ok(Async::Ready(None)) => {
+                    debug!("poll keepalive_receiver finished");
+                    break;
+                }
+                Ok(Async::NotReady) => break,
+                Err(_) => {
+                    debug!("poll keepalive_receiver error");
+                    break;
                 }
             }
         }

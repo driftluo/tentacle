@@ -5,14 +5,15 @@ use std::time::Duration;
 
 use futures::{future::lazy, prelude::*, sync::mpsc::channel};
 use generic_channel::Sender;
-use tentacle_ping::{Event, PingHandler};
 use p2p::{
     builder::{MetaBuilder, ServiceBuilder},
     context::ServiceContext,
+    secio::SecioKeyPair,
     service::{DialProtocol, ProtocolHandle, ProtocolMeta, ServiceError, ServiceEvent},
     traits::ServiceHandle,
     ProtocolId,
 };
+use tentacle_ping::{Event, PingHandler};
 
 fn main() {
     env_logger::init();
@@ -27,6 +28,7 @@ fn main() {
         );
         let mut service = ServiceBuilder::default()
             .insert_protocol(protocol)
+            .key_pair(SecioKeyPair::secp256k1_generated())
             .forever(true)
             .build(SimpleHandler {});
         let _ = service.listen("/ip4/127.0.0.1/tcp/1337".parse().unwrap());
@@ -48,6 +50,7 @@ fn main() {
         );
         let mut service = ServiceBuilder::default()
             .insert_protocol(protocol)
+            .key_pair(SecioKeyPair::secp256k1_generated())
             .forever(true)
             .build(SimpleHandler {});
         let _ = service.dial(

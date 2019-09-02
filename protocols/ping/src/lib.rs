@@ -284,7 +284,8 @@ impl PingMessage {
         let mut builder = protocol_generated::p2p::ping::PingMessageBuilder::new(&mut fbb);
         builder.add_payload_type(protocol_generated::p2p::ping::PingPayload::Ping);
         builder.add_payload(ping.as_union_value());
-        builder.finish();
+        let data = builder.finish();
+        fbb.finish(data, None);
         Bytes::from(fbb.finished_data())
     }
 
@@ -299,16 +300,16 @@ impl PingMessage {
         let mut builder = protocol_generated::p2p::ping::PingMessageBuilder::new(&mut fbb);
         builder.add_payload_type(protocol_generated::p2p::ping::PingPayload::Pong);
         builder.add_payload(pong.as_union_value());
-        builder.finish();
+        let data = builder.finish();
+        fbb.finish(data, None);
         Bytes::from(fbb.finished_data())
     }
 
     #[cfg(feature = "flatc")]
     fn decode(data: &[u8]) -> Option<PingPayload> {
-        let msg = flatbuffers_verifier::get_root::<protocol_generated::p2p::ping::PingMessage>(
-            data,
-        )
-        .ok()?;
+        let msg =
+            flatbuffers_verifier::get_root::<protocol_generated::p2p::ping::PingMessage>(data)
+                .ok()?;
         match msg.payload_type() {
             protocol_generated::p2p::ping::PingPayload::Ping => {
                 Some(PingPayload::Ping(msg.payload_as_ping().unwrap().nonce()))
@@ -359,7 +360,7 @@ impl PingMessage {
                 let le = reader.nonce().raw_data().as_ptr() as *const u32;
                 Some(PingPayload::Pong(u32::from_le(unsafe { *le })))
             }
-            protocol_mol::PingPayloadUnionReader::NotSet => None
+            protocol_mol::PingPayloadUnionReader::NotSet => None,
         }
     }
 }

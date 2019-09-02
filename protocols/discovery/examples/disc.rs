@@ -17,7 +17,9 @@ use p2p::{
     ProtocolId, SessionId,
 };
 
-use tentacle_discovery::{AddressManager, Discovery, DiscoveryProtocol, MisbehaveResult, Misbehavior};
+use tentacle_discovery::{
+    AddressManager, Discovery, DiscoveryProtocol, MisbehaveResult, Misbehavior,
+};
 
 fn main() {
     env_logger::init();

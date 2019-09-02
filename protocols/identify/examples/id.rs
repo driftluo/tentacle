@@ -2,7 +2,6 @@ use env_logger;
 use log::debug;
 
 use futures::{future::lazy, prelude::*};
-use tentacle_identify::{Callback, IdentifyProtocol, MisbehaveResult, Misbehavior};
 use p2p::{
     builder::{MetaBuilder, ServiceBuilder},
     context::{ProtocolContextMutRef, ServiceContext},
@@ -11,6 +10,7 @@ use p2p::{
     service::{DialProtocol, ProtocolHandle, ServiceError, ServiceEvent, SessionType},
     traits::ServiceHandle,
 };
+use tentacle_identify::{Callback, IdentifyProtocol, MisbehaveResult, Misbehavior};
 
 fn main() {
     env_logger::init();
