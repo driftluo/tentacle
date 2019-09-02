@@ -1,7 +1,7 @@
 # P2P
 
 [![Build Status](https://api.travis-ci.org/driftluo/p2p.svg?branch=master)](https://travis-ci.org/driftluo/p2p)
-![image](https://img.shields.io/badge/rustc-1.33-blue.svg)
+![image](https://img.shields.io/badge/rustc-1.36-blue.svg)
 
 ## Overview
 
@@ -38,7 +38,7 @@ The API of this project is basically usable. However we still need more tests. P
 
 ```toml
 [dependencies]
-tentacle = "0.2"
+tentacle = { version = "0.2", feaures = ["molc"] }
 ```
 
 ### Example
@@ -53,13 +53,13 @@ $ git clone https://github.com/nervosnetwork/p2p.git
 
 Listen on 127.0.0.1:1337
 ```bash
-$ RUST_LOG=simple=info,tentacle=debug cargo run --example simple -- server
+$ RUST_LOG=simple=info,tentacle=debug cargo run --example simple --feaures molc -- server
 ```
 
 3. On another terminal:
 
 ```bash
-$ RUST_LOG=simple=info,tentacle=debug cargo run --example simple
+$ RUST_LOG=simple=info,tentacle=debug cargo run --example simple --feaures molc
 ```
 
 4. Now you can see some data interaction information on the terminal.

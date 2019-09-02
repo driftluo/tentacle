@@ -1,4 +1,19 @@
-## 0.2.3 
+## 0.2.4
+
+### Features
+
+- Remove `fnv` dependence
+- Support handshake on molecule with features
+- Handle panic shutdown mechanism
+- Discovery only publish public ip and "0.0.0.0"
+
+### Bug fix
+
+- Fix error output on listen error
+- Fix discovery ipaddr conditions
+- Fix yamux possible security issues on malicious attack
+
+## 0.2.3
 
 ### Features
 
