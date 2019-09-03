@@ -1,6 +1,6 @@
 [package]
 name = "tentacle-discovery"
-version = "0.2.5"
+version = "0.2.6"
 authors = ["Linfeng Qian <thewawar@gmail.com>"]
 license = "MIT"
 description = "p2p discovery protocol main reference bitcoin"
@@ -10,7 +10,7 @@ categories = ["network-programming", "asynchronous"]
 edition = "2018"
 
 [dependencies]
-p2p = { path = "../..", version = "0.2.0", package = "tentacle" }
+p2p = { path = "../..", version = "0.2.4", package = "tentacle" }
 bytes = "0.4"
 byteorder = "1.2"
 futures = "0.1"

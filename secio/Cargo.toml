@@ -1,6 +1,6 @@
 [package]
 name = "tentacle-secio"
-version = "0.1.9"
+version = "0.1.10"
 license = "MIT"
 description = "Secio encryption protocol for p2p"
 authors = ["piaoliu <441594700@qq.com>", "Nervos Core Dev <dev@nervos.org>"]
@@ -8,6 +8,9 @@ repository = "https://github.com/nervosnetwork/p2p"
 keywords = ["network", "peer-to-peer"]
 categories = ["network-programming", "asynchronous"]
 edition = "2018"
+
+[package.metadata.docs.rs]
+all-features = true
 
 [dependencies]
 bytes = "0.4"
