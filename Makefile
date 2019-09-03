@@ -24,6 +24,9 @@ MOL_RUST_FILES := $(patsubst %.mol,%_mol.rs,${MOL_FILES})
 
 fmt:
 	cargo fmt --all -- --check
+	cd protocols/ping && cargo fmt -- --check
+	cd protocols/discovery && cargo fmt -- --check
+	cd protocols/identify && cargo fmt -- --check
 
 clippy:
 	RUSTFLAGS='-F warnings' cargo clippy --all --tests --features molc
