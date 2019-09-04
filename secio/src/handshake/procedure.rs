@@ -58,7 +58,7 @@ where
 
     trace!("sending proposition to remote");
     socket
-        .send(Bytes::from(local_context.state.proposition_bytes.clone()))
+        .send(local_context.state.proposition_bytes.clone())
         .await?;
 
     // Receive the remote's proposition.
@@ -123,7 +123,7 @@ where
     // Send our local `Exchange`.
     trace!("sending exchange to remote");
 
-    socket.send(Bytes::from(local_exchanges)).await?;
+    socket.send(local_exchanges).await?;
 
     // Receive the remote's `Exchange`.
     let raw_exchanges = match socket.next().await {
@@ -340,13 +340,14 @@ mod tests {
     };
 
     fn handshake_with_self_success(config_1: Config, config_2: Config, data: &'static [u8]) {
-        let listener = TcpListener::bind(&"127.0.0.1:0".parse().unwrap()).unwrap();
-        let listener_addr = listener.local_addr().unwrap();
-
         let rt = tokio::runtime::Runtime::new().unwrap();
         let (sender, receiver) = channel::oneshot::channel::<bytes::BytesMut>();
+        let (addr_sender, addr_receiver) = channel::oneshot::channel::<::std::net::SocketAddr>();
 
         rt.spawn(async move {
+            let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let listener_addr = listener.local_addr().unwrap();
+            let _ = addr_sender.send(listener_addr);
             let (connect, _stream) = listener.incoming().into_future().await;
             let (mut handle, _, _) = config_1.handshake(connect.unwrap().unwrap()).await.unwrap();
             let mut data = [0u8; 11];
@@ -355,6 +356,7 @@ mod tests {
         });
 
         rt.spawn(async move {
+            let listener_addr = addr_receiver.await.unwrap();
             let connect = TcpStream::connect(&listener_addr).await.unwrap();
             let (mut handle, _, _) = config_2.handshake(connect).await.unwrap();
             handle.write_all(data).await.unwrap();

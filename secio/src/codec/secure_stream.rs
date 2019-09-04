@@ -479,14 +479,15 @@ mod tests {
         let data_clone = &*data;
         let nonce = vec![0, 1, 2, 3, 4, 5, 6, 7, 8, 9];
 
-        let listener = TcpListener::bind(&"127.0.0.1:0".parse().unwrap()).unwrap();
-        let listener_addr = listener.local_addr().unwrap();
-
         let (sender, receiver) = channel::oneshot::channel::<bytes::BytesMut>();
+        let (addr_sender, addr_receiver) = channel::oneshot::channel::<::std::net::SocketAddr>();
         let rt = tokio::runtime::Runtime::new().unwrap();
 
         let nonce2 = nonce.clone();
         rt.spawn(async move {
+            let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let listener_addr = listener.local_addr().unwrap();
+            let _ = addr_sender.send(listener_addr);
             let (socket, _stream) = listener.incoming().into_future().await;
             let nonce2 = nonce2.clone();
             let (decode_hmac, encode_hmac) = match cipher {
@@ -537,6 +538,7 @@ mod tests {
         });
 
         rt.spawn(async move {
+            let listener_addr = addr_receiver.await.unwrap();
             let stream = TcpStream::connect(&listener_addr).await.unwrap();
             let (decode_hmac, encode_hmac) = match cipher {
                 CipherType::ChaCha20Poly1305 | CipherType::Aes128Gcm | CipherType::Aes256Gcm => {
