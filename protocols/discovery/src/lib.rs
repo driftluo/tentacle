@@ -291,7 +291,9 @@ impl<M: AddressManager> Stream for Discovery<M> {
         let mut dead_addr = Vec::default();
         for key in self.dead_keys.drain() {
             if let Some(value) = self.substreams.remove(&key) {
-                dead_addr.push(RawAddr::from(value.remote_addr.into_inner()))
+                if let Some(addr) = value.remote_addr.into_inner() {
+                    dead_addr.push(RawAddr::from(addr))
+                }
             }
         }
 

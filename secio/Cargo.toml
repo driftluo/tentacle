@@ -10,7 +10,9 @@ categories = ["network-programming", "asynchronous"]
 edition = "2018"
 
 [package.metadata.docs.rs]
-all-features = true
+features = [ "molc" ]
+all-features = false
+no-default-features = true
 
 [dependencies]
 bytes = "0.4"

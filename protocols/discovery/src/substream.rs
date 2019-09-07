@@ -10,7 +10,7 @@ use p2p::{
     context::ProtocolContextMutRef,
     error::Error,
     service::{ServiceControl, SessionType},
-    utils::multiaddr_to_socketaddr,
+    utils::{is_reachable, multiaddr_to_socketaddr},
     ProtocolId, SessionId,
 };
 use tokio::codec::Framed;
@@ -134,7 +134,12 @@ impl SubstreamValue {
         let mut pending_messages = VecDeque::default();
         debug!("direction: {:?}", direction);
         let mut addr_known = AddrKnown::new(max_known);
-        let remote_addr = if direction.is_outbound() {
+        let is_reachable = multiaddr_to_socketaddr(&substream.remote_addr)
+            .map(|addr| is_reachable(addr.ip()))
+            .unwrap_or_default();
+        let remote_addr = if !is_reachable {
+            RemoteAddress::Unreachable
+        } else if direction.is_outbound() {
             pending_messages.push_back(DiscoveryMessage::GetNodes {
                 version: VERSION,
                 count: MAX_ADDR_TO_SEND as u32,
@@ -167,7 +172,7 @@ impl SubstreamValue {
     }
 
     fn remote_raw_addr(&self) -> Option<RawAddr> {
-        multiaddr_to_socketaddr(self.remote_addr.to_inner()).map(RawAddr::from)
+        multiaddr_to_socketaddr(self.remote_addr.to_inner()?).map(RawAddr::from)
     }
 
     pub(crate) fn check_timer(&mut self) {
@@ -222,8 +227,9 @@ impl SubstreamValue {
                             self.addr_known.insert(raw_addr);
                         }
                         // add client listen address to manager
-                        addr_mgr
-                            .add_new_addr(self.session_id, self.remote_addr.clone().into_inner());
+                        if let Some(addr) = self.remote_addr.clone().into_inner() {
+                            addr_mgr.add_new_addr(self.session_id, addr);
+                        }
                     }
 
                     // TODO: magic number
@@ -407,6 +413,8 @@ impl Substream {
 
 #[derive(Eq, PartialEq, Hash, Debug, Clone)]
 pub(crate) enum RemoteAddress {
+    /// unreachable addr
+    Unreachable,
     /// Inbound init remote address
     Init(Multiaddr),
     /// Outbound init remote address or Inbound listen address
@@ -414,15 +422,17 @@ pub(crate) enum RemoteAddress {
 }
 
 impl RemoteAddress {
-    fn to_inner(&self) -> &Multiaddr {
+    fn to_inner(&self) -> Option<&Multiaddr> {
         match self {
-            RemoteAddress::Init(ref addr) | RemoteAddress::Listen(ref addr) => addr,
+            RemoteAddress::Init(ref addr) | RemoteAddress::Listen(ref addr) => Some(addr),
+            RemoteAddress::Unreachable => None,
         }
     }
 
-    pub(crate) fn into_inner(self) -> Multiaddr {
+    pub(crate) fn into_inner(self) -> Option<Multiaddr> {
         match self {
-            RemoteAddress::Init(addr) | RemoteAddress::Listen(addr) => addr,
+            RemoteAddress::Init(addr) | RemoteAddress::Listen(addr) => Some(addr),
+            RemoteAddress::Unreachable => None,
         }
     }
 
@@ -432,7 +442,7 @@ impl RemoteAddress {
                 .into_iter()
                 .map(|proto| {
                     match proto {
-                        // TODO: ohter transport, UDP for example
+                        // TODO: other transport, UDP for example
                         Protocol::Tcp(_) => Protocol::Tcp(port),
                         value => value,
                     }

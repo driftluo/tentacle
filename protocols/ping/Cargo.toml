@@ -9,6 +9,11 @@ repository = "https://github.com/nervosnetwork/p2p"
 description = "ping protocol implementation for tentacle"
 edition = "2018"
 
+[package.metadata.docs.rs]
+features = [ "molc" ]
+all-features = false
+no-default-features = true
+
 [dependencies]
 p2p = { path = "../..", version = "0.2.4", package = "tentacle" }
 log = "0.4"
