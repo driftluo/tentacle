@@ -129,21 +129,33 @@ impl SubstreamValue {
         substream: Substream,
         max_known: usize,
         query_cycle: Option<Duration>,
+        debug: bool,
     ) -> SubstreamValue {
         let session_id = substream.stream.session_id;
         let mut pending_messages = VecDeque::default();
         debug!("direction: {:?}", direction);
         let mut addr_known = AddrKnown::new(max_known);
-        let is_reachable = multiaddr_to_socketaddr(&substream.remote_addr)
-            .map(|addr| is_reachable(addr.ip()))
-            .unwrap_or_default();
+        let is_reachable = debug
+            || multiaddr_to_socketaddr(&substream.remote_addr)
+                .map(|addr| is_reachable(addr.ip()))
+                .unwrap_or_default();
         let remote_addr = if !is_reachable {
             RemoteAddress::Unreachable
         } else if direction.is_outbound() {
+            let listen_port = if debug {
+                substream
+                    .listens
+                    .iter()
+                    .map(|address| multiaddr_to_socketaddr(address).map(|addr| addr.port()))
+                    .nth(0)
+                    .unwrap()
+            } else {
+                substream.listen_port
+            };
             pending_messages.push_back(DiscoveryMessage::GetNodes {
                 version: VERSION,
                 count: MAX_ADDR_TO_SEND as u32,
-                listen_port: substream.listen_port,
+                listen_port,
             });
             addr_known.insert(RawAddr::from(
                 multiaddr_to_socketaddr(&substream.remote_addr).unwrap(),
@@ -367,6 +379,7 @@ pub struct Substream {
     pub direction: SessionType,
     pub stream: StreamHandle,
     pub listen_port: Option<u16>,
+    listens: Vec<Multiaddr>,
 }
 
 impl Substream {
@@ -399,6 +412,7 @@ impl Substream {
             direction: context.session.ty,
             stream,
             listen_port,
+            listens: context.listens().to_owned(),
         }
     }
 

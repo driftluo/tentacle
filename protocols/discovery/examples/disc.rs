@@ -32,7 +32,7 @@ fn main() {
     let first_arg = std::env::args().nth(1).unwrap();
     if first_arg == "server" {
         debug!("Starting server ......");
-        let _ = service.listen("/ip4/0.0.0.0/tcp/1337".parse().unwrap());
+        let _ = service.listen("/ip4/127.0.0.1/tcp/1337".parse().unwrap());
         tokio::run(service.for_each(|_| Ok(())))
     } else {
         debug!("Starting client ......");
@@ -41,7 +41,7 @@ fn main() {
             "/ip4/127.0.0.1/tcp/1337".parse().unwrap(),
             DialProtocol::All,
         );
-        let _ = service.listen(format!("/ip4/0.0.0.0/tcp/{}", first_arg).parse().unwrap());
+        let _ = service.listen(format!("/ip4/127.0.0.1/tcp/{}", first_arg).parse().unwrap());
         tokio::run(service.for_each(|_| Ok(())))
     }
 }
@@ -56,7 +56,7 @@ fn create_meta(id: ProtocolId, start: u16) -> ProtocolMeta {
     MetaBuilder::default()
         .id(id)
         .service_handle(move || {
-            let discovery = Discovery::new(addr_mgr, Some(Duration::from_secs(7)));
+            let discovery = Discovery::new(addr_mgr, Some(Duration::from_secs(7))).debug(true);
             ProtocolHandle::Callback(Box::new(DiscoveryProtocol::new(discovery)))
         })
         .build()
@@ -81,6 +81,7 @@ pub struct SimpleAddressManager {
 
 impl AddressManager for SimpleAddressManager {
     fn add_new_addr(&mut self, session_id: SessionId, addr: Multiaddr) {
+        log::info!("{:?}", addr);
         let (_, addrs) = self
             .peers
             .entry(session_id)

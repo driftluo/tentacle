@@ -158,6 +158,8 @@ pub struct Discovery<M> {
     dynamic_query_cycle: Option<Duration>,
 
     check_interval: Interval,
+
+    debug: bool,
 }
 
 #[derive(Clone)]
@@ -180,7 +182,14 @@ impl<M: AddressManager> Discovery<M> {
             substream_receiver,
             dead_keys: HashSet::default(),
             dynamic_query_cycle: query_cycle,
+            debug: false,
         }
+    }
+
+    /// Turning on debug mode will allow any ip to be broadcast for testing
+    pub fn debug(mut self, debug: bool) -> Self {
+        self.debug = debug;
+        self
     }
 
     pub fn addr_mgr(&self) -> &M {
@@ -204,6 +213,7 @@ impl<M: AddressManager> Discovery<M> {
                         substream,
                         self.max_known,
                         self.dynamic_query_cycle,
+                        self.debug,
                     );
                     self.substreams.insert(key, value);
                 }
@@ -290,10 +300,12 @@ impl<M: AddressManager> Stream for Discovery<M> {
 
         let mut dead_addr = Vec::default();
         for key in self.dead_keys.drain() {
-            if let Some(value) = self.substreams.remove(&key) {
-                if let Some(addr) = value.remote_addr.into_inner() {
-                    dead_addr.push(RawAddr::from(addr))
-                }
+            if let Some(addr) = self
+                .substreams
+                .remove(&key)
+                .and_then(|value| value.remote_addr.into_inner())
+            {
+                dead_addr.push(RawAddr::from(addr))
             }
         }
 
