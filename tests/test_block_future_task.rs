@@ -1,4 +1,4 @@
-use futures::{future::empty, prelude::Stream};
+use futures::{future::pending, StreamExt};
 use std::time::Duration;
 use tentacle::{
     builder::{MetaBuilder, ServiceBuilder},
@@ -10,7 +10,7 @@ use tentacle::{
 
 pub fn create<F>(meta: ProtocolMeta, shandle: F) -> Service<F>
 where
-    F: ServiceHandle,
+    F: ServiceHandle + Unpin,
 {
     ServiceBuilder::default()
         .insert_protocol(meta)
@@ -30,7 +30,7 @@ impl ServiceProtocol for PHandle {
         let _ = context.set_service_notify(proto_id, Duration::from_secs(1), 1);
 
         for _ in 0..4096 {
-            let _ = context.future_task(empty());
+            let _ = context.future_task(pending());
         }
     }
 
@@ -54,7 +54,15 @@ fn create_meta(id: ProtocolId) -> ProtocolMeta {
 
 #[test]
 fn test_block_future_task() {
-    let service = create(create_meta(1.into()), ());
+    let mut service = create(create_meta(1.into()), ());
 
-    tokio::run(service.for_each(|_| Ok(())));
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    rt.spawn(async move {
+        loop {
+            if service.next().await.is_none() {
+                break;
+            }
+        }
+    });
+    rt.shutdown_on_idle();
 }

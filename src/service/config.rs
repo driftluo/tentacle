@@ -117,7 +117,7 @@ impl From<usize> for TargetSession {
 /// Define the minimum data required for a custom protocol
 pub struct ProtocolMeta {
     pub(crate) inner: Arc<Meta>,
-    pub(crate) service_handle: ProtocolHandle<Box<dyn ServiceProtocol + Send + 'static>>,
+    pub(crate) service_handle: ProtocolHandle<Box<dyn ServiceProtocol + Send + 'static + Unpin>>,
     pub(crate) session_handle: SessionHandleFn,
     pub(crate) before_send: Option<Box<dyn Fn(bytes::Bytes) -> bytes::Bytes + Send + 'static>>,
 }
@@ -160,7 +160,9 @@ impl ProtocolMeta {
     ///
     /// Only can be called once, and will return `ProtocolHandle::Neither` or later.
     #[inline]
-    pub fn service_handle(&mut self) -> ProtocolHandle<Box<dyn ServiceProtocol + Send + 'static>> {
+    pub fn service_handle(
+        &mut self,
+    ) -> ProtocolHandle<Box<dyn ServiceProtocol + Send + 'static + Unpin>> {
         ::std::mem::replace(&mut self.service_handle, ProtocolHandle::Neither)
     }
 
@@ -175,7 +177,9 @@ impl ProtocolMeta {
     ///
     /// Correspondingly, whenever the protocol is closed, the corresponding exclusive handle is cleared.
     #[inline]
-    pub fn session_handle(&mut self) -> ProtocolHandle<Box<dyn SessionProtocol + Send + 'static>> {
+    pub fn session_handle(
+        &mut self,
+    ) -> ProtocolHandle<Box<dyn SessionProtocol + Send + 'static + Unpin>> {
         (self.session_handle)()
     }
 }

@@ -1,6 +1,7 @@
 use bytes::BytesMut;
 use futures::{
     channel::mpsc::{Receiver, Sender},
+    stream::FusedStream,
     Stream,
 };
 use tokio::prelude::{AsyncRead, AsyncWrite};
@@ -47,6 +48,9 @@ impl StreamHandle {
     /// Receive frames from secure stream
     fn recv_frames(&mut self, cx: &mut Context) -> Result<(), io::Error> {
         loop {
+            if self.frame_receiver.is_terminated() {
+                break;
+            }
             match Pin::new(&mut self.frame_receiver).poll_next(cx) {
                 Poll::Ready(Some(event)) => self.handle_event(cx, event)?,
                 Poll::Ready(None) => {

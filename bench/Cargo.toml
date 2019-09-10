@@ -14,8 +14,8 @@ path = "./src/main.rs"
 [dependencies]
 p2p = { path = "..", package = "tentacle" }
 rand = "0.6.1"
-tokio = "0.1.14"
-futures = "0.1.25"
+tokio = "0.2.0-alpha.3"
+futures = { version = "0.3.0-alpha.18", package = "futures-preview" }
 crossbeam-channel = "0.3.6"
 env_logger = "0.6.0"
 bytes = "0.4"

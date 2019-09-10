@@ -1,9 +1,10 @@
 use bench::Bench;
 use bytes::Bytes;
-use futures::prelude::Stream;
+use futures::{channel, StreamExt};
 use p2p::{
     builder::{MetaBuilder, ServiceBuilder},
     context::{ProtocolContext, ProtocolContextMutRef},
+    multiaddr::Multiaddr,
     secio::SecioKeyPair,
     service::{DialProtocol, ProtocolHandle, ProtocolMeta, Service, ServiceControl, TargetSession},
     traits::{ServiceHandle, ServiceProtocol},
@@ -29,7 +30,7 @@ enum Notify {
 
 pub fn create<F>(secio: bool, meta: ProtocolMeta, shandle: F) -> Service<F>
 where
-    F: ServiceHandle,
+    F: ServiceHandle + Unpin,
 {
     let builder = ServiceBuilder::default()
         .insert_protocol(meta)
@@ -98,17 +99,42 @@ pub fn init() {
     // init secio two peers
     START_SECIO.call_once(|| {
         let (meta, _receiver) = create_meta(ProtocolId::new(1));
+        let (addr_sender, addr_receiver) = channel::oneshot::channel::<Multiaddr>();
         let mut service = create(true, meta, ());
-        let listen_addr = service
-            .listen("/ip4/127.0.0.1/tcp/0".parse().unwrap())
-            .unwrap();
         let control = service.control().clone();
-        thread::spawn(|| tokio::run(service.for_each(|_| Ok(()))));
+        thread::spawn(move || {
+            let rt = tokio::runtime::Runtime::new().unwrap();
+            rt.spawn(async move {
+                let listen_addr = service
+                    .listen("/ip4/127.0.0.1/tcp/0".parse().unwrap())
+                    .await
+                    .unwrap();
+                let _ = addr_sender.send(listen_addr);
+                loop {
+                    if service.next().await.is_none() {
+                        break;
+                    }
+                }
+            });
+            rt.shutdown_on_idle();
+        });
 
         let (meta, client_receiver) = create_meta(1.into());
-        let mut service = create(true, meta, ());
-        service.dial(listen_addr, DialProtocol::All).unwrap();
-        thread::spawn(|| tokio::run(service.for_each(|_| Ok(()))));
+
+        thread::spawn(|| {
+            let rt = tokio::runtime::Runtime::new().unwrap();
+            let mut service = create(true, meta, ());
+            rt.spawn(async move {
+                let listen_addr = addr_receiver.await.unwrap();
+                service.dial(listen_addr, DialProtocol::All).await.unwrap();
+                loop {
+                    if service.next().await.is_none() {
+                        break;
+                    }
+                }
+            });
+            rt.shutdown_on_idle();
+        });
 
         assert_eq!(client_receiver.recv(), Ok(Notify::Connected));
         unsafe {
@@ -120,17 +146,42 @@ pub fn init() {
     // init no secio two peers
     START_NO_SECIO.call_once(|| {
         let (meta, _receiver) = create_meta(ProtocolId::new(1));
+        let (addr_sender, addr_receiver) = channel::oneshot::channel::<Multiaddr>();
         let mut service = create(false, meta, ());
-        let listen_addr = service
-            .listen("/ip4/127.0.0.1/tcp/0".parse().unwrap())
-            .unwrap();
         let control = service.control().clone();
-        thread::spawn(|| tokio::run(service.for_each(|_| Ok(()))));
+        thread::spawn(move || {
+            let rt = tokio::runtime::Runtime::new().unwrap();
+            rt.spawn(async move {
+                let listen_addr = service
+                    .listen("/ip4/127.0.0.1/tcp/0".parse().unwrap())
+                    .await
+                    .unwrap();
+                let _ = addr_sender.send(listen_addr);
+                loop {
+                    if service.next().await.is_none() {
+                        break;
+                    }
+                }
+            });
+            rt.shutdown_on_idle();
+        });
 
         let (meta, client_receiver) = create_meta(ProtocolId::new(1));
-        let mut service = create(false, meta, ());
-        service.dial(listen_addr, DialProtocol::All).unwrap();
-        thread::spawn(|| tokio::run(service.for_each(|_| Ok(()))));
+
+        thread::spawn(move || {
+            let rt = tokio::runtime::Runtime::new().unwrap();
+            let mut service = create(false, meta, ());
+            rt.spawn(async move {
+                let listen_addr = addr_receiver.await.unwrap();
+                service.dial(listen_addr, DialProtocol::All).await.unwrap();
+                loop {
+                    if service.next().await.is_none() {
+                        break;
+                    }
+                }
+            });
+            rt.shutdown_on_idle();
+        });
 
         assert_eq!(client_receiver.recv(), Ok(Notify::Connected));
         unsafe {

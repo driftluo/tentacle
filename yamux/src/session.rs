@@ -610,7 +610,7 @@ where
             match Pin::new(receiver).as_mut().poll_next(cx) {
                 Poll::Ready(Some(_)) => {
                     if self.last_ping_time.elapsed() > self.config.keepalive_interval {
-                        let _ = self.keep_alive(cx, Instant::now())?;
+                        self.keep_alive(cx, Instant::now())?;
                         self.last_ping_time = Instant::now();
                     }
                 }

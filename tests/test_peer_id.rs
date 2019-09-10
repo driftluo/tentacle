@@ -1,5 +1,5 @@
-use futures::prelude::Stream;
-use std::{borrow::Cow, thread};
+use futures::StreamExt;
+use std::{sync::mpsc::channel, thread, borrow::Cow};
 use tentacle::{
     builder::{MetaBuilder, ServiceBuilder},
     context::{ProtocolContext, ServiceContext},
@@ -13,7 +13,7 @@ use tentacle::{
 
 pub fn create<F>(key_pair: SecioKeyPair, meta: ProtocolMeta, shandle: F) -> Service<F>
 where
-    F: ServiceHandle,
+    F: ServiceHandle + Unpin,
 {
     ServiceBuilder::default()
         .insert_protocol(meta)
@@ -84,18 +84,45 @@ fn create_meta(id: ProtocolId) -> ProtocolMeta {
 fn test_peer_id(fail: bool) {
     let meta = create_meta(1.into());
     let key = SecioKeyPair::secp256k1_generated();
+    let (addr_sender, addr_receiver) = channel::<Multiaddr>();
     let mut service = create(key.clone(), meta, ());
 
-    let mut listen_addr = service
-        .listen("/ip4/127.0.0.1/tcp/0".parse().unwrap())
-        .unwrap();
-    thread::spawn(|| tokio::run(service.for_each(|_| Ok(()))));
+    thread::spawn(move || {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.spawn(async move {
+            let listen_addr = service
+                .listen("/ip4/127.0.0.1/tcp/0".parse().unwrap())
+                .await
+                .unwrap();
+
+            addr_sender.send(listen_addr).unwrap();
+
+            loop {
+                if service.next().await.is_none() {
+                    break;
+                }
+            }
+        });
+        rt.shutdown_on_idle();
+    });
+
+    let mut listen_addr = addr_receiver.recv().unwrap();
 
     let (shandle, error_receiver) = create_shandle();
     let meta = create_meta(1.into());
-    let service = create(SecioKeyPair::secp256k1_generated(), meta, shandle);
+    let mut service = create(SecioKeyPair::secp256k1_generated(), meta, shandle);
     let control = service.control().clone();
-    thread::spawn(|| tokio::run(service.for_each(|_| Ok(()))));
+    thread::spawn(move || {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.spawn(async move {
+            loop {
+                if service.next().await.is_none() {
+                    break;
+                }
+            }
+        });
+        rt.shutdown_on_idle();
+    });
 
     if fail {
         (1..11).for_each(|_| {

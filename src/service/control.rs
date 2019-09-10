@@ -1,4 +1,4 @@
-use futures::{prelude::*, sync::mpsc};
+use futures::{channel::mpsc, prelude::*};
 
 use std::time::Duration;
 use std::{
@@ -187,10 +187,10 @@ impl ServiceControl {
     #[inline]
     pub fn future_task<T>(&self, task: T) -> Result<(), Error>
     where
-        T: Future<Item = (), Error = ()> + 'static + Send,
+        T: Future<Output = ()> + 'static + Send,
     {
         self.send(ServiceTask::FutureTask {
-            task: Box::new(task),
+            task: Box::pin(task),
         })
     }
 

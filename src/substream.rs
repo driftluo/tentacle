@@ -1,18 +1,19 @@
-use futures::{prelude::*, stream::iter_ok, sync::mpsc};
+use futures::{channel::mpsc, prelude::*, stream::iter};
 use log::debug;
 use std::{
     collections::VecDeque,
     io::{self, ErrorKind},
+    pin::Pin,
     sync::{
         atomic::{AtomicBool, Ordering},
         Arc,
     },
+    task::{Context, Poll},
     time::Instant,
 };
 use tokio::{
     codec::{length_delimited::LengthDelimitedCodec, Framed},
     prelude::AsyncWrite,
-    timer::Delay,
 };
 
 use crate::{
@@ -110,7 +111,7 @@ pub(crate) struct SubStream<U> {
 
 impl<U> SubStream<U>
 where
-    U: Codec,
+    U: Codec + Unpin,
 {
     pub fn proto_open(&mut self, version: String) {
         if self.service_proto_sender.is_some() {
@@ -125,8 +126,6 @@ where
             self.session_proto_buf
                 .push_back(SessionProtocolEvent::Connected { version })
         }
-
-        self.distribute_to_user_level();
     }
 
     fn push_front(&mut self, priority: Priority, frame: bytes::Bytes) {
@@ -148,40 +147,44 @@ where
     /// Sink `start_send` Ready -> data in buffer or send
     /// Sink `start_send` NotReady -> buffer full need poll complete
     #[inline]
-    fn send_inner(&mut self, frame: bytes::Bytes, priority: Priority) -> Result<bool, io::Error> {
+    fn send_inner(
+        &mut self,
+        cx: &mut Context,
+        frame: bytes::Bytes,
+        priority: Priority,
+    ) -> Result<bool, io::Error> {
         let data_size = frame.len();
-        match self.sub_stream.start_send(frame) {
-            Ok(AsyncSink::NotReady(frame)) => {
-                debug!("framed_stream NotReady, frame len: {:?}", frame.len());
-                self.push_front(priority, frame);
-                Ok(true)
-            }
-            Ok(AsyncSink::Ready) => {
+        let mut sink = Pin::new(&mut self.sub_stream);
+
+        match sink.as_mut().poll_ready(cx)? {
+            Poll::Ready(()) => {
+                sink.as_mut().start_send(frame)?;
                 self.context.decr_pending_data_size(data_size);
                 Ok(false)
             }
-            Err(err) => {
-                debug!("framed_stream send error: {:?}", err);
-                Err(err)
+            Poll::Pending => {
+                debug!("framed_stream NotReady, frame len: {:?}", frame.len());
+                self.push_front(priority, frame);
+                Ok(true)
             }
         }
     }
 
     /// Send data to the lower `yamux` sub stream
-    fn send_data(&mut self) -> Result<(), io::Error> {
+    fn send_data(&mut self, cx: &mut Context) -> Result<(), io::Error> {
         while let Some(frame) = self.high_write_buf.pop_front() {
-            if self.send_inner(frame, Priority::High)? && self.poll_complete()? {
+            if self.send_inner(cx, frame, Priority::High)? && self.poll_complete(cx)? {
                 return Ok(());
             }
         }
 
         while let Some(frame) = self.write_buf.pop_front() {
-            if self.send_inner(frame, Priority::Normal)? && self.poll_complete()? {
+            if self.send_inner(cx, frame, Priority::Normal)? && self.poll_complete(cx)? {
                 return Ok(());
             }
         }
 
-        self.poll_complete()?;
+        self.poll_complete(cx)?;
 
         debug!("send success, proto_id: {}", self.proto_id);
         Ok(())
@@ -192,18 +195,23 @@ where
     ///
     /// Sink `poll_complete` Ready -> no buffer remain, flush all
     /// Sink `poll_complete` NotReady -> there is more work left to do, may wake up next poll
-    fn poll_complete(&mut self) -> Result<bool, io::Error> {
-        if self.sub_stream.poll_complete()?.is_not_ready() {
-            self.set_delay();
-            return Ok(true);
+    fn poll_complete(&mut self, cx: &mut Context) -> Result<bool, io::Error> {
+        match Pin::new(&mut self.sub_stream).poll_flush(cx) {
+            Poll::Pending => {
+                self.set_delay(cx);
+                Ok(true)
+            }
+            Poll::Ready(res) => {
+                res?;
+                Ok(false)
+            }
         }
-        Ok(false)
     }
 
     /// Close protocol sub stream
-    fn close_proto_stream(&mut self) {
+    fn close_proto_stream(&mut self, cx: &mut Context) {
         self.event_receiver.close();
-        let _ = self.sub_stream.get_mut().shutdown();
+        let _ = Pin::new(self.sub_stream.get_mut()).poll_shutdown(cx);
 
         if self.service_proto_sender.is_some() {
             self.service_proto_buf
@@ -211,28 +219,26 @@ where
                     id: self.context.id,
                 });
             let events = self.service_proto_buf.split_off(0);
-            tokio::spawn(
-                self.service_proto_sender
-                    .take()
-                    .unwrap()
-                    .send_all(iter_ok(events))
-                    .map(|_| ())
-                    .map_err(|e| debug!("stream close event send to proto handle error: {:?}", e)),
-            );
+            let mut sender = self.service_proto_sender.take().unwrap();
+            tokio::spawn(async move {
+                let mut iter = iter(events);
+                if let Err(e) = sender.send_all(&mut iter).await {
+                    debug!("stream close event send to proto handle error: {:?}", e)
+                }
+            });
         }
 
         if self.session_proto_sender.is_some() {
             self.session_proto_buf
                 .push_back(SessionProtocolEvent::Disconnected);
             let events = self.session_proto_buf.split_off(0);
-            tokio::spawn(
-                self.session_proto_sender
-                    .take()
-                    .unwrap()
-                    .send_all(iter_ok(events))
-                    .map(|_| ())
-                    .map_err(|e| debug!("stream close event send to proto handle error: {:?}", e)),
-            );
+            let mut sender = self.session_proto_sender.take().unwrap();
+            tokio::spawn(async move {
+                let mut iter = iter(events);
+                if let Err(e) = sender.send_all(&mut iter).await {
+                    debug!("stream close event send to proto handle error: {:?}", e)
+                }
+            });
         }
 
         self.read_buf.push_back(ProtocolEvent::Close {
@@ -242,21 +248,21 @@ where
 
         if !self.closed.load(Ordering::SeqCst) {
             let events = self.read_buf.split_off(0);
+            let mut sender = self.event_sender.clone();
 
-            tokio::spawn(
-                self.event_sender
-                    .clone()
-                    .send_all(iter_ok(events))
-                    .map(|_| ())
-                    .map_err(|e| debug!("stream close event send to session error: {:?}", e)),
-            );
+            tokio::spawn(async move {
+                let mut iter = iter(events);
+                if let Err(e) = sender.send_all(&mut iter).await {
+                    debug!("stream close event send to session error: {:?}", e)
+                }
+            });
         } else {
-            self.output();
+            self.output(cx);
         }
     }
 
     /// When send or receive message error, output error and close stream
-    fn error_close(&mut self, error: io::Error) {
+    fn error_close(&mut self, cx: &mut Context, error: io::Error) {
         self.dead = true;
         if !self.keep_buffer {
             self.read_buf.clear()
@@ -266,17 +272,17 @@ where
             proto_id: self.proto_id,
             error: error.into(),
         });
-        self.close_proto_stream();
+        self.close_proto_stream(cx);
     }
 
     /// Handling commands send by session
-    fn handle_proto_event(&mut self, event: ProtocolEvent) {
+    fn handle_proto_event(&mut self, cx: &mut Context, event: ProtocolEvent) {
         match event {
             ProtocolEvent::Message { data, priority, .. } => {
                 debug!("proto [{}] send data: {}", self.proto_id, data.len());
                 self.push_back(priority, data);
 
-                if let Err(err) = self.send_data() {
+                if let Err(err) = self.send_data(cx) {
                     // Whether it is a read send error or a flush error,
                     // the most essential problem is that there is a problem with the external network.
                     // Close the protocol stream directly.
@@ -284,11 +290,14 @@ where
                         "protocol [{}] close because of extern network",
                         self.proto_id
                     );
-                    self.output_event(ProtocolEvent::Error {
-                        id: self.id,
-                        proto_id: self.proto_id,
-                        error: err.into(),
-                    });
+                    self.output_event(
+                        cx,
+                        ProtocolEvent::Error {
+                            id: self.id,
+                            proto_id: self.proto_id,
+                            error: err.into(),
+                        },
+                    );
                     self.dead = true;
                 }
             }
@@ -300,14 +309,14 @@ where
         }
     }
 
-    fn distribute_to_user_level(&mut self) {
+    fn distribute_to_user_level(&mut self, cx: &mut Context) {
         if let Some(ref mut sender) = self.service_proto_sender {
             while let Some(event) = self.service_proto_buf.pop_front() {
                 if let Err(e) = sender.try_send(event) {
                     if e.is_full() {
                         debug!("service proto [{}] handle is full", self.proto_id);
                         self.service_proto_buf.push_front(e.into_inner());
-                        self.set_delay();
+                        self.set_delay(cx);
                         break;
                     } else {
                         self.dead = true;
@@ -322,7 +331,7 @@ where
                     if e.is_full() {
                         debug!("service proto [{}] handle is full", self.proto_id);
                         self.session_proto_buf.push_front(e.into_inner());
-                        self.set_delay();
+                        self.set_delay(cx);
                         break;
                     } else {
                         self.dead = true;
@@ -331,24 +340,24 @@ where
             }
         }
         if self.dead {
-            self.output();
+            self.output(cx);
         }
     }
 
     /// Send event to user
     #[inline]
-    fn output_event(&mut self, event: ProtocolEvent) {
+    fn output_event(&mut self, cx: &mut Context, event: ProtocolEvent) {
         self.read_buf.push_back(event);
-        self.output();
+        self.output(cx);
     }
 
     #[inline]
-    fn output(&mut self) {
+    fn output(&mut self, cx: &mut Context) {
         while let Some(event) = self.read_buf.pop_front() {
             if let Err(e) = self.event_sender.try_send(event) {
                 if e.is_full() {
                     self.read_buf.push_front(e.into_inner());
-                    self.set_delay();
+                    self.set_delay(cx);
                 } else {
                     debug!("proto send to session error: {}, may be kill by remote", e);
                     self.dead = true;
@@ -358,7 +367,7 @@ where
         }
     }
 
-    fn recv_event(&mut self) {
+    fn recv_event(&mut self, cx: &mut Context) {
         let mut finished = false;
         for _ in 0..64 {
             if self.dead {
@@ -366,34 +375,30 @@ where
             }
 
             if self.write_buf.len() > self.config.send_event_size() {
-                self.set_delay();
+                self.set_delay(cx);
                 break;
             }
 
-            match self.event_receiver.poll() {
-                Ok(Async::Ready(Some(event))) => self.handle_proto_event(event),
-                Ok(Async::Ready(None)) => {
+            match Pin::new(&mut self.event_receiver).as_mut().poll_next(cx) {
+                Poll::Ready(Some(event)) => self.handle_proto_event(cx, event),
+                Poll::Ready(None) => {
                     // Must be session close
                     self.dead = true;
-                    let _ = self.sub_stream.get_mut().shutdown();
+                    let _ = Pin::new(self.sub_stream.get_mut()).poll_shutdown(cx);
                     return;
                 }
-                Ok(Async::NotReady) => {
-                    finished = true;
-                    break;
-                }
-                Err(_) => {
+                Poll::Pending => {
                     finished = true;
                     break;
                 }
             }
         }
         if !finished {
-            self.set_delay();
+            self.set_delay(cx);
         }
     }
 
-    fn recv_frame(&mut self) {
+    fn recv_frame(&mut self, cx: &mut Context) {
         let mut finished = false;
         for _ in 0..64 {
             if self.dead {
@@ -401,12 +406,12 @@ where
             }
 
             if self.read_buf.len() > self.config.recv_event_size() {
-                self.set_delay();
+                self.set_delay(cx);
                 break;
             }
 
-            match self.sub_stream.poll() {
-                Ok(Async::Ready(Some(data))) => {
+            match Pin::new(&mut self.sub_stream).as_mut().poll_next(cx) {
+                Poll::Ready(Some(Ok(data))) => {
                     debug!(
                         "protocol [{}] receive data len: {}",
                         self.proto_id,
@@ -417,7 +422,7 @@ where
                         Some(ref function) => match function(data) {
                             Ok(data) => data,
                             Err(err) => {
-                                self.error_close(err);
+                                self.error_close(cx, err);
                                 return;
                             }
                         },
@@ -437,27 +442,30 @@ where
                             .push_back(SessionProtocolEvent::Received { data: data.clone() })
                     }
 
-                    self.distribute_to_user_level();
+                    self.distribute_to_user_level(cx);
 
                     if self.event {
-                        self.output_event(ProtocolEvent::Message {
-                            id: self.id,
-                            proto_id: self.proto_id,
-                            data,
-                            priority: Priority::Normal,
-                        })
+                        self.output_event(
+                            cx,
+                            ProtocolEvent::Message {
+                                id: self.id,
+                                proto_id: self.proto_id,
+                                data,
+                                priority: Priority::Normal,
+                            },
+                        )
                     }
                 }
-                Ok(Async::Ready(None)) => {
+                Poll::Ready(None) => {
                     debug!("protocol [{}] close", self.proto_id);
                     self.dead = true;
                     return;
                 }
-                Ok(Async::NotReady) => {
+                Poll::Pending => {
                     finished = true;
                     break;
                 }
-                Err(err) => {
+                Poll::Ready(Some(Err(err))) => {
                     finished = true;
                     debug!("sub stream codec error: {:?}", err);
                     match err.kind() {
@@ -467,7 +475,7 @@ where
                         | ErrorKind::NotConnected
                         | ErrorKind::UnexpectedEof => self.dead = true,
                         _ => {
-                            self.error_close(err);
+                            self.error_close(cx, err);
                             return;
                         }
                     }
@@ -475,12 +483,12 @@ where
             }
         }
         if !finished {
-            self.set_delay();
+            self.set_delay(cx);
         }
     }
 
     #[inline]
-    fn set_delay(&mut self) {
+    fn set_delay(&mut self, cx: &mut Context) {
         // Why use `delay` instead of `notify`?
         //
         // In fact, on machines that can use multi-core normally, there is almost no problem with the `notify` behavior,
@@ -491,22 +499,21 @@ where
         // Under a single-core machine, `notify` may fall into the loop of infinitely preemptive CPU, causing starvation.
         if !self.delay.load(Ordering::Acquire) {
             self.delay.store(true, Ordering::Release);
-            let notify = futures::task::current();
+            let waker = cx.waker().clone();
             let delay = self.delay.clone();
-            let delay_task = Delay::new(Instant::now() + DELAY_TIME).then(move |_| {
-                notify.notify();
+            tokio::spawn(async move {
+                tokio::timer::delay(Instant::now() + DELAY_TIME).await;
+                waker.wake();
                 delay.store(false, Ordering::Release);
-                Ok(())
             });
-            tokio::spawn(delay_task);
         }
     }
 
     #[inline]
-    fn flush(&mut self) -> Result<(), io::Error> {
-        self.output();
+    fn flush(&mut self, cx: &mut Context) -> Result<(), io::Error> {
+        self.output(cx);
 
-        match self.send_data() {
+        match self.send_data(cx) {
             Ok(()) => Ok(()),
             Err(err) => Err(err),
         }
@@ -515,47 +522,46 @@ where
 
 impl<U> Stream for SubStream<U>
 where
-    U: Codec,
+    U: Codec + Unpin,
 {
     type Item = ();
-    type Error = ();
 
-    fn poll(&mut self) -> Poll<Option<Self::Item>, Self::Error> {
+    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Option<Self::Item>> {
         // double check here
         if self.dead || self.closed.load(Ordering::SeqCst) {
             debug!(
                 "SubStream({}) finished, self.dead || self.closed.load(Ordering::SeqCst), head",
                 self.id
             );
-            self.close_proto_stream();
-            return Ok(Async::Ready(None));
+            self.close_proto_stream(cx);
+            return Poll::Ready(None);
+        }
+
+        if !self.service_proto_buf.is_empty() || !self.session_proto_buf.is_empty() {
+            self.distribute_to_user_level(cx);
         }
 
         if !self.read_buf.is_empty()
             || !self.write_buf.is_empty()
             || !self.high_write_buf.is_empty()
         {
-            if let Err(err) = self.flush() {
+            if let Err(err) = self.flush(cx) {
                 debug!(
                     "SubStream({}) finished with flush error: {:?}",
                     self.id, err
                 );
-                self.error_close(err);
-                return Err(());
+                self.error_close(cx, err);
+                return Poll::Ready(None);
             }
         }
 
-        if !self.service_proto_buf.is_empty() || !self.session_proto_buf.is_empty() {
-            self.distribute_to_user_level();
-        }
-
-        if let Err(err) = self.poll_complete() {
+        if let Err(err) = self.poll_complete(cx) {
             debug!(
                 "SubStream({}) finished with poll_complete error: {:?}",
                 self.id, err
             );
-            self.error_close(err);
-            return Err(());
+            self.error_close(cx, err);
+            return Poll::Ready(None);
         }
 
         debug!(
@@ -564,9 +570,9 @@ where
             self.read_buf.len()
         );
 
-        self.recv_frame();
+        self.recv_frame(cx);
 
-        self.recv_event();
+        self.recv_event(cx);
 
         if self.dead || self.closed.load(Ordering::SeqCst) {
             debug!(
@@ -576,11 +582,11 @@ where
             if !self.keep_buffer {
                 self.read_buf.clear()
             }
-            self.close_proto_stream();
-            return Ok(Async::Ready(None));
+            self.close_proto_stream(cx);
+            return Poll::Ready(None);
         }
 
-        Ok(Async::NotReady)
+        Poll::Pending
     }
 }
 

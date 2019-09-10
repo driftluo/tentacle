@@ -11,7 +11,7 @@ use crate::protocol_select::protocol_select_generated::p2p::protocol_select::{
 use molecule::prelude::{Builder, Entity, Reader};
 
 use bytes::Bytes;
-use futures::{future, prelude::*};
+use futures::prelude::*;
 use log::debug;
 use std::cmp::Ordering;
 use std::{collections::HashMap, io};
@@ -149,121 +149,80 @@ impl ProtocolInfo {
 ///
 /// Select the protocol version, return a handle that implements the `AsyncWrite` and `AsyncRead` trait,
 /// plus the protocol name, plus the version option.
-pub(crate) fn client_select<T: AsyncWrite + AsyncRead + Send>(
+pub(crate) async fn client_select<T: AsyncWrite + AsyncRead + Send + Unpin>(
     handle: T,
     proto_info: ProtocolInfo,
-) -> impl Future<Item = (Framed<T, LengthDelimitedCodec>, String, Option<String>), Error = io::Error>
-{
-    let socket = Framed::new(handle, LengthDelimitedCodec::new());
-    future::ok::<_, io::Error>(proto_info)
-        .and_then(|proto_info| {
-            socket
-                .send(Bytes::from(proto_info.encode()))
-                .from_err()
-                .map(|socket| socket)
-        })
-        .and_then(|socket| {
-            socket
-                .into_future()
-                .map_err(|(e, socket)| {
-                    let _ = socket.into_inner().shutdown();
-                    e
-                })
-                .and_then(|(raw_remote_info, socket)| {
-                    let remote_info = match raw_remote_info {
-                        Some(info) => match ProtocolInfo::decode(&info) {
-                            Some(info) => info,
-                            None => return Err(io::ErrorKind::InvalidData.into()),
-                        },
-                        None => {
-                            let err =
-                                io::Error::new(io::ErrorKind::UnexpectedEof, "unexpected eof");
-                            debug!(
-                                "unexpected eof while waiting for remote's protocol proposition"
-                            );
-                            return Err(err);
-                        }
-                    };
-                    Ok((remote_info, socket))
-                })
-        })
-        .and_then(|(mut remote_info, socket)| {
-            Ok((
-                // Due to possible business data in the buffer, it cannot be directly discarded.
-                socket,
-                remote_info.name,
-                remote_info.support_versions.pop(),
-            ))
-        })
+) -> Result<(Framed<T, LengthDelimitedCodec>, String, Option<String>), io::Error> {
+    let mut socket = Framed::new(handle, LengthDelimitedCodec::new());
+
+    socket.send(Bytes::from(proto_info.encode())).await?;
+
+    let (raw_remote_info, socket) = socket.into_future().await;
+
+    let mut remote_info = match raw_remote_info {
+        Some(info) => match ProtocolInfo::decode(&info?) {
+            Some(info) => info,
+            None => return Err(io::ErrorKind::InvalidData.into()),
+        },
+        None => {
+            let err = io::Error::new(io::ErrorKind::UnexpectedEof, "unexpected eof");
+            debug!("unexpected eof while waiting for remote's protocol proposition");
+            return Err(err);
+        }
+    };
+
+    Ok((
+        // Due to possible business data in the buffer, it cannot be directly discarded.
+        socket,
+        remote_info.name,
+        remote_info.support_versions.pop(),
+    ))
 }
 
 /// Performs a handshake on the given socket.
 ///
 /// Select the protocol version, return a handle that implements the `AsyncWrite` and `AsyncRead` trait,
 /// plus the protocol name, plus the version option.
-pub(crate) fn server_select<T: AsyncWrite + AsyncRead + Send>(
+pub(crate) async fn server_select<T: AsyncWrite + AsyncRead + Send + Unpin>(
     handle: T,
-    proto_infos: HashMap<String, (ProtocolInfo, Option<SelectFn<String>>)>,
-) -> impl Future<Item = (Framed<T, LengthDelimitedCodec>, String, Option<String>), Error = io::Error>
-{
+    mut proto_infos: HashMap<String, (ProtocolInfo, Option<SelectFn<String>>)>,
+) -> Result<(Framed<T, LengthDelimitedCodec>, String, Option<String>), io::Error> {
     let socket = Framed::new(handle, LengthDelimitedCodec::new());
-    future::ok::<_, io::Error>(proto_infos)
-        .and_then(|mut proto_infos| {
-            socket
-                .into_future()
-                .map_err(|(e, socket)| {
-                    let _ = socket.into_inner().shutdown();
-                    e
+
+    let (raw_remote_info, mut socket) = socket.into_future().await;
+    let remote_info = match raw_remote_info {
+        Some(info) => match ProtocolInfo::decode(&info?) {
+            Some(info) => info,
+            None => return Err(io::ErrorKind::InvalidData.into()),
+        },
+        None => {
+            let err = io::Error::new(io::ErrorKind::UnexpectedEof, "unexpected eof");
+            debug!("unexpected eof while waiting for remote's protocol proposition");
+            return Err(err);
+        }
+    };
+
+    let version = proto_infos
+        .remove(&remote_info.name)
+        .and_then(|(local_info, select)| {
+            select
+                .map(|f| f(&local_info.support_versions, &remote_info.support_versions))
+                .unwrap_or_else(|| {
+                    select_version(&local_info.support_versions, &remote_info.support_versions)
                 })
-                .and_then(move |(raw_remote_info, socket)| {
-                    let remote_info = match raw_remote_info {
-                        Some(info) => match ProtocolInfo::decode(&info) {
-                            Some(info) => info,
-                            None => return Err(io::ErrorKind::InvalidData.into()),
-                        },
-                        None => {
-                            let err =
-                                io::Error::new(io::ErrorKind::UnexpectedEof, "unexpected eof");
-                            debug!(
-                                "unexpected eof while waiting for remote's protocol proposition"
-                            );
-                            return Err(err);
-                        }
-                    };
-                    let version =
-                        proto_infos
-                            .remove(&remote_info.name)
-                            .and_then(|(local_info, select)| {
-                                select
-                                    .map(|f| {
-                                        f(
-                                            &local_info.support_versions,
-                                            &remote_info.support_versions,
-                                        )
-                                    })
-                                    .unwrap_or_else(|| {
-                                        select_version(
-                                            &local_info.support_versions,
-                                            &remote_info.support_versions,
-                                        )
-                                    })
-                            });
-                    Ok((socket, remote_info.name, version))
-                })
-        })
-        .and_then(|(socket, name, version)| {
-            socket
-                .send(Bytes::from(
-                    ProtocolInfo {
-                        name: name.clone(),
-                        support_versions: version.clone().into_iter().collect(),
-                    }
-                    .encode(),
-                ))
-                .from_err()
-                .map(|socket| (socket, name, version))
-        })
-        .and_then(|(socket, name, version)| Ok((socket, name, version)))
+        });
+
+    socket
+        .send(Bytes::from(
+            ProtocolInfo {
+                name: remote_info.name.clone(),
+                support_versions: version.clone().into_iter().collect(),
+            }
+            .encode(),
+        ))
+        .await?;
+
+    Ok((socket, remote_info.name, version))
 }
 
 /// Choose the highest version of the two sides, assume that slices are sorted
@@ -284,8 +243,8 @@ pub fn select_version<T: Ord + Clone>(local: &[T], remote: &[T]) -> Option<T> {
 #[cfg(test)]
 mod tests {
     use super::{client_select, select_version, server_select, ProtocolInfo};
-    use futures::{prelude::*, sync};
-    use std::{collections::HashMap, thread};
+    use futures::{channel, prelude::*};
+    use std::collections::HashMap;
     use tokio::net::{TcpListener, TcpStream};
 
     #[test]
@@ -323,57 +282,50 @@ mod tests {
         assert!(select_version(&e, &d).is_none());
     }
 
-    fn select_protocol(server: Vec<String>, client: Vec<String>, result: &Option<String>) {
-        let listener = TcpListener::bind(&"127.0.0.1:0".parse().unwrap()).unwrap();
-        let listener_addr = listener.local_addr().unwrap();
-        let (sender, receiver_1) = sync::oneshot::channel::<Option<String>>();
+    fn select_protocol(server: Vec<String>, client: Vec<String>, result: Option<String>) {
+        let (sender_1, receiver_1) = channel::oneshot::channel::<Option<String>>();
+        let (sender_2, receiver_2) = channel::oneshot::channel::<Option<String>>();
+        let (addr_sender, addr_receiver) = channel::oneshot::channel::<::std::net::SocketAddr>();
 
-        let server = listener
-            .incoming()
-            .into_future()
-            .and_then(move |(connect, _)| {
-                let mut message = ProtocolInfo::default();
-                message.name = "test".to_owned();
-                message.support_versions = server;
-                let mut messages = HashMap::new();
-                messages.insert("test".to_owned(), (message, None));
+        let rt = tokio::runtime::Runtime::new().unwrap();
 
-                let task = server_select(connect.unwrap(), messages)
-                    .map(|(_, _, a)| {
-                        let _ = sender.send(a);
-                    })
-                    .map_err(|_| ());
-                tokio::spawn(task);
-                Ok(())
-            })
-            .map_err(|_| ());
+        rt.spawn(async move {
+            let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let listener_addr = listener.local_addr().unwrap();
+            let _ = addr_sender.send(listener_addr);
 
-        let (sender, receiver_2) = sync::oneshot::channel::<Option<String>>();
-        let client = TcpStream::connect(&listener_addr)
-            .and_then(move |connect| {
-                let mut message = ProtocolInfo::default();
-                message.name = "test".to_owned();
-                message.support_versions = client;
-                let task = client_select(connect, message)
-                    .map(move |(_, _, a)| {
-                        let _ = sender.send(a);
-                    })
-                    .map_err(|_| ());
-                tokio::spawn(task);
-                Ok(())
-            })
-            .map_err(|_| ());
+            let (connect, _stream) = listener.incoming().into_future().await;
 
-        thread::spawn(|| {
-            tokio::run(server);
+            let mut message = ProtocolInfo::default();
+            message.name = "test".to_owned();
+            message.support_versions = server;
+            let mut messages = HashMap::new();
+            messages.insert("test".to_owned(), (message, None));
+
+            let (_, _, a) = server_select(connect.unwrap().unwrap(), messages)
+                .await
+                .unwrap();
+            let _ = sender_1.send(a);
         });
 
-        thread::spawn(|| {
-            tokio::run(client);
+        rt.spawn(async move {
+            let listener_addr = addr_receiver.await.unwrap();
+            let connect = TcpStream::connect(&listener_addr).await.unwrap();
+
+            let mut message = ProtocolInfo::default();
+            message.name = "test".to_owned();
+            message.support_versions = client;
+
+            let (_, _, a) = client_select(connect, message).await.unwrap();
+            let _ = sender_2.send(a);
         });
 
-        assert_eq!(&receiver_1.wait().unwrap(), result);
-        assert_eq!(&receiver_2.wait().unwrap(), result);
+        rt.spawn(async move {
+            assert_eq!(receiver_1.await.unwrap(), result);
+            assert_eq!(receiver_2.await.unwrap(), result);
+        });
+
+        rt.shutdown_on_idle();
     }
 
     #[test]
@@ -381,7 +333,7 @@ mod tests {
         select_protocol(
             vec!["1.0.0".to_string(), "1.1.1".to_string()],
             vec!["1.0.0".to_string(), "1.1.1".to_string()],
-            &Some("1.1.1".to_owned()),
+            Some("1.1.1".to_owned()),
         )
     }
 
@@ -390,7 +342,7 @@ mod tests {
         select_protocol(
             vec!["1.0.0".to_string(), "2.1.1".to_string()],
             vec!["1.0.0".to_string(), "1.1.1".to_string()],
-            &Some("1.0.0".to_owned()),
+            Some("1.0.0".to_owned()),
         )
     }
 
@@ -399,7 +351,7 @@ mod tests {
         select_protocol(
             vec!["1.0.0".to_string(), "1.1.1".to_string()],
             vec!["2.0.0".to_string(), "2.1.1".to_string()],
-            &None,
+            None,
         )
     }
 }

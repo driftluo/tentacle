@@ -1,4 +1,4 @@
-use futures::prelude::Stream;
+use futures::{channel, StreamExt};
 use std::{
     thread,
     time::{Duration, Instant},
@@ -19,7 +19,7 @@ use tentacle::{
 
 pub fn create<F>(secio: bool, meta: ProtocolMeta, shandle: F) -> Service<F>
 where
-    F: ServiceHandle,
+    F: ServiceHandle + Unpin,
 {
     let builder = ServiceBuilder::default()
         .insert_protocol(meta)
@@ -218,18 +218,42 @@ fn test_repeated_dial(secio: bool) {
     let (meta_1, receiver_1) = create_meta(1.into());
     let (meta_2, receiver_2) = create_meta(1.into());
     let (shandle, error_receiver_1) = create_shandle(secio, false);
+    let (addr_sender, addr_receiver) = channel::oneshot::channel::<Multiaddr>();
 
-    let mut service = create(secio, meta_1, shandle);
-
-    let listen_addr = service
-        .listen("/ip4/127.0.0.1/tcp/0".parse().unwrap())
-        .unwrap();
-    thread::spawn(|| tokio::run(service.for_each(|_| Ok(()))));
+    thread::spawn(move || {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let mut service = create(secio, meta_1, shandle);
+        rt.spawn(async move {
+            let listen_addr = service
+                .listen("/ip4/127.0.0.1/tcp/0".parse().unwrap())
+                .await
+                .unwrap();
+            let _ = addr_sender.send(listen_addr);
+            loop {
+                if service.next().await.is_none() {
+                    break;
+                }
+            }
+        });
+        rt.shutdown_on_idle();
+    });
 
     let (shandle, error_receiver_2) = create_shandle(secio, false);
-    let mut service = create(secio, meta_2, shandle);
-    service.dial(listen_addr, DialProtocol::All).unwrap();
-    thread::spawn(|| tokio::run(service.for_each(|_| Ok(()))));
+
+    thread::spawn(move || {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let mut service = create(secio, meta_2, shandle);
+        rt.spawn(async move {
+            let listen_addr = addr_receiver.await.unwrap();
+            service.dial(listen_addr, DialProtocol::All).await.unwrap();
+            loop {
+                if service.next().await.is_none() {
+                    break;
+                }
+            }
+        });
+        rt.shutdown_on_idle();
+    });
 
     if secio {
         assert_eq!(receiver_1.recv(), Ok(1));
@@ -253,9 +277,19 @@ fn test_repeated_dial(secio: bool) {
 fn test_dial_with_no_notify(secio: bool) {
     let (meta, _receiver) = create_meta(0.into());
     let (shandle, error_receiver) = create_shandle(secio, true);
-    let service = create(secio, meta, shandle);
+    let mut service = create(secio, meta, shandle);
     let control = service.control().clone();
-    thread::spawn(|| tokio::run(service.for_each(|_| Ok(()))));
+    thread::spawn(move || {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.spawn(async move {
+            loop {
+                if service.next().await.is_none() {
+                    break;
+                }
+            }
+        });
+        rt.shutdown_on_idle();
+    });
     // macOs can't dial 0 port
     for _ in 0..2 {
         for i in 1..6 {

@@ -1,13 +1,14 @@
-use futures::future::ok;
-use futures::prelude::{Future, Poll};
-use std::{error::Error as _, io, time::Duration};
+use futures::{future::ok, TryFutureExt};
+use std::{
+    future::Future,
+    io,
+    pin::Pin,
+    task::{Context, Poll},
+    time::Duration,
+};
 use tokio::{
-    net::{
-        tcp::{ConnectFuture, Incoming},
-        TcpListener, TcpStream,
-    },
-    prelude::FutureExt,
-    timer::Timeout,
+    future::FutureExt as _,
+    net::{TcpListener, TcpStream},
 };
 
 use crate::{
@@ -17,30 +18,37 @@ use crate::{
 };
 
 /// Tcp listen bind
-fn bind(address: Multiaddr) -> Result<(Multiaddr, Incoming), TransportError> {
-    match multiaddr_to_socketaddr(&address) {
+async fn bind(
+    address: impl Future<Output = Result<Multiaddr, TransportError>>,
+) -> Result<(Multiaddr, TcpListener), TransportError> {
+    let addr = address.await?;
+    match multiaddr_to_socketaddr(&addr) {
         Some(socket_address) => {
-            let tcp = TcpListener::bind(&socket_address).map_err(TransportError::Io)?;
+            let tcp = TcpListener::bind(&socket_address)
+                .await
+                .map_err(TransportError::Io)?;
             let listen_addr =
                 socketaddr_to_multiaddr(tcp.local_addr().map_err(TransportError::Io)?);
 
-            Ok((listen_addr, tcp.incoming()))
+            Ok((listen_addr, tcp))
         }
-        None => Err(TransportError::NotSupport(address)),
+        None => Err(TransportError::NotSupport(addr)),
     }
 }
 
 /// Tcp connect
-fn connect(
-    address: Multiaddr,
+async fn connect(
+    address: impl Future<Output = Result<Multiaddr, TransportError>>,
     timeout: Duration,
-) -> Result<(Multiaddr, Timeout<ConnectFuture>), TransportError> {
-    match multiaddr_to_socketaddr(&address) {
-        Some(socket_address) => {
-            let connect = TcpStream::connect(&socket_address).timeout(timeout);
-            Ok((address, connect))
-        }
-        None => Err(TransportError::NotSupport(address)),
+    original: Option<Multiaddr>,
+) -> Result<(Multiaddr, TcpStream), TransportError> {
+    let addr = address.await?;
+    match multiaddr_to_socketaddr(&addr) {
+        Some(socket_address) => match TcpStream::connect(&socket_address).timeout(timeout).await {
+            Err(_) => Err(TransportError::Io(io::ErrorKind::TimedOut.into())),
+            Ok(res) => Ok((original.unwrap_or(addr), res.map_err(TransportError::Io)?)),
+        },
+        None => Err(TransportError::NotSupport(original.unwrap_or(addr))),
     }
 }
 
@@ -60,19 +68,15 @@ impl Transport for TcpTransport {
     type ListenFuture = TcpListenFuture;
     type DialFuture = TcpDialFuture;
 
-    fn listen(self, address: Multiaddr) -> Result<(Self::ListenFuture, Multiaddr), TransportError> {
+    fn listen(self, address: Multiaddr) -> Result<Self::ListenFuture, TransportError> {
         match DNSResolver::new(address.clone()) {
             Some(dns) => {
-                let task = dns.then(|result| match result {
-                    Ok(address) => bind(address),
-                    Err(e) => Err(TransportError::DNSResolverError(e)),
-                });
-                Ok((TcpListenFuture::new(task), address))
+                let task = bind(dns.map_err(TransportError::DNSResolverError));
+                Ok(TcpListenFuture::new(task))
             }
             None => {
-                let listen = bind(address)?;
-                let listen_addr = listen.0.clone();
-                Ok((TcpListenFuture::new(ok(listen)), listen_addr))
+                let task = bind(ok(address));
+                Ok(TcpListenFuture::new(task))
             }
         }
     }
@@ -80,90 +84,73 @@ impl Transport for TcpTransport {
     fn dial(self, address: Multiaddr) -> Result<Self::DialFuture, TransportError> {
         match DNSResolver::new(address.clone()) {
             Some(dns) => {
-                let task =
-                    dns.map_err(TransportError::DNSResolverError)
-                        .and_then(move |new_address| {
-                            let rs = connect(new_address, self.timeout)?;
-                            // Why do this?
-                            // Because here need to save the original address as an index to open the specified protocol.
-                            Ok((address, rs.1))
-                        });
+                // Why do this?
+                // Because here need to save the original address as an index to open the specified protocol.
+                let task = connect(
+                    dns.map_err(TransportError::DNSResolverError),
+                    self.timeout,
+                    Some(address),
+                );
                 Ok(TcpDialFuture::new(task))
             }
             None => {
-                let dial = connect(address, self.timeout)?;
-                Ok(TcpDialFuture::new(ok(dial)))
+                let dial = connect(ok(address), self.timeout, None);
+                Ok(TcpDialFuture::new(dial))
             }
         }
     }
 }
 
+type TcpListenFutureInner =
+    Pin<Box<dyn Future<Output = Result<(Multiaddr, TcpListener), TransportError>> + Send>>;
+
 /// Tcp listen future
 pub struct TcpListenFuture {
-    executed: Box<dyn Future<Item = (Multiaddr, Incoming), Error = TransportError> + Send>,
+    executed: TcpListenFutureInner,
 }
 
 impl TcpListenFuture {
     fn new<T>(executed: T) -> Self
     where
-        T: Future<Item = (Multiaddr, Incoming), Error = TransportError> + 'static + Send,
+        T: Future<Output = Result<(Multiaddr, TcpListener), TransportError>> + 'static + Send,
     {
         TcpListenFuture {
-            executed: Box::new(executed),
+            executed: Box::pin(executed),
         }
     }
 }
 
 impl Future for TcpListenFuture {
-    type Item = (Multiaddr, Incoming);
-    type Error = TransportError;
+    type Output = Result<(Multiaddr, TcpListener), TransportError>;
 
-    fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
-        self.executed.poll()
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        self.executed.as_mut().poll(cx)
     }
 }
 
+type TcpDialFutureInner =
+    Pin<Box<dyn Future<Output = Result<(Multiaddr, TcpStream), TransportError>> + Send>>;
+
 /// Tcp dial future
 pub struct TcpDialFuture {
-    executed: Box<dyn Future<Item = (Multiaddr, TcpStream), Error = TransportError> + Send>,
+    executed: TcpDialFutureInner,
 }
 
 impl TcpDialFuture {
     fn new<T>(executed: T) -> Self
     where
-        T: Future<Item = (Multiaddr, Timeout<ConnectFuture>), Error = TransportError>
-            + 'static
-            + Send,
+        T: Future<Output = Result<(Multiaddr, TcpStream), TransportError>> + 'static + Send,
     {
-        let task = executed.and_then(|(address, connect_future)| {
-            connect_future
-                .map(move |tcp| (address, tcp))
-                .map_err(|err| {
-                    let error = if err.is_timer() {
-                        // tokio timer error
-                        io::Error::new(io::ErrorKind::Other, err.description())
-                    } else if err.is_elapsed() {
-                        // time out error
-                        io::Error::new(io::ErrorKind::TimedOut, err.description())
-                    } else {
-                        // dialer error
-                        err.into_inner().unwrap()
-                    };
-                    TransportError::Io(error)
-                })
-        });
-
         TcpDialFuture {
-            executed: Box::new(task),
+            executed: Box::pin(executed),
         }
     }
 }
 
 impl Future for TcpDialFuture {
-    type Item = (Multiaddr, TcpStream);
-    type Error = TransportError;
+    type Output = Result<(Multiaddr, TcpStream), TransportError>;
 
-    fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
-        self.executed.poll()
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        self.executed.as_mut().poll(cx)
     }
 }

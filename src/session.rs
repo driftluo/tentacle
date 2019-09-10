@@ -1,18 +1,20 @@
-use futures::{prelude::*, stream::iter_ok, sync::mpsc};
+use futures::{channel::mpsc, prelude::*, stream::iter};
 use log::{debug, error, trace, warn};
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::{
     io::{self, ErrorKind},
+    pin::Pin,
     sync::{
         atomic::{AtomicBool, Ordering},
         Arc,
     },
+    task::{Context, Poll},
     time::{Duration, Instant},
 };
-use tokio::prelude::{AsyncRead, AsyncWrite, FutureExt};
+use tokio::prelude::{AsyncRead, AsyncWrite};
 use tokio::{
     codec::{Framed, FramedParts, LengthDelimitedCodec},
-    timer::Delay,
+    future::FutureExt as _,
 };
 
 use crate::{
@@ -193,7 +195,7 @@ pub(crate) struct Session<T> {
 
 impl<T> Session<T>
 where
-    T: AsyncRead + AsyncWrite,
+    T: AsyncRead + AsyncWrite + Unpin,
 {
     /// New a session
     pub fn new(
@@ -206,36 +208,19 @@ where
     ) -> Self {
         let socket = YamuxSession::new(socket, meta.config, meta.context.ty.into());
         let (proto_event_sender, proto_event_receiver) = mpsc::channel(RECEIVED_SIZE);
-        let interval = proto_event_sender.clone();
+        let mut interval = proto_event_sender.clone();
 
         // NOTE: A Interval/Delay will block tokio runtime from gracefully shutdown.
         //       So we spawn it in FutureTaskManager
-        let task = Delay::new(Instant::now() + meta.timeout).then({
-            let future_task_sender = future_task_sender.clone();
-            move |_| {
-                let interval_task = Box::new(
-                    interval
-                        .send(ProtocolEvent::TimeoutCheck)
-                        .map(|_| ())
-                        .map_err(|_| ()),
-                );
-                tokio::spawn(
-                    future_task_sender
-                        .clone()
-                        .send(interval_task)
-                        .map(|_| ())
-                        .map_err(|_| ()),
-                );
-                Ok(())
-            }
+        let mut future_task_sender_ = future_task_sender.clone();
+        let timeout = meta.timeout;
+        tokio::spawn(async move {
+            tokio::timer::delay(Instant::now() + timeout).await;
+            let task = Box::pin(async move {
+                let _ = interval.send(ProtocolEvent::TimeoutCheck).await;
+            });
+            let _ = future_task_sender_.send(task).await;
         });
-        tokio::spawn(
-            future_task_sender
-                .clone()
-                .send(Box::new(task))
-                .map(|_| ())
-                .map_err(|_| ()),
-        );
 
         Session {
             socket,
@@ -271,62 +256,57 @@ where
     fn select_procedure(
         &mut self,
         procedure: impl Future<
-                Item = (
-                    Framed<StreamHandle, LengthDelimitedCodec>,
-                    String,
-                    Option<String>,
-                ),
-                Error = io::Error,
+                Output = Result<
+                    (
+                        Framed<StreamHandle, LengthDelimitedCodec>,
+                        String,
+                        Option<String>,
+                    ),
+                    io::Error,
+                >,
             > + Send
             + 'static,
     ) {
-        let event_sender = self.proto_event_sender.clone();
+        let mut event_sender = self.proto_event_sender.clone();
+        let timeout = self.timeout;
 
         // NOTE: A Interval/Delay will block tokio runtime from gracefully shutdown.
         //       So we spawn it in FutureTaskManager
-        let task = procedure.timeout(self.timeout).then(|result| {
-            match result {
-                Ok((handle, name, version)) => match version {
-                    Some(version) => {
-                        let send_task = event_sender.send(ProtocolEvent::Open {
+        let task = Box::pin(async move {
+            let event = match procedure.timeout(timeout).await {
+                Ok(res) => match res {
+                    Ok((handle, name, version)) => match version {
+                        Some(version) => ProtocolEvent::Open {
                             sub_stream: Box::new(handle),
                             proto_name: name,
                             version,
-                        });
-                        tokio::spawn(send_task.map(|_| ()).map_err(|err| {
-                            debug!("stream send back error: {:?}", err);
-                        }));
-                    }
-                    None => {
-                        debug!("Negotiation to open the protocol {} failed", name);
-                        let send_task = event_sender.send(ProtocolEvent::SelectError {
-                            proto_name: Some(name),
-                        });
-                        tokio::spawn(send_task.map(|_| ()).map_err(|err| {
-                            debug!("select error send back error: {:?}", err);
-                        }));
+                        },
+                        None => {
+                            debug!("Negotiation to open the protocol {} failed", name);
+                            ProtocolEvent::SelectError {
+                                proto_name: Some(name),
+                            }
+                        }
+                    },
+                    Err(err) => {
+                        debug!("stream protocol select err: {:?}", err);
+                        ProtocolEvent::SelectError { proto_name: None }
                     }
                 },
                 Err(err) => {
                     debug!("stream protocol select err: {:?}", err);
-                    let send_task =
-                        event_sender.send(ProtocolEvent::SelectError { proto_name: None });
-                    tokio::spawn(send_task.map(|_| ()).map_err(|err| {
-                        debug!("select error send back error: {:?}", err);
-                    }));
+                    ProtocolEvent::SelectError { proto_name: None }
                 }
+            };
+            if let Err(err) = event_sender.send(event).await {
+                debug!("select result send back error: {:?}", err);
             }
+        }) as BoxedFutureTask;
 
-            Ok(())
+        let mut future_task_sender = self.future_task_sender.clone();
+        tokio::spawn(async move {
+            let _ = future_task_sender.send(task).await;
         });
-
-        tokio::spawn(
-            self.future_task_sender
-                .clone()
-                .send(Box::new(task))
-                .map(|_| ())
-                .map_err(|_| ()),
-        );
     }
 
     /// After the session is established, the client is requested to open some custom protocol sub stream.
@@ -348,18 +328,18 @@ where
 
     /// Push the generated event to the Service
     #[inline]
-    fn event_output(&mut self, event: SessionEvent) {
+    fn event_output(&mut self, cx: &mut Context, event: SessionEvent) {
         self.read_buf.push_back(event);
-        self.output();
+        self.output(cx);
     }
 
     #[inline]
-    fn output(&mut self) {
+    fn output(&mut self, cx: &mut Context) {
         while let Some(event) = self.read_buf.pop_front() {
             if let Err(e) = self.service_sender.try_send(event) {
                 if e.is_full() {
                     self.read_buf.push_front(e.into_inner());
-                    self.set_delay();
+                    self.set_delay(cx);
                     return;
                 } else {
                     error!("session send to service error: {}", e);
@@ -381,6 +361,7 @@ where
     #[inline(always)]
     fn distribute_to_substream_process<D: Iterator<Item = (ProtocolId, ProtocolEvent)>>(
         &mut self,
+        cx: &mut Context,
         data: D,
         priority: Priority,
         block_substreams: &mut HashSet<ProtocolId>,
@@ -396,7 +377,7 @@ where
                     if let Err(e) = sender.try_send(event) {
                         if e.is_full() {
                             self.push_back(priority, proto_id, e.into_inner());
-                            self.set_delay();
+                            self.set_delay(cx);
                             block_substreams.insert(proto_id);
                         } else {
                             debug!("session send to sub stream error: {}", e);
@@ -410,15 +391,20 @@ where
     }
 
     #[inline]
-    fn distribute_to_substream(&mut self) {
+    fn distribute_to_substream(&mut self, cx: &mut Context) {
         let mut block_substreams = HashSet::new();
 
         let high = self.high_write_buf.split_off(0).into_iter();
-        self.distribute_to_substream_process(high, Priority::High, &mut block_substreams);
+        self.distribute_to_substream_process(cx, high, Priority::High, &mut block_substreams);
 
         if self.sub_streams.len() > block_substreams.len() {
             let normal = self.write_buf.split_off(0).into_iter();
-            self.distribute_to_substream_process(normal, Priority::Normal, &mut block_substreams);
+            self.distribute_to_substream_process(
+                cx,
+                normal,
+                Priority::Normal,
+                &mut block_substreams,
+            );
         }
 
         if self.write_buf.capacity() > BUF_SHRINK_THRESHOLD {
@@ -449,6 +435,7 @@ where
 
     fn open_protocol(
         &mut self,
+        cx: &mut Context,
         name: String,
         version: String,
         sub_stream: Box<Framed<StreamHandle, LengthDelimitedCodec>>,
@@ -459,7 +446,7 @@ where
                 // if the server intentionally returns malicious protocol data with arbitrary
                 // protocol names, close the connection and feedback error
                 self.state = SessionState::Abnormal;
-                self.event_output(SessionEvent::ProtocolSelectError {
+                self.event_output(cx,SessionEvent::ProtocolSelectError {
                     id: self.context.id,
                     proto_name: None,
                 });
@@ -503,70 +490,92 @@ where
 
         proto_stream.proto_open(version.clone());
 
-        self.event_output(SessionEvent::ProtocolOpen {
-            id: self.context.id,
-            proto_id,
-            version,
-            session_sender: None,
-        });
+        self.event_output(
+            cx,
+            SessionEvent::ProtocolOpen {
+                id: self.context.id,
+                proto_id,
+                version,
+                session_sender: None,
+            },
+        );
         self.next_stream += 1;
 
         debug!("session [{}] proto [{}] open", self.context.id, proto_id);
-        tokio::spawn(proto_stream.for_each(|_| Ok(())));
+        tokio::spawn(async move {
+            loop {
+                if proto_stream.next().await.is_none() {
+                    break;
+                }
+            }
+        });
     }
 
     /// Handling events uploaded by the protocol stream
-    fn handle_stream_event(&mut self, event: ProtocolEvent) {
+    fn handle_stream_event(&mut self, cx: &mut Context, event: ProtocolEvent) {
         match event {
             ProtocolEvent::Open {
                 proto_name,
                 sub_stream,
                 version,
             } => {
-                self.open_protocol(proto_name, version, sub_stream);
+                self.open_protocol(cx, proto_name, version, sub_stream);
             }
             ProtocolEvent::Close { id, proto_id } => {
                 debug!("session [{}] proto [{}] closed", self.context.id, proto_id);
                 self.sub_streams.remove(&id);
                 self.proto_streams.remove(&proto_id);
-                self.event_output(SessionEvent::ProtocolClose {
-                    id: self.context.id,
-                    proto_id,
-                });
+                self.event_output(
+                    cx,
+                    SessionEvent::ProtocolClose {
+                        id: self.context.id,
+                        proto_id,
+                    },
+                );
             }
             ProtocolEvent::Message { data, proto_id, .. } => {
                 debug!("get proto [{}] data len: {}", proto_id, data.len());
                 if self.state == SessionState::RemoteClose && !self.keep_buffer {
                     return;
                 }
-                self.event_output(SessionEvent::ProtocolMessage {
-                    id: self.context.id,
-                    proto_id,
-                    data,
-                    priority: Priority::Normal,
-                })
+                self.event_output(
+                    cx,
+                    SessionEvent::ProtocolMessage {
+                        id: self.context.id,
+                        proto_id,
+                        data,
+                        priority: Priority::Normal,
+                    },
+                )
             }
-            ProtocolEvent::SelectError { proto_name } => {
-                self.event_output(SessionEvent::ProtocolSelectError {
+            ProtocolEvent::SelectError { proto_name } => self.event_output(
+                cx,
+                SessionEvent::ProtocolSelectError {
                     id: self.context.id,
                     proto_name,
-                })
-            }
+                },
+            ),
             ProtocolEvent::Error {
                 proto_id, error, ..
             } => {
                 debug!("Codec error: {:?}", error);
-                self.event_output(SessionEvent::ProtocolError {
-                    id: self.context.id,
-                    proto_id,
-                    error,
-                })
+                self.event_output(
+                    cx,
+                    SessionEvent::ProtocolError {
+                        id: self.context.id,
+                        proto_id,
+                        error,
+                    },
+                )
             }
             ProtocolEvent::TimeoutCheck => {
                 if self.sub_streams.is_empty() {
-                    self.event_output(SessionEvent::SessionTimeout {
-                        id: self.context.id,
-                    });
+                    self.event_output(
+                        cx,
+                        SessionEvent::SessionTimeout {
+                            id: self.context.id,
+                        },
+                    );
                     self.state = SessionState::LocalClose;
                 }
             }
@@ -575,7 +584,7 @@ where
 
     /// Handling events send by the service
     #[allow(clippy::map_entry)]
-    fn handle_session_event(&mut self, event: SessionEvent) {
+    fn handle_session_event(&mut self, cx: &mut Context, event: SessionEvent) {
         match event {
             SessionEvent::ProtocolMessage {
                 proto_id,
@@ -598,10 +607,10 @@ where
             SessionEvent::SessionClose { .. } => {
                 if self.sub_streams.is_empty() {
                     // if no proto open, just close session
-                    self.close_session();
+                    self.close_session(cx);
                 } else {
                     self.state = SessionState::LocalClose;
-                    self.close_all_proto();
+                    self.close_all_proto(cx);
                 }
             }
             SessionEvent::ProtocolOpen {
@@ -645,27 +654,27 @@ where
             }
             _ => (),
         }
-        self.distribute_to_substream();
+        self.distribute_to_substream(cx);
     }
 
-    fn poll_inner_socket(&mut self) {
+    fn poll_inner_socket(&mut self, cx: &mut Context) {
         let mut finished = false;
         for _ in 0..64 {
             if !self.state.is_normal() {
                 break;
             }
-            match self.socket.poll() {
-                Ok(Async::Ready(Some(sub_stream))) => self.handle_sub_stream(sub_stream),
-                Ok(Async::Ready(None)) => {
+            match Pin::new(&mut self.socket).as_mut().poll_next(cx) {
+                Poll::Ready(Some(Ok(sub_stream))) => self.handle_sub_stream(sub_stream),
+                Poll::Ready(None) => {
                     finished = true;
                     self.state = SessionState::RemoteClose;
                     break;
                 }
-                Ok(Async::NotReady) => {
+                Poll::Pending => {
                     finished = true;
                     break;
                 }
-                Err(err) => {
+                Poll::Ready(Some(Err(err))) => {
                     finished = true;
                     debug!("session poll error: {:?}", err);
                     self.write_buf.clear();
@@ -682,10 +691,13 @@ where
                         | ErrorKind::UnexpectedEof => self.state = SessionState::RemoteClose,
                         _ => {
                             warn!("MuxerError: {:?}", err);
-                            self.event_output(SessionEvent::MuxerError {
-                                id: self.context.id,
-                                error: err.into(),
-                            });
+                            self.event_output(
+                                cx,
+                                SessionEvent::MuxerError {
+                                    id: self.context.id,
+                                    error: err.into(),
+                                },
+                            );
                             self.state = SessionState::Abnormal;
                         }
                     }
@@ -695,37 +707,35 @@ where
             }
         }
         if !finished {
-            self.set_delay();
+            self.set_delay(cx);
         }
     }
 
-    fn recv_substreams(&mut self) {
+    fn recv_substreams(&mut self, cx: &mut Context) {
         let mut finished = false;
         for _ in 0..128 {
             if self.read_buf.len() > self.config.recv_event_size() {
                 break;
             }
 
-            match self.proto_event_receiver.poll() {
-                Ok(Async::Ready(Some(event))) => {
+            match Pin::new(&mut self.proto_event_receiver)
+                .as_mut()
+                .poll_next(cx)
+            {
+                Poll::Ready(Some(event)) => {
                     // Local close means user doesn't want any message from this session
                     // But when remote close, we should try my best to accept all data as much as possible
                     if self.state.is_local_close() {
                         continue;
                     }
-                    self.handle_stream_event(event)
+                    self.handle_stream_event(cx, event)
                 }
-                Ok(Async::Ready(None)) => {
+                Poll::Ready(None) => {
                     // Drop by self
                     self.state = SessionState::LocalClose;
                     return;
                 }
-                Ok(Async::NotReady) => {
-                    finished = true;
-                    break;
-                }
-                Err(_) => {
-                    debug!("receive proto event error");
+                Poll::Pending => {
                     finished = true;
                     break;
                 }
@@ -733,11 +743,11 @@ where
         }
 
         if !finished {
-            self.set_delay();
+            self.set_delay(cx);
         }
     }
 
-    fn recv_service(&mut self) {
+    fn recv_service(&mut self, cx: &mut Context) {
         let mut finished = false;
         for _ in 0..64 {
             if self.high_write_buf.len() > RECEIVED_BUFFER_SIZE
@@ -746,23 +756,21 @@ where
                 break;
             }
 
-            let task = match self.quick_receiver.poll() {
-                Ok(Async::Ready(Some(event))) => {
+            let task = match Pin::new(&mut self.quick_receiver).as_mut().poll_next(cx) {
+                Poll::Ready(Some(event)) => {
                     if !self.state.is_normal() {
                         None
                     } else {
                         Some(event)
                     }
                 }
-                Ok(Async::Ready(None)) => {
+                Poll::Ready(None) => {
                     // Must drop by service
                     self.state = SessionState::LocalClose;
-                    self.clean();
+                    self.clean(cx);
                     None
                 }
-                Ok(Async::NotReady) => None,
-                Err(_) => {
-                    warn!("receive service message error");
+                Poll::Pending => {
                     None
                 }
             }
@@ -774,23 +782,21 @@ where
                     }
                     None
                 } else {
-                    match self.service_receiver.poll() {
-                        Ok(Async::Ready(Some(event))) => {
+                    match Pin::new(&mut self.service_receiver).as_mut().poll_next(cx) {
+                        Poll::Ready(Some(event)) => {
                             if !self.state.is_normal() {
                                 None
                             } else {
                                 Some(event)
                             }
                         }
-                        Ok(Async::Ready(None)) => {
+                        Poll::Ready(None) => {
                             // Must drop by service
                             self.state = SessionState::LocalClose;
-                            self.clean();
+                            self.clean(cx);
                             None
                         }
-                        Ok(Async::NotReady) => None,
-                        Err(_) => {
-                            warn!("receive service message error");
+                        Poll::Pending => {
                             None
                         }
                     }
@@ -798,7 +804,7 @@ where
             });
 
             match task {
-                Some(task) => self.handle_session_event(task),
+                Some(task) => self.handle_session_event(cx, task),
                 None => {
                     finished = true;
                     break;
@@ -807,22 +813,22 @@ where
         }
 
         if !finished {
-            self.set_delay();
+            self.set_delay(cx);
         }
     }
 
     /// Try close all protocol
     #[inline]
-    fn close_all_proto(&mut self) {
+    fn close_all_proto(&mut self, cx: &mut Context) {
         if self.substreams_control.load(Ordering::SeqCst) {
-            self.close_session()
+            self.close_session(cx)
         }
         self.substreams_control.store(true, Ordering::SeqCst);
-        self.set_delay();
+        self.set_delay(cx);
     }
 
     /// Close session
-    fn close_session(&mut self) {
+    fn close_session(&mut self, cx: &mut Context) {
         self.context.closed.store(true, Ordering::SeqCst);
         self.substreams_control.store(true, Ordering::SeqCst);
 
@@ -830,34 +836,34 @@ where
             id: self.context.id,
         });
         let events = self.read_buf.split_off(0);
+        let mut sender = self.service_sender.clone();
 
-        tokio::spawn(
-            self.service_sender
-                .clone()
-                .send_all(iter_ok(events))
-                .map(|_| ())
-                .map_err(|e| debug!("session close event send to service error: {:?}", e)),
-        );
-        self.clean();
+        tokio::spawn(async move {
+            let mut iter = iter(events);
+            if let Err(e) = sender.send_all(&mut iter).await {
+                debug!("session close event send to service error: {:?}", e)
+            }
+        });
+        self.clean(cx);
     }
 
     /// Clean env
-    fn clean(&mut self) {
+    fn clean(&mut self, cx: &mut Context) {
         self.sub_streams.clear();
         self.service_receiver.close();
         self.proto_event_receiver.close();
 
-        let _ = self.socket.shutdown();
+        let _ = self.socket.shutdown(cx);
     }
 
     #[inline]
-    fn flush(&mut self) {
-        self.distribute_to_substream();
-        self.output();
+    fn flush(&mut self, cx: &mut Context) {
+        self.distribute_to_substream(cx);
+        self.output(cx);
     }
 
     #[inline]
-    fn set_delay(&mut self) {
+    fn set_delay(&mut self, cx: &mut Context) {
         // Why use `delay` instead of `notify`?
         //
         // In fact, on machines that can use multi-core normally, there is almost no problem with the `notify` behavior,
@@ -868,26 +874,24 @@ where
         // Under a single-core machine, `notify` may fall into the loop of infinitely preemptive CPU, causing starvation.
         if !self.delay.load(Ordering::Acquire) {
             self.delay.store(true, Ordering::Release);
-            let notify = futures::task::current();
+            let waker = cx.waker().clone();
             let delay = self.delay.clone();
-            let delay_task = Delay::new(Instant::now() + DELAY_TIME).then(move |_| {
-                notify.notify();
+            tokio::spawn(async move {
+                tokio::timer::delay(Instant::now() + DELAY_TIME).await;
+                waker.wake();
                 delay.store(false, Ordering::Release);
-                Ok(())
             });
-            tokio::spawn(delay_task);
         }
     }
 }
 
 impl<T> Stream for Session<T>
 where
-    T: AsyncRead + AsyncWrite,
+    T: AsyncRead + AsyncWrite + Unpin,
 {
     type Item = ();
-    type Error = io::Error;
 
-    fn poll(&mut self) -> Poll<Option<Self::Item>, Self::Error> {
+    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Option<Self::Item>> {
         debug!(
             "session [{}], [{:?}], proto count [{}], state: {:?} ,\
              read buf: {}, write buf: {}, high_write_buf: {}",
@@ -906,21 +910,21 @@ where
                 "Session({:?}) finished, self.state.is_local_close()",
                 self.context.id
             );
-            return Ok(Async::Ready(None));
+            return Poll::Ready(None);
         }
 
         if !self.read_buf.is_empty()
             || !self.write_buf.is_empty()
             || !self.high_write_buf.is_empty()
         {
-            self.flush();
+            self.flush(cx);
         }
 
-        self.poll_inner_socket();
+        self.poll_inner_socket(cx);
 
-        self.recv_substreams();
+        self.recv_substreams(cx);
 
-        self.recv_service();
+        self.recv_service(cx);
 
         match self.state {
             SessionState::LocalClose | SessionState::Abnormal => {
@@ -928,23 +932,23 @@ where
                     "Session({:?}) finished, LocalClose||Abnormal",
                     self.context.id
                 );
-                self.close_session();
-                return Ok(Async::Ready(None));
+                self.close_session(cx);
+                return Poll::Ready(None);
             }
             SessionState::RemoteClose => {
                 // try close all protocol stream, and then close session
                 if self.proto_streams.is_empty() {
                     debug!("Session({:?}) finished, RemoteClose", self.context.id);
-                    self.close_session();
-                    return Ok(Async::Ready(None));
+                    self.close_session(cx);
+                    return Poll::Ready(None);
                 } else {
-                    self.close_all_proto();
+                    self.close_all_proto(cx);
                 }
             }
             SessionState::Normal => (),
         }
 
-        Ok(Async::NotReady)
+        Poll::Pending
     }
 }
 

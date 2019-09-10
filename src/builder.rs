@@ -31,7 +31,7 @@ impl ServiceBuilder {
     /// Combine the configuration of this builder with service handle to create a Service.
     pub fn build<H>(self, handle: H) -> Service<H>
     where
-        H: ServiceHandle,
+        H: ServiceHandle + Unpin,
     {
         Service::new(self.inner, handle, self.key_pair, self.forever, self.config)
     }
@@ -153,7 +153,7 @@ impl Default for ServiceBuilder {
 pub(crate) type NameFn = Box<dyn Fn(ProtocolId) -> String + Send + Sync>;
 pub(crate) type CodecFn = Box<dyn Fn() -> Box<dyn Codec + Send + 'static> + Send + Sync>;
 pub(crate) type SessionHandleFn =
-    Box<dyn FnMut() -> ProtocolHandle<Box<dyn SessionProtocol + Send + 'static>> + Send>;
+    Box<dyn FnMut() -> ProtocolHandle<Box<dyn SessionProtocol + Send + 'static + Unpin>> + Send>;
 pub(crate) type SelectVersionFn = Box<dyn Fn() -> Option<SelectFn<String>> + Send + Sync + 'static>;
 pub(crate) type BeforeReceiveFn = Box<dyn Fn() -> Option<BeforeReceive> + Send + Sync + 'static>;
 pub(crate) type BeforeReceive =
@@ -165,7 +165,7 @@ pub struct MetaBuilder {
     name: NameFn,
     support_versions: Vec<String>,
     codec: CodecFn,
-    service_handle: ProtocolHandle<Box<dyn ServiceProtocol + Send + 'static>>,
+    service_handle: ProtocolHandle<Box<dyn ServiceProtocol + Send + 'static + Unpin>>,
     session_handle: SessionHandleFn,
     select_version: SelectVersionFn,
     before_send: Option<Box<dyn Fn(bytes::Bytes) -> bytes::Bytes + Send + 'static>>,
@@ -221,7 +221,7 @@ impl MetaBuilder {
 
     /// Define protocol service handle, default is neither
     pub fn service_handle<
-        T: FnOnce() -> ProtocolHandle<Box<dyn ServiceProtocol + Send + 'static>>,
+        T: FnOnce() -> ProtocolHandle<Box<dyn ServiceProtocol + Send + 'static + Unpin>>,
     >(
         mut self,
         service_handle: T,
@@ -232,7 +232,9 @@ impl MetaBuilder {
 
     /// Define protocol session handle, default is neither
     pub fn session_handle<
-        T: FnMut() -> ProtocolHandle<Box<dyn SessionProtocol + Send + 'static>> + Send + 'static,
+        T: FnMut() -> ProtocolHandle<Box<dyn SessionProtocol + Send + 'static + Unpin>>
+            + Send
+            + 'static,
     >(
         mut self,
         session_handle: T,

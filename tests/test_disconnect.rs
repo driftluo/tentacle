@@ -1,8 +1,9 @@
-use futures::prelude::Stream;
+use futures::{channel, StreamExt};
 use std::{thread, time::Duration};
 use tentacle::{
     builder::{MetaBuilder, ServiceBuilder},
     context::{ProtocolContext, ProtocolContextMutRef},
+    multiaddr::Multiaddr,
     secio::SecioKeyPair,
     service::{DialProtocol, ProtocolHandle, ProtocolMeta, Service},
     traits::{ServiceHandle, ServiceProtocol},
@@ -11,7 +12,7 @@ use tentacle::{
 
 pub fn create<F>(secio: bool, meta: ProtocolMeta, shandle: F) -> Service<F>
 where
-    F: ServiceHandle,
+    F: ServiceHandle + Unpin,
 {
     let builder = ServiceBuilder::default().insert_protocol(meta);
 
@@ -55,16 +56,41 @@ fn create_meta(id: impl Into<ProtocolId> + Copy + Send + 'static) -> ProtocolMet
 }
 
 fn test_disconnect(secio: bool) {
-    let mut service = create(secio, create_meta(1), ());
-    let listen_addr = service
-        .listen("/ip4/127.0.0.1/tcp/0".parse().unwrap())
-        .unwrap();
-    thread::spawn(|| tokio::run(service.for_each(|_| Ok(()))));
+    let (addr_sender, addr_receiver) = channel::oneshot::channel::<Multiaddr>();
+
+    thread::spawn(move || {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let mut service = create(secio, create_meta(1), ());
+        rt.spawn(async move {
+            let listen_addr = service
+                .listen("/ip4/127.0.0.1/tcp/0".parse().unwrap())
+                .await
+                .unwrap();
+            let _ = addr_sender.send(listen_addr);
+            loop {
+                if service.next().await.is_none() {
+                    break;
+                }
+            }
+        });
+        rt.shutdown_on_idle();
+    });
 
     let mut service = create(secio, create_meta(1), ());
-    service.dial(listen_addr, DialProtocol::All).unwrap();
     let control = service.control().clone();
-    let handle = thread::spawn(|| tokio::run(service.for_each(|_| Ok(()))));
+    let handle = thread::spawn(move || {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.spawn(async move {
+            let listen_addr = addr_receiver.await.unwrap();
+            service.dial(listen_addr, DialProtocol::All).await.unwrap();
+            loop {
+                if service.next().await.is_none() {
+                    break;
+                }
+            }
+        });
+        rt.shutdown_on_idle();
+    });
     thread::sleep(Duration::from_secs(5));
 
     control.disconnect(1.into()).unwrap();

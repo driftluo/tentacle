@@ -1,5 +1,5 @@
 use bytes::Bytes;
-use futures::{prelude::*, sync::mpsc};
+use futures::{channel::mpsc, prelude::*};
 use std::{
     collections::HashMap,
     ops::{Deref, DerefMut},
@@ -211,7 +211,7 @@ impl ServiceContext {
     #[inline]
     pub fn future_task<T>(&self, task: T) -> Result<(), Error>
     where
-        T: Future<Item = (), Error = ()> + 'static + Send,
+        T: Future<Output = ()> + 'static + Send,
     {
         self.inner.future_task(task)
     }

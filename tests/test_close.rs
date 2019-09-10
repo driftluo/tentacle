@@ -1,18 +1,19 @@
-use futures::prelude::Stream;
+use futures::StreamExt;
 use tentacle::{
     builder::{MetaBuilder, ServiceBuilder},
     context::{ProtocolContext, ProtocolContextMutRef},
+    multiaddr::Multiaddr,
     secio::SecioKeyPair,
     service::{DialProtocol, ProtocolHandle, ProtocolMeta, Service},
     traits::{ServiceHandle, ServiceProtocol},
     ProtocolId,
 };
 
-use std::{thread, time::Duration};
+use std::{sync::mpsc::channel, thread, time::Duration};
 
 pub fn create<F>(secio: bool, metas: impl Iterator<Item = ProtocolMeta>, shandle: F) -> Service<F>
 where
-    F: ServiceHandle,
+    F: ServiceHandle + Unpin,
 {
     let mut builder = ServiceBuilder::default().forever(true);
 
@@ -85,7 +86,7 @@ fn test(secio: bool, shutdown: bool) {
         .into_iter(),
         (),
     );
-    let mut service_2 = create(
+    let service_2 = create(
         secio,
         vec![
             create_meta(0.into(), shutdown),
@@ -95,7 +96,7 @@ fn test(secio: bool, shutdown: bool) {
         .into_iter(),
         (),
     );
-    let mut service_3 = create(
+    let service_3 = create(
         secio,
         vec![
             create_meta(0.into(), shutdown),
@@ -105,7 +106,7 @@ fn test(secio: bool, shutdown: bool) {
         .into_iter(),
         (),
     );
-    let mut service_4 = create(
+    let service_4 = create(
         secio,
         vec![
             create_meta(0.into(), shutdown),
@@ -115,7 +116,7 @@ fn test(secio: bool, shutdown: bool) {
         .into_iter(),
         (),
     );
-    let mut service_5 = create(
+    let service_5 = create(
         secio,
         vec![
             create_meta(0.into(), shutdown),
@@ -126,29 +127,61 @@ fn test(secio: bool, shutdown: bool) {
         (),
     );
 
-    let listen_addr = service_1
-        .listen("/ip4/127.0.0.1/tcp/0".parse().unwrap())
-        .unwrap();
+    let (addr_sender, addr_receiver) = channel::<Multiaddr>();
 
-    let handle = thread::spawn(|| tokio::run(service_1.for_each(|_| Ok(()))));
+    let handle = thread::spawn(|| {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.spawn(async move {
+            let listen_addr = service_1
+                .listen("/ip4/127.0.0.1/tcp/0".parse().unwrap())
+                .await
+                .unwrap();
 
-    service_2
-        .dial(listen_addr.clone(), DialProtocol::All)
-        .unwrap();
-    service_3
-        .dial(listen_addr.clone(), DialProtocol::All)
-        .unwrap();
-    service_4
-        .dial(listen_addr.clone(), DialProtocol::All)
-        .unwrap();
-    service_5.dial(listen_addr, DialProtocol::All).unwrap();
+            addr_sender.send(listen_addr).unwrap();
 
-    thread::spawn(|| tokio::run(service_2.for_each(|_| Ok(()))));
-    thread::spawn(|| tokio::run(service_3.for_each(|_| Ok(()))));
-    thread::spawn(|| tokio::run(service_4.for_each(|_| Ok(()))));
-    thread::spawn(|| tokio::run(service_5.for_each(|_| Ok(()))));
+            loop {
+                if service_1.next().await.is_none() {
+                    break;
+                }
+            }
+        });
+        rt.shutdown_on_idle();
+    });
+
+    let listen_addr = addr_receiver.recv().unwrap();
+
+    let listen_addr_2 = listen_addr.clone();
+    let listen_addr_3 = listen_addr.clone();
+    let listen_addr_4 = listen_addr.clone();
+
+    start_service(service_2, listen_addr_2);
+    start_service(service_3, listen_addr_3);
+    start_service(service_4, listen_addr_4);
+    start_service(service_5, listen_addr);
 
     handle.join().expect("test fail");
+}
+
+fn start_service<F>(
+    mut service: Service<F>,
+    listen_addr: Multiaddr,
+) -> ::std::thread::JoinHandle<()>
+where
+    F: ServiceHandle + Unpin + Send + 'static,
+{
+    thread::spawn(move || {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.spawn(async move {
+            service.dial(listen_addr, DialProtocol::All).await.unwrap();
+
+            loop {
+                if service.next().await.is_none() {
+                    break;
+                }
+            }
+        });
+        rt.shutdown_on_idle();
+    })
 }
 
 #[test]
