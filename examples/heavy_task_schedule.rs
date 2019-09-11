@@ -9,8 +9,8 @@ use tentacle::{
     context::{ProtocolContext, ProtocolContextMutRef, ServiceContext},
     secio::SecioKeyPair,
     service::{
-        DialProtocol, ProtocolHandle, ProtocolMeta, Service, ServiceError, ServiceEvent,
-        SessionType,
+        ProtocolHandle, ProtocolMeta, Service, ServiceError, ServiceEvent, SessionType,
+        TargetProtocol,
     },
     traits::{ServiceHandle, ServiceProtocol},
     ProtocolId, SessionId,
@@ -164,7 +164,10 @@ fn main() {
             let listen_addr = std::env::args().nth(1).unwrap().parse().unwrap();
             let meta = create_meta(1.into());
             let mut service = create(true, meta, SHandle);
-            service.dial(listen_addr, DialProtocol::All).await.unwrap();
+            service
+                .dial(listen_addr, TargetProtocol::All)
+                .await
+                .unwrap();
             loop {
                 if service.next().await.is_none() {
                     break;

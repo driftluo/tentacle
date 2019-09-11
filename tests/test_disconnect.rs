@@ -5,7 +5,7 @@ use tentacle::{
     context::{ProtocolContext, ProtocolContextMutRef},
     multiaddr::Multiaddr,
     secio::SecioKeyPair,
-    service::{DialProtocol, ProtocolHandle, ProtocolMeta, Service},
+    service::{ProtocolHandle, ProtocolMeta, Service, TargetProtocol},
     traits::{ServiceHandle, ServiceProtocol},
     ProtocolId,
 };
@@ -82,7 +82,10 @@ fn test_disconnect(secio: bool) {
         let rt = tokio::runtime::Runtime::new().unwrap();
         rt.spawn(async move {
             let listen_addr = addr_receiver.await.unwrap();
-            service.dial(listen_addr, DialProtocol::All).await.unwrap();
+            service
+                .dial(listen_addr, TargetProtocol::All)
+                .await
+                .unwrap();
             loop {
                 if service.next().await.is_none() {
                     break;

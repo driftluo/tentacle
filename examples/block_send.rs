@@ -11,7 +11,7 @@ use tentacle::{
     builder::{MetaBuilder, ServiceBuilder},
     context::{ProtocolContext, ProtocolContextMutRef},
     secio::SecioKeyPair,
-    service::{DialProtocol, ProtocolHandle, ProtocolMeta, Service},
+    service::{ProtocolHandle, ProtocolMeta, Service, TargetProtocol},
     traits::{ServiceHandle, ServiceProtocol},
     ProtocolId,
 };
@@ -123,7 +123,10 @@ fn main() {
             let listen_addr = std::env::args().nth(1).unwrap().parse().unwrap();
             let (meta, _result) = create_meta(1.into());
             let mut service = create(false, meta, ());
-            service.dial(listen_addr, DialProtocol::All).await.unwrap();
+            service
+                .dial(listen_addr, TargetProtocol::All)
+                .await
+                .unwrap();
             loop {
                 if service.next().await.is_none() {
                     break;

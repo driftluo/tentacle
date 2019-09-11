@@ -17,7 +17,7 @@ use crate::{
     secio::{PublicKey, SecioKeyPair},
     service::{
         event::{Priority, ServiceTask},
-        DialProtocol, ServiceControl, SessionType, TargetProtocol, TargetSession,
+        ServiceControl, SessionType, TargetProtocol, TargetSession,
     },
     session::SessionEvent,
     ProtocolId, SessionId,
@@ -152,7 +152,7 @@ impl ServiceContext {
 
     /// Initiate a connection request to address
     #[inline]
-    pub fn dial(&self, address: Multiaddr, target: DialProtocol) -> Result<(), Error> {
+    pub fn dial(&self, address: Multiaddr, target: TargetProtocol) -> Result<(), Error> {
         self.inner.dial(address, target)
     }
 

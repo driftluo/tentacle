@@ -10,8 +10,8 @@ use tentacle::{
     multiaddr::Multiaddr,
     secio::SecioKeyPair,
     service::{
-        DialProtocol, ProtocolHandle, ProtocolMeta, Service, ServiceError, ServiceEvent,
-        SessionType,
+        ProtocolHandle, ProtocolMeta, Service, ServiceError, ServiceEvent, SessionType,
+        TargetProtocol,
     },
     traits::{ServiceHandle, ServiceProtocol},
     ProtocolId, SessionId,
@@ -136,7 +136,10 @@ impl ServiceProtocol for PHandle {
 
     fn notify(&mut self, context: &mut ProtocolContext, _token: u64) {
         if self.dial_addr.is_some() {
-            let _ = context.dial(self.dial_addr.as_ref().unwrap().clone(), DialProtocol::All);
+            let _ = context.dial(
+                self.dial_addr.as_ref().unwrap().clone(),
+                TargetProtocol::All,
+            );
             self.dial_count += 1;
             if self.dial_count == 10 {
                 self.sender.try_send(self.connected_count).unwrap();
@@ -245,7 +248,10 @@ fn test_repeated_dial(secio: bool) {
         let mut service = create(secio, meta_2, shandle);
         rt.spawn(async move {
             let listen_addr = addr_receiver.await.unwrap();
-            service.dial(listen_addr, DialProtocol::All).await.unwrap();
+            service
+                .dial(listen_addr, TargetProtocol::All)
+                .await
+                .unwrap();
             loop {
                 if service.next().await.is_none() {
                     break;
@@ -294,7 +300,7 @@ fn test_dial_with_no_notify(secio: bool) {
     for _ in 0..2 {
         for i in 1..6 {
             let addr = format!("/ip4/127.0.0.1/tcp/{}", i).parse().unwrap();
-            control.dial(addr, DialProtocol::All).unwrap();
+            control.dial(addr, TargetProtocol::All).unwrap();
         }
         std::thread::sleep(Duration::from_secs(3));
     }

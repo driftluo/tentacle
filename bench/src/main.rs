@@ -6,7 +6,9 @@ use p2p::{
     context::{ProtocolContext, ProtocolContextMutRef},
     multiaddr::Multiaddr,
     secio::SecioKeyPair,
-    service::{DialProtocol, ProtocolHandle, ProtocolMeta, Service, ServiceControl, TargetSession},
+    service::{
+        ProtocolHandle, ProtocolMeta, Service, ServiceControl, TargetProtocol, TargetSession,
+    },
     traits::{ServiceHandle, ServiceProtocol},
     ProtocolId,
 };
@@ -126,7 +128,10 @@ pub fn init() {
             let mut service = create(true, meta, ());
             rt.spawn(async move {
                 let listen_addr = addr_receiver.await.unwrap();
-                service.dial(listen_addr, DialProtocol::All).await.unwrap();
+                service
+                    .dial(listen_addr, TargetProtocol::All)
+                    .await
+                    .unwrap();
                 loop {
                     if service.next().await.is_none() {
                         break;
@@ -173,7 +178,10 @@ pub fn init() {
             let mut service = create(false, meta, ());
             rt.spawn(async move {
                 let listen_addr = addr_receiver.await.unwrap();
-                service.dial(listen_addr, DialProtocol::All).await.unwrap();
+                service
+                    .dial(listen_addr, TargetProtocol::All)
+                    .await
+                    .unwrap();
                 loop {
                     if service.next().await.is_none() {
                         break;

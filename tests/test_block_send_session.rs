@@ -12,7 +12,7 @@ use tentacle::{
     context::{ProtocolContext, ProtocolContextMutRef},
     multiaddr::Multiaddr,
     secio::SecioKeyPair,
-    service::{DialProtocol, ProtocolHandle, ProtocolMeta, Service},
+    service::{ProtocolHandle, ProtocolMeta, Service, TargetProtocol},
     traits::{ServiceHandle, ServiceProtocol, SessionProtocol},
     ProtocolId,
 };
@@ -159,7 +159,10 @@ fn test_block_send(secio: bool, session_protocol: bool) {
         let mut service = create(secio, meta, ());
         rt.spawn(async move {
             let listen_addr = addr_receiver.await.unwrap();
-            service.dial(listen_addr, DialProtocol::All).await.unwrap();
+            service
+                .dial(listen_addr, TargetProtocol::All)
+                .await
+                .unwrap();
             loop {
                 if service.next().await.is_none() {
                     break;

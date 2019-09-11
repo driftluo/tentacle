@@ -34,41 +34,6 @@ impl Default for ServiceConfig {
 }
 
 /// When dial, specify which protocol want to open
-/// deprecated on 0.3, rename TargetProtocol
-// #[deprecated(since = "0.3.0", note = "rename target protocol")]
-#[derive(Debug, Clone, Eq, PartialEq, Ord, PartialOrd)]
-pub enum DialProtocol {
-    /// Try open all protocol
-    All,
-    /// Try open one protocol
-    Single(ProtocolId),
-    /// Try open some protocol
-    Multi(Vec<ProtocolId>),
-}
-
-impl From<DialProtocol> for TargetProtocol {
-    fn from(item: DialProtocol) -> TargetProtocol {
-        match item {
-            DialProtocol::All => TargetProtocol::All,
-            DialProtocol::Single(id) => TargetProtocol::Single(id),
-            DialProtocol::Multi(ids) => TargetProtocol::Multi(ids),
-        }
-    }
-}
-
-impl From<ProtocolId> for DialProtocol {
-    fn from(id: ProtocolId) -> Self {
-        DialProtocol::Single(id)
-    }
-}
-
-impl From<usize> for DialProtocol {
-    fn from(id: usize) -> Self {
-        DialProtocol::Single(id.into())
-    }
-}
-
-/// When dial, specify which protocol want to open
 #[derive(Debug, Clone, Eq, PartialEq, Ord, PartialOrd)]
 pub enum TargetProtocol {
     /// Try open all protocol

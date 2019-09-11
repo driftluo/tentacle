@@ -4,7 +4,7 @@ use tentacle::{
     context::{ProtocolContext, ProtocolContextMutRef},
     multiaddr::Multiaddr,
     secio::SecioKeyPair,
-    service::{DialProtocol, ProtocolHandle, ProtocolMeta, Service},
+    service::{ProtocolHandle, ProtocolMeta, Service, TargetProtocol},
     traits::{ServiceHandle, ServiceProtocol},
     ProtocolId,
 };
@@ -172,7 +172,10 @@ where
     thread::spawn(move || {
         let rt = tokio::runtime::Runtime::new().unwrap();
         rt.spawn(async move {
-            service.dial(listen_addr, DialProtocol::All).await.unwrap();
+            service
+                .dial(listen_addr, TargetProtocol::All)
+                .await
+                .unwrap();
 
             loop {
                 if service.next().await.is_none() {

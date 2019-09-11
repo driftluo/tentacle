@@ -56,11 +56,9 @@ impl ProtocolInfo {
         }
     }
 
-    // TODO: return type change to Bytes on 0.3
-
     /// Encode to flatbuffer
     #[cfg(feature = "flatc")]
-    pub fn encode(&self) -> Vec<u8> {
+    pub fn encode(&self) -> Bytes {
         let mut fbb = flatbuffers::FlatBufferBuilder::new();
         let name = fbb.create_string(&self.name);
         let versions = &self
@@ -76,7 +74,7 @@ impl ProtocolInfo {
         let data = builder.finish();
 
         fbb.finish(data, None);
-        fbb.finished_data().to_vec()
+        Bytes::from(fbb.finished_data())
     }
 
     /// Decode from flatbuffer
@@ -103,7 +101,7 @@ impl ProtocolInfo {
 
     /// Encode with molecule
     #[cfg(feature = "molc")]
-    pub fn encode(self) -> Vec<u8> {
+    pub fn encode(self) -> Bytes {
         let name = protocol_select_mol::String::new_builder()
             .set(self.name.into_bytes().into_iter().map(Into::into).collect())
             .build();
@@ -124,8 +122,7 @@ impl ProtocolInfo {
             .name(name)
             .support_versions(versions)
             .build()
-            .as_slice()
-            .to_vec()
+            .as_bytes()
     }
 
     /// Decode with molecule
@@ -155,7 +152,7 @@ pub(crate) async fn client_select<T: AsyncWrite + AsyncRead + Send + Unpin>(
 ) -> Result<(Framed<T, LengthDelimitedCodec>, String, Option<String>), io::Error> {
     let mut socket = Framed::new(handle, LengthDelimitedCodec::new());
 
-    socket.send(Bytes::from(proto_info.encode())).await?;
+    socket.send(proto_info.encode()).await?;
 
     let (raw_remote_info, socket) = socket.into_future().await;
 
@@ -213,13 +210,13 @@ pub(crate) async fn server_select<T: AsyncWrite + AsyncRead + Send + Unpin>(
         });
 
     socket
-        .send(Bytes::from(
+        .send(
             ProtocolInfo {
                 name: remote_info.name.clone(),
                 support_versions: version.clone().into_iter().collect(),
             }
             .encode(),
-        ))
+        )
         .await?;
 
     Ok((socket, remote_info.name, version))

@@ -16,7 +16,7 @@ use tentacle::{
     context::{ProtocolContext, ProtocolContextMutRef, ServiceContext},
     secio::SecioKeyPair,
     service::{
-        DialProtocol, ProtocolHandle, ProtocolMeta, Service, ServiceError, ServiceEvent,
+        ProtocolHandle, ProtocolMeta, Service, ServiceError, ServiceEvent, TargetProtocol,
         TargetSession,
     },
     traits::{ServiceHandle, ServiceProtocol},
@@ -219,7 +219,7 @@ fn client() {
         service
             .dial(
                 "/dns4/localhost/tcp/1337".parse().unwrap(),
-                DialProtocol::All,
+                TargetProtocol::All,
             )
             .await
             .unwrap();
