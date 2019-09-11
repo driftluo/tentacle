@@ -13,13 +13,19 @@ use std::{
 };
 
 use futures::{
-    channel::mpsc::{channel, Receiver, Sender},
-    Sink, SinkExt, Stream,
+    channel::{
+        mpsc::{channel, Receiver, Sender},
+        oneshot,
+    },
+    future::select,
+    FutureExt, Sink, SinkExt, Stream,
 };
 use log::{debug, warn};
-use tokio::codec::Framed;
-use tokio::prelude::{AsyncRead, AsyncWrite};
-use tokio::timer::Interval;
+use tokio::{
+    codec::Framed,
+    prelude::{AsyncRead, AsyncWrite},
+    timer::Interval,
+};
 
 use crate::{
     config::Config,
@@ -84,8 +90,8 @@ pub struct Session<T> {
     last_send_success: Instant,
     /// Last successful read time
     last_read_success: Instant,
-    /// Last ping time
-    last_ping_time: Instant,
+    /// keep alive stop signal
+    stop_signal_tx: Option<oneshot::Sender<()>>,
 }
 
 /// Session type, client or server
@@ -120,20 +126,15 @@ where
             SessionType::Server => 2,
         };
         let (event_sender, event_receiver) = channel(32);
-        let framed_stream = Framed::new(
-            raw_stream,
-            FrameCodec::default().max_frame_size(config.max_stream_window_size),
-        );
-        let keepalive_receiver = if config.enable_keepalive {
+        let framed_stream = Framed::new(raw_stream, FrameCodec::default());
+        let (keepalive_receiver, stop_signal_tx) = if config.enable_keepalive {
             let (mut interval_sender, interval_receiver) = channel(2);
-            // NOTE: Set a 300ms interval because we want shutdown service quick.
-            //       A Interval/Delay will block tokio runtime from gracefully shutdown.
-            let mut interval = Interval::new_interval(Duration::from_millis(300));
-            tokio::spawn(async move {
+            let (stop_signal_tx, stop_signal_rx) = oneshot::channel::<()>();
+            let interval = async move {
+                let mut interval = Interval::new_interval(config.keepalive_interval);
                 loop {
-                    match interval.next().await {
-                        Some(_) => (),
-                        None => break,
+                    if interval.next().await.is_none() {
+                        break;
                     }
                     match interval_sender.send(()).await {
                         Ok(_) => (),
@@ -144,10 +145,15 @@ where
                         }
                     }
                 }
+            }
+                .boxed();
+
+            tokio::spawn(async move {
+                select(stop_signal_rx, interval).await;
             });
-            Some(interval_receiver)
+            (Some(interval_receiver), Some(stop_signal_tx))
         } else {
-            None
+            (None, None)
         };
 
         Session {
@@ -171,7 +177,7 @@ where
             delay: Arc::new(AtomicBool::new(false)),
             last_send_success: Instant::now(),
             last_read_success: Instant::now(),
-            last_ping_time: Instant::now(),
+            stop_signal_tx,
         }
     }
 
@@ -609,10 +615,7 @@ where
         while let Some(ref mut receiver) = self.keepalive_receiver {
             match Pin::new(receiver).as_mut().poll_next(cx) {
                 Poll::Ready(Some(_)) => {
-                    if self.last_ping_time.elapsed() > self.config.keepalive_interval {
-                        self.keep_alive(cx, Instant::now())?;
-                        self.last_ping_time = Instant::now();
-                    }
+                    self.keep_alive(cx, Instant::now())?;
                 }
                 Poll::Ready(None) => {
                     debug!("poll keepalive_receiver finished");
@@ -643,5 +646,13 @@ where
         }
 
         Poll::Pending
+    }
+}
+
+impl<T> Drop for Session<T> {
+    fn drop(&mut self) {
+        if let Some(send) = self.stop_signal_tx.take() {
+            let _ = send.send(());
+        }
     }
 }
