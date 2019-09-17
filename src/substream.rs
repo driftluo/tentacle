@@ -560,6 +560,10 @@ where
             }
         }
 
+        if !self.service_proto_buf.is_empty() || !self.session_proto_buf.is_empty() {
+            self.distribute_to_user_level();
+        }
+
         if let Err(err) = self.poll_complete() {
             debug!(
                 "SubStream({}) finished with poll_complete error: {:?}",

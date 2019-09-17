@@ -748,13 +748,9 @@ where
                     self.clean();
                     None
                 }
-                Ok(Async::NotReady) => {
-                    finished = true;
-                    None
-                }
+                Ok(Async::NotReady) => None,
                 Err(_) => {
                     warn!("receive service message error");
-                    finished = true;
                     None
                 }
             }
@@ -780,13 +776,9 @@ where
                             self.clean();
                             None
                         }
-                        Ok(Async::NotReady) => {
-                            finished = true;
-                            None
-                        }
+                        Ok(Async::NotReady) => None,
                         Err(_) => {
                             warn!("receive service message error");
-                            finished = true;
                             None
                         }
                     }
