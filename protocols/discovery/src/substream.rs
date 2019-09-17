@@ -129,20 +129,20 @@ impl SubstreamValue {
         substream: Substream,
         max_known: usize,
         query_cycle: Option<Duration>,
-        debug: bool,
+        global_ip_only: bool,
     ) -> SubstreamValue {
         let session_id = substream.stream.session_id;
         let mut pending_messages = VecDeque::default();
         debug!("direction: {:?}", direction);
         let mut addr_known = AddrKnown::new(max_known);
-        let is_reachable = debug
+        let is_reachable = !global_ip_only
             || multiaddr_to_socketaddr(&substream.remote_addr)
                 .map(|addr| is_reachable(addr.ip()))
                 .unwrap_or_default();
         let remote_addr = if !is_reachable {
             RemoteAddress::Unreachable
         } else if direction.is_outbound() {
-            let listen_port = if debug {
+            let listen_port = if global_ip_only {
                 substream
                     .listens
                     .iter()

@@ -159,7 +159,7 @@ pub struct Discovery<M> {
 
     check_interval: Interval,
 
-    debug: bool,
+    global_ip_only: bool,
 }
 
 #[derive(Clone)]
@@ -182,13 +182,13 @@ impl<M: AddressManager> Discovery<M> {
             substream_receiver,
             dead_keys: HashSet::default(),
             dynamic_query_cycle: query_cycle,
-            debug: false,
+            global_ip_only: true,
         }
     }
 
-    /// Turning on debug mode will allow any ip to be broadcast for testing
-    pub fn debug(mut self, debug: bool) -> Self {
-        self.debug = debug;
+    /// Turning off global ip only mode will allow any ip to be broadcast, default is true
+    pub fn global_ip_only(mut self, global_ip_only: bool) -> Self {
+        self.global_ip_only = global_ip_only;
         self
     }
 
@@ -213,7 +213,7 @@ impl<M: AddressManager> Discovery<M> {
                         substream,
                         self.max_known,
                         self.dynamic_query_cycle,
-                        self.debug,
+                        self.global_ip_only,
                     );
                     self.substreams.insert(key, value);
                 }

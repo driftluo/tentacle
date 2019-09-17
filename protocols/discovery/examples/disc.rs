@@ -56,7 +56,8 @@ fn create_meta(id: ProtocolId, start: u16) -> ProtocolMeta {
     MetaBuilder::default()
         .id(id)
         .service_handle(move || {
-            let discovery = Discovery::new(addr_mgr, Some(Duration::from_secs(7))).debug(true);
+            let discovery =
+                Discovery::new(addr_mgr, Some(Duration::from_secs(7))).global_ip_only(false);
             ProtocolHandle::Callback(Box::new(DiscoveryProtocol::new(discovery)))
         })
         .build()
