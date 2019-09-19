@@ -10,7 +10,7 @@ use p2p::{
     context::ProtocolContextMutRef,
     error::Error,
     service::{ServiceControl, SessionType},
-    utils::{is_reachable, multiaddr_to_socketaddr},
+    utils::multiaddr_to_socketaddr,
     ProtocolId, SessionId,
 };
 use tokio::codec::Framed;
@@ -129,33 +129,16 @@ impl SubstreamValue {
         substream: Substream,
         max_known: usize,
         query_cycle: Option<Duration>,
-        global_ip_only: bool,
     ) -> SubstreamValue {
         let session_id = substream.stream.session_id;
         let mut pending_messages = VecDeque::default();
         debug!("direction: {:?}", direction);
         let mut addr_known = AddrKnown::new(max_known);
-        let is_reachable = !global_ip_only
-            || multiaddr_to_socketaddr(&substream.remote_addr)
-                .map(|addr| is_reachable(addr.ip()))
-                .unwrap_or_default();
-        let remote_addr = if !is_reachable {
-            RemoteAddress::Unreachable
-        } else if direction.is_outbound() {
-            let listen_port = if global_ip_only {
-                substream
-                    .listens
-                    .iter()
-                    .map(|address| multiaddr_to_socketaddr(address).map(|addr| addr.port()))
-                    .nth(0)
-                    .unwrap()
-            } else {
-                substream.listen_port
-            };
+        let remote_addr = if direction.is_outbound() {
             pending_messages.push_back(DiscoveryMessage::GetNodes {
                 version: VERSION,
                 count: MAX_ADDR_TO_SEND as u32,
-                listen_port,
+                listen_port: substream.listen_port,
             });
             addr_known.insert(RawAddr::from(
                 multiaddr_to_socketaddr(&substream.remote_addr).unwrap(),
@@ -184,7 +167,7 @@ impl SubstreamValue {
     }
 
     fn remote_raw_addr(&self) -> Option<RawAddr> {
-        multiaddr_to_socketaddr(self.remote_addr.to_inner()?).map(RawAddr::from)
+        multiaddr_to_socketaddr(self.remote_addr.to_inner()).map(RawAddr::from)
     }
 
     pub(crate) fn check_timer(&mut self) {
@@ -239,8 +222,8 @@ impl SubstreamValue {
                             self.addr_known.insert(raw_addr);
                         }
                         // add client listen address to manager
-                        if let Some(addr) = self.remote_addr.clone().into_inner() {
-                            addr_mgr.add_new_addr(self.session_id, addr);
+                        if let RemoteAddress::Listen(ref addr) = self.remote_addr {
+                            addr_mgr.add_new_addr(self.session_id, addr.clone());
                         }
                     }
 
@@ -379,7 +362,6 @@ pub struct Substream {
     pub direction: SessionType,
     pub stream: StreamHandle,
     pub listen_port: Option<u16>,
-    listens: Vec<Multiaddr>,
 }
 
 impl Substream {
@@ -412,7 +394,6 @@ impl Substream {
             direction: context.session.ty,
             stream,
             listen_port,
-            listens: context.listens().to_owned(),
         }
     }
 
@@ -427,8 +408,6 @@ impl Substream {
 
 #[derive(Eq, PartialEq, Hash, Debug, Clone)]
 pub(crate) enum RemoteAddress {
-    /// unreachable addr
-    Unreachable,
     /// Inbound init remote address
     Init(Multiaddr),
     /// Outbound init remote address or Inbound listen address
@@ -436,17 +415,15 @@ pub(crate) enum RemoteAddress {
 }
 
 impl RemoteAddress {
-    fn to_inner(&self) -> Option<&Multiaddr> {
+    fn to_inner(&self) -> &Multiaddr {
         match self {
-            RemoteAddress::Init(ref addr) | RemoteAddress::Listen(ref addr) => Some(addr),
-            RemoteAddress::Unreachable => None,
+            RemoteAddress::Init(ref addr) | RemoteAddress::Listen(ref addr) => addr,
         }
     }
 
-    pub(crate) fn into_inner(self) -> Option<Multiaddr> {
+    pub(crate) fn into_inner(self) -> Multiaddr {
         match self {
-            RemoteAddress::Init(addr) | RemoteAddress::Listen(addr) => Some(addr),
-            RemoteAddress::Unreachable => None,
+            RemoteAddress::Init(addr) | RemoteAddress::Listen(addr) => addr,
         }
     }
 

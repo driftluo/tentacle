@@ -9,7 +9,9 @@ use futures::{
 use log::{debug, warn};
 use p2p::{
     context::{ProtocolContext, ProtocolContextMutRef},
+    multiaddr::Multiaddr,
     traits::ServiceProtocol,
+    utils::{is_reachable, multiaddr_to_socketaddr},
     SessionId,
 };
 use rand::seq::SliceRandom;
@@ -213,7 +215,6 @@ impl<M: AddressManager> Discovery<M> {
                         substream,
                         self.max_known,
                         self.dynamic_query_cycle,
-                        self.global_ip_only,
                     );
                     self.substreams.insert(key, value);
                 }
@@ -258,6 +259,17 @@ impl<M: AddressManager> Stream for Discovery<M> {
         self.recv_substreams()?;
         self.check_interval();
 
+        let announce_fn =
+            |announce_multiaddrs: &mut Vec<Multiaddr>, global_ip_only: bool, addr: &Multiaddr| {
+                if !global_ip_only
+                    || multiaddr_to_socketaddr(addr)
+                        .map(|addr| is_reachable(addr.ip()))
+                        .unwrap_or_default()
+                {
+                    announce_multiaddrs.push(addr.clone());
+                }
+            };
+
         let mut announce_multiaddrs = Vec::new();
         for (key, value) in self.substreams.iter_mut() {
             value.check_timer();
@@ -291,7 +303,7 @@ impl<M: AddressManager> Stream for Discovery<M> {
 
             if value.announce {
                 if let RemoteAddress::Listen(ref addr) = value.remote_addr {
-                    announce_multiaddrs.push(addr.clone());
+                    announce_fn(&mut announce_multiaddrs, self.global_ip_only, addr)
                 }
                 value.announce = false;
                 value.last_announce = Some(Instant::now());
@@ -300,12 +312,8 @@ impl<M: AddressManager> Stream for Discovery<M> {
 
         let mut dead_addr = Vec::default();
         for key in self.dead_keys.drain() {
-            if let Some(addr) = self
-                .substreams
-                .remove(&key)
-                .and_then(|value| value.remote_addr.into_inner())
-            {
-                dead_addr.push(RawAddr::from(addr))
+            if let Some(addr) = self.substreams.remove(&key) {
+                dead_addr.push(RawAddr::from(addr.remote_addr.into_inner()));
             }
         }
 
