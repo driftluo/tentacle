@@ -9,7 +9,9 @@ use futures::{
 use log::{debug, warn};
 use p2p::{
     context::{ProtocolContext, ProtocolContextMutRef},
+    multiaddr::Multiaddr,
     traits::ServiceProtocol,
+    utils::{is_reachable, multiaddr_to_socketaddr},
     SessionId,
 };
 use rand::seq::SliceRandom;
@@ -158,6 +160,8 @@ pub struct Discovery<M> {
     dynamic_query_cycle: Option<Duration>,
 
     check_interval: Interval,
+
+    global_ip_only: bool,
 }
 
 #[derive(Clone)]
@@ -180,7 +184,14 @@ impl<M: AddressManager> Discovery<M> {
             substream_receiver,
             dead_keys: HashSet::default(),
             dynamic_query_cycle: query_cycle,
+            global_ip_only: true,
         }
+    }
+
+    /// Turning off global ip only mode will allow any ip to be broadcast, default is true
+    pub fn global_ip_only(mut self, global_ip_only: bool) -> Self {
+        self.global_ip_only = global_ip_only;
+        self
     }
 
     pub fn addr_mgr(&self) -> &M {
@@ -248,6 +259,17 @@ impl<M: AddressManager> Stream for Discovery<M> {
         self.recv_substreams()?;
         self.check_interval();
 
+        let announce_fn =
+            |announce_multiaddrs: &mut Vec<Multiaddr>, global_ip_only: bool, addr: &Multiaddr| {
+                if !global_ip_only
+                    || multiaddr_to_socketaddr(addr)
+                        .map(|addr| is_reachable(addr.ip()))
+                        .unwrap_or_default()
+                {
+                    announce_multiaddrs.push(addr.clone());
+                }
+            };
+
         let mut announce_multiaddrs = Vec::new();
         for (key, value) in self.substreams.iter_mut() {
             value.check_timer();
@@ -281,7 +303,7 @@ impl<M: AddressManager> Stream for Discovery<M> {
 
             if value.announce {
                 if let RemoteAddress::Listen(ref addr) = value.remote_addr {
-                    announce_multiaddrs.push(addr.clone());
+                    announce_fn(&mut announce_multiaddrs, self.global_ip_only, addr)
                 }
                 value.announce = false;
                 value.last_announce = Some(Instant::now());
@@ -290,8 +312,8 @@ impl<M: AddressManager> Stream for Discovery<M> {
 
         let mut dead_addr = Vec::default();
         for key in self.dead_keys.drain() {
-            if let Some(value) = self.substreams.remove(&key) {
-                dead_addr.push(RawAddr::from(value.remote_addr.into_inner()))
+            if let Some(addr) = self.substreams.remove(&key) {
+                dead_addr.push(RawAddr::from(addr.remote_addr.into_inner()));
             }
         }
 

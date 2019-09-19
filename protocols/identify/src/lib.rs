@@ -106,6 +106,7 @@ pub struct IdentifyProtocol<T> {
     callback: T,
     remote_infos: HashMap<SessionId, RemoteInfo>,
     secio_enabled: bool,
+    global_ip_only: bool,
 }
 
 impl<T: Callback> IdentifyProtocol<T> {
@@ -114,7 +115,14 @@ impl<T: Callback> IdentifyProtocol<T> {
             callback,
             remote_infos: HashMap::default(),
             secio_enabled: true,
+            global_ip_only: true,
         }
+    }
+
+    /// Turning off global ip only mode will allow any ip to be broadcast, default is true
+    pub fn global_ip_only(mut self, global_ip_only: bool) -> Self {
+        self.global_ip_only = global_ip_only;
+        self
     }
 
     fn process_listens(
@@ -137,11 +145,12 @@ impl<T: Callback> IdentifyProtocol<T> {
                 .misbehave(&info.peer_id, Misbehavior::TooManyAddresses(listens.len()))
         } else {
             trace!("received listen addresses: {:?}", listens);
+            let global_ip_only = self.global_ip_only;
             let reachable_addrs = listens
                 .into_iter()
                 .filter(|addr| {
                     multiaddr_to_socketaddr(addr)
-                        .map(|socket_addr| is_reachable(socket_addr.ip()))
+                        .map(|socket_addr| !global_ip_only || is_reachable(socket_addr.ip()))
                         .unwrap_or(false)
                 })
                 .collect::<Vec<_>>();
@@ -170,9 +179,10 @@ impl<T: Callback> IdentifyProtocol<T> {
         } else {
             trace!("received observed address: {}", observed);
 
+            let global_ip_only = self.global_ip_only;
             if multiaddr_to_socketaddr(&observed)
                 .map(|socket_addr| socket_addr.ip())
-                .filter(|ip_addr| is_reachable(*ip_addr))
+                .filter(|ip_addr| !global_ip_only || is_reachable(*ip_addr))
                 .is_some()
                 && self
                     .callback
@@ -248,7 +258,7 @@ impl<T: Callback> ServiceProtocol for IdentifyProtocol<T> {
             .iter()
             .filter(|addr| {
                 multiaddr_to_socketaddr(addr)
-                    .map(|socket_addr| is_reachable(socket_addr.ip()))
+                    .map(|socket_addr| !self.global_ip_only || is_reachable(socket_addr.ip()))
                     .unwrap_or(false)
             })
             .take(MAX_ADDRS)

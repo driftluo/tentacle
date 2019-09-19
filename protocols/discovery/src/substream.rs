@@ -222,8 +222,9 @@ impl SubstreamValue {
                             self.addr_known.insert(raw_addr);
                         }
                         // add client listen address to manager
-                        addr_mgr
-                            .add_new_addr(self.session_id, self.remote_addr.clone().into_inner());
+                        if let RemoteAddress::Listen(ref addr) = self.remote_addr {
+                            addr_mgr.add_new_addr(self.session_id, addr.clone());
+                        }
                     }
 
                     // TODO: magic number
@@ -432,7 +433,7 @@ impl RemoteAddress {
                 .into_iter()
                 .map(|proto| {
                     match proto {
-                        // TODO: ohter transport, UDP for example
+                        // TODO: other transport, UDP for example
                         Protocol::Tcp(_) => Protocol::Tcp(port),
                         value => value,
                     }
