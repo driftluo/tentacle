@@ -129,7 +129,7 @@ impl<'a> IdentifyMessage<'a> {
 
     #[cfg(feature = "molc")]
     pub(crate) fn decode(data: &'a [u8]) -> Option<Self> {
-        let reader = protocol_mol::IdentifyMessageReader::from_slice(data).ok()?;
+        let reader = protocol_mol::IdentifyMessageReader::from_compatible_slice(data).ok()?;
 
         let identify = reader.identify().raw_data();
         let observed_addr =

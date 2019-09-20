@@ -239,7 +239,7 @@ impl DiscoveryMessage {
     #[cfg(feature = "molc")]
     #[allow(clippy::cast_ptr_alignment)]
     pub fn decode(data: &[u8]) -> Option<Self> {
-        let reader = protocol_mol::DiscoveryMessageReader::from_slice(data).ok()?;
+        let reader = protocol_mol::DiscoveryMessageReader::from_compatible_slice(data).ok()?;
         match reader.payload().to_enum() {
             protocol_mol::DiscoveryPayloadUnionReader::GetNodes(reader) => {
                 let le = reader.version().raw_data().as_ptr() as *const u32;
