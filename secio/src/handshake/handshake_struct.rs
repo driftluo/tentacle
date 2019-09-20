@@ -103,7 +103,7 @@ impl Propose {
     /// Decode with molecule
     #[cfg(feature = "molc")]
     pub fn decode(data: &[u8]) -> Option<Self> {
-        let reader = handshake_mol::ProposeReader::from_slice(data).ok()?;
+        let reader = handshake_mol::ProposeReader::from_compatible_slice(data).ok()?;
         Some(Propose {
             rand: reader.rand().raw_data().to_owned(),
             pubkey: Bytes::from(reader.pubkey().raw_data()),
@@ -173,7 +173,7 @@ impl Exchange {
     /// Decode with molecule
     #[cfg(feature = "molc")]
     pub fn decode(data: &[u8]) -> Option<Self> {
-        let reader = handshake_mol::ExchangeReader::from_slice(data).ok()?;
+        let reader = handshake_mol::ExchangeReader::from_compatible_slice(data).ok()?;
         Some(Exchange {
             epubkey: reader.epubkey().raw_data().to_owned(),
             signature: reader.signature().raw_data().to_owned(),
@@ -246,7 +246,7 @@ impl PublicKey {
     /// Decode with molecule
     #[cfg(feature = "molc")]
     pub fn decode(data: &[u8]) -> Option<Self> {
-        let reader = handshake_mol::PublicKeyReader::from_slice(data).ok()?;
+        let reader = handshake_mol::PublicKeyReader::from_compatible_slice(data).ok()?;
         let union = reader.to_enum();
         match union {
             handshake_mol::PublicKeyUnionReader::Secp256k1(reader) => {

@@ -131,7 +131,7 @@ impl ProtocolInfo {
     /// Decode with molecule
     #[cfg(feature = "molc")]
     pub fn decode(data: &[u8]) -> Option<Self> {
-        let reader = protocol_select_mol::ProtocolInfoReader::from_slice(data).ok()?;
+        let reader = protocol_select_mol::ProtocolInfoReader::from_compatible_slice(data).ok()?;
 
         let mut supports = Vec::new();
         for version in reader.support_versions().iter() {

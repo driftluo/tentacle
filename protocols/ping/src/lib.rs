@@ -350,7 +350,7 @@ impl PingMessage {
     #[cfg(feature = "molc")]
     #[allow(clippy::cast_ptr_alignment)]
     fn decode(data: &[u8]) -> Option<PingPayload> {
-        let reader = protocol_mol::PingMessageReader::from_slice(data).ok()?;
+        let reader = protocol_mol::PingMessageReader::from_compatible_slice(data).ok()?;
         match reader.payload().to_enum() {
             protocol_mol::PingPayloadUnionReader::Ping(reader) => {
                 let le = reader.nonce().raw_data().as_ptr() as *const u32;
