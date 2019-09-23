@@ -3,13 +3,16 @@ use log::{debug, info};
 
 use std::time::Duration;
 
-use futures::{future::lazy, prelude::*, sync::mpsc::channel};
-use generic_channel::Sender;
+use futures::{
+    channel::mpsc::{channel, Sender},
+    prelude::*,
+    StreamExt,
+};
 use p2p::{
     builder::{MetaBuilder, ServiceBuilder},
     context::ServiceContext,
     secio::SecioKeyPair,
-    service::{DialProtocol, ProtocolHandle, ProtocolMeta, ServiceError, ServiceEvent},
+    service::{ProtocolHandle, ProtocolMeta, ServiceError, ServiceEvent, TargetProtocol},
     traits::ServiceHandle,
     ProtocolId,
 };
@@ -17,9 +20,10 @@ use tentacle_ping::{Event, PingHandler};
 
 fn main() {
     env_logger::init();
+    let rt = tokio::runtime::Runtime::new().unwrap();
     if std::env::args().nth(1) == Some("server".to_string()) {
         debug!("Starting server ......");
-        let (sender, receiver) = channel(256);
+        let (sender, mut receiver) = channel(256);
         let protocol = create_meta(
             1.into(),
             Duration::from_secs(5),
@@ -31,17 +35,28 @@ fn main() {
             .key_pair(SecioKeyPair::secp256k1_generated())
             .forever(true)
             .build(SimpleHandler {});
-        let _ = service.listen("/ip4/127.0.0.1/tcp/1337".parse().unwrap());
-        tokio::run(lazy(|| {
-            tokio::spawn(receiver.for_each(|event: Event| {
-                info!("server receive event: {:?}", event);
-                Ok(())
-            }));
-            service.for_each(|_| Ok(()))
-        }))
+        rt.spawn(async move {
+            loop {
+                match receiver.next().await {
+                    Some(event) => info!("server receive event: {:?}", event),
+                    None => break,
+                }
+            }
+        });
+        rt.spawn(async move {
+            service
+                .listen("/ip4/127.0.0.1/tcp/1337".parse().unwrap())
+                .await
+                .unwrap();
+            loop {
+                if service.next().await.is_none() {
+                    break;
+                }
+            }
+        });
     } else {
         debug!("Starting client ......");
-        let (sender, receiver) = channel(256);
+        let (sender, mut receiver) = channel(256);
         let protocol = create_meta(
             1.into(),
             Duration::from_secs(5),
@@ -53,26 +68,42 @@ fn main() {
             .key_pair(SecioKeyPair::secp256k1_generated())
             .forever(true)
             .build(SimpleHandler {});
-        let _ = service.dial(
-            "/ip4/127.0.0.1/tcp/1337".parse().unwrap(),
-            DialProtocol::All,
-        );
-        let _ = service.listen("/ip4/127.0.0.1/tcp/1338".parse().unwrap());
-        tokio::run(lazy(|| {
-            tokio::spawn(receiver.for_each(|event| {
-                info!("client receive event: {:?}", event);
-                Ok(())
-            }));
-            service.for_each(|_| Ok(()))
-        }))
+        rt.spawn(async move {
+            loop {
+                match receiver.next().await {
+                    Some(event) => info!("server receive event: {:?}", event),
+                    None => break,
+                }
+            }
+        });
+        rt.spawn(async move {
+            service
+                .dial(
+                    "/ip4/127.0.0.1/tcp/1337".parse().unwrap(),
+                    TargetProtocol::All,
+                )
+                .await
+                .unwrap();
+            service
+                .listen("/ip4/127.0.0.1/tcp/1338".parse().unwrap())
+                .await
+                .unwrap();
+            loop {
+                if service.next().await.is_none() {
+                    break;
+                }
+            }
+        });
     }
+
+    rt.shutdown_on_idle();
 }
 
-pub fn create_meta<S: Sender<Event> + Send + Clone + 'static>(
+pub fn create_meta(
     id: ProtocolId,
     interval: Duration,
     timeout: Duration,
-    event_sender: S,
+    event_sender: Sender<Event>,
 ) -> ProtocolMeta {
     MetaBuilder::new()
         .id(id)

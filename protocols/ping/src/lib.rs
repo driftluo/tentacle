@@ -22,7 +22,7 @@ mod protocol_mol;
 use molecule::prelude::{Builder, Entity, Reader};
 
 use bytes::Bytes;
-use generic_channel::Sender;
+use futures::channel::mpsc::Sender;
 use log::{debug, error, warn};
 use p2p::{
     context::{ProtocolContext, ProtocolContextMutRef},
@@ -57,15 +57,15 @@ pub enum Event {
 ///
 /// The interval means that we send ping to peers.
 /// The timeout means that consider peer is timeout if during a timeout we still have not received pong from a peer
-pub struct PingHandler<S: Sender<Event>> {
+pub struct PingHandler {
     interval: Duration,
     timeout: Duration,
     connected_session_ids: HashMap<SessionId, PingStatus>,
-    event_sender: S,
+    event_sender: Sender<Event>,
 }
 
-impl<S: Sender<Event>> PingHandler<S> {
-    pub fn new(interval: Duration, timeout: Duration, event_sender: S) -> PingHandler<S> {
+impl PingHandler {
+    pub fn new(interval: Duration, timeout: Duration, event_sender: Sender<Event>) -> PingHandler {
         PingHandler {
             interval,
             timeout,
@@ -106,10 +106,7 @@ impl PingStatus {
     }
 }
 
-impl<S> ServiceProtocol for PingHandler<S>
-where
-    S: Sender<Event>,
-{
+impl ServiceProtocol for PingHandler {
     fn init(&mut self, context: &mut ProtocolContext) {
         // send ping to peers periodically
         let proto_id = context.proto_id;

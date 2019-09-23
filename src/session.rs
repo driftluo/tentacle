@@ -770,9 +770,7 @@ where
                     self.clean(cx);
                     None
                 }
-                Poll::Pending => {
-                    None
-                }
+                Poll::Pending => None,
             }
             .or_else(|| {
                 if self.write_buf.len() > RECEIVED_BUFFER_SIZE {
@@ -796,9 +794,7 @@ where
                             self.clean(cx);
                             None
                         }
-                        Poll::Pending => {
-                            None
-                        }
+                        Poll::Pending => None,
                     }
                 }
             });

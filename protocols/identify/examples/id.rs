@@ -1,13 +1,13 @@
 use env_logger;
 use log::debug;
 
-use futures::{future::lazy, prelude::*};
+use futures::prelude::*;
 use p2p::{
     builder::{MetaBuilder, ServiceBuilder},
     context::{ProtocolContextMutRef, ServiceContext},
     multiaddr::Multiaddr,
     secio::{PeerId, SecioKeyPair},
-    service::{DialProtocol, ProtocolHandle, ServiceError, ServiceEvent, SessionType},
+    service::{ProtocolHandle, ServiceError, ServiceEvent, SessionType, TargetProtocol},
     traits::ServiceHandle,
 };
 use tentacle_identify::{Callback, IdentifyProtocol, MisbehaveResult, Misbehavior};
@@ -20,11 +20,12 @@ fn main() {
     let protocol = MetaBuilder::default()
         .id(1.into())
         .service_handle(move || {
-            ProtocolHandle::Callback(
-                Box::new(IdentifyProtocol::new(callback)).global_ip_only(false),
-            )
+            ProtocolHandle::Callback(Box::new(
+                IdentifyProtocol::new(callback).global_ip_only(false),
+            ))
         })
         .build();
+    let rt = tokio::runtime::Runtime::new().unwrap();
     if std::env::args().nth(1) == Some("server".to_string()) {
         debug!("Starting server ......");
         let mut service = ServiceBuilder::default()
@@ -32,12 +33,17 @@ fn main() {
             .key_pair(SecioKeyPair::secp256k1_generated())
             .forever(true)
             .build(SimpleHandler {});
-        let _ = service.dial(
-            "/ip4/127.0.0.1/tcp/1338".parse().unwrap(),
-            DialProtocol::All,
-        );
-        let _ = service.listen("/ip4/127.0.0.1/tcp/1337".parse().unwrap());
-        tokio::run(lazy(|| service.for_each(|_| Ok(()))))
+        rt.spawn(async move {
+            service
+                .listen("/ip4/127.0.0.1/tcp/1337".parse().unwrap())
+                .await
+                .unwrap();
+            loop {
+                if service.next().await.is_none() {
+                    break;
+                }
+            }
+        });
     } else {
         debug!("Starting client ......");
         let mut service = ServiceBuilder::default()
@@ -45,13 +51,22 @@ fn main() {
             .key_pair(SecioKeyPair::secp256k1_generated())
             .forever(true)
             .build(SimpleHandler {});
-        let _ = service.dial(
-            "/ip4/127.0.0.1/tcp/1337".parse().unwrap(),
-            DialProtocol::All,
-        );
-        let _ = service.listen("/ip4/127.0.0.1/tcp/1338".parse().unwrap());
-        tokio::run(lazy(|| service.for_each(|_| Ok(()))))
+        rt.spawn(async move {
+            service
+                .dial(
+                    "/ip4/127.0.0.1/tcp/1337".parse().unwrap(),
+                    TargetProtocol::All,
+                )
+                .await
+                .unwrap();
+            loop {
+                if service.next().await.is_none() {
+                    break;
+                }
+            }
+        });
     }
+    rt.shutdown_on_idle();
 }
 
 #[derive(Clone)]

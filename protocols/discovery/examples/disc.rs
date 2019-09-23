@@ -6,13 +6,13 @@ use std::{
     time::Duration,
 };
 
-use futures::prelude::*;
+use futures::StreamExt;
 
 use p2p::{
     builder::{MetaBuilder, ServiceBuilder},
     context::ServiceContext,
     multiaddr::Multiaddr,
-    service::{DialProtocol, ProtocolHandle, ProtocolMeta, ServiceError, ServiceEvent},
+    service::{ProtocolHandle, ProtocolMeta, ServiceError, ServiceEvent, TargetProtocol},
     traits::ServiceHandle,
     ProtocolId, SessionId,
 };
@@ -29,21 +29,44 @@ fn main() {
         .forever(true)
         .build(SHandle {});
 
+    let rt = tokio::runtime::Runtime::new().unwrap();
     let first_arg = std::env::args().nth(1).unwrap();
     if first_arg == "server" {
         debug!("Starting server ......");
-        let _ = service.listen("/ip4/127.0.0.1/tcp/1337".parse().unwrap());
-        tokio::run(service.for_each(|_| Ok(())))
+        rt.spawn(async move {
+            service
+                .listen("/ip4/127.0.0.1/tcp/1337".parse().unwrap())
+                .await
+                .unwrap();
+            loop {
+                if service.next().await.is_none() {
+                    break;
+                }
+            }
+        });
     } else {
         debug!("Starting client ......");
-
-        let _ = service.dial(
-            "/ip4/127.0.0.1/tcp/1337".parse().unwrap(),
-            DialProtocol::All,
-        );
-        let _ = service.listen(format!("/ip4/127.0.0.1/tcp/{}", first_arg).parse().unwrap());
-        tokio::run(service.for_each(|_| Ok(())))
+        rt.spawn(async move {
+            service
+                .dial(
+                    "/ip4/127.0.0.1/tcp/1337".parse().unwrap(),
+                    TargetProtocol::All,
+                )
+                .await
+                .unwrap();
+            service
+                .listen(format!("/ip4/127.0.0.1/tcp/{}", first_arg).parse().unwrap())
+                .await
+                .unwrap();
+            loop {
+                if service.next().await.is_none() {
+                    break;
+                }
+            }
+        });
     }
+
+    rt.shutdown_on_idle();
 }
 
 fn create_meta(id: ProtocolId, start: u16) -> ProtocolMeta {
