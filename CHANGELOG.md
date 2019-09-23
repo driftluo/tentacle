@@ -1,3 +1,16 @@
+## 0.2.5
+
+### Features
+
+- Upgrade molecule, use compatible mode
+- Add `global_ip_only` to identify/discovery
+- Add Readme to identify/discovery
+
+### Bug fix
+
+- Fix substream cache processing is not timely
+- Fix session `set_delay` status setting error，may cause an invalid call
+
 ## 0.2.4
 
 ### Features
