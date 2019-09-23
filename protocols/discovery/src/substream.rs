@@ -214,6 +214,11 @@ impl SubstreamValue {
                         return Err(io::ErrorKind::Other.into());
                     }
                 } else {
+                    // TODO: magic number
+                    // must get the item first, otherwise it is possible to load
+                    // the address of peer listen.
+                    let mut items = addr_mgr.get_random(2500);
+
                     // change client random outbound port to client listen port
                     debug!("listen port: {:?}", listen_port);
                     if let Some(port) = listen_port {
@@ -227,8 +232,6 @@ impl SubstreamValue {
                         }
                     }
 
-                    // TODO: magic number
-                    let mut items = addr_mgr.get_random(2500);
                     while items.len() > 1000 {
                         if let Some(last_item) = items.pop() {
                             let idx = rand::random::<usize>() % 1000;
@@ -377,14 +380,7 @@ impl Substream {
             context
                 .listens()
                 .iter()
-                .map(|address| multiaddr_to_socketaddr(address).unwrap())
-                .filter_map(|address| {
-                    if RawAddr::from(address).is_reachable() || address.ip().is_unspecified() {
-                        Some(address.port())
-                    } else {
-                        None
-                    }
-                })
+                .map(|address| multiaddr_to_socketaddr(address).unwrap().port())
                 .nth(0)
         } else {
             None
