@@ -50,7 +50,6 @@ pub fn agree(
     algorithm: KeyAgreement,
     my_private_key: agreement::EphemeralPrivateKey,
     other_public_key: &[u8],
-    _out_size: usize,
 ) -> Result<Vec<u8>, SecioError> {
     agreement::agree_ephemeral(
         my_private_key,

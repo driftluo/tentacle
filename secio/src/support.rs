@@ -3,7 +3,7 @@
 /// Delete part of the structure
 use crate::error::SecioError;
 use crate::exchange::KeyAgreement;
-use crate::{stream_cipher::Cipher, Digest};
+use crate::{crypto::cipher::CipherType, Digest};
 
 use std::cmp::Ordering;
 
@@ -12,13 +12,20 @@ const ECDH_P384: &str = "P-384";
 
 const AES_128: &str = "AES-128";
 const AES_256: &str = "AES-256";
-const TWOFISH_CTR: &str = "TwofishCTR";
+const AES_128_CTR: &str = "AES-128-CTR";
+const AES_256_CTR: &str = "AES-256-CTR";
+
+const AES_128_GCM: &str = "AES-128-GCM";
+const AES_256_GCM: &str = "AES-256-GCM";
+
+const CHACHA20_POLY1305: &str = "CHACHA20_POLY1305";
 
 const SHA_256: &str = "SHA256";
 const SHA_512: &str = "SHA512";
 
 pub(crate) const DEFAULT_AGREEMENTS_PROPOSITION: &str = "P-256,P-384";
-pub(crate) const DEFAULT_CIPHERS_PROPOSITION: &str = "AES-128,AES-256,TwofishCTR";
+pub(crate) const DEFAULT_CIPHERS_PROPOSITION: &str =
+    "AES-128-GCM,AES-256-GCM,CHACHA20_POLY1305,AES-128-CTR,AES-256-CTR,AES-128,AES-256";
 pub(crate) const DEFAULT_DIGESTS_PROPOSITION: &str = "SHA256,SHA512";
 
 /// Return a proposition string from the given sequence of `KeyAgreement` values.
@@ -67,21 +74,29 @@ pub fn select_agreement(r: Ordering, ours: &str, theirs: &str) -> Result<KeyAgre
 /// Return a proposition string from the given sequence of `Cipher` values.
 pub fn ciphers_proposition<'a, I>(ciphers: I) -> String
 where
-    I: IntoIterator<Item = &'a Cipher>,
+    I: IntoIterator<Item = &'a CipherType>,
 {
     let mut s = String::new();
     for c in ciphers {
         match c {
-            Cipher::Aes128 => {
-                s.push_str(AES_128);
+            CipherType::Aes128Ctr => {
+                s.push_str(AES_128_CTR);
                 s.push(',')
             }
-            Cipher::Aes256 => {
-                s.push_str(AES_256);
+            CipherType::Aes256Ctr => {
+                s.push_str(AES_256_CTR);
                 s.push(',')
             }
-            Cipher::TwofishCtr => {
-                s.push_str(TWOFISH_CTR);
+            CipherType::Aes128Gcm => {
+                s.push_str(AES_128_GCM);
+                s.push(',')
+            }
+            CipherType::Aes256Gcm => {
+                s.push_str(AES_256_GCM);
+                s.push(',')
+            }
+            CipherType::ChaCha20Poly1305 => {
+                s.push_str(CHACHA20_POLY1305);
                 s.push(',')
             }
         }
@@ -137,7 +152,7 @@ pub fn select_digest(r: Ordering, ours: &str, theirs: &str) -> Result<Digest, Se
 ///
 /// The `Ordering` parameter determines which argument is preferred. If `Less` or `Equal` we
 /// try for each of `theirs` every one of `ours`, for `Greater` it's the other way around.
-pub fn select_cipher(r: Ordering, ours: &str, theirs: &str) -> Result<Cipher, SecioError> {
+pub fn select_cipher(r: Ordering, ours: &str, theirs: &str) -> Result<CipherType, SecioError> {
     let (a, b) = match r {
         Ordering::Less | Ordering::Equal => (theirs, ours),
         Ordering::Greater => (ours, theirs),
@@ -145,9 +160,11 @@ pub fn select_cipher(r: Ordering, ours: &str, theirs: &str) -> Result<Cipher, Se
     for x in a.split(',') {
         if b.split(',').any(|y| x == y) {
             match x {
-                AES_128 => return Ok(Cipher::Aes128),
-                AES_256 => return Ok(Cipher::Aes256),
-                TWOFISH_CTR => return Ok(Cipher::TwofishCtr),
+                AES_128 | AES_128_CTR => return Ok(CipherType::Aes128Ctr),
+                AES_256 | AES_256_CTR => return Ok(CipherType::Aes256Ctr),
+                AES_128_GCM => return Ok(CipherType::Aes128Gcm),
+                AES_256_GCM => return Ok(CipherType::Aes256Gcm),
+                CHACHA20_POLY1305 => return Ok(CipherType::ChaCha20Poly1305),
                 _ => continue,
             }
         }

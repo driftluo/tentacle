@@ -281,7 +281,7 @@ mod tests {
 
     #[test]
     fn decode_encode_pubkey() {
-        let raw = SecioKeyPair::secp256k1_generated().to_public_key();
+        let raw = SecioKeyPair::secp256k1_generated().public_key();
         let byte = raw.clone().encode();
 
         assert_eq!(raw, PublicKey::decode(&byte).unwrap())

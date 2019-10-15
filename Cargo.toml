@@ -18,7 +18,7 @@ no-default-features = true
 
 [dependencies]
 yamux = { path = "yamux", version = "0.1.13", package = "tokio-yamux" }
-secio = { path = "secio", version = "0.1.11", package = "tentacle-secio" }
+secio = { path = "secio", version = "0.2.0", package = "tentacle-secio" }
 
 futures = "0.1"
 tokio = "0.1"

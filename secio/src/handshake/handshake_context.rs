@@ -2,20 +2,20 @@
 /// It does not use protobuf. It uses flatbuffers as the basis for serialization and deserialization.
 /// It does not use protobuf bytes when determining the order of the order. But the original public key bytes
 use crate::{
+    crypto::cipher::CipherType,
     error::SecioError,
     exchange::KeyAgreement,
     handshake::{
         handshake_struct::{Propose, PublicKey},
         Config,
     },
-    stream_cipher, support, Digest,
+    support, Digest,
 };
 
 use bytes::{Bytes, BytesMut};
 use log::{debug, trace};
 use rand;
 use ring::agreement;
-use sha2::{Digest as Sha2Digest, Sha256};
 
 use std::cmp::Ordering;
 
@@ -58,7 +58,7 @@ pub struct Remote {
     pub(crate) hashes_ordering: Ordering,
     // Crypto algorithms chosen for the communication:
     pub(crate) chosen_exchange: KeyAgreement,
-    pub(crate) chosen_cipher: stream_cipher::Cipher,
+    pub(crate) chosen_cipher: CipherType,
     pub(crate) chosen_hash: Digest,
 }
 
@@ -85,7 +85,7 @@ impl HandshakeContext<()> {
     pub fn with_local(self) -> HandshakeContext<Local> {
         let nonce: [u8; 16] = rand::random();
 
-        let public_key = self.config.key.to_public_key();
+        let public_key = self.config.key.public_key();
 
         // Send our proposition with our nonce, public key and supported protocols.
         let mut proposition = Propose::new();
@@ -151,7 +151,7 @@ impl HandshakeContext<Local> {
             }
         };
 
-        if public_key == self.config.key.to_public_key() {
+        if public_key == self.config.key.public_key() {
             return Err(SecioError::ConnectSelf);
         }
 
@@ -159,17 +159,17 @@ impl HandshakeContext<Local> {
         // based on which hash is larger.
         let hashes_ordering = {
             let oh1 = {
-                let mut ctx = Sha256::new();
-                ctx.input(public_key.inner_ref());
-                ctx.input(&self.state.nonce);
-                ctx.result()
+                let mut ctx = ring::digest::Context::new(&ring::digest::SHA256);
+                ctx.update(public_key.inner_ref());
+                ctx.update(&self.state.nonce);
+                ctx.finish()
             };
 
             let oh2 = {
-                let mut ctx = Sha256::new();
-                ctx.input(&self.state.public_key);
-                ctx.input(&nonce);
-                ctx.result()
+                let mut ctx = ring::digest::Context::new(&ring::digest::SHA256);
+                ctx.update(&self.state.public_key);
+                ctx.update(&nonce);
+                ctx.finish()
             };
 
             oh1.as_ref().cmp(&oh2.as_ref())

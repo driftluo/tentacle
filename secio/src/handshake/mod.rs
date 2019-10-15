@@ -1,7 +1,7 @@
 /// Most of the code for this module comes from `rust-libp2p`, but modified some logic(struct).
 use crate::{
-    codec::stream_handle::StreamHandle, error::SecioError, exchange::KeyAgreement,
-    handshake::procedure::handshake, stream_cipher::Cipher, support, Digest, EphemeralPublicKey,
+    codec::stream_handle::StreamHandle, crypto::cipher::CipherType, error::SecioError,
+    exchange::KeyAgreement, handshake::procedure::handshake, support, Digest, EphemeralPublicKey,
     PublicKey, SecioKeyPair,
 };
 
@@ -74,7 +74,7 @@ impl Config {
     /// Override the default set of supported ciphers.
     pub fn ciphers<'a, I>(mut self, xs: I) -> Self
     where
-        I: IntoIterator<Item = &'a Cipher>,
+        I: IntoIterator<Item = &'a CipherType>,
     {
         self.ciphers_proposal = Some(support::ciphers_proposition(xs));
         self

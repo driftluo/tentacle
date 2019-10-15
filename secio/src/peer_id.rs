@@ -2,7 +2,6 @@
 use std::fmt;
 
 use rand::{thread_rng, Rng};
-use sha2::digest::Digest;
 use unsigned_varint::{decode, encode};
 
 use crate::handshake::handshake_struct::PublicKey;
@@ -68,9 +67,9 @@ impl PeerId {
         inner[..code.len()].copy_from_slice(code);
         inner[code.len()] = SHA256_SIZE;
 
-        let mut hasher = sha2::Sha256::default();
-        hasher.input(seed);
-        inner[header_len..].copy_from_slice(hasher.result().as_ref());
+        let mut ctx = ring::digest::Context::new(&ring::digest::SHA256);
+        ctx.update(seed);
+        inner[header_len..].copy_from_slice(ctx.finish().as_ref());
         PeerId { inner }
     }
 
@@ -135,21 +134,21 @@ mod tests {
 
     #[test]
     fn peer_id_is_public_key() {
-        let pub_key = SecioKeyPair::secp256k1_generated().to_public_key();
+        let pub_key = SecioKeyPair::secp256k1_generated().public_key();
         let peer_id = PeerId::from_public_key(&pub_key);
         assert_eq!(peer_id.is_public_key(&pub_key), true);
     }
 
     #[test]
     fn peer_id_into_bytes_then_from_bytes() {
-        let peer_id = SecioKeyPair::secp256k1_generated().to_peer_id();
+        let peer_id = SecioKeyPair::secp256k1_generated().peer_id();
         let second = PeerId::from_bytes(peer_id.as_bytes().to_vec()).unwrap();
         assert_eq!(peer_id, second);
     }
 
     #[test]
     fn peer_id_to_base58_then_back() {
-        let peer_id = SecioKeyPair::secp256k1_generated().to_peer_id();
+        let peer_id = SecioKeyPair::secp256k1_generated().peer_id();
         let second: PeerId = peer_id.to_base58().parse().unwrap();
         assert_eq!(peer_id, second);
     }
