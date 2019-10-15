@@ -18,7 +18,9 @@ fn decode_encode(data: &[u8], cipher: CipherType) {
     let mut encode_cipher = new_stream(cipher, &cipher_key, &iv, CryptoMode::Encrypt);
     let mut decode_cipher = new_stream(cipher, &cipher_key, &iv, CryptoMode::Decrypt);
     let (mut decode_hmac, mut encode_hmac) = match cipher {
-        CipherType::ChaCha20Poly1305 | CipherType::Aes128Gcm | CipherType::Aes256Gcm => (None, None),
+        CipherType::ChaCha20Poly1305 | CipherType::Aes128Gcm | CipherType::Aes256Gcm => {
+            (None, None)
+        }
         _ => {
             let encode_hmac = Hmac::from_key(Digest::Sha256, &hmac_key);
             let decode_hmac = encode_hmac.clone();

@@ -26,7 +26,6 @@ use crate::{
 };
 
 const DELAY_TIME: Duration = Duration::from_millis(300);
-const BLOCK_BOUNDARY: usize = 1024 * 256 * 100;
 
 /// Encrypted stream
 pub struct SecureStream<T> {
@@ -41,9 +40,6 @@ pub struct SecureStream<T> {
     /// denotes a sequence of bytes which are expected to be
     /// found at the beginning of the stream and are checked for equality
     nonce: Vec<u8>,
-
-    current_decode: Option<BytesMut>,
-    current_encode: Option<BytesMut>,
     /// Send buffer
     pending: VecDeque<Bytes>,
     /// Read buffer
@@ -63,7 +59,7 @@ where
     T: AsyncRead + AsyncWrite,
 {
     /// New a secure stream
-    pub fn new(
+    pub(crate) fn new(
         socket: Framed<T, LengthDelimitedCodec>,
         decode_cipher: BoxStreamCipher,
         decode_hmac: Option<Hmac>,
@@ -81,8 +77,6 @@ where
             encode_hmac,
             read_buf: VecDeque::default(),
             nonce,
-            current_decode: None,
-            current_encode: None,
             pending: VecDeque::default(),
             frame_sender: None,
             event_sender,
@@ -138,10 +132,7 @@ where
         match event {
             StreamEvent::Frame(frame) => {
                 debug!("start send data: {:?}", frame);
-                self.current_encode = Some(frame);
-                if let Async::NotReady = self.encode() {
-                    return Ok(Async::NotReady);
-                }
+                self.encode(frame);
                 self.send_frame()?;
             }
             StreamEvent::Close => {
@@ -163,10 +154,7 @@ where
             match self.socket.poll() {
                 Ok(Async::Ready(Some(t))) => {
                     trace!("receive raw data size: {:?}", t.len());
-                    self.current_decode = Some(t.clone());
-                    if let Async::NotReady = self.decode()? {
-                        break;
-                    }
+                    self.decode(t)?;
                     self.send_to_handle()?;
                 }
                 Ok(Async::Ready(None)) => {
@@ -325,25 +313,11 @@ where
         Ok(out)
     }
 
-    fn decode(&mut self) -> Poll<(), SecioError> {
-        if self.current_decode.is_none() {
-            return Ok(Async::Ready(()));
-        }
-        let data = self.current_decode.clone().unwrap();
-        let t = if data.len() > BLOCK_BOUNDARY {
-            match tokio_threadpool::blocking(|| self.decode_inner(data.clone())) {
-                Ok(Async::Ready(res)) => res?,
-                Ok(Async::NotReady) => return Ok(Async::NotReady),
-                Err(_) => self.decode_inner(data)?,
-            }
-        } else {
-            self.decode_inner(data)?
-        };
-
-        self.current_decode.take();
+    fn decode(&mut self, frame: BytesMut) -> Result<(), SecioError> {
+        let t = self.decode_inner(frame)?;
         debug!("receive data size: {:?}", t.len());
         self.read_buf.push_back(StreamEvent::Frame(t));
-        Ok(Async::Ready(()))
+        Ok(())
     }
 
     /// Encoding data
@@ -358,27 +332,9 @@ where
         out
     }
 
-    fn encode(&mut self) -> Async<()> {
-        if self.current_encode.is_none() {
-            return Async::Ready(());
-        }
-
-        let data = self.current_encode.clone().unwrap();
-
-        let frame = if data.len() > BLOCK_BOUNDARY {
-            match tokio_threadpool::blocking(|| self.encode_inner(data.clone())) {
-                Ok(Async::Ready(res)) => res,
-                Ok(Async::NotReady) => return Async::NotReady,
-                Err(_) => self.encode_inner(data),
-            }
-        } else {
-            self.encode_inner(data)
-        };
-
+    fn encode(&mut self, data: BytesMut) {
+        let frame = self.encode_inner(data);
         self.pending.push_back(frame.freeze());
-        self.current_encode.take();
-
-        Async::Ready(())
     }
 }
 
@@ -400,16 +356,6 @@ where
         }
 
         self.poll_complete()?;
-
-        if let Async::NotReady = self.decode().map_err::<io::Error, _>(Into::into)? {
-            self.set_delay();
-            return Ok(Async::NotReady);
-        }
-
-        if let Async::NotReady = self.encode() {
-            self.set_delay();
-            return Ok(Async::NotReady);
-        }
 
         match self.recv_frame() {
             Ok(Async::Ready(None)) => {
