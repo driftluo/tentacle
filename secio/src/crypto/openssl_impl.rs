@@ -1,85 +1,128 @@
-use bytes::BytesMut;
+use bytes::{Bytes, BytesMut};
 use openssl::symm;
 
 use crate::{
-    crypto::{cipher::CipherType, CryptoMode, StreamCipher},
+    crypto::{cipher::CipherType, nonce_advance, StreamCipher},
     error::SecioError,
 };
 
 pub(crate) struct OpenSSLCrypt {
     cipher: symm::Cipher,
-    inner: symm::Crypter,
+    cipher_type: CipherType,
+    key: Bytes,
+    iv: BytesMut,
+    aead: bool,
 }
 
 impl OpenSSLCrypt {
-    pub fn new(cipher_type: CipherType, key: &[u8], iv: &[u8], mode: CryptoMode) -> Self {
-        let cipher = match cipher_type {
-            CipherType::Aes128Ctr => symm::Cipher::aes_128_ctr(),
-            CipherType::Aes256Ctr => symm::Cipher::aes_256_ctr(),
-            CipherType::Aes128Gcm => symm::Cipher::aes_128_gcm(),
-            CipherType::Aes256Gcm => symm::Cipher::aes_256_gcm(),
+    pub fn new(cipher_type: CipherType, key: &[u8], iv: &[u8]) -> Self {
+        let (cipher, aead) = match cipher_type {
+            CipherType::Aes128Ctr => (symm::Cipher::aes_128_ctr(), false),
+            CipherType::Aes256Ctr => (symm::Cipher::aes_256_ctr(), false),
+            CipherType::Aes128Gcm => (symm::Cipher::aes_128_gcm(), true),
+            CipherType::Aes256Gcm => (symm::Cipher::aes_256_gcm(), true),
+            #[cfg(any(ossl110))]
+            CipherType::ChaCha20Poly1305 => (symm::Cipher::chacha20_poly1305(), true),
+            #[cfg(not(ossl110))]
             _ => panic!(
                 "Cipher type {:?} does not supported by OpenSSLCrypt yet",
                 cipher_type
             ),
         };
-        // Panic if error occurs
-        let cypter = symm::Crypter::new(cipher, From::from(mode), key, Some(iv)).unwrap();
+
+        // aead use self-increase iv, ctr use fixed iv
+        let iv = if aead {
+            let nonce_size = cipher_type.iv_size();
+            let mut nonce = BytesMut::with_capacity(nonce_size);
+            unsafe {
+                nonce.set_len(nonce_size);
+                ::std::ptr::write_bytes(nonce.as_mut_ptr(), 0, nonce_size);
+            }
+            nonce
+        } else {
+            BytesMut::from(iv)
+        };
+
         OpenSSLCrypt {
             cipher,
-            inner: cypter,
+            cipher_type,
+            key: Bytes::from(key),
+            iv,
+            aead,
         }
     }
 
-    pub fn update(&mut self, data: &[u8], out: &mut BytesMut) -> Result<(), SecioError> {
-        let least_reserved = data.len() + self.cipher.block_size();
-        let mut buf = BytesMut::with_capacity(least_reserved); // NOTE: len() is 0 now!
-        unsafe {
-            buf.set_len(least_reserved);
+    /// Encrypt `input` to `output` with `tag`. `output.len()` should equals to `input.len() + tag.len()`.
+    /// ```plain
+    /// +----------------------------------------+-----------------------+
+    /// | ENCRYPTED TEXT (length = input.len())  | TAG                   |
+    /// +----------------------------------------+-----------------------+
+    /// ```
+    pub fn encrypt(&mut self, input: &[u8], output: &mut BytesMut) -> Result<(), SecioError> {
+        if self.aead {
+            nonce_advance(self.iv.as_mut());
+            let tag_size = self.cipher_type.tag_size();
+            let mut tag = BytesMut::with_capacity(tag_size);
+            unsafe {
+                tag.set_len(tag_size);
+            }
+            let out =
+                symm::encrypt_aead(self.cipher, &self.key, Some(&self.iv), &[], input, &mut tag)
+                    .map(BytesMut::from)?;
+            output.unsplit(out);
+            output.unsplit(tag)
+        } else {
+            let out =
+                symm::encrypt(self.cipher, &self.key, Some(&self.iv), input).map(BytesMut::from)?;
+            output.unsplit(out)
         }
-        let length = self.inner.update(data, &mut *buf)?;
-        buf.truncate(length);
-        out.unsplit(buf);
         Ok(())
     }
 
-    /// Generate the final block
-    pub fn finalize(&mut self, out: &mut BytesMut) -> Result<(), SecioError> {
-        let least_reserved = self.cipher.block_size();
-        let mut buf = BytesMut::with_capacity(least_reserved); // NOTE: len() is 0 now!
-        unsafe {
-            buf.set_len(least_reserved);
+    /// Decrypt `input` to `output` with `tag`. `output.len()` should equals to `input.len() - tag.len()`.
+    /// ```plain
+    /// +----------------------------------------+-----------------------+
+    /// | ENCRYPTED TEXT (length = output.len()) | TAG                   |
+    /// +----------------------------------------+-----------------------+
+    /// ```
+    pub fn decrypt(&mut self, input: &[u8], output: &mut BytesMut) -> Result<(), SecioError> {
+        if self.aead {
+            nonce_advance(self.iv.as_mut());
+            let crypt_data_len = input.len() - self.cipher_type.tag_size();
+            let out = openssl::symm::decrypt_aead(
+                self.cipher,
+                &self.key,
+                Some(&self.iv),
+                &[],
+                &input[..crypt_data_len],
+                &input[crypt_data_len..],
+            )
+            .map(BytesMut::from)?;
+            output.unsplit(out)
+        } else {
+            let out =
+                symm::decrypt(self.cipher, &self.key, Some(&self.iv), input).map(BytesMut::from)?;
+            output.unsplit(out)
         }
-
-        let length = self.inner.finalize(&mut *buf)?;
-        buf.truncate(length);
-        out.unsplit(buf);
         Ok(())
-    }
-
-    /// Gets output buffer size based on data
-    pub fn buffer_size(&self, data: &[u8]) -> usize {
-        self.cipher.block_size() + data.len()
     }
 }
 
 impl StreamCipher for OpenSSLCrypt {
-    fn update(&mut self, data: &[u8], out: &mut BytesMut) -> Result<(), SecioError> {
-        self.update(data, out)
+    fn encrypt(&mut self, input: &[u8], output: &mut BytesMut) -> Result<(), SecioError> {
+        self.encrypt(input, output)?;
+        Ok(())
     }
 
-    fn finalize(&mut self, out: &mut BytesMut) -> Result<(), SecioError> {
-        self.finalize(out)
-    }
-
-    fn buffer_size(&self, data: &[u8]) -> usize {
-        self.buffer_size(data)
+    fn decrypt(&mut self, input: &[u8], output: &mut BytesMut) -> Result<(), SecioError> {
+        self.decrypt(input, output)?;
+        Ok(())
     }
 }
 
 #[cfg(test)]
 mod test {
-    use super::{BytesMut, CipherType, CryptoMode, OpenSSLCrypt};
+    use super::{BytesMut, CipherType, OpenSSLCrypt};
     use rand;
 
     fn test_openssl(mode: CipherType) {
@@ -90,17 +133,17 @@ mod test {
             .map(|_| rand::random::<u8>())
             .collect::<Vec<_>>();
 
-        let mut encryptor = OpenSSLCrypt::new(mode, &key[0..], &iv[0..], CryptoMode::Encrypt);
-        let mut decryptor = OpenSSLCrypt::new(mode, &key[0..], &iv[0..], CryptoMode::Decrypt);
+        let mut encryptor = OpenSSLCrypt::new(mode, &key[0..], &iv[0..]);
+        let mut decryptor = OpenSSLCrypt::new(mode, &key[0..], &iv[0..]);
 
         // first time
         let message = b"HELLO WORLD";
 
         let mut encrypted_msg = BytesMut::new();
-        encryptor.update(message, &mut encrypted_msg).unwrap();
+        encryptor.encrypt(message, &mut encrypted_msg).unwrap();
         let mut decrypted_msg = BytesMut::new();
         decryptor
-            .update(&encrypted_msg[..], &mut decrypted_msg)
+            .decrypt(&encrypted_msg[..], &mut decrypted_msg)
             .unwrap();
 
         assert_eq!(message, &decrypted_msg[..]);
@@ -109,10 +152,10 @@ mod test {
         let message = b"hello, world";
 
         let mut encrypted_msg = BytesMut::new();
-        encryptor.update(message, &mut encrypted_msg).unwrap();
+        encryptor.encrypt(message, &mut encrypted_msg).unwrap();
         let mut decrypted_msg = BytesMut::new();
         decryptor
-            .update(&encrypted_msg[..], &mut decrypted_msg)
+            .decrypt(&encrypted_msg[..], &mut decrypted_msg)
             .unwrap();
 
         assert_eq!(message, &decrypted_msg[..]);
@@ -136,5 +179,11 @@ mod test {
     #[test]
     fn test_aes_256_gcm() {
         test_openssl(CipherType::Aes256Gcm)
+    }
+
+    #[cfg(any(ossl110))]
+    #[test]
+    fn test_chacha20_poly1305() {
+        test_openssl(CipherType::ChaCha20Poly1305)
     }
 }

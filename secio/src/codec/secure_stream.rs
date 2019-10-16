@@ -300,7 +300,7 @@ where
         }
 
         let mut out = BytesMut::new();
-        self.decode_cipher.update(&frame, &mut out)?;
+        self.decode_cipher.decrypt(&frame, &mut out)?;
 
         if !self.nonce.is_empty() {
             let n = min(out.len(), self.nonce.len());
@@ -324,7 +324,7 @@ where
     #[inline]
     fn encode_inner(&mut self, data: BytesMut) -> BytesMut {
         let mut out = BytesMut::new();
-        self.encode_cipher.update(&data[..], &mut out).unwrap();
+        self.encode_cipher.encrypt(&data[..], &mut out).unwrap();
         if let Some(ref mut hmac) = self.encode_hmac {
             let signature = hmac.sign(&out[..]);
             out.extend_from_slice(signature.as_ref());
@@ -426,7 +426,7 @@ mod tests {
         };
 
         let mut encode_data = BytesMut::new();
-        encode_cipher.update(&data[..], &mut encode_data).unwrap();
+        encode_cipher.encrypt(&data[..], &mut encode_data).unwrap();
         if encode_hmac.is_some() {
             let signature = encode_hmac.as_mut().unwrap().sign(&encode_data[..]);
             encode_data.extend_from_slice(signature.as_ref());
@@ -447,7 +447,7 @@ mod tests {
 
         let mut decode_data = BytesMut::new();
         decode_cipher
-            .update(&encode_data, &mut decode_data)
+            .decrypt(&encode_data, &mut decode_data)
             .unwrap();
 
         assert_eq!(&decode_data[..], &data[..]);

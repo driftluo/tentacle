@@ -8,6 +8,7 @@ repository = "https://github.com/nervosnetwork/p2p"
 keywords = ["network", "peer-to-peer"]
 categories = ["network-programming", "asynchronous"]
 edition = "2018"
+build = "build.rs"
 
 [package.metadata.docs.rs]
 features = [ "molc" ]

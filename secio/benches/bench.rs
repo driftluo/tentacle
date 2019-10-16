@@ -29,7 +29,7 @@ fn decode_encode(data: &[u8], cipher: CipherType) {
     };
 
     let mut encode_data = BytesMut::new();
-    encode_cipher.update(&data[..], &mut encode_data).unwrap();
+    encode_cipher.encrypt(&data[..], &mut encode_data).unwrap();
     if encode_hmac.is_some() {
         let signature = encode_hmac.as_mut().unwrap().sign(&encode_data[..]);
         encode_data.extend_from_slice(signature.as_ref());
@@ -50,7 +50,7 @@ fn decode_encode(data: &[u8], cipher: CipherType) {
 
     let mut decode_data = BytesMut::new();
     decode_cipher
-        .update(&encode_data, &mut decode_data)
+        .decrypt(&encode_data, &mut decode_data)
         .unwrap();
 
     assert_eq!(&decode_data[..], &data[..]);
