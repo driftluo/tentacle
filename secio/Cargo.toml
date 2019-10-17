@@ -29,6 +29,7 @@ secp256k1 = "0.15"
 rand = "0.6"
 ring = "0.16.5"
 openssl = "0.10.25"
+openssl-sys = "0.9"
 unsigned-varint = "0.2.2"
 bs58 = "0.3.0"
 

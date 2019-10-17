@@ -13,7 +13,7 @@ use tokio::prelude::{AsyncRead, AsyncWrite};
 
 use crate::{
     codec::{secure_stream::SecureStream, stream_handle::StreamHandle, Hmac},
-    crypto::{cipher::CipherType, new_stream, CryptoMode},
+    crypto::{cipher::CipherType, new_stream, BoxStreamCipher, CryptoMode},
     error::SecioError,
     exchange,
     handshake::Config,
@@ -21,7 +21,7 @@ use crate::{
         handshake_context::HandshakeContext,
         handshake_struct::{Exchange, PublicKey},
     },
-    EphemeralPublicKey, KeyPairInner,
+    Digest, EphemeralPublicKey, KeyPairInner,
 };
 
 /// Performs a handshake on the given socket.
@@ -257,38 +257,23 @@ where
                 remote_infos
             );
 
-            let (encode_cipher, encode_hmac) = {
-                let (iv, rest) = local_infos.split_at(iv_size);
-                let (cipher_key, mac_key) = rest.split_at(cipher_key_size);
-                let hmac = match chosen_cipher {
-                    CipherType::ChaCha20Poly1305
-                    | CipherType::Aes128Gcm
-                    | CipherType::Aes256Gcm => None,
-                    _ => Some(Hmac::from_key(
-                        pub_ephemeral_context.state.remote.chosen_hash,
-                        mac_key,
-                    )),
-                };
+            let (encode_cipher, encode_hmac) = generate_stream_cipher_and_hmac(
+                chosen_cipher,
+                pub_ephemeral_context.state.remote.chosen_hash,
+                CryptoMode::Encrypt,
+                local_infos,
+                cipher_key_size,
+                iv_size,
+            );
 
-                let cipher = new_stream(chosen_cipher, cipher_key, iv, CryptoMode::Encrypt);
-                (cipher, hmac)
-            };
-
-            let (decode_cipher, decode_hmac) = {
-                let (iv, rest) = remote_infos.split_at(iv_size);
-                let (cipher_key, mac_key) = rest.split_at(cipher_key_size);
-                let hmac = match chosen_cipher {
-                    CipherType::ChaCha20Poly1305
-                    | CipherType::Aes128Gcm
-                    | CipherType::Aes256Gcm => None,
-                    _ => Some(Hmac::from_key(
-                        pub_ephemeral_context.state.remote.chosen_hash,
-                        mac_key,
-                    )),
-                };
-                let cipher = new_stream(chosen_cipher, cipher_key, iv, CryptoMode::Decrypt);
-                (cipher, hmac)
-            };
+            let (decode_cipher, decode_hmac) = generate_stream_cipher_and_hmac(
+                chosen_cipher,
+                pub_ephemeral_context.state.remote.chosen_hash,
+                CryptoMode::Decrypt,
+                remote_infos,
+                cipher_key_size,
+                iv_size,
+            );
 
             let secure_stream = SecureStream::new(
                 socket,
@@ -349,6 +334,24 @@ fn stretch_key(hmac: Hmac, result: &mut [u8]) {
         context.update(a.as_ref());
         a = context.sign();
     }
+}
+
+fn generate_stream_cipher_and_hmac(
+    t: CipherType,
+    digest: Digest,
+    mode: CryptoMode,
+    info: &[u8],
+    key_size: usize,
+    iv_size: usize,
+) -> (BoxStreamCipher, Option<Hmac>) {
+    let (iv, rest) = info.split_at(iv_size);
+    let (cipher_key, mac_key) = rest.split_at(key_size);
+    let hmac = match t {
+        CipherType::ChaCha20Poly1305 | CipherType::Aes128Gcm | CipherType::Aes256Gcm => None,
+        _ => Some(Hmac::from_key(digest, mac_key)),
+    };
+    let cipher = new_stream(t, cipher_key, iv, mode);
+    (cipher, hmac)
 }
 
 #[cfg(test)]
