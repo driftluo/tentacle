@@ -105,13 +105,13 @@ impl ProtocolInfo {
     #[cfg(feature = "molc")]
     pub fn encode(self) -> Vec<u8> {
         let name = protocol_select_mol::String::new_builder()
-            .set(self.name.into_bytes())
+            .set(self.name.into_bytes().into_iter().map(Into::into).collect())
             .build();
         let mut versions = Vec::new();
         for version in self.support_versions {
             versions.push(
                 protocol_select_mol::String::new_builder()
-                    .set(version.into_bytes())
+                    .set(version.into_bytes().into_iter().map(Into::into).collect())
                     .build(),
             );
         }

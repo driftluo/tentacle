@@ -17,10 +17,10 @@ use tentacle::{
 };
 
 /// Get current used memory(bytes)
-fn current_used_memory() -> Option<f32> {
+fn current_used_memory() -> Option<f64> {
     let sys = System::new();
     match sys.memory() {
-        Ok(mem) => Some((mem.total.as_usize() - mem.free.as_usize()) as f32),
+        Ok(mem) => Some((mem.total.as_u64() - mem.free.as_u64()) as f64),
         Err(_) => None,
     }
 }
