@@ -58,25 +58,21 @@ impl OpenSSLCrypt {
     /// | ENCRYPTED TEXT (length = input.len())  | TAG                   |
     /// +----------------------------------------+-----------------------+
     /// ```
-    pub fn encrypt(&mut self, input: &[u8], output: &mut BytesMut) -> Result<(), SecioError> {
+    pub fn encrypt(&mut self, input: &[u8]) -> Result<Vec<u8>, SecioError> {
         if self.aead {
             nonce_advance(self.iv.as_mut());
             let tag_size = self.cipher_type.tag_size();
-            let mut tag = BytesMut::with_capacity(tag_size);
+            let mut tag = Vec::with_capacity(tag_size);
             unsafe {
                 tag.set_len(tag_size);
             }
-            let out =
-                symm::encrypt_aead(self.cipher, &self.key, Some(&self.iv), &[], input, &mut tag)
-                    .map(BytesMut::from)?;
-            output.unsplit(out);
-            output.unsplit(tag)
+            let mut output =
+                symm::encrypt_aead(self.cipher, &self.key, Some(&self.iv), &[], input, &mut tag)?;
+            output.append(&mut tag);
+            Ok(output)
         } else {
-            let out =
-                symm::encrypt(self.cipher, &self.key, Some(&self.iv), input).map(BytesMut::from)?;
-            output.unsplit(out)
+            symm::encrypt(self.cipher, &self.key, Some(&self.iv), input).map_err(Into::into)
         }
-        Ok(())
     }
 
     /// Decrypt `input` to `output` with `tag`. `output.len()` should equals to `input.len() - tag.len()`.
@@ -85,11 +81,11 @@ impl OpenSSLCrypt {
     /// | ENCRYPTED TEXT (length = output.len()) | TAG                   |
     /// +----------------------------------------+-----------------------+
     /// ```
-    pub fn decrypt(&mut self, input: &[u8], output: &mut BytesMut) -> Result<(), SecioError> {
+    pub fn decrypt(&mut self, input: &[u8]) -> Result<Vec<u8>, SecioError> {
         if self.aead {
             nonce_advance(self.iv.as_mut());
             let crypt_data_len = input.len() - self.cipher_type.tag_size();
-            let out = openssl::symm::decrypt_aead(
+            openssl::symm::decrypt_aead(
                 self.cipher,
                 &self.key,
                 Some(&self.iv),
@@ -97,32 +93,26 @@ impl OpenSSLCrypt {
                 &input[..crypt_data_len],
                 &input[crypt_data_len..],
             )
-            .map(BytesMut::from)?;
-            output.unsplit(out)
+            .map_err(Into::into)
         } else {
-            let out =
-                symm::decrypt(self.cipher, &self.key, Some(&self.iv), input).map(BytesMut::from)?;
-            output.unsplit(out)
+            symm::decrypt(self.cipher, &self.key, Some(&self.iv), input).map_err(Into::into)
         }
-        Ok(())
     }
 }
 
 impl StreamCipher for OpenSSLCrypt {
-    fn encrypt(&mut self, input: &[u8], output: &mut BytesMut) -> Result<(), SecioError> {
-        self.encrypt(input, output)?;
-        Ok(())
+    fn encrypt(&mut self, input: &[u8]) -> Result<Vec<u8>, SecioError> {
+        self.encrypt(input)
     }
 
-    fn decrypt(&mut self, input: &[u8], output: &mut BytesMut) -> Result<(), SecioError> {
-        self.decrypt(input, output)?;
-        Ok(())
+    fn decrypt(&mut self, input: &[u8]) -> Result<Vec<u8>, SecioError> {
+        self.decrypt(input)
     }
 }
 
 #[cfg(test)]
 mod test {
-    use super::{BytesMut, CipherType, OpenSSLCrypt};
+    use super::{CipherType, OpenSSLCrypt};
     use rand;
 
     fn test_openssl(mode: CipherType) {
@@ -139,24 +129,16 @@ mod test {
         // first time
         let message = b"HELLO WORLD";
 
-        let mut encrypted_msg = BytesMut::new();
-        encryptor.encrypt(message, &mut encrypted_msg).unwrap();
-        let mut decrypted_msg = BytesMut::new();
-        decryptor
-            .decrypt(&encrypted_msg[..], &mut decrypted_msg)
-            .unwrap();
+        let encrypted_msg = encryptor.encrypt(message).unwrap();
+        let decrypted_msg = decryptor.decrypt(&encrypted_msg[..]).unwrap();
 
         assert_eq!(message, &decrypted_msg[..]);
 
         // second time
         let message = b"hello, world";
 
-        let mut encrypted_msg = BytesMut::new();
-        encryptor.encrypt(message, &mut encrypted_msg).unwrap();
-        let mut decrypted_msg = BytesMut::new();
-        decryptor
-            .decrypt(&encrypted_msg[..], &mut decrypted_msg)
-            .unwrap();
+        let encrypted_msg = encryptor.encrypt(message).unwrap();
+        let decrypted_msg = decryptor.decrypt(&encrypted_msg[..]).unwrap();
 
         assert_eq!(message, &decrypted_msg[..]);
     }

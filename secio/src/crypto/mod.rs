@@ -1,5 +1,3 @@
-use bytes::BytesMut;
-
 use crate::error::SecioError;
 
 /// Define cipher
@@ -15,10 +13,10 @@ pub type BoxStreamCipher = Box<dyn StreamCipher + Send>;
 /// Basic operation of Cipher, which is a Symmetric Cipher.
 #[doc(hidden)]
 pub trait StreamCipher {
-    /// Feeds data from input through the cipher, writing encrypted bytes into output.
-    fn encrypt(&mut self, input: &[u8], output: &mut BytesMut) -> Result<(), SecioError>;
-    /// Feeds data from input through the cipher, writing decrypted bytes into output.
-    fn decrypt(&mut self, input: &[u8], output: &mut BytesMut) -> Result<(), SecioError>;
+    /// Feeds data from input through the cipher, return encrypted bytes.
+    fn encrypt(&mut self, input: &[u8]) -> Result<Vec<u8>, SecioError>;
+    /// Feeds data from input through the cipher, return decrypted bytes.
+    fn decrypt(&mut self, input: &[u8]) -> Result<Vec<u8>, SecioError>;
 }
 
 /// Crypto mode, encrypt or decrypt
@@ -70,11 +68,13 @@ pub fn new_stream(
 /// [1, 1, 0, 0]
 /// ...
 fn nonce_advance(nonce: &mut [u8]) {
-    let mut prev: u16 = 1;
     for i in nonce {
-        prev += u16::from(*i);
-        *i = prev as u8;
-        prev >>= 8;
+        if std::u8::MAX == *i {
+            *i = 0;
+        } else {
+            *i += 1;
+            return;
+        }
     }
 }
 
@@ -83,7 +83,6 @@ mod test {
     use super::{
         cipher::CipherType, openssl_impl::OpenSSLCrypt, ring_impl::RingAeadCipher, CryptoMode,
     };
-    use bytes::BytesMut;
 
     fn test_openssl_encrypt_ring_decrypt(cipher: CipherType) {
         let key = (0..cipher.key_size())
@@ -99,28 +98,16 @@ mod test {
         // first time
         let message = b"HELLO WORLD";
 
-        let mut encrypted_msg = BytesMut::new();
-        openssl_encrypt
-            .encrypt(message, &mut encrypted_msg)
-            .unwrap();
-        let mut decrypted_msg = BytesMut::new();
-        ring_decrypt
-            .decrypt(&encrypted_msg, &mut decrypted_msg)
-            .unwrap();
+        let encrypted_msg = openssl_encrypt.encrypt(message).unwrap();
+        let decrypted_msg = ring_decrypt.decrypt(&encrypted_msg).unwrap();
 
         assert_eq!(message, &decrypted_msg[..]);
 
         // second time
         let message = b"hello, world";
 
-        let mut encrypted_msg = BytesMut::new();
-        openssl_encrypt
-            .encrypt(message, &mut encrypted_msg)
-            .unwrap();
-        let mut decrypted_msg = BytesMut::new();
-        ring_decrypt
-            .decrypt(&encrypted_msg, &mut decrypted_msg)
-            .unwrap();
+        let encrypted_msg = openssl_encrypt.encrypt(message).unwrap();
+        let decrypted_msg = ring_decrypt.decrypt(&encrypted_msg).unwrap();
 
         assert_eq!(message, &decrypted_msg[..]);
     }
@@ -139,24 +126,16 @@ mod test {
         // first time
         let message = b"HELLO WORLD";
 
-        let mut encrypted_msg = BytesMut::new();
-        ring_encrypt.encrypt(message, &mut encrypted_msg);
-        let mut decrypted_msg = BytesMut::new();
-        openssl_decrypt
-            .decrypt(&encrypted_msg, &mut decrypted_msg)
-            .unwrap();
+        let encrypted_msg = ring_encrypt.encrypt(message).unwrap();
+        let decrypted_msg = openssl_decrypt.decrypt(&encrypted_msg).unwrap();
 
         assert_eq!(message, &decrypted_msg[..]);
 
         // second time
         let message = b"hello, world";
 
-        let mut encrypted_msg = BytesMut::new();
-        ring_encrypt.encrypt(message, &mut encrypted_msg);
-        let mut decrypted_msg = BytesMut::new();
-        openssl_decrypt
-            .decrypt(&encrypted_msg, &mut decrypted_msg)
-            .unwrap();
+        let encrypted_msg = ring_encrypt.encrypt(message).unwrap();
+        let decrypted_msg = openssl_decrypt.decrypt(&encrypted_msg).unwrap();
 
         assert_eq!(message, &decrypted_msg[..]);
     }

@@ -8,7 +8,6 @@ pub mod stream_handle;
 use crate::Digest;
 
 /// Hash-based Message Authentication Code (HMAC).
-#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone)]
 pub struct Hmac(ring::hmac::Key);
 
@@ -37,7 +36,7 @@ impl Hmac {
         ring::hmac::verify(&self.0, crypted_data, expected_hash).is_ok()
     }
 
-    /// Return a mutl-step hmac context
+    /// Return a multi-step hmac context
     pub fn context(&self) -> ring::hmac::Context {
         ring::hmac::Context::with_key(&self.0)
     }

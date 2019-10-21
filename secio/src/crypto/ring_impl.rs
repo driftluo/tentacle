@@ -1,4 +1,4 @@
-use bytes::{BufMut, BytesMut};
+use bytes::BytesMut;
 use ring::{
     aead::{
         Aad, BoundKey, Nonce, NonceSequence, OpeningKey, SealingKey, UnboundKey, AES_128_GCM,
@@ -74,17 +74,16 @@ impl RingAeadCipher {
     /// | ENCRYPTED TEXT (length = input.len())  | TAG                   |
     /// +----------------------------------------+-----------------------+
     /// ```
-    pub fn encrypt(&mut self, input: &[u8], output: &mut BytesMut) {
-        output.reserve(input.len() + self.cipher_type.tag_size());
+    pub fn encrypt(&mut self, input: &[u8]) -> Result<Vec<u8>, SecioError> {
+        let mut output = Vec::with_capacity(input.len() + self.cipher_type.tag_size());
         unsafe {
-            output.set_len(input.len() + self.cipher_type.tag_size());
+            output.set_len(input.len());
         }
-        let mut buf = BytesMut::with_capacity(output.len());
-        buf.put_slice(input);
+        output.copy_from_slice(input);
         if let RingAeadCryptoVariant::Seal(ref mut key) = self.cipher {
-            key.seal_in_place_append_tag(Aad::empty(), &mut buf)
-                .unwrap();
-            output.copy_from_slice(&buf);
+            key.seal_in_place_append_tag(Aad::empty(), &mut output)
+                .map_err::<SecioError, _>(Into::into)?;
+            Ok(output)
         } else {
             unreachable!("encrypt is called on a non-seal cipher")
         }
@@ -96,14 +95,15 @@ impl RingAeadCipher {
     /// | ENCRYPTED TEXT (length = output.len()) | TAG                   |
     /// +----------------------------------------+-----------------------+
     /// ```
-    pub fn decrypt(&mut self, input: &[u8], output: &mut BytesMut) -> Result<(), SecioError> {
-        output.reserve(input.len() - self.cipher_type.tag_size());
+    pub fn decrypt(&mut self, input: &[u8]) -> Result<Vec<u8>, SecioError> {
+        let mut output = Vec::with_capacity(input.len() - self.cipher_type.tag_size());
+        let mut buf = Vec::with_capacity(self.cipher_type.tag_size() + input.len());
+
         unsafe {
             output.set_len(input.len() - self.cipher_type.tag_size());
+            buf.set_len(input.len());
         }
-
-        let mut buf = BytesMut::with_capacity(self.cipher_type.tag_size() + input.len());
-        buf.put_slice(input);
+        buf.copy_from_slice(input);
 
         if let RingAeadCryptoVariant::Open(ref mut key) = self.cipher {
             match key.open_in_place(Aad::empty(), &mut buf) {
@@ -111,27 +111,25 @@ impl RingAeadCipher {
                 Err(e) => return Err(e.into()),
             }
         } else {
-            unreachable!("encrypt is called on a non-seal cipher")
+            unreachable!("encrypt is called on a non-open cipher")
         }
-        Ok(())
+        Ok(output)
     }
 }
 
 impl StreamCipher for RingAeadCipher {
-    fn encrypt(&mut self, input: &[u8], output: &mut BytesMut) -> Result<(), SecioError> {
-        self.encrypt(input, output);
-        Ok(())
+    fn encrypt(&mut self, input: &[u8]) -> Result<Vec<u8>, SecioError> {
+        self.encrypt(input)
     }
 
-    fn decrypt(&mut self, input: &[u8], output: &mut BytesMut) -> Result<(), SecioError> {
-        self.decrypt(input, output)?;
-        Ok(())
+    fn decrypt(&mut self, input: &[u8]) -> Result<Vec<u8>, SecioError> {
+        self.decrypt(input)
     }
 }
 
 #[cfg(test)]
 mod test {
-    use super::{BytesMut, CipherType, CryptoMode, RingAeadCipher};
+    use super::{CipherType, CryptoMode, RingAeadCipher};
 
     fn test_ring_aead(cipher: CipherType) {
         let key = (0..cipher.key_size())
@@ -143,29 +141,23 @@ mod test {
 
         let mut enc = RingAeadCipher::new(cipher, &key[..], CryptoMode::Encrypt);
 
-        let mut encrypted_msg = BytesMut::new();
-        enc.encrypt(message, &mut encrypted_msg);
+        let encrypted_msg = enc.encrypt(message).unwrap();
 
         assert_ne!(message, &encrypted_msg[..]);
 
         let mut dec = RingAeadCipher::new(cipher, &key[..], CryptoMode::Decrypt);
-        let mut decrypted_msg = BytesMut::new();
-
-        dec.decrypt(&encrypted_msg[..], &mut decrypted_msg).unwrap();
+        let decrypted_msg = dec.decrypt(&encrypted_msg[..]).unwrap();
 
         assert_eq!(&decrypted_msg[..], message);
 
         // second time
         let message = b"hello, world";
 
-        let mut encrypted_msg = BytesMut::new();
-        enc.encrypt(message, &mut encrypted_msg);
+        let encrypted_msg = enc.encrypt(message).unwrap();
 
         assert_ne!(message, &encrypted_msg[..]);
 
-        let mut decrypted_msg = BytesMut::new();
-
-        dec.decrypt(&encrypted_msg[..], &mut decrypted_msg).unwrap();
+        let decrypted_msg = dec.decrypt(&encrypted_msg[..]).unwrap();
 
         assert_eq!(&decrypted_msg[..], message);
     }
@@ -181,7 +173,7 @@ mod test {
     }
 
     #[test]
-    fn test_aes_chacha20_poly1305() {
+    fn test_chacha20_poly1305() {
         test_ring_aead(CipherType::ChaCha20Poly1305)
     }
 }

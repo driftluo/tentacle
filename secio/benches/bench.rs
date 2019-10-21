@@ -1,4 +1,3 @@
-use bytes::BytesMut;
 use criterion::{criterion_group, criterion_main, Bencher, Criterion};
 use tentacle_secio::{
     codec::Hmac,
@@ -28,8 +27,7 @@ fn decode_encode(data: &[u8], cipher: CipherType) {
         }
     };
 
-    let mut encode_data = BytesMut::new();
-    encode_cipher.encrypt(&data[..], &mut encode_data).unwrap();
+    let mut encode_data = encode_cipher.encrypt(&data[..]).unwrap();
     if encode_hmac.is_some() {
         let signature = encode_hmac.as_mut().unwrap().sign(&encode_data[..]);
         encode_data.extend_from_slice(signature.as_ref());
@@ -48,10 +46,7 @@ fn decode_encode(data: &[u8], cipher: CipherType) {
         encode_data.truncate(content_length);
     }
 
-    let mut decode_data = BytesMut::new();
-    decode_cipher
-        .decrypt(&encode_data, &mut decode_data)
-        .unwrap();
+    let decode_data = decode_cipher.decrypt(&encode_data).unwrap();
 
     assert_eq!(&decode_data[..], &data[..]);
 }
