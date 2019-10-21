@@ -3,9 +3,7 @@
 /// Some panic logic has been removed, some error handling has been removed, and an error has been added.
 ///
 use futures::{future, prelude::*, Future};
-use hmac::digest::{generic_array::ArrayLength, BlockInput, Digest, FixedOutput, Input, Reset};
 use log::{debug, trace};
-use sha2::Sha256;
 use std::{
     cmp::Ordering,
     io::{self, Write},
@@ -15,6 +13,7 @@ use tokio::prelude::{AsyncRead, AsyncWrite};
 
 use crate::{
     codec::{secure_stream::SecureStream, stream_handle::StreamHandle, Hmac},
+    crypto::{cipher::CipherType, new_stream, BoxStreamCipher, CryptoMode},
     error::SecioError,
     exchange,
     handshake::Config,
@@ -22,8 +21,7 @@ use crate::{
         handshake_context::HandshakeContext,
         handshake_struct::{Exchange, PublicKey},
     },
-    stream_cipher::ctr_init,
-    EphemeralPublicKey, KeyPairInner,
+    Digest, EphemeralPublicKey, KeyPairInner,
 };
 
 /// Performs a handshake on the given socket.
@@ -114,7 +112,7 @@ where
 
                 exchanges.epubkey = tmp_pub_key;
 
-                let data_to_sign = Sha256::digest(&data_to_sign);
+                let data_to_sign = ring::digest::digest(&ring::digest::SHA256, &data_to_sign);
                 let message = match secp256k1::Message::from_slice(data_to_sign.as_ref()) {
                     Ok(msg) => msg,
                     Err(_) => {
@@ -182,7 +180,7 @@ where
                 .extend_from_slice(&ephemeral_context.state.remote.local.proposition_bytes);
             data_to_verify.extend_from_slice(&remote_exchanges.epubkey);
 
-            let data_to_verify = Sha256::digest(&data_to_verify);
+            let data_to_verify = ring::digest::digest(&ring::digest::SHA256, &data_to_verify);
 
             let message = match secp256k1::Message::from_slice(data_to_verify.as_ref()) {
                 Ok(msg) => msg,
@@ -219,12 +217,10 @@ where
             // derive from it a cipher key, an iv, and a hmac key, and build the encoder/decoder.
 
             let (pub_ephemeral_context, local_priv_key) = ephemeral_context.take_private_key();
-            let key_size = pub_ephemeral_context.state.remote.chosen_hash.num_bytes();
             exchange::agree(
                 pub_ephemeral_context.state.remote.chosen_exchange,
                 local_priv_key,
                 &remote_exchanges.epubkey,
-                key_size,
             )
             .map(move |key_material| (socket, pub_ephemeral_context, key_material))
         })
@@ -261,21 +257,23 @@ where
                 remote_infos
             );
 
-            let (encode_cipher, encode_hmac) = {
-                let (iv, rest) = local_infos.split_at(iv_size);
-                let (cipher_key, mac_key) = rest.split_at(cipher_key_size);
-                let hmac = Hmac::from_key(pub_ephemeral_context.state.remote.chosen_hash, mac_key);
-                let cipher = ctr_init(chosen_cipher, cipher_key, iv);
-                (cipher, hmac)
-            };
+            let (encode_cipher, encode_hmac) = generate_stream_cipher_and_hmac(
+                chosen_cipher,
+                pub_ephemeral_context.state.remote.chosen_hash,
+                CryptoMode::Encrypt,
+                local_infos,
+                cipher_key_size,
+                iv_size,
+            );
 
-            let (decode_cipher, decode_hmac) = {
-                let (iv, rest) = remote_infos.split_at(iv_size);
-                let (cipher_key, mac_key) = rest.split_at(cipher_key_size);
-                let hmac = Hmac::from_key(pub_ephemeral_context.state.remote.chosen_hash, mac_key);
-                let cipher = ctr_init(chosen_cipher, cipher_key, iv);
-                (cipher, hmac)
-            };
+            let (decode_cipher, decode_hmac) = generate_stream_cipher_and_hmac(
+                chosen_cipher,
+                pub_ephemeral_context.state.remote.chosen_hash,
+                CryptoMode::Decrypt,
+                remote_infos,
+                cipher_key_size,
+                iv_size,
+            );
 
             let secure_stream = SecureStream::new(
                 socket,
@@ -313,31 +311,18 @@ where
 /// Custom algorithm translated from reference implementations. Needs to be the same algorithm
 /// amongst all implementations.
 fn stretch_key(hmac: Hmac, result: &mut [u8]) {
-    match hmac {
-        Hmac::Sha256(hmac) => stretch_key_inner(hmac, result),
-        Hmac::Sha512(hmac) => stretch_key_inner(hmac, result),
-    }
-}
-
-fn stretch_key_inner<D>(hmac: hmac::Hmac<D>, result: &mut [u8])
-where
-    hmac::Hmac<D>: Clone,
-    D: Input + BlockInput + FixedOutput + Reset + Default + Clone + Digest,
-    D::BlockSize: ArrayLength<u8> + Clone,
-{
-    use ::hmac::Mac;
     const SEED: &[u8] = b"key expansion";
 
-    let mut init_ctxt = hmac.clone();
-    init_ctxt.input(SEED);
-    let mut a = init_ctxt.result().code();
+    let mut init_ctxt = hmac.context();
+    init_ctxt.update(SEED);
+    let mut a = init_ctxt.sign();
 
     let mut j = 0;
     while j < result.len() {
-        let mut context = hmac.clone();
-        context.input(a.as_ref());
-        context.input(SEED);
-        let b = context.result().code();
+        let mut context = hmac.context();
+        context.update(a.as_ref());
+        context.update(SEED);
+        let b = context.sign();
 
         let todo = ::std::cmp::min(b.as_ref().len(), result.len() - j);
 
@@ -345,10 +330,28 @@ where
 
         j += todo;
 
-        let mut context = hmac.clone();
-        context.input(a.as_ref());
-        a = context.result().code();
+        let mut context = hmac.context();
+        context.update(a.as_ref());
+        a = context.sign();
     }
+}
+
+fn generate_stream_cipher_and_hmac(
+    t: CipherType,
+    digest: Digest,
+    mode: CryptoMode,
+    info: &[u8],
+    key_size: usize,
+    iv_size: usize,
+) -> (BoxStreamCipher, Option<Hmac>) {
+    let (iv, rest) = info.split_at(iv_size);
+    let (cipher_key, mac_key) = rest.split_at(key_size);
+    let hmac = match t {
+        CipherType::ChaCha20Poly1305 | CipherType::Aes128Gcm | CipherType::Aes256Gcm => None,
+        _ => Some(Hmac::from_key(digest, mac_key)),
+    };
+    let cipher = new_stream(t, cipher_key, iv, mode);
+    (cipher, hmac)
 }
 
 #[cfg(test)]

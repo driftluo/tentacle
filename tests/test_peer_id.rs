@@ -103,7 +103,7 @@ fn test_peer_id(fail: bool) {
             addr.push(MultiProtocol::P2p(
                 Multihash::from_bytes(
                     SecioKeyPair::secp256k1_generated()
-                        .to_peer_id()
+                        .peer_id()
                         .as_bytes()
                         .to_vec(),
                 )
@@ -114,7 +114,7 @@ fn test_peer_id(fail: bool) {
         assert_eq!(error_receiver.recv(), Ok(9));
     } else {
         listen_addr.push(MultiProtocol::P2p(
-            Multihash::from_bytes(key.to_peer_id().into_bytes()).expect("Invalid peer id"),
+            Multihash::from_bytes(key.peer_id().into_bytes()).expect("Invalid peer id"),
         ));
         control.dial(listen_addr, DialProtocol::All).unwrap();
         assert_eq!(error_receiver.recv(), Ok(0));

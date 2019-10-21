@@ -128,7 +128,7 @@ mod test {
 
     #[test]
     fn parser_peer_id_from_multiaddr() {
-        let peer_id = SecioKeyPair::secp256k1_generated().to_peer_id();
+        let peer_id = SecioKeyPair::secp256k1_generated().peer_id();
         let addr_1: Multiaddr = format!("/ip4/127.0.0.1/tcp/1337/p2p/{}", peer_id.to_base58())
             .parse()
             .unwrap();
@@ -142,7 +142,7 @@ mod test {
 
     #[test]
     fn parser_socket_addr_from_multiaddr() {
-        let peer_id = SecioKeyPair::secp256k1_generated().to_peer_id();
+        let peer_id = SecioKeyPair::secp256k1_generated().peer_id();
         let addr_1: Multiaddr = format!("/ip4/127.0.0.1/tcp/1337/p2p/{}", peer_id.to_base58())
             .parse()
             .unwrap();
@@ -162,7 +162,7 @@ mod test {
     #[test]
     #[should_panic]
     fn parser_socket_addr_fail() {
-        let peer_id = SecioKeyPair::secp256k1_generated().to_peer_id();
+        let peer_id = SecioKeyPair::secp256k1_generated().peer_id();
         let addr: Multiaddr = format!("/ip4/127.0.0.1/p2p/{}/tcp/1337", peer_id.to_base58())
             .parse()
             .unwrap();

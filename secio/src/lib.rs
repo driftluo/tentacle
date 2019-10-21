@@ -8,6 +8,8 @@ pub use crate::{handshake::handshake_struct::PublicKey, peer_id::PeerId};
 
 /// Encrypted and decrypted codec implementation, and stream handle
 pub mod codec;
+/// Symmetric ciphers algorithms
+pub mod crypto;
 /// Error type
 pub mod error;
 /// Exchange information during the handshake
@@ -16,8 +18,6 @@ mod exchange;
 pub mod handshake;
 /// Peer id
 pub mod peer_id;
-/// Encrypted stream
-pub mod stream_cipher;
 /// Supported algorithms
 mod support;
 
@@ -58,7 +58,7 @@ impl SecioKeyPair {
     }
 
     /// Returns the public key corresponding to this key pair.
-    pub fn to_public_key(&self) -> PublicKey {
+    pub fn public_key(&self) -> PublicKey {
         match self.inner {
             KeyPairInner::Secp256k1 { ref private } => {
                 let secp = secp256k1::Secp256k1::signing_only();
@@ -69,8 +69,8 @@ impl SecioKeyPair {
     }
 
     /// Generate Peer id
-    pub fn to_peer_id(&self) -> PeerId {
-        self.to_public_key().peer_id()
+    pub fn peer_id(&self) -> PeerId {
+        self.public_key().peer_id()
     }
 }
 
