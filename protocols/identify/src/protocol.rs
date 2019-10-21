@@ -94,12 +94,18 @@ impl<'a> IdentifyMessage<'a> {
     #[cfg(feature = "molc")]
     pub(crate) fn encode(self) -> Bytes {
         let identify = protocol_mol::Bytes::new_builder()
-            .set(self.identify.to_vec())
+            .set(self.identify.to_vec().into_iter().map(Into::into).collect())
             .build();
         let observed_addr = protocol_mol::Address::new_builder()
             .bytes(
                 protocol_mol::Bytes::new_builder()
-                    .set(self.observed_addr.to_vec())
+                    .set(
+                        self.observed_addr
+                            .to_vec()
+                            .into_iter()
+                            .map(Into::into)
+                            .collect(),
+                    )
                     .build(),
             )
             .build();
@@ -109,7 +115,7 @@ impl<'a> IdentifyMessage<'a> {
                 protocol_mol::Address::new_builder()
                     .bytes(
                         protocol_mol::Bytes::new_builder()
-                            .set(addr.to_vec())
+                            .set(addr.to_vec().into_iter().map(Into::into).collect())
                             .build(),
                     )
                     .build(),

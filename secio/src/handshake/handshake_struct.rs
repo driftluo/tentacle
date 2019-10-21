@@ -77,18 +77,38 @@ impl Propose {
     /// Encode with molecule
     #[cfg(feature = "molc")]
     pub fn encode(self) -> Bytes {
-        let rand = handshake_mol::Bytes::new_builder().set(self.rand).build();
+        let rand = handshake_mol::Bytes::new_builder()
+            .set(self.rand.into_iter().map(Into::into).collect())
+            .build();
         let pubkey = handshake_mol::Bytes::new_builder()
-            .set(self.pubkey.to_vec())
+            .set(self.pubkey.to_vec().into_iter().map(Into::into).collect())
             .build();
         let exchange = handshake_mol::String::new_builder()
-            .set(self.exchange.into_bytes())
+            .set(
+                self.exchange
+                    .into_bytes()
+                    .into_iter()
+                    .map(Into::into)
+                    .collect(),
+            )
             .build();
         let ciphers = handshake_mol::String::new_builder()
-            .set(self.ciphers.into_bytes())
+            .set(
+                self.ciphers
+                    .into_bytes()
+                    .into_iter()
+                    .map(Into::into)
+                    .collect(),
+            )
             .build();
         let hashes = handshake_mol::String::new_builder()
-            .set(self.hashes.into_bytes())
+            .set(
+                self.hashes
+                    .into_bytes()
+                    .into_iter()
+                    .map(Into::into)
+                    .collect(),
+            )
             .build();
         handshake_mol::Propose::new_builder()
             .rand(rand)
@@ -158,10 +178,10 @@ impl Exchange {
     #[cfg(feature = "molc")]
     pub fn encode(self) -> Bytes {
         let epubkey = handshake_mol::Bytes::new_builder()
-            .set(self.epubkey)
+            .set(self.epubkey.into_iter().map(Into::into).collect())
             .build();
         let signature = handshake_mol::Bytes::new_builder()
-            .set(self.signature)
+            .set(self.signature.into_iter().map(Into::into).collect())
             .build();
         handshake_mol::Exchange::new_builder()
             .epubkey(epubkey)
@@ -235,7 +255,7 @@ impl PublicKey {
     #[cfg(feature = "molc")]
     pub fn encode(self) -> Bytes {
         let secp256k1 = handshake_mol::Secp256k1::new_builder()
-            .set(self.inner())
+            .set(self.inner().into_iter().map(Into::into).collect())
             .build();
         let pubkey = handshake_mol::PublicKey::new_builder()
             .set(secp256k1)
@@ -252,7 +272,6 @@ impl PublicKey {
             handshake_mol::PublicKeyUnionReader::Secp256k1(reader) => {
                 Some(PublicKey::Secp256k1(reader.raw_data().to_owned()))
             }
-            handshake_mol::PublicKeyUnionReader::NotSet => None,
         }
     }
 

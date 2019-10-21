@@ -179,16 +179,26 @@ impl DiscoveryMessage {
                 count,
                 listen_port,
             } => {
+                let version_le = version.to_le_bytes();
+                let count_le = count.to_le_bytes();
                 let version = protocol_mol::Uint32::new_builder()
-                    .set(version.to_le_bytes())
+                    .nth0(version_le[0].into())
+                    .nth1(version_le[1].into())
+                    .nth2(version_le[2].into())
+                    .nth3(version_le[3].into())
                     .build();
                 let count = protocol_mol::Uint32::new_builder()
-                    .set(count.to_le_bytes())
+                    .nth0(count_le[0].into())
+                    .nth1(count_le[1].into())
+                    .nth2(count_le[2].into())
+                    .nth3(count_le[3].into())
                     .build();
                 let listen_port = protocol_mol::PortOpt::new_builder()
                     .set(listen_port.map(|port| {
+                        let port_le = port.to_le_bytes();
                         protocol_mol::Uint16::new_builder()
-                            .set(port.to_le_bytes())
+                            .nth0(port_le[0].into())
+                            .nth1(port_le[1].into())
                             .build()
                     }))
                     .build();
@@ -203,14 +213,16 @@ impl DiscoveryMessage {
             }
             DiscoveryMessage::Nodes(Nodes { announce, items }) => {
                 let bool_ = if announce { 1u8 } else { 0 };
-                let announce = protocol_mol::Bool::new_builder().set([bool_]).build();
+                let announce = protocol_mol::Bool::new_builder()
+                    .set([bool_.into()])
+                    .build();
                 let mut item_vec = Vec::with_capacity(items.len());
                 for item in items {
                     let mut vec_addrs = Vec::with_capacity(item.addresses.len());
                     for addr in item.addresses {
                         vec_addrs.push(
                             protocol_mol::Bytes::new_builder()
-                                .set(addr.to_vec())
+                                .set(addr.to_vec().into_iter().map(Into::into).collect())
                                 .build(),
                         )
                     }
@@ -273,7 +285,6 @@ impl DiscoveryMessage {
                 }
                 Some(DiscoveryMessage::Nodes(Nodes { announce, items }))
             }
-            protocol_mol::DiscoveryPayloadUnionReader::NotSet => None,
         }
     }
 }

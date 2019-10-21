@@ -323,8 +323,12 @@ impl PingMessage {
 
     #[cfg(feature = "molc")]
     fn build_ping(nonce: u32) -> Bytes {
+        let nonce_le = nonce.to_le_bytes();
         let nonce = protocol_mol::Uint32::new_builder()
-            .set(nonce.to_le_bytes())
+            .nth0(nonce_le[0].into())
+            .nth1(nonce_le[1].into())
+            .nth2(nonce_le[2].into())
+            .nth3(nonce_le[3].into())
             .build();
         let ping = protocol_mol::Ping::new_builder().nonce(nonce).build();
         let payload = protocol_mol::PingPayload::new_builder().set(ping).build();
@@ -336,8 +340,12 @@ impl PingMessage {
 
     #[cfg(feature = "molc")]
     fn build_pong(nonce: u32) -> Bytes {
+        let nonce_le = nonce.to_le_bytes();
         let nonce = protocol_mol::Uint32::new_builder()
-            .set(nonce.to_le_bytes())
+            .nth0(nonce_le[0].into())
+            .nth1(nonce_le[1].into())
+            .nth2(nonce_le[2].into())
+            .nth3(nonce_le[3].into())
             .build();
         let pong = protocol_mol::Pong::new_builder().nonce(nonce).build();
         let payload = protocol_mol::PingPayload::new_builder().set(pong).build();
@@ -360,7 +368,6 @@ impl PingMessage {
                 let le = reader.nonce().raw_data().as_ptr() as *const u32;
                 Some(PingPayload::Pong(u32::from_le(unsafe { *le })))
             }
-            protocol_mol::PingPayloadUnionReader::NotSet => None,
         }
     }
 }
