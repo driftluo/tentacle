@@ -745,6 +745,15 @@ where
         }
     }
 
+    fn generate_next_session(&mut self) {
+        loop {
+            self.next_session = self.next_session.wrapping_add(1);
+            if !self.sessions.contains_key(&self.next_session) {
+                break;
+            }
+        }
+    }
+
     /// Session open
     #[inline]
     fn session_open<H>(
@@ -815,11 +824,11 @@ where
                         ))
                     }
 
-                    self.next_session += 1
+                    self.generate_next_session();
                 }
             }
         } else {
-            self.next_session += 1;
+            self.generate_next_session();
         }
 
         let session_closed = Arc::new(AtomicBool::new(false));

@@ -7,7 +7,9 @@ use bytes::{BufMut, Bytes, BytesMut};
 use log::trace;
 use tokio::codec::{Decoder, Encoder};
 
-use crate::{StreamId, HEADER_SIZE, PROTOCOL_VERSION, RESERVED_STREAM_ID};
+use crate::{
+    config::INITIAL_STREAM_WINDOW, StreamId, HEADER_SIZE, PROTOCOL_VERSION, RESERVED_STREAM_ID,
+};
 
 /// The base message type is frame
 #[derive(Debug)]
@@ -233,9 +235,25 @@ impl From<u32> for GoAwayCode {
 }
 
 /// The frame decoder/encoder
-#[derive(Default)]
 pub(crate) struct FrameCodec {
     unused_data_header: Option<Header>,
+    max_frame_size: u32,
+}
+
+impl FrameCodec {
+    pub fn max_frame_size(mut self, size: u32) -> Self {
+        self.max_frame_size = size;
+        self
+    }
+}
+
+impl Default for FrameCodec {
+    fn default() -> Self {
+        Self {
+            unused_data_header: None,
+            max_frame_size: INITIAL_STREAM_WINDOW,
+        }
+    }
 }
 
 impl Decoder for FrameCodec {
@@ -274,6 +292,13 @@ impl Decoder for FrameCodec {
                 let flags = Flags(BigEndian::read_u16(&header_data[2..4]));
                 let stream_id = BigEndian::read_u32(&header_data[4..8]);
                 let length = BigEndian::read_u32(&header_data[8..12]);
+                if length > self.max_frame_size {
+                    let err = io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        format!("yamux.length={}", length),
+                    );
+                    return Err(err);
+                }
                 Header {
                     version,
                     ty,
@@ -327,7 +352,7 @@ impl Encoder for FrameCodec {
 
 #[cfg(test)]
 mod test {
-    use super::{Flags, Frame, FrameCodec, Type, HEADER_SIZE};
+    use super::{Flags, Frame, FrameCodec, Type, HEADER_SIZE, INITIAL_STREAM_WINDOW};
     use bytes::{Bytes, BytesMut};
     use tokio::codec::{Decoder, Encoder};
 
@@ -339,6 +364,7 @@ mod test {
 
         let mut codec = FrameCodec {
             unused_data_header: None,
+            max_frame_size: INITIAL_STREAM_WINDOW,
         };
 
         codec.encode(frame, &mut data).unwrap();

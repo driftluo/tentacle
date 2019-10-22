@@ -119,7 +119,10 @@ where
             SessionType::Server => 2,
         };
         let (event_sender, event_receiver) = channel(32);
-        let framed_stream = Framed::new(raw_stream, FrameCodec::default());
+        let framed_stream = Framed::new(
+            raw_stream,
+            FrameCodec::default().max_frame_size(config.max_stream_window_size),
+        );
         let keepalive_receiver = if config.enable_keepalive {
             let (mut interval_sender, interval_receiver) = channel(2);
             // NOTE: Set a 300ms interval because we want shutdown service quick.
@@ -230,7 +233,7 @@ where
         } else if self.remote_go_away {
             Err(Error::RemoteGoAway)
         } else {
-            let stream = self.create_stream(None);
+            let stream = self.create_stream(None)?;
             self.inflight.insert(stream.id());
             Ok(stream)
         }
@@ -256,12 +259,15 @@ where
         Ok(Async::Ready(()))
     }
 
-    fn create_stream(&mut self, stream_id: Option<StreamId>) -> StreamHandle {
+    fn create_stream(&mut self, stream_id: Option<StreamId>) -> Result<StreamHandle, Error> {
         let (stream_id, state) = match stream_id {
             Some(stream_id) => (stream_id, StreamState::SynReceived),
             None => {
                 let next_id = self.next_stream_id;
-                self.next_stream_id += 2;
+                self.next_stream_id = self
+                    .next_stream_id
+                    .checked_add(2)
+                    .ok_or(Error::StreamsExhausted)?;
                 (next_id, StreamState::Init)
             }
         };
@@ -278,7 +284,7 @@ where
         if let Err(err) = stream.send_window_update() {
             debug!("[{:?}] stream.send_window_update error={:?}", self.ty, err);
         }
-        stream
+        Ok(stream)
     }
 
     /// Sink `start_send` Ready -> data in buffer or send
@@ -383,7 +389,9 @@ where
                     return Ok(());
                 }
                 debug!("[{:?}] Accept a stream id={}", self.ty, stream_id);
-                let stream = self.create_stream(Some(stream_id));
+                let stream = self
+                    .create_stream(Some(stream_id))
+                    .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
                 self.pending_streams.push_back(stream);
             }
             let disconnected = {

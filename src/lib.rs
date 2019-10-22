@@ -98,6 +98,10 @@ impl SessionId {
     pub const fn value(self) -> usize {
         self.0
     }
+
+    pub(crate) const fn wrapping_add(self, rhs: usize) -> SessionId {
+        SessionId(self.0.wrapping_add(rhs))
+    }
 }
 
 impl fmt::Display for SessionId {
