@@ -19,11 +19,11 @@ pub enum Error {
     DNSResolverError(io::Error),
     /// Service protocol handle block, may be user's protocol handle implementation problem
     ServiceProtoHandleBlock,
-    /// Service protocol handle abnormally closed, may be user's protocol handle implementation problem
+    /// protocol handle abnormally closed, may be user's protocol handle implementation problem
     ServiceProtoHandleAbnormallyClosed,
     /// Session protocol handle block, may be user's protocol handle implementation problem
     SessionProtoHandleBlock(SessionId),
-    /// Session protocol handle abnormally closed, may be user's protocol handle implementation problem
+    /// protocol handle abnormally closed, may be user's protocol handle implementation problem
     SessionProtoHandleAbnormallyClosed(SessionId),
 }
 
