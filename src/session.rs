@@ -449,7 +449,16 @@ where
     ) {
         let proto = match self.protocol_configs.get(&name) {
             Some(proto) => proto,
-            None => unreachable!(),
+            None => {
+                // if the server intentionally returns malicious protocol data with arbitrary
+                // protocol names, close the connection and feedback error
+                self.state = SessionState::Abnormal;
+                self.event_output(SessionEvent::ProtocolSelectError {
+                    id: self.context.id,
+                    proto_name: None,
+                });
+                return;
+            }
         };
 
         let proto_id = proto.id;
