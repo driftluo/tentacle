@@ -532,6 +532,7 @@ where
                     self.service_context.clone_self(),
                     receiver,
                     proto_id,
+                    self.session_event_sender.clone(),
                     (self.shutdown.clone(), self.future_task_sender.clone()),
                 );
                 stream.handle_event();
@@ -551,6 +552,7 @@ where
                         Arc::clone(&session_control.inner),
                         receiver,
                         proto_id,
+                        self.session_event_sender.clone(),
                         (self.shutdown.clone(), self.future_task_sender.clone()),
                     );
                     tokio::spawn(stream.for_each(|_| Ok(())).map_err(|_| ()));

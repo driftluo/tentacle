@@ -69,13 +69,6 @@ pub(crate) enum ProtocolEvent {
         error: Error,
     },
     TimeoutCheck,
-    /// Protocol handle error, will cause memory leaks/abnormal CPU usage
-    ProtocolHandleError {
-        /// Error message
-        error: Error,
-        /// Protocol id
-        proto_id: ProtocolId,
-    },
 }
 
 /// Each custom protocol in a session corresponds to a sub stream
@@ -317,10 +310,6 @@ where
                         self.set_delay();
                         break;
                     } else {
-                        self.read_buf.push_back(ProtocolEvent::ProtocolHandleError {
-                            error: Error::ServiceProtoHandleAbnormallyClosed,
-                            proto_id: self.proto_id,
-                        });
                         self.dead = true;
                     }
                 }
@@ -336,10 +325,6 @@ where
                         self.set_delay();
                         break;
                     } else {
-                        self.read_buf.push_back(ProtocolEvent::ProtocolHandleError {
-                            error: Error::SessionProtoHandleAbnormallyClosed(self.context.id),
-                            proto_id: self.proto_id,
-                        });
                         self.dead = true;
                     }
                 }

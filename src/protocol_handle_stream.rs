@@ -12,8 +12,10 @@ use tokio::timer::Delay;
 
 use crate::{
     context::{ProtocolContext, ServiceContext, SessionContext},
+    error::Error,
     multiaddr::Multiaddr,
     service::future_task::BoxedFutureTask,
+    session::SessionEvent,
     traits::{ServiceProtocol, SessionProtocol},
     ProtocolId, SessionId,
 };
@@ -61,6 +63,7 @@ pub struct ServiceProtocolStream<T> {
     notify: HashMap<u64, Duration>,
     notify_sender: mpsc::Sender<u64>,
     notify_receiver: mpsc::Receiver<u64>,
+    panic_report: mpsc::Sender<SessionEvent>,
     current_task: Option<ServiceProtocolEvent>,
     delay: Arc<AtomicBool>,
     shutdown: Arc<AtomicBool>,
@@ -71,11 +74,12 @@ impl<T> ServiceProtocolStream<T>
 where
     T: ServiceProtocol + Send,
 {
-    pub fn new(
+    pub(crate) fn new(
         handle: T,
         service_context: ServiceContext,
         receiver: mpsc::Receiver<ServiceProtocolEvent>,
         proto_id: ProtocolId,
+        panic_report: mpsc::Sender<SessionEvent>,
         (shutdown, future_task_sender): (Arc<AtomicBool>, mpsc::Sender<BoxedFutureTask>),
     ) -> Self {
         let (notify_sender, notify_receiver) = mpsc::channel(16);
@@ -90,6 +94,7 @@ where
             current_task: Some(ServiceProtocolEvent::Init),
             delay: Arc::new(AtomicBool::new(false)),
             shutdown,
+            panic_report,
             future_task_sender,
         }
     }
@@ -238,6 +243,40 @@ where
     }
 }
 
+impl<T> Drop for ServiceProtocolStream<T> {
+    fn drop(&mut self) {
+        if !self.shutdown.load(Ordering::SeqCst) {
+            use ServiceProtocolEvent::*;
+            if let Some(event) = self.current_task.take() {
+                let session_id = match event {
+                    Received { id, .. } => Some(id),
+                    Disconnected { id } => Some(id),
+                    Connected { session, .. } => Some(session.id),
+                    _ => None,
+                };
+                let proto_id = self.handle_context.proto_id;
+                let event = match session_id {
+                    Some(id) => SessionEvent::ProtocolHandleError {
+                        error: Error::SessionProtoHandleAbnormallyClosed(id),
+                        proto_id,
+                    },
+                    None => SessionEvent::ProtocolHandleError {
+                        error: Error::ServiceProtoHandleAbnormallyClosed,
+                        proto_id,
+                    },
+                };
+                tokio::spawn(
+                    self.panic_report
+                        .clone()
+                        .send(event)
+                        .map(|_| ())
+                        .map_err(|_| ()),
+                );
+            }
+        }
+    }
+}
+
 impl<T> Stream for ServiceProtocolStream<T>
 where
     T: ServiceProtocol + Send,
@@ -264,6 +303,7 @@ where
                         "ServiceProtocolStream({:?}) finished",
                         self.handle_context.proto_id
                     );
+                    self.current_task.take();
                     return Ok(Async::Ready(None));
                 }
                 Ok(Async::NotReady) => {
@@ -351,6 +391,7 @@ pub struct SessionProtocolStream<T> {
     notify_sender: mpsc::Sender<u64>,
     notify_receiver: mpsc::Receiver<u64>,
     current_task: Option<SessionProtocolEvent>,
+    panic_report: mpsc::Sender<SessionEvent>,
     delay: Arc<AtomicBool>,
     shutdown: Arc<AtomicBool>,
     future_task_sender: mpsc::Sender<BoxedFutureTask>,
@@ -360,12 +401,13 @@ impl<T> SessionProtocolStream<T>
 where
     T: SessionProtocol + Send,
 {
-    pub fn new(
+    pub(crate) fn new(
         handle: T,
         service_context: ServiceContext,
         context: Arc<SessionContext>,
         receiver: mpsc::Receiver<SessionProtocolEvent>,
         proto_id: ProtocolId,
+        panic_report: mpsc::Sender<SessionEvent>,
         (shutdown, future_task_sender): (Arc<AtomicBool>, mpsc::Sender<BoxedFutureTask>),
     ) -> Self {
         let (notify_sender, notify_receiver) = mpsc::channel(16);
@@ -377,6 +419,7 @@ where
             notify_receiver,
             notify: HashMap::new(),
             context,
+            panic_report,
             current_task: None,
             shutdown,
             delay: Arc::new(AtomicBool::new(false)),
@@ -516,6 +559,25 @@ where
     #[inline(always)]
     fn close(&mut self) {
         self.receiver.close();
+        self.current_task.take();
+    }
+}
+
+impl<T> Drop for SessionProtocolStream<T> {
+    fn drop(&mut self) {
+        if !self.shutdown.load(Ordering::SeqCst) && self.current_task.is_some() {
+            let event = SessionEvent::ProtocolHandleError {
+                error: Error::SessionProtoHandleAbnormallyClosed(self.context.id),
+                proto_id: self.handle_context.proto_id,
+            };
+            tokio::spawn(
+                self.panic_report
+                    .clone()
+                    .send(event)
+                    .map(|_| ())
+                    .map_err(|_| ()),
+            );
+        }
     }
 }
 

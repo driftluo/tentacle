@@ -555,9 +555,6 @@ where
                     self.state = SessionState::LocalClose;
                 }
             }
-            ProtocolEvent::ProtocolHandleError { error, proto_id } => {
-                self.event_output(SessionEvent::ProtocolHandleError { error, proto_id });
-            }
         }
     }
 
