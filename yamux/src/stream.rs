@@ -244,7 +244,10 @@ impl StreamHandle {
 
     fn handle_window_update(&mut self, frame: &Frame) -> Result<(), Error> {
         self.process_flags(frame.flags())?;
-        self.send_window += frame.length();
+        self.send_window = self
+            .send_window
+            .checked_add(frame.length())
+            .ok_or(Error::InvalidMsgType)?;
         let n = ::std::cmp::min(self.send_window as usize, self.write_buf.len());
         // Send cached data
         if n != 0 {

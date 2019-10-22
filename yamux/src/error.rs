@@ -1,5 +1,7 @@
 //! The error types
 
+use std::{error, fmt};
+
 /// The error types
 #[derive(Debug, Eq, PartialEq)]
 pub enum Error {
@@ -54,4 +56,50 @@ pub enum Error {
 
     /// Sub stream send event channel full, block to complete
     WouldBlock,
+}
+
+impl error::Error for Error {
+    fn description(&self) -> &str {
+        match self {
+            Error::InvalidVersion => "Received a frame with an invalid version",
+            Error::InvalidMsgType => "Received a frame with an invalid message type",
+            Error::SessionShutdown => "Session shutdown",
+            Error::StreamsExhausted => "No more stream ids to issue",
+            Error::DuplicateStream => "Duplicate stream is opened inbound",
+            Error::RecvWindowExceeded => "Received window was exceeded",
+            Error::Timeout => "Reach an IO deadline",
+            Error::StreamClosed => "Using a closed stream",
+            Error::UnexpectedFlag => "Get an unexpected flag",
+            Error::RemoteGoAway => "Go away message from the other side",
+            Error::ConnectionReset => "Stream is reset",
+            Error::ConnectionWriteTimeout => "Timeout on write to the underlying stream connection",
+            Error::KeepAliveTimeout => "Keepalive timeout",
+            Error::SubStreamRemoteClosing => "Remote sub stream is closed",
+            Error::WouldBlock => "Sub stream send channel full",
+        }
+    }
+}
+
+impl fmt::Display for Error {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            Error::InvalidVersion => write!(f, "Received a frame with an invalid version"),
+            Error::InvalidMsgType => write!(f, "Received a frame with an invalid message type"),
+            Error::SessionShutdown => write!(f, "Session shutdown"),
+            Error::StreamsExhausted => write!(f, "No more stream ids to issue"),
+            Error::DuplicateStream => write!(f, "Duplicate stream is opened inbound"),
+            Error::RecvWindowExceeded => write!(f, "Received window was exceeded"),
+            Error::Timeout => write!(f, "Reach an IO deadline"),
+            Error::StreamClosed => write!(f, "Using a closed stream"),
+            Error::UnexpectedFlag => write!(f, "Get an unexpected flag"),
+            Error::RemoteGoAway => write!(f, "Go away message from the other side"),
+            Error::ConnectionReset => write!(f, "Stream is reset"),
+            Error::ConnectionWriteTimeout => {
+                write!(f, "Timeout on write to the underlying stream connection")
+            }
+            Error::KeepAliveTimeout => write!(f, "Keepalive timeout"),
+            Error::SubStreamRemoteClosing => write!(f, "Remote sub stream is closed"),
+            Error::WouldBlock => write!(f, "Sub stream send channel full"),
+        }
+    }
 }
