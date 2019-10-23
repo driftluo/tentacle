@@ -331,8 +331,14 @@ where
 
     /// After the session is established, the client is requested to open some custom protocol sub stream.
     pub fn open_proto_stream(&mut self, proto_name: &str) {
+        let handle = match self.socket.open_stream() {
+            Ok(handle) => handle,
+            Err(e) => {
+                debug!("session {} open stream error: {}", self.context.id, e);
+                return;
+            }
+        };
         debug!("try open proto, {}", proto_name);
-        let handle = self.socket.open_stream().unwrap();
         let versions = self.protocol_configs[proto_name].support_versions.clone();
         let proto_info = ProtocolInfo::new(&proto_name, versions);
 

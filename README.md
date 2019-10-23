@@ -38,7 +38,7 @@ The API of this project is basically usable. However we still need more tests. P
 
 ```toml
 [dependencies]
-tentacle = { version = "0.2", feaures = ["molc"] }
+tentacle = { version = "0.2", features = ["molc"] }
 ```
 
 ### Example
@@ -53,13 +53,13 @@ $ git clone https://github.com/nervosnetwork/p2p.git
 
 Listen on 127.0.0.1:1337
 ```bash
-$ RUST_LOG=simple=info,tentacle=debug cargo run --example simple --feaures molc -- server
+$ RUST_LOG=simple=info,tentacle=debug cargo run --example simple --features molc -- server
 ```
 
 3. On another terminal:
 
 ```bash
-$ RUST_LOG=simple=info,tentacle=debug cargo run --example simple --feaures molc
+$ RUST_LOG=simple=info,tentacle=debug cargo run --example simple --features molc
 ```
 
 4. Now you can see some data interaction information on the terminal.

@@ -402,12 +402,12 @@ impl io::Write for StreamHandle {
             match e {
                 Error::SessionShutdown => return Err(io::ErrorKind::BrokenPipe.into()),
                 // read flag error or read data error
-                Error::UnexpectedFlag | Error::RecvWindowExceeded => {
+                Error::UnexpectedFlag | Error::RecvWindowExceeded | Error::InvalidMsgType => {
                     return Err(io::ErrorKind::InvalidData.into());
                 }
                 Error::SubStreamRemoteClosing => (),
                 Error::WouldBlock => return Err(io::ErrorKind::WouldBlock.into()),
-                _ => unimplemented!(),
+                _ => (),
             }
         }
         if self.state == StreamState::LocalClosing || self.state == StreamState::Closed {
@@ -450,12 +450,12 @@ impl io::Write for StreamHandle {
             match e {
                 Error::SessionShutdown => return Err(io::ErrorKind::BrokenPipe.into()),
                 // read flag error or read data error
-                Error::UnexpectedFlag | Error::RecvWindowExceeded => {
+                Error::UnexpectedFlag | Error::RecvWindowExceeded | Error::InvalidMsgType => {
                     return Err(io::ErrorKind::InvalidData.into());
                 }
                 Error::SubStreamRemoteClosing => (),
                 Error::WouldBlock => return Err(io::ErrorKind::WouldBlock.into()),
-                _ => unimplemented!(),
+                _ => (),
             }
         }
         let event = StreamEvent::Flush(self.id);
