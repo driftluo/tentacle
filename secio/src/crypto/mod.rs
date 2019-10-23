@@ -2,8 +2,9 @@ use crate::error::SecioError;
 
 /// Define cipher
 pub mod cipher;
+#[cfg(unix)]
 mod openssl_impl;
-#[cfg(any(not(ossl110), test))]
+#[cfg(any(not(ossl110), test, not(unix)))]
 mod ring_impl;
 
 /// Variant cipher which contains all possible stream ciphers
@@ -31,7 +32,7 @@ pub enum CryptoMode {
 
 /// Generate a specific Cipher with key and initialize vector
 #[doc(hidden)]
-#[cfg(any(ossl110))]
+#[cfg(all(ossl110, unix))]
 pub fn new_stream(
     t: cipher::CipherType,
     key: &[u8],
@@ -43,7 +44,7 @@ pub fn new_stream(
 
 /// Generate a specific Cipher with key and initialize vector
 #[doc(hidden)]
-#[cfg(not(ossl110))]
+#[cfg(all(not(ossl110), unix))]
 pub fn new_stream(
     t: cipher::CipherType,
     key: &[u8],
@@ -58,6 +59,18 @@ pub fn new_stream(
         }
         ChaCha20Poly1305 => Box::new(ring_impl::RingAeadCipher::new(t, key, mode)),
     }
+}
+
+/// Generate a specific Cipher with key and initialize vector
+#[doc(hidden)]
+#[cfg(not(unix))]
+pub fn new_stream(
+    t: cipher::CipherType,
+    key: &[u8],
+    _iv: &[u8],
+    mode: CryptoMode,
+) -> BoxStreamCipher {
+    Box::new(ring_impl::RingAeadCipher::new(t, key, mode))
 }
 
 /// [0, 0, 0, 0]
@@ -78,7 +91,7 @@ fn nonce_advance(nonce: &mut [u8]) {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod test {
     use super::{
         cipher::CipherType, openssl_impl::OpenSSLCrypt, ring_impl::RingAeadCipher, CryptoMode,

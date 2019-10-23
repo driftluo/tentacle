@@ -338,17 +338,18 @@ fn stretch_key(hmac: Hmac, result: &mut [u8]) {
 
 fn generate_stream_cipher_and_hmac(
     t: CipherType,
-    digest: Digest,
+    _digest: Digest,
     mode: CryptoMode,
     info: &[u8],
     key_size: usize,
     iv_size: usize,
 ) -> (BoxStreamCipher, Option<Hmac>) {
     let (iv, rest) = info.split_at(iv_size);
-    let (cipher_key, mac_key) = rest.split_at(key_size);
+    let (cipher_key, _mac_key) = rest.split_at(key_size);
     let hmac = match t {
         CipherType::ChaCha20Poly1305 | CipherType::Aes128Gcm | CipherType::Aes256Gcm => None,
-        _ => Some(Hmac::from_key(digest, mac_key)),
+        #[cfg(unix)]
+        _ => Some(Hmac::from_key(_digest, _mac_key)),
     };
     let cipher = new_stream(t, cipher_key, iv, mode);
     (cipher, hmac)

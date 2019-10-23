@@ -393,6 +393,7 @@ impl<T> Drop for SecureStream<T> {
 mod tests {
     use super::{Hmac, SecureStream};
     use crate::crypto::{cipher::CipherType, new_stream, CryptoMode};
+    #[cfg(unix)]
     use crate::Digest;
     use bytes::BytesMut;
     use futures::{sync, Future, Stream};
@@ -406,7 +407,7 @@ mod tests {
         let cipher_key = (0..cipher.key_size())
             .map(|_| rand::random::<u8>())
             .collect::<Vec<_>>();
-        let hmac_key: [u8; 32] = rand::random();
+        let _hmac_key: [u8; 32] = rand::random();
         let iv = (0..cipher.iv_size())
             .map(|_| rand::random::<u8>())
             .collect::<Vec<_>>();
@@ -416,12 +417,13 @@ mod tests {
         let mut encode_cipher = new_stream(cipher, &cipher_key, &iv, CryptoMode::Encrypt);
         let mut decode_cipher = new_stream(cipher, &cipher_key, &iv, CryptoMode::Decrypt);
 
-        let (mut decode_hmac, mut encode_hmac) = match cipher {
+        let (mut decode_hmac, mut encode_hmac): (Option<Hmac>, Option<Hmac>) = match cipher {
             CipherType::ChaCha20Poly1305 | CipherType::Aes128Gcm | CipherType::Aes256Gcm => {
                 (None, None)
             }
+            #[cfg(unix)]
             _ => {
-                let encode_hmac = Hmac::from_key(Digest::Sha256, &hmac_key);
+                let encode_hmac = Hmac::from_key(Digest::Sha256, &_hmac_key);
                 let decode_hmac = encode_hmac.clone();
                 (Some(decode_hmac), Some(encode_hmac))
             }
@@ -460,7 +462,7 @@ mod tests {
         let iv_clone = iv.clone();
         let key_size = cipher.key_size();
         let hmac_key: [u8; 16] = rand::random();
-        let hmac_key_clone = hmac_key;
+        let _hmac_key_clone = hmac_key;
         let data = b"hello world";
         let data_clone = &*data;
         let nonce = vec![0, 1, 2, 3, 4, 5, 6, 7, 8, 9];
@@ -481,9 +483,10 @@ mod tests {
                     CipherType::ChaCha20Poly1305
                     | CipherType::Aes128Gcm
                     | CipherType::Aes256Gcm => (None, None),
+                    #[cfg(unix)]
                     _ => (
-                        Some(Hmac::from_key(Digest::Sha256, &hmac_key_clone)),
-                        Some(Hmac::from_key(Digest::Sha256, &hmac_key_clone)),
+                        Some(Hmac::from_key(Digest::Sha256, &_hmac_key_clone)),
+                        Some(Hmac::from_key(Digest::Sha256, &_hmac_key_clone)),
                     ),
                 };
                 let mut secure = SecureStream::new(
@@ -523,9 +526,10 @@ mod tests {
                     CipherType::ChaCha20Poly1305
                     | CipherType::Aes128Gcm
                     | CipherType::Aes256Gcm => (None, None),
+                    #[cfg(unix)]
                     _ => (
-                        Some(Hmac::from_key(Digest::Sha256, &hmac_key_clone)),
-                        Some(Hmac::from_key(Digest::Sha256, &hmac_key_clone)),
+                        Some(Hmac::from_key(Digest::Sha256, &_hmac_key_clone)),
+                        Some(Hmac::from_key(Digest::Sha256, &_hmac_key_clone)),
                     ),
                 };
                 let mut secure = SecureStream::new(
@@ -568,11 +572,13 @@ mod tests {
         assert_eq!(received.to_vec(), data);
     }
 
+    #[cfg(unix)]
     #[test]
     fn test_encode_decode_aes128ctr() {
         test_decode_encode(CipherType::Aes128Ctr);
     }
 
+    #[cfg(unix)]
     #[test]
     fn test_encode_decode_aes256ctr() {
         test_decode_encode(CipherType::Aes256Ctr);
@@ -593,11 +599,13 @@ mod tests {
         test_decode_encode(CipherType::ChaCha20Poly1305);
     }
 
+    #[cfg(unix)]
     #[test]
     fn secure_codec_encode_then_decode_aes128ctr() {
         secure_codec_encode_then_decode(CipherType::Aes128Ctr);
     }
 
+    #[cfg(unix)]
     #[test]
     fn secure_codec_encode_then_decode_aes256ctr() {
         secure_codec_encode_then_decode(CipherType::Aes256Ctr);
