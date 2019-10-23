@@ -126,7 +126,10 @@ where
             SessionType::Server => 2,
         };
         let (event_sender, event_receiver) = channel(32);
-        let framed_stream = Framed::new(raw_stream, FrameCodec::default());
+        let framed_stream = Framed::new(
+            raw_stream,
+            FrameCodec::default().max_frame_size(config.max_stream_window_size),
+        );
         let (keepalive_receiver, stop_signal_tx) = if config.enable_keepalive {
             let (mut interval_sender, interval_receiver) = channel(2);
             let (stop_signal_tx, stop_signal_rx) = oneshot::channel::<()>();
@@ -146,7 +149,7 @@ where
                     }
                 }
             }
-                .boxed();
+            .boxed();
 
             tokio::spawn(async move {
                 select(stop_signal_rx, interval).await;

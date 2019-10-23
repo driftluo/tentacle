@@ -273,13 +273,10 @@ impl<T> Drop for ServiceProtocolStream<T> {
                         proto_id,
                     },
                 };
-                tokio::spawn(
-                    self.panic_report
-                        .clone()
-                        .send(event)
-                        .map(|_| ())
-                        .map_err(|_| ()),
-                );
+                let mut panic_sender = self.panic_report.clone();
+                tokio::spawn(async move {
+                    let _ = panic_sender.send(event).await;
+                });
             }
         }
     }
@@ -572,13 +569,10 @@ impl<T> Drop for SessionProtocolStream<T> {
                 error: Error::SessionProtoHandleAbnormallyClosed(self.context.id),
                 proto_id: self.handle_context.proto_id,
             };
-            tokio::spawn(
-                self.panic_report
-                    .clone()
-                    .send(event)
-                    .map(|_| ())
-                    .map_err(|_| ()),
-            );
+            let mut panic_sender = self.panic_report.clone();
+            tokio::spawn(async move {
+                let _ = panic_sender.send(event).await;
+            });
         }
     }
 }

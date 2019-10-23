@@ -920,7 +920,7 @@ where
                 address,
                 ty,
                 remote_pubkey,
-                session_closed.clone(),
+                session_closed,
                 pending_data_size,
             )),
         );
@@ -1123,7 +1123,7 @@ where
                     ProtocolEvent::Connected {
                         session_context: Arc::clone(&session_control.inner),
                         proto_id,
-                        version: version.clone(),
+                        version,
                     },
                 );
             }
@@ -1153,7 +1153,7 @@ where
                     ProtocolEvent::Received {
                         session_context: Arc::clone(&session_control.inner),
                         proto_id,
-                        data: data.clone(),
+                        data,
                     },
                 );
             }

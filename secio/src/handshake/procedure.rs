@@ -2,8 +2,6 @@
 ///
 /// Some panic logic has been removed, some error handling has been removed, and an error has been added.
 ///
-use bytes::Bytes;
-use futures::prelude::*;
 use futures::{SinkExt, StreamExt};
 use log::{debug, trace};
 use std::{cmp::Ordering, io};

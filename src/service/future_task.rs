@@ -160,7 +160,7 @@ mod test {
     fn test_manager_drop() {
         let (sender, receiver) = channel(128);
         let shutdown = Arc::new(AtomicBool::new(false));
-        let mut manager = FutureTaskManager::new(receiver, shutdown.clone());
+        let mut manager = FutureTaskManager::new(receiver, shutdown);
 
         let mut send_task = sender.clone();
 

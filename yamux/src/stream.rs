@@ -469,7 +469,7 @@ impl AsyncWrite for StreamHandle {
                     return Poll::Ready(Err(io::ErrorKind::BrokenPipe.into()))
                 }
                 // read flag error or read data error
-                Error::UnexpectedFlag | Error::RecvWindowExceeded | Error::InvalidMsgType=> {
+                Error::UnexpectedFlag | Error::RecvWindowExceeded | Error::InvalidMsgType => {
                     return Poll::Ready(Err(io::ErrorKind::InvalidData.into()));
                 }
                 Error::SubStreamRemoteClosing => (),

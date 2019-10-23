@@ -551,22 +551,22 @@ mod tests {
                 ),
             };
             let mut secure = SecureStream::new(
-                Framed::new(socket.unwrap().unwrap(), LengthDelimitedCodec::new()),
+                Framed::new(stream, LengthDelimitedCodec::new()),
                 new_stream(
                     cipher,
                     &cipher_key_clone[..key_size],
-                    &iv_clone,
+                    &iv,
                     CryptoMode::Decrypt,
                 ),
                 decode_hmac,
                 new_stream(
                     cipher,
                     &cipher_key_clone[..key_size],
-                    &iv_clone,
+                    &iv,
                     CryptoMode::Encrypt,
                 ),
                 encode_hmac,
-                nonce2,
+                Vec::new(),
             );
             let mut handle = secure.create_handle().unwrap();
 

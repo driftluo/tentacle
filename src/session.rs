@@ -446,10 +446,13 @@ where
                 // if the server intentionally returns malicious protocol data with arbitrary
                 // protocol names, close the connection and feedback error
                 self.state = SessionState::Abnormal;
-                self.event_output(cx,SessionEvent::ProtocolSelectError {
-                    id: self.context.id,
-                    proto_name: None,
-                });
+                self.event_output(
+                    cx,
+                    SessionEvent::ProtocolSelectError {
+                        id: self.context.id,
+                        proto_name: None,
+                    },
+                );
                 return;
             }
         };

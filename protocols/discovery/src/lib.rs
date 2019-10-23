@@ -86,7 +86,7 @@ impl<M: AddressManager + Unpin + Send + 'static> ServiceProtocol for DiscoveryPr
                         }
                     }
                 }
-                    .boxed()
+                .boxed()
             })
             .unwrap();
         if context.future_task(discovery_task).is_err() {

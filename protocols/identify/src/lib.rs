@@ -191,7 +191,7 @@ impl<T: Callback> IdentifyProtocol<T> {
             {
                 return MisbehaveResult::Disconnect;
             }
-            info.observed_addr = Some(observed.clone());
+            info.observed_addr = Some(observed);
             MisbehaveResult::Continue
         }
     }
