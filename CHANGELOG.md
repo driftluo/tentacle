@@ -1,3 +1,21 @@
+## 0.2.6
+
+### Features
+
+- Secio removed support for `twofish-ctr`, [detail](https://github.com/nervosnetwork/p2p/pull/191)
+- Secio added support for `aes-gcm/chacha20poly1305`, [detail](https://github.com/nervosnetwork/p2p/pull/191)
+- Secio default symmetric encryption algorithm change to `aes-128-gcm`, [detail](https://github.com/nervosnetwork/p2p/pull/191)
+- Use industry standard encryption algorithms in openssl or ring, [detail](https://github.com/nervosnetwork/p2p/pull/191)
+- Upgrade molecule
+- Secio bump to 0.2.0
+- Change panic report road
+
+### Bug fix
+
+- Fix the implementation of non-standard encryption algorithms
+- Fix potential overflow
+- Fix handshake attack
+
 ## 0.2.5
 
 ### Features

@@ -1,6 +1,6 @@
 [package]
 name = "tokio-yamux"
-version = "0.1.13"
+version = "0.1.14"
 license = "MIT"
 repository = "https://github.com/nervosnetwork/p2p"
 description = "Rust implementation of Yamux"
