@@ -8,6 +8,7 @@ pub enum SecioError {
     IoError(io::Error),
 
     /// Openssl stack error
+    #[cfg(unix)]
     Openssl(openssl::error::ErrorStack),
 
     /// Ring Crypto error
@@ -83,6 +84,7 @@ impl Into<io::Error> for SecioError {
     }
 }
 
+#[cfg(unix)]
 impl From<openssl::error::ErrorStack> for SecioError {
     fn from(err: openssl::error::ErrorStack) -> SecioError {
         SecioError::Openssl(err)
@@ -99,6 +101,7 @@ impl error::Error for SecioError {
     fn description(&self) -> &str {
         match self {
             SecioError::IoError(e) => error::Error::description(e),
+            #[cfg(unix)]
             SecioError::Openssl(e) => error::Error::description(e),
             SecioError::RingCryptoError => "Ring crypto error",
             SecioError::EphemeralKeyGenerationFailed => "EphemeralKey Generation Failed",
@@ -120,6 +123,7 @@ impl fmt::Display for SecioError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             SecioError::IoError(e) => fmt::Display::fmt(&e, f),
+            #[cfg(unix)]
             SecioError::Openssl(e) => fmt::Display::fmt(&e, f),
             SecioError::RingCryptoError => write!(f, "Ring Crypto Error"),
             SecioError::EphemeralKeyGenerationFailed => write!(f, "EphemeralKey Generation Failed"),

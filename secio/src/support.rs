@@ -10,9 +10,13 @@ use std::cmp::Ordering;
 const ECDH_P256: &str = "P-256";
 const ECDH_P384: &str = "P-384";
 
+#[cfg(unix)]
 const AES_128: &str = "AES-128";
+#[cfg(unix)]
 const AES_256: &str = "AES-256";
+#[cfg(unix)]
 const AES_128_CTR: &str = "AES-128-CTR";
+#[cfg(unix)]
 const AES_256_CTR: &str = "AES-256-CTR";
 
 const AES_128_GCM: &str = "AES-128-GCM";
@@ -24,8 +28,11 @@ const SHA_256: &str = "SHA256";
 const SHA_512: &str = "SHA512";
 
 pub(crate) const DEFAULT_AGREEMENTS_PROPOSITION: &str = "P-256,P-384";
+#[cfg(unix)]
 pub(crate) const DEFAULT_CIPHERS_PROPOSITION: &str =
     "AES-128-GCM,AES-256-GCM,CHACHA20_POLY1305,AES-128-CTR,AES-256-CTR,AES-128,AES-256";
+#[cfg(not(unix))]
+pub(crate) const DEFAULT_CIPHERS_PROPOSITION: &str = "AES-128-GCM,AES-256-GCM,CHACHA20_POLY1305";
 pub(crate) const DEFAULT_DIGESTS_PROPOSITION: &str = "SHA256,SHA512";
 
 /// Return a proposition string from the given sequence of `KeyAgreement` values.
@@ -79,10 +86,12 @@ where
     let mut s = String::new();
     for c in ciphers {
         match c {
+            #[cfg(unix)]
             CipherType::Aes128Ctr => {
                 s.push_str(AES_128_CTR);
                 s.push(',')
             }
+            #[cfg(unix)]
             CipherType::Aes256Ctr => {
                 s.push_str(AES_256_CTR);
                 s.push(',')
@@ -160,7 +169,9 @@ pub fn select_cipher(r: Ordering, ours: &str, theirs: &str) -> Result<CipherType
     for x in a.split(',') {
         if b.split(',').any(|y| x == y) {
             match x {
+                #[cfg(unix)]
                 AES_128 | AES_128_CTR => return Ok(CipherType::Aes128Ctr),
+                #[cfg(unix)]
                 AES_256 | AES_256_CTR => return Ok(CipherType::Aes256Ctr),
                 AES_128_GCM => return Ok(CipherType::Aes128Gcm),
                 AES_256_GCM => return Ok(CipherType::Aes256Gcm),

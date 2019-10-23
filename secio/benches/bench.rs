@@ -2,26 +2,27 @@ use criterion::{criterion_group, criterion_main, Bencher, Criterion};
 use tentacle_secio::{
     codec::Hmac,
     crypto::{cipher::CipherType, new_stream, CryptoMode},
-    Digest,
 };
 
 fn decode_encode(data: &[u8], cipher: CipherType) {
     let cipher_key = (0..cipher.key_size())
         .map(|_| rand::random::<u8>())
         .collect::<Vec<_>>();
-    let hmac_key: [u8; 32] = rand::random();
+    let _hmac_key: [u8; 32] = rand::random();
     let iv = (0..cipher.iv_size())
         .map(|_| rand::random::<u8>())
         .collect::<Vec<_>>();
 
     let mut encode_cipher = new_stream(cipher, &cipher_key, &iv, CryptoMode::Encrypt);
     let mut decode_cipher = new_stream(cipher, &cipher_key, &iv, CryptoMode::Decrypt);
-    let (mut decode_hmac, mut encode_hmac) = match cipher {
+    let (mut decode_hmac, mut encode_hmac): (Option<Hmac>, Option<Hmac>) = match cipher {
         CipherType::ChaCha20Poly1305 | CipherType::Aes128Gcm | CipherType::Aes256Gcm => {
             (None, None)
         }
+        #[cfg(unix)]
         _ => {
-            let encode_hmac = Hmac::from_key(Digest::Sha256, &hmac_key);
+            use tentacle_secio::Digest;
+            let encode_hmac = Hmac::from_key(Digest::Sha256, &_hmac_key);
             let decode_hmac = encode_hmac.clone();
             (Some(decode_hmac), Some(encode_hmac))
         }
@@ -61,10 +62,12 @@ fn criterion_benchmark(bench: &mut Criterion) {
     let data = (0..1024 * 256)
         .map(|_| rand::random::<u8>())
         .collect::<Vec<_>>();
+    #[cfg(unix)]
     bench.bench_function("1kb_aes128ctr", {
         let data = data.clone();
         move |b| bench_test(b, CipherType::Aes128Ctr, &data)
     });
+    #[cfg(unix)]
     bench.bench_function("1kb_aes256ctr", {
         let data = data.clone();
         move |b| bench_test(b, CipherType::Aes256Ctr, &data)
@@ -84,10 +87,12 @@ fn criterion_benchmark(bench: &mut Criterion) {
     let data = (0..1024 * 1024)
         .map(|_| rand::random::<u8>())
         .collect::<Vec<_>>();
+    #[cfg(unix)]
     bench.bench_function("1mb_aes128ctr", {
         let data = data.clone();
         move |b| bench_test(b, CipherType::Aes128Ctr, &data)
     });
+    #[cfg(unix)]
     bench.bench_function("1mb_aes256ctr", {
         let data = data.clone();
         move |b| bench_test(b, CipherType::Aes256Ctr, &data)
