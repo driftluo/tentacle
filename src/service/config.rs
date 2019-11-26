@@ -16,6 +16,7 @@ pub(crate) struct ServiceConfig {
     pub event: HashSet<ProtocolId>,
     pub keep_buffer: bool,
     pub upnp: bool,
+    pub max_connection_number: usize,
 }
 
 impl Default for ServiceConfig {
@@ -27,6 +28,7 @@ impl Default for ServiceConfig {
             event: HashSet::default(),
             keep_buffer: false,
             upnp: false,
+            max_connection_number: 65535,
         }
     }
 }
@@ -297,6 +299,14 @@ impl State {
         match self {
             State::Running(num) => *num -= 1,
             State::PreShutdown | State::Forever => (),
+        }
+    }
+
+    #[inline]
+    pub fn into_inner(self) -> Option<usize> {
+        match self {
+            State::Running(num) => Some(num),
+            State::PreShutdown | State::Forever => None,
         }
     }
 }
