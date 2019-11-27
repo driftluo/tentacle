@@ -1,3 +1,13 @@
+## 0.2.7
+
+### Features
+
+- Upgrade moleculec to 0.4.2
+
+### Bug fix
+
+- Add transport connection number limit on listener
+
 ## 0.2.6
 
 ### Features

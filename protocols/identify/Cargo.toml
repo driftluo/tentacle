@@ -1,6 +1,6 @@
 [package]
 name = "tentacle-identify"
-version = "0.2.9"
+version = "0.2.10"
 authors = ["Qian Linfeng <thewawar@gmail.com>"]
 license = "MIT"
 description = "p2p identify protocol"

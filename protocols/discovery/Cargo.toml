@@ -1,6 +1,6 @@
 [package]
 name = "tentacle-discovery"
-version = "0.2.8"
+version = "0.2.9"
 authors = ["Linfeng Qian <thewawar@gmail.com>"]
 license = "MIT"
 description = "p2p discovery protocol main reference bitcoin"
