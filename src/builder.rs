@@ -122,6 +122,16 @@ impl ServiceBuilder {
         self
     }
 
+    /// The limit of max open connection(file descriptors)
+    /// If not limited, service will try to serve as many connections as possible until it exhausts system resources(os error),
+    /// and then close the listener, no longer accepting new connection requests, and the established connections remain working
+    ///
+    /// Default is 65535
+    pub fn max_connection_number(mut self, number: usize) -> Self {
+        self.config.max_connection_number = number;
+        self
+    }
+
     /// Clear all protocols
     pub fn clear(&mut self) {
         self.inner.clear();

@@ -1503,6 +1503,17 @@ where
     /// Poll listen connections
     #[inline]
     fn listen_poll(&mut self) {
+        if !self
+            .listens
+            .len()
+            .checked_add(self.sessions.len())
+            .and_then(|count| count.checked_add(self.state.into_inner().unwrap_or_default()))
+            .map(|count| self.config.max_connection_number >= count)
+            .unwrap_or_default()
+        {
+            return;
+        }
+
         let mut update = false;
         for (address, mut listen) in self.listens.split_off(0) {
             match listen.poll() {
