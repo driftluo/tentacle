@@ -135,9 +135,9 @@ fn test_block_send(secio: bool, session_protocol: bool) {
     let (addr_sender, addr_receiver) = channel::oneshot::channel::<Multiaddr>();
 
     thread::spawn(move || {
-        let mut rt = tokio::runtime::current_thread::Runtime::new().unwrap();
+        let mut rt = tokio::runtime::Runtime::new().unwrap();
         let mut service = create(secio, meta, ());
-        rt.spawn(async move {
+        rt.block_on(async move {
             let listen_addr = service
                 .listen("/ip4/127.0.0.1/tcp/0".parse().unwrap())
                 .await
@@ -149,15 +149,14 @@ fn test_block_send(secio: bool, session_protocol: bool) {
                 }
             }
         });
-        rt.run().unwrap();
     });
 
     let (meta, result) = create_meta(1.into(), session_protocol);
 
     let handle_2 = thread::spawn(move || {
-        let mut rt = tokio::runtime::current_thread::Runtime::new().unwrap();
+        let mut rt = tokio::runtime::Runtime::new().unwrap();
         let mut service = create(secio, meta, ());
-        rt.spawn(async move {
+        rt.block_on(async move {
             let listen_addr = addr_receiver.await.unwrap();
             service
                 .dial(listen_addr, TargetProtocol::All)
@@ -169,7 +168,6 @@ fn test_block_send(secio: bool, session_protocol: bool) {
                 }
             }
         });
-        rt.run().unwrap();
     });
     handle_2.join().unwrap();
 

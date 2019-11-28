@@ -6,10 +6,10 @@ use futures::{SinkExt, StreamExt};
 use log::{debug, trace};
 use std::{cmp::Ordering, io};
 use tokio::{
-    codec::length_delimited::Builder,
     io::AsyncWriteExt,
     prelude::{AsyncRead, AsyncWrite},
 };
+use tokio_util::codec::length_delimited::Builder;
 
 use crate::{
     codec::{secure_stream::SecureStream, stream_handle::StreamHandle, Hmac},
@@ -23,6 +23,7 @@ use crate::{
     },
     Digest, EphemeralPublicKey, KeyPairInner,
 };
+use bytes::{Buf, BytesMut};
 
 /// Performs a handshake on the given socket.
 ///
@@ -86,12 +87,14 @@ where
     let exchanges = {
         let mut exchanges = Exchange::new();
 
-        let mut data_to_sign = ephemeral_context
-            .state
-            .remote
-            .local
-            .proposition_bytes
-            .clone();
+        let mut data_to_sign = BytesMut::from(
+            ephemeral_context
+                .state
+                .remote
+                .local
+                .proposition_bytes
+                .bytes(),
+        );
         data_to_sign.extend_from_slice(&ephemeral_context.state.remote.proposition_bytes);
         data_to_sign.extend_from_slice(&tmp_pub_key);
 
@@ -331,23 +334,23 @@ mod tests {
     use crate::{codec::Hmac, handshake::Config, Digest, SecioKeyPair};
 
     use bytes::BytesMut;
-    use futures::{channel, StreamExt};
+    use futures::channel;
     use tokio::{
         io::{AsyncReadExt, AsyncWriteExt},
         net::{TcpListener, TcpStream},
     };
 
     fn handshake_with_self_success(config_1: Config, config_2: Config, data: &'static [u8]) {
-        let rt = tokio::runtime::Runtime::new().unwrap();
+        let mut rt = tokio::runtime::Runtime::new().unwrap();
         let (sender, receiver) = channel::oneshot::channel::<bytes::BytesMut>();
         let (addr_sender, addr_receiver) = channel::oneshot::channel::<::std::net::SocketAddr>();
 
         rt.spawn(async move {
-            let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let mut listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
             let listener_addr = listener.local_addr().unwrap();
             let _ = addr_sender.send(listener_addr);
-            let (connect, _stream) = listener.incoming().into_future().await;
-            let (mut handle, _, _) = config_1.handshake(connect.unwrap().unwrap()).await.unwrap();
+            let (connect, _) = listener.accept().await.unwrap();
+            let (mut handle, _, _) = config_1.handshake(connect).await.unwrap();
             let mut data = [0u8; 11];
             handle.read_exact(&mut data).await.unwrap();
             handle.write_all(&data).await.unwrap();
@@ -360,15 +363,13 @@ mod tests {
             handle.write_all(data).await.unwrap();
             let mut data = [0u8; 11];
             handle.read_exact(&mut data).await.unwrap();
-            let _ = sender.send(BytesMut::from(data.to_vec()));
+            let _ = sender.send(BytesMut::from(&data[..]));
         });
 
-        rt.spawn(async move {
+        rt.block_on(async move {
             let received = receiver.await.unwrap();
             assert_eq!(received.to_vec(), data);
         });
-
-        rt.shutdown_on_idle()
     }
 
     #[test]

@@ -1,5 +1,5 @@
 use std::{io, pin::Pin, task::Context};
-use tokio::codec::{Decoder, Encoder};
+use tokio_util::codec::{Decoder, Encoder};
 
 use crate::{
     context::{ProtocolContext, ProtocolContextMutRef, ServiceContext},

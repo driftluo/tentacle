@@ -1,6 +1,5 @@
 use bytes::BytesMut;
 use env_logger;
-use futures::prelude::*;
 use log::info;
 use tentacle_secio::{handshake::Config, SecioKeyPair};
 use tokio::{
@@ -24,27 +23,22 @@ fn server() {
     let key = SecioKeyPair::secp256k1_generated();
     let config = Config::new(key);
 
-    let rt = tokio::runtime::Runtime::new().unwrap();
+    let mut rt = tokio::runtime::Runtime::new().unwrap();
 
-    rt.spawn(async move {
-        let mut incoming = TcpListener::bind("127.0.0.1:1337")
-            .await
-            .unwrap()
-            .incoming();
+    rt.block_on(async move {
+        let mut listener = TcpListener::bind("127.0.0.1:1337").await.unwrap();
 
-        while let Some(Ok(socket)) = incoming.next().await {
+        while let Ok((socket, _)) = listener.accept().await {
             let config = config.clone();
             tokio::spawn(async move {
                 let (mut handle, _, _) = config.handshake(socket).await.unwrap();
                 let mut data = [0u8; 11];
                 handle.read_exact(&mut data).await.unwrap();
-                info!("receive: {:?}", BytesMut::from(data.to_vec()));
+                info!("receive: {:?}", BytesMut::from(&data[..]));
                 handle.write_all(&data).await.unwrap();
             });
         }
     });
-
-    rt.shutdown_on_idle()
 }
 
 fn client() {
@@ -53,9 +47,9 @@ fn client() {
 
     let data = b"hello world";
 
-    let rt = tokio::runtime::Runtime::new().unwrap();
+    let mut rt = tokio::runtime::Runtime::new().unwrap();
 
-    rt.spawn(async move {
+    rt.block_on(async move {
         let stream = TcpStream::connect("127.0.0.1:1337").await.unwrap();
         let (mut handle, _, _) = config.handshake(stream).await.unwrap();
         match handle.write_all(data).await {
@@ -64,8 +58,6 @@ fn client() {
         }
         let mut data = [0u8; 11];
         handle.read_exact(&mut data).await.unwrap();
-        info!("receive: {:?}", BytesMut::from(data.to_vec()));
+        info!("receive: {:?}", BytesMut::from(&data[..]));
     });
-
-    rt.shutdown_on_idle()
 }

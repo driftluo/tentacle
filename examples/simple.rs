@@ -7,10 +7,7 @@ use futures::{
 };
 use log::info;
 use std::collections::HashMap;
-use std::{
-    str,
-    time::{Duration, Instant},
-};
+use std::{str, time::Duration};
 use tentacle::{
     builder::{MetaBuilder, ServiceBuilder},
     context::{ProtocolContext, ProtocolContextMutRef, ServiceContext},
@@ -22,7 +19,6 @@ use tentacle::{
     traits::{ServiceHandle, ServiceProtocol},
     ProtocolId, SessionId,
 };
-use tokio::timer::{self, Interval};
 
 fn create_meta(id: ProtocolId) -> ProtocolMeta {
     MetaBuilder::new()
@@ -75,18 +71,15 @@ impl ServiceProtocol for PHandle {
         let interval_sender = context.control().clone();
 
         let interval_send_task = async move {
-            let mut interval = Interval::new(Instant::now(), Duration::from_secs(5));
+            let mut interval =
+                tokio::time::interval_at(tokio::time::Instant::now(), Duration::from_secs(5));
             loop {
-                match interval.next().await {
-                    Some(_) => {
-                        let _ = interval_sender.send_message_to(
-                            session_id,
-                            1.into(),
-                            Bytes::from("I am a interval message"),
-                        );
-                    }
-                    None => break,
-                }
+                interval.tick().await;
+                let _ = interval_sender.send_message_to(
+                    session_id,
+                    1.into(),
+                    Bytes::from("I am a interval message"),
+                );
             }
         };
 
@@ -147,7 +140,8 @@ impl ServiceHandle for SHandle {
             let delay_sender = context.control().clone();
 
             let _ = context.future_task(async move {
-                timer::delay(Instant::now() + Duration::from_secs(3)).await;
+                tokio::time::delay_until(tokio::time::Instant::now() + Duration::from_secs(3))
+                    .await;
                 let _ = delay_sender.filter_broadcast(
                     TargetSession::All,
                     0.into(),
@@ -193,9 +187,9 @@ fn create_client() -> Service<SHandle> {
 }
 
 fn server() {
-    let rt = tokio::runtime::Runtime::new().unwrap();
+    let mut rt = tokio::runtime::Runtime::new().unwrap();
 
-    rt.spawn(async {
+    rt.block_on(async {
         let mut service = create_server();
         service
             .listen("/ip4/127.0.0.1/tcp/1337".parse().unwrap())
@@ -207,14 +201,12 @@ fn server() {
             }
         }
     });
-
-    rt.shutdown_on_idle();
 }
 
 fn client() {
-    let rt = tokio::runtime::Runtime::new().unwrap();
+    let mut rt = tokio::runtime::Runtime::new().unwrap();
 
-    rt.spawn(async {
+    rt.block_on(async {
         let mut service = create_client();
         service
             .dial(
@@ -229,6 +221,4 @@ fn client() {
             }
         }
     });
-
-    rt.shutdown_on_idle();
 }

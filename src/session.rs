@@ -12,10 +12,7 @@ use std::{
     time::{Duration, Instant},
 };
 use tokio::prelude::{AsyncRead, AsyncWrite};
-use tokio::{
-    codec::{Framed, FramedParts, LengthDelimitedCodec},
-    future::FutureExt as _,
-};
+use tokio_util::codec::{Framed, FramedParts, LengthDelimitedCodec};
 
 use crate::{
     context::SessionContext,
@@ -215,7 +212,7 @@ where
         let mut future_task_sender_ = future_task_sender.clone();
         let timeout = meta.timeout;
         tokio::spawn(async move {
-            tokio::timer::delay(Instant::now() + timeout).await;
+            tokio::time::delay_until(tokio::time::Instant::now() + timeout).await;
             let task = Box::pin(async move {
                 let _ = interval.send(ProtocolEvent::TimeoutCheck).await;
             });
@@ -273,7 +270,7 @@ where
         // NOTE: A Interval/Delay will block tokio runtime from gracefully shutdown.
         //       So we spawn it in FutureTaskManager
         let task = Box::pin(async move {
-            let event = match procedure.timeout(timeout).await {
+            let event = match tokio::time::timeout(timeout, procedure).await {
                 Ok(res) => match res {
                     Ok((handle, name, version)) => match version {
                         Some(version) => ProtocolEvent::Open {
@@ -838,7 +835,7 @@ where
         let mut sender = self.service_sender.clone();
 
         tokio::spawn(async move {
-            let mut iter = iter(events);
+            let mut iter = iter(events).map(Ok);
             if let Err(e) = sender.send_all(&mut iter).await {
                 debug!("session close event send to service error: {:?}", e)
             }
@@ -876,7 +873,7 @@ where
             let waker = cx.waker().clone();
             let delay = self.delay.clone();
             tokio::spawn(async move {
-                tokio::timer::delay(Instant::now() + DELAY_TIME).await;
+                tokio::time::delay_until(tokio::time::Instant::now() + DELAY_TIME).await;
                 waker.wake();
                 delay.store(false, Ordering::Release);
             });

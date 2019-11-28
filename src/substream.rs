@@ -9,12 +9,9 @@ use std::{
         Arc,
     },
     task::{Context, Poll},
-    time::Instant,
 };
-use tokio::{
-    codec::{length_delimited::LengthDelimitedCodec, Framed},
-    prelude::AsyncWrite,
-};
+use tokio::prelude::AsyncWrite;
+use tokio_util::codec::{length_delimited::LengthDelimitedCodec, Framed};
 
 use crate::{
     builder::BeforeReceive,
@@ -221,7 +218,7 @@ where
             let events = self.service_proto_buf.split_off(0);
             let mut sender = self.service_proto_sender.take().unwrap();
             tokio::spawn(async move {
-                let mut iter = iter(events);
+                let mut iter = iter(events).map(Ok);
                 if let Err(e) = sender.send_all(&mut iter).await {
                     debug!("stream close event send to proto handle error: {:?}", e)
                 }
@@ -234,7 +231,7 @@ where
             let events = self.session_proto_buf.split_off(0);
             let mut sender = self.session_proto_sender.take().unwrap();
             tokio::spawn(async move {
-                let mut iter = iter(events);
+                let mut iter = iter(events).map(Ok);
                 if let Err(e) = sender.send_all(&mut iter).await {
                     debug!("stream close event send to proto handle error: {:?}", e)
                 }
@@ -251,7 +248,7 @@ where
             let mut sender = self.event_sender.clone();
 
             tokio::spawn(async move {
-                let mut iter = iter(events);
+                let mut iter = iter(events).map(Ok);
                 if let Err(e) = sender.send_all(&mut iter).await {
                     debug!("stream close event send to session error: {:?}", e)
                 }
@@ -502,7 +499,7 @@ where
             let waker = cx.waker().clone();
             let delay = self.delay.clone();
             tokio::spawn(async move {
-                tokio::timer::delay(Instant::now() + DELAY_TIME).await;
+                tokio::time::delay_until(tokio::time::Instant::now() + DELAY_TIME).await;
                 waker.wake();
                 delay.store(false, Ordering::Release);
             });

@@ -21,11 +21,8 @@ use futures::{
     FutureExt, Sink, SinkExt, Stream,
 };
 use log::{debug, warn};
-use tokio::{
-    codec::Framed,
-    prelude::{AsyncRead, AsyncWrite},
-    timer::Interval,
-};
+use tokio::prelude::{AsyncRead, AsyncWrite};
+use tokio_util::codec::Framed;
 
 use crate::{
     config::Config,
@@ -134,11 +131,9 @@ where
             let (mut interval_sender, interval_receiver) = channel(2);
             let (stop_signal_tx, stop_signal_rx) = oneshot::channel::<()>();
             let interval = async move {
-                let mut interval = Interval::new_interval(config.keepalive_interval);
+                let mut interval = tokio::time::interval(config.keepalive_interval);
                 loop {
-                    if interval.next().await.is_none() {
-                        break;
-                    }
+                    interval.tick().await;
                     match interval_sender.send(()).await {
                         Ok(_) => (),
                         Err(e) => {
@@ -583,7 +578,7 @@ where
             let waker = cx.waker().clone();
             let delay = self.delay.clone();
             tokio::spawn(async move {
-                tokio::timer::delay(Instant::now() + DELAY_TIME).await;
+                tokio::time::delay_until(tokio::time::Instant::now() + DELAY_TIME).await;
                 waker.wake();
                 delay.store(false, Ordering::Release);
             });

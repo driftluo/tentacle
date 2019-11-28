@@ -19,7 +19,7 @@ use p2p::{
     SessionId,
 };
 use rand::seq::SliceRandom;
-use tokio::timer::Interval;
+use tokio::time::Interval;
 
 use std::time::{Duration, Instant};
 
@@ -86,7 +86,7 @@ impl<M: AddressManager + Unpin + Send + 'static> ServiceProtocol for DiscoveryPr
                         }
                     }
                 }
-                .boxed()
+                    .boxed()
             })
             .unwrap();
         if context.future_task(discovery_task).is_err() {
@@ -177,7 +177,7 @@ impl<M: AddressManager + Unpin> Discovery<M> {
     /// Query cycle means checking and synchronizing the cycle time of the currently connected node, default is 24 hours
     pub fn new(addr_mgr: M, query_cycle: Option<Duration>) -> Discovery<M> {
         let (substream_sender, substream_receiver) = channel(8);
-        let check_interval = Interval::new_interval(CHECK_INTERVAL);
+        let check_interval = tokio::time::interval(CHECK_INTERVAL);
         Discovery {
             check_interval,
             max_known: DEFAULT_MAX_KNOWN,

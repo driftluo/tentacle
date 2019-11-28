@@ -5,7 +5,6 @@ use std::time::Duration;
 
 use futures::{
     channel::mpsc::{channel, Sender},
-    prelude::*,
     StreamExt,
 };
 use p2p::{
@@ -20,7 +19,7 @@ use tentacle_ping::{Event, PingHandler};
 
 fn main() {
     env_logger::init();
-    let rt = tokio::runtime::Runtime::new().unwrap();
+    let mut rt = tokio::runtime::Runtime::new().unwrap();
     if std::env::args().nth(1) == Some("server".to_string()) {
         debug!("Starting server ......");
         let (sender, mut receiver) = channel(256);
@@ -43,7 +42,7 @@ fn main() {
                 }
             }
         });
-        rt.spawn(async move {
+        rt.block_on(async move {
             service
                 .listen("/ip4/127.0.0.1/tcp/1337".parse().unwrap())
                 .await
@@ -76,7 +75,7 @@ fn main() {
                 }
             }
         });
-        rt.spawn(async move {
+        rt.block_on(async move {
             service
                 .dial(
                     "/ip4/127.0.0.1/tcp/1337".parse().unwrap(),
@@ -95,8 +94,6 @@ fn main() {
             }
         });
     }
-
-    rt.shutdown_on_idle();
 }
 
 pub fn create_meta(

@@ -1,6 +1,7 @@
 use futures::{channel::mpsc, prelude::*, stream::FusedStream};
 use log::{debug, error, trace};
 use std::{
+    borrow::Cow,
     collections::{vec_deque::VecDeque, HashMap, HashSet},
     error::Error as ErrorTrait,
     io,
@@ -10,17 +11,9 @@ use std::{
         Arc,
     },
     task::{Context, Poll},
-    time::{Duration, Instant},
+    time::Duration,
 };
-use tokio::{
-    future::FutureExt as _,
-    prelude::{AsyncRead, AsyncWrite},
-    timer::Interval,
-};
-use std::time::{Duration, Instant};
-use std::{borrow::Cow, error::Error as ErrorTrait, io};
-use tokio::prelude::{AsyncRead, AsyncWrite, FutureExt};
-use tokio::timer::{Delay, Interval};
+use tokio::prelude::{AsyncRead, AsyncWrite};
 
 use crate::{
     context::{ServiceContext, SessionContext, SessionController},
@@ -74,6 +67,14 @@ pub(crate) enum InnerProtocolHandle {
     /// Session level protocol
     Session(Box<dyn SessionProtocol + Send + 'static + Unpin>),
 }
+
+type SessionProtoHandles = HashMap<
+    (SessionId, ProtocolId),
+    (
+        Option<futures::channel::oneshot::Sender<()>>,
+        tokio::task::JoinHandle<()>,
+    ),
+>;
 
 /// An abstraction of p2p service, currently only supports TCP protocol
 pub struct Service<T> {
@@ -136,6 +137,12 @@ pub struct Service<T> {
     delay: Arc<AtomicBool>,
 
     shutdown: Arc<AtomicBool>,
+
+    wait_handle: Vec<(
+        Option<futures::channel::oneshot::Sender<()>>,
+        tokio::task::JoinHandle<()>,
+    )>,
+    session_wait_handle: SessionProtoHandles,
 }
 
 impl<T> Service<T>
@@ -203,6 +210,8 @@ where
             pending_tasks: VecDeque::default(),
             delay: Arc::new(AtomicBool::new(false)),
             shutdown,
+            wait_handle: Vec::new(),
+            session_wait_handle: HashMap::new(),
         }
     }
 
@@ -600,14 +609,23 @@ where
                     self.session_event_sender.clone(),
                     (self.shutdown.clone(), self.future_task_sender.clone()),
                 );
-                stream.handle_event();
-                tokio::spawn(async move {
-                    loop {
-                        if stream.next().await.is_none() {
-                            break;
+                stream.handle_event(ServiceProtocolEvent::Init);
+                let (sender, receiver) = futures::channel::oneshot::channel();
+                let handle = tokio::spawn(async move {
+                    future::select(
+                        async move {
+                            loop {
+                                if stream.next().await.is_none() {
+                                    break;
+                                }
+                            }
                         }
-                    }
+                        .boxed(),
+                        receiver,
+                    )
+                    .await;
                 });
+                self.wait_handle.push((Some(sender), handle));
             }
 
             InnerProtocolHandle::Session(handle) => {
@@ -626,13 +644,23 @@ where
                         self.session_event_sender.clone(),
                         (self.shutdown.clone(), self.future_task_sender.clone()),
                     );
-                    tokio::spawn(async move {
-                        loop {
-                            if stream.next().await.is_none() {
-                                break;
+                    let (sender, receiver) = futures::channel::oneshot::channel();
+                    let handle = tokio::spawn(async move {
+                        future::select(
+                            async move {
+                                loop {
+                                    if stream.next().await.is_none() {
+                                        break;
+                                    }
+                                }
                             }
-                        }
+                            .boxed(),
+                            receiver,
+                        )
+                        .await;
                     });
+                    self.session_wait_handle
+                        .insert((id, proto_id), (Some(sender), handle));
                 }
             }
         }
@@ -767,11 +795,13 @@ where
             let timeout = self.config.timeout;
 
             let handshake_task = async move {
-                let result = Config::new(key_pair)
-                    .max_frame_length(max_frame_length)
-                    .handshake(socket)
-                    .timeout(timeout)
-                    .await;
+                let result = tokio::time::timeout(
+                    timeout,
+                    Config::new(key_pair)
+                        .max_frame_length(max_frame_length)
+                        .handshake(socket),
+                )
+                .await;
 
                 let event = match result {
                     Err(error) => {
@@ -1204,6 +1234,7 @@ where
             infos.remove(&proto_id);
         }
         self.session_proto_handles.remove(&(session_id, proto_id));
+        self.session_wait_handle.remove(&(session_id, proto_id));
     }
 
     #[inline(always)]
@@ -1231,10 +1262,11 @@ where
         let quick_count = self.service_context.control().quick_count.clone();
         let normal_count = self.service_context.control().normal_count.clone();
         let task = async move {
-            let mut interval = Interval::new(Instant::now(), Duration::from_millis(200));
+            let mut interval =
+                tokio::time::interval_at(tokio::time::Instant::now(), Duration::from_millis(200));
             loop {
                 let waker = waker.clone();
-                interval.next().await;
+                interval.tick().await;
                 if quick_count.load(Ordering::SeqCst) > RECEIVED_BUFFER_SIZE / 4
                     || normal_count.load(Ordering::SeqCst) > RECEIVED_BUFFER_SIZE / 2
                 {
@@ -1758,10 +1790,42 @@ where
             let waker = cx.waker().clone();
             let delay = self.delay.clone();
             tokio::spawn(async move {
-                tokio::timer::delay(Instant::now() + DELAY_TIME).await;
+                tokio::time::delay_until(tokio::time::Instant::now() + DELAY_TIME).await;
                 waker.wake();
                 delay.store(false, Ordering::Release);
             });
+        }
+    }
+
+    fn wait_handle_poll(&mut self, cx: &mut Context) -> Poll<Option<()>> {
+        for (sender, mut handle) in self.wait_handle.split_off(0) {
+            if let Some(sender) = sender {
+                let _ = sender.send(());
+            }
+            match handle.poll_unpin(cx) {
+                Poll::Pending => {
+                    self.wait_handle.push((None, handle));
+                }
+                Poll::Ready(_) => (),
+            }
+        }
+
+        for (_, (sender, mut handle)) in self.session_wait_handle.drain() {
+            if let Some(sender) = sender {
+                let _ = sender.send(());
+            }
+            match handle.poll_unpin(cx) {
+                Poll::Pending => {
+                    self.wait_handle.push((None, handle));
+                }
+                Poll::Ready(_) => (),
+            }
+        }
+
+        if self.wait_handle.is_empty() {
+            Poll::Ready(None)
+        } else {
+            Poll::Pending
         }
     }
 }
@@ -1780,17 +1844,26 @@ where
         {
             debug!("shutdown because all state is empty head");
             self.shutdown.store(true, Ordering::SeqCst);
-            return Poll::Ready(None);
+            return self.wait_handle_poll(cx);
         }
 
         if let Some(mut stream) = self.future_task_manager.take() {
-            tokio::spawn(async move {
-                loop {
-                    if stream.next().await.is_none() {
-                        break;
+            let (sender, receiver) = futures::channel::oneshot::channel();
+            let handle = tokio::spawn(async move {
+                future::select(
+                    async move {
+                        loop {
+                            if stream.next().await.is_none() {
+                                break;
+                            }
+                        }
                     }
-                }
+                    .boxed(),
+                    receiver,
+                )
+                .await;
             });
+            self.wait_handle.push((Some(sender), handle));
             self.notify_queue(cx);
             self.init_proto_handles();
         }
@@ -1820,7 +1893,7 @@ where
         {
             debug!("shutdown because all state is empty tail");
             self.shutdown.store(true, Ordering::SeqCst);
-            return Poll::Ready(None);
+            return self.wait_handle_poll(cx);
         }
 
         debug!(

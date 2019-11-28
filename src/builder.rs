@@ -1,6 +1,6 @@
 use std::{collections::HashMap, io, sync::Arc, time::Duration};
 
-use tokio::codec::LengthDelimitedCodec;
+use tokio_util::codec::LengthDelimitedCodec;
 
 use crate::{
     protocol_select::SelectFn,

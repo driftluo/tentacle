@@ -17,12 +17,11 @@ use p2p::{
     utils::multiaddr_to_socketaddr,
     ProtocolId, SessionId,
 };
-use tokio::codec::Framed;
 use tokio::io::{AsyncRead, AsyncWrite};
+use tokio_util::codec::Framed;
 
 use crate::addr::{AddrKnown, AddressManager, Misbehavior, RawAddr};
 use crate::protocol::{DiscoveryCodec, DiscoveryMessage, Node, Nodes};
-use bytes::Bytes;
 
 // FIXME: should be a more high level version number
 const VERSION: u32 = 0;
@@ -60,7 +59,7 @@ impl AsyncRead for StreamHandle {
             match Pin::new(&mut self.receiver).as_mut().poll_next(cx) {
                 Poll::Ready(Some(data)) => {
                     self.data_buf.reserve(data.len());
-                    self.data_buf.put(&data);
+                    self.data_buf.put(data.as_slice());
                 }
                 Poll::Ready(None) => {
                     return Poll::Ready(Err(io::ErrorKind::BrokenPipe.into()));
@@ -83,7 +82,7 @@ impl AsyncRead for StreamHandle {
 impl AsyncWrite for StreamHandle {
     fn poll_write(self: Pin<&mut Self>, _cx: &mut Context, buf: &[u8]) -> Poll<io::Result<usize>> {
         self.sender
-            .send_message_to(self.session_id, self.proto_id, Bytes::from(buf))
+            .send_message_to(self.session_id, self.proto_id, BytesMut::from(buf).freeze())
             .map(|()| buf.len())
             .map_err(|e| {
                 if let Error::IoError(e) = e {

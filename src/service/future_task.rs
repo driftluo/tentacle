@@ -11,7 +11,7 @@ use std::{
         Arc,
     },
     task::{Context, Poll},
-    time::{Duration, Instant},
+    time::Duration,
 };
 
 use crate::service::SEND_SIZE;
@@ -72,7 +72,8 @@ impl FutureTaskManager {
             let waker = cx.waker().clone();
             let delay = self.delay.clone();
             tokio::spawn(async move {
-                tokio::timer::delay(Instant::now() + Duration::from_millis(100)).await;
+                tokio::time::delay_until(tokio::time::Instant::now() + Duration::from_millis(100))
+                    .await;
                 waker.wake();
                 delay.store(false, Ordering::Release);
             });
@@ -150,11 +151,7 @@ mod test {
 
     use std::{thread, time};
 
-    use futures::{
-        channel::mpsc::channel,
-        stream::{iter, pending},
-        SinkExt, StreamExt,
-    };
+    use futures::{channel::mpsc::channel, stream::pending, SinkExt, StreamExt};
 
     #[test]
     fn test_manager_drop() {
@@ -165,31 +162,26 @@ mod test {
         let mut send_task = sender.clone();
 
         let handle = thread::spawn(|| {
-            let rt = tokio::runtime::Runtime::new().unwrap();
+            let mut rt = tokio::runtime::Runtime::new().unwrap();
             rt.spawn(async move {
+                for _ in 1..100 {
+                    let _ = send_task
+                        .send(Box::pin(async {
+                            let mut stream = pending::<()>();
+                            loop {
+                                stream.next().await;
+                            }
+                        }) as BoxedFutureTask)
+                        .await;
+                }
+            });
+            rt.block_on(async move {
                 loop {
                     if manager.next().await.is_none() {
                         break;
                     }
                 }
             });
-            rt.spawn(async move {
-                let mut tasks = iter(
-                    (1..100)
-                        .map(|_| {
-                            Box::pin(async {
-                                let mut stream = pending::<()>();
-                                loop {
-                                    stream.next().await;
-                                }
-                            }) as BoxedFutureTask
-                        })
-                        .collect::<Vec<_>>(),
-                );
-                let _ = send_task.send_all(&mut tasks).await;
-            });
-
-            rt.shutdown_on_idle();
         });
 
         thread::sleep(time::Duration::from_millis(300));

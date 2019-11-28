@@ -1,4 +1,4 @@
-use futures::{channel::mpsc, prelude::*};
+use futures::{channel::mpsc, SinkExt, Stream};
 use log::debug;
 use std::collections::HashMap;
 use std::{
@@ -8,7 +8,7 @@ use std::{
         Arc,
     },
     task::{Context, Poll},
-    time::{Duration, Instant},
+    time::Duration,
 };
 
 use crate::{
@@ -55,6 +55,25 @@ pub enum ServiceProtocolEvent {
     },
 }
 
+enum CurrentTask {
+    Idle,
+    Run(Option<SessionId>),
+}
+
+impl CurrentTask {
+    fn run_with_id(&mut self, id: SessionId) {
+        *self = CurrentTask::Run(Some(id))
+    }
+
+    fn run(&mut self) {
+        *self = CurrentTask::Run(None)
+    }
+
+    fn idle(&mut self) {
+        *self = CurrentTask::Idle
+    }
+}
+
 pub struct ServiceProtocolStream<T> {
     handle: T,
     /// External event is passed in from this
@@ -65,7 +84,7 @@ pub struct ServiceProtocolStream<T> {
     notify_sender: mpsc::Sender<u64>,
     notify_receiver: mpsc::Receiver<u64>,
     panic_report: mpsc::Sender<SessionEvent>,
-    current_task: Option<ServiceProtocolEvent>,
+    current_task: CurrentTask,
     delay: Arc<AtomicBool>,
     shutdown: Arc<AtomicBool>,
     future_task_sender: mpsc::Sender<BoxedFutureTask>,
@@ -92,7 +111,7 @@ where
             notify_sender,
             notify_receiver,
             notify: HashMap::new(),
-            current_task: Some(ServiceProtocolEvent::Init),
+            current_task: CurrentTask::Idle,
             delay: Arc::new(AtomicBool::new(false)),
             shutdown,
             panic_report,
@@ -101,19 +120,16 @@ where
     }
 
     #[inline]
-    pub fn handle_event(&mut self) -> bool {
+    pub fn handle_event(&mut self, event: ServiceProtocolEvent) {
         use self::ServiceProtocolEvent::*;
 
-        if self.current_task.is_none() {
-            return false;
-        }
+        let shutdown = self.shutdown.load(Ordering::SeqCst);
 
-        if self.shutdown.load(Ordering::SeqCst) {
-            match self.current_task.as_ref().unwrap() {
+        if shutdown {
+            match event {
                 Disconnected { .. } => (),
                 _ => {
-                    self.current_task.take();
-                    return false;
+                    return;
                 }
             }
         }
@@ -131,82 +147,66 @@ where
             }
         }
 
-        match self.current_task.clone().unwrap() {
-            Init => self.handle.init(&mut self.handle_context),
+        match event {
+            Init => {
+                self.current_task.run();
+                self.handle.init(&mut self.handle_context)
+            }
             Connected { session, version } => {
-                match tokio_executor::threadpool::blocking(|| {
+                self.current_task.run_with_id(session.id);
+                tokio::task::block_in_place(|| {
                     self.handle
                         .connected(self.handle_context.as_mut(&session), &version)
-                }) {
-                    Poll::Ready(res) => match res {
-                        Ok(_) => (),
-                        Err(_) => self
-                            .handle
-                            .connected(self.handle_context.as_mut(&session), &version),
-                    },
-                    Poll::Pending => return true,
-                }
+                });
                 self.sessions.insert(session.id, session);
             }
             Disconnected { id } => {
+                self.current_task.run_with_id(id);
                 if let Some(session) = self.sessions.remove(&id) {
-                    match tokio_executor::threadpool::blocking(|| {
+                    if shutdown {
                         self.handle
                             .disconnected(self.handle_context.as_mut(&session))
-                    }) {
-                        Poll::Ready(res) => match res {
-                            Ok(_) => (),
-                            Err(_) => self
-                                .handle
-                                .disconnected(self.handle_context.as_mut(&session)),
-                        },
-                        Poll::Pending => return true,
+                    } else {
+                        tokio::task::block_in_place(|| {
+                            self.handle
+                                .disconnected(self.handle_context.as_mut(&session))
+                        });
                     }
                 }
             }
             Received { id, data } => {
+                self.current_task.run_with_id(id);
                 if let Some(session) = self.sessions.get(&id).cloned() {
-                    if !session.closed.load(Ordering::SeqCst) {
-                        match tokio_executor::threadpool::blocking(|| {
+                    if !session.closed.load(Ordering::SeqCst)
+                        && !self.shutdown.load(Ordering::SeqCst)
+                    {
+                        tokio::task::block_in_place(|| {
                             self.handle
                                 .received(self.handle_context.as_mut(&session), data.clone())
-                        }) {
-                            Poll::Ready(res) => match res {
-                                Ok(_) => (),
-                                Err(_) => self
-                                    .handle
-                                    .received(self.handle_context.as_mut(&session), data),
-                            },
-                            Poll::Pending => return true,
-                        }
+                        })
                     }
                 }
             }
             Notify { token } => {
-                match tokio_executor::threadpool::blocking(|| {
-                    self.handle.notify(&mut self.handle_context, token)
-                }) {
-                    Poll::Ready(res) => match res {
-                        Ok(_) => (),
-                        Err(_) => self.handle.notify(&mut self.handle_context, token),
-                    },
-                    Poll::Pending => return true,
-                }
+                self.current_task.run();
+                tokio::task::block_in_place(|| self.handle.notify(&mut self.handle_context, token));
                 self.set_notify(token);
             }
             SetNotify { interval, token } => {
+                self.current_task.run();
                 self.notify.entry(token).or_insert(interval);
                 self.set_notify(token);
             }
             RemoveNotify { token } => {
+                self.current_task.run();
                 self.notify.remove(&token);
             }
             Update { listen_addrs } => {
+                self.current_task.run();
                 self.handle_context.update_listens(listen_addrs);
             }
         }
-        self.current_task.take();
-        false
+        self.current_task.idle();
     }
 
     fn handle_poll(&mut self, cx: &mut Context) {
@@ -219,7 +219,7 @@ where
             // NOTE: A Interval/Delay will block tokio runtime from gracefully shutdown.
             //       So we spawn it in FutureTaskManager
             let task = async move {
-                tokio::timer::delay(Instant::now() + interval).await;
+                tokio::time::delay_until(tokio::time::Instant::now() + interval).await;
                 let _ = sender.send(token).await;
             };
             let mut future_task_sender = self.future_task_sender.clone();
@@ -243,7 +243,8 @@ where
             let waker = cx.waker().clone();
             let delay = self.delay.clone();
             tokio::spawn(async move {
-                tokio::timer::delay(Instant::now() + Duration::from_millis(200)).await;
+                tokio::time::delay_until(tokio::time::Instant::now() + Duration::from_millis(200))
+                    .await;
                 waker.wake();
                 delay.store(false, Ordering::Release);
             });
@@ -254,14 +255,7 @@ where
 impl<T> Drop for ServiceProtocolStream<T> {
     fn drop(&mut self) {
         if !self.shutdown.load(Ordering::SeqCst) {
-            use ServiceProtocolEvent::*;
-            if let Some(event) = self.current_task.take() {
-                let session_id = match event {
-                    Received { id, .. } => Some(id),
-                    Disconnected { id } => Some(id),
-                    Connected { session, .. } => Some(session.id),
-                    _ => None,
-                };
+            if let CurrentTask::Run(session_id) = self.current_task {
                 let proto_id = self.handle_context.proto_id;
                 let event = match session_id {
                     Some(id) => SessionEvent::ProtocolHandleError {
@@ -289,25 +283,25 @@ where
     type Item = ();
 
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Option<Self::Item>> {
-        if self.handle_event() {
-            self.set_delay(cx);
-            return Poll::Pending;
+        if self.shutdown.load(Ordering::SeqCst) {
+            debug!(
+                "ServiceProtocolStream({:?}) finished, shutdown",
+                self.handle_context.proto_id
+            );
+            self.current_task.idle();
+            return Poll::Ready(None);
         }
+
         let mut finished = false;
         for _ in 0..64 {
             match Pin::new(&mut self.receiver).as_mut().poll_next(cx) {
-                Poll::Ready(Some(event)) => {
-                    self.current_task = Some(event);
-                    if self.handle_event() {
-                        break;
-                    }
-                }
+                Poll::Ready(Some(event)) => self.handle_event(event),
                 Poll::Ready(None) => {
                     debug!(
                         "ServiceProtocolStream({:?}) finished",
                         self.handle_context.proto_id
                     );
-                    self.current_task.take();
+                    self.current_task.idle();
                     return Poll::Ready(None);
                 }
                 Poll::Pending => {
@@ -323,21 +317,25 @@ where
         loop {
             match Pin::new(&mut self.notify_receiver).as_mut().poll_next(cx) {
                 Poll::Ready(Some(token)) => {
-                    self.current_task = Some(ServiceProtocolEvent::Notify { token });
-                    if self.handle_event() {
-                        self.set_delay(cx);
-                        break;
-                    }
+                    self.handle_event(ServiceProtocolEvent::Notify { token })
                 }
                 Poll::Ready(None) => unreachable!(),
                 Poll::Pending => {
-                    self.set_delay(cx);
                     break;
                 }
             }
         }
 
         self.handle_poll(cx);
+
+        if self.shutdown.load(Ordering::SeqCst) {
+            debug!(
+                "ServiceProtocolStream({:?}) finished, shutdown",
+                self.handle_context.proto_id
+            );
+            self.current_task.idle();
+            return Poll::Ready(None);
+        }
 
         Poll::Pending
     }
@@ -380,7 +378,7 @@ pub struct SessionProtocolStream<T> {
     notify: HashMap<u64, Duration>,
     notify_sender: mpsc::Sender<u64>,
     notify_receiver: mpsc::Receiver<u64>,
-    current_task: Option<SessionProtocolEvent>,
+    current_task: bool,
     panic_report: mpsc::Sender<SessionEvent>,
     delay: Arc<AtomicBool>,
     shutdown: Arc<AtomicBool>,
@@ -410,7 +408,7 @@ where
             notify: HashMap::new(),
             context,
             panic_report,
-            current_task: None,
+            current_task: false,
             shutdown,
             delay: Arc::new(AtomicBool::new(false)),
             future_task_sender,
@@ -418,83 +416,51 @@ where
     }
 
     #[inline]
-    fn handle_event(&mut self) -> bool {
+    fn handle_event(&mut self, mut event: SessionProtocolEvent) {
         use self::SessionProtocolEvent::*;
 
-        if self.current_task.is_none() {
-            return false;
-        }
-        if self.shutdown.load(Ordering::SeqCst) {
-            match self.current_task.as_ref().unwrap() {
+        self.current_task = true;
+        let shutdown = self.shutdown.load(Ordering::SeqCst);
+        if shutdown {
+            match event {
                 Disconnected {} => (),
                 _ => {
-                    self.current_task.take();
-                    return false;
+                    self.current_task = false;
+                    return;
                 }
             }
         }
 
         if self.context.closed.load(Ordering::SeqCst) {
-            self.current_task = Some(SessionProtocolEvent::Disconnected);
+            event = SessionProtocolEvent::Disconnected;
         }
 
-        match self.current_task.clone().unwrap() {
-            Connected { version } => {
-                match tokio_executor::threadpool::blocking(|| {
-                    self.handle
-                        .connected(self.handle_context.as_mut(&self.context), &version)
-                }) {
-                    Poll::Ready(res) => match res {
-                        Ok(_) => (),
-                        Err(_) => self
-                            .handle
-                            .connected(self.handle_context.as_mut(&self.context), &version),
-                    },
-                    Poll::Pending => return true,
-                }
-            }
+        match event {
+            Connected { version } => tokio::task::block_in_place(|| {
+                self.handle
+                    .connected(self.handle_context.as_mut(&self.context), &version)
+            }),
             Disconnected => {
-                match tokio_executor::threadpool::blocking(|| {
+                if shutdown {
                     self.handle
                         .disconnected(self.handle_context.as_mut(&self.context))
-                }) {
-                    Poll::Ready(res) => match res {
-                        Ok(_) => (),
-                        Err(_) => self
-                            .handle
-                            .disconnected(self.handle_context.as_mut(&self.context)),
-                    },
-                    Poll::Pending => return true,
+                } else {
+                    tokio::task::block_in_place(|| {
+                        self.handle
+                            .disconnected(self.handle_context.as_mut(&self.context))
+                    });
                 }
                 self.close();
             }
-            Received { data } => {
-                match tokio_executor::threadpool::blocking(|| {
-                    self.handle
-                        .received(self.handle_context.as_mut(&self.context), data.clone())
-                }) {
-                    Poll::Ready(res) => match res {
-                        Ok(_) => (),
-                        Err(_) => self
-                            .handle
-                            .received(self.handle_context.as_mut(&self.context), data),
-                    },
-                    Poll::Pending => return true,
-                }
-            }
+            Received { data } => tokio::task::block_in_place(|| {
+                self.handle
+                    .received(self.handle_context.as_mut(&self.context), data.clone())
+            }),
             Notify { token } => {
-                match tokio_executor::threadpool::blocking(|| {
+                tokio::task::block_in_place(|| {
                     self.handle
                         .notify(self.handle_context.as_mut(&self.context), token)
-                }) {
-                    Poll::Ready(res) => match res {
-                        Ok(_) => (),
-                        Err(_) => self
-                            .handle
-                            .notify(self.handle_context.as_mut(&self.context), token),
-                    },
-                    Poll::Pending => return true,
-                }
+                });
                 self.set_notify(token);
             }
             SetNotify { token, interval } => {
@@ -508,8 +474,7 @@ where
                 self.handle_context.update_listens(listen_addrs);
             }
         }
-        self.current_task.take();
-        false
+        self.current_task = false;
     }
 
     fn handle_poll(&mut self, cx: &mut Context) {
@@ -524,7 +489,7 @@ where
             // NOTE: A Interval/Delay will block tokio runtime from gracefully shutdown.
             //       So we spawn it in FutureTaskManager
             let task = async move {
-                tokio::timer::delay(Instant::now() + interval).await;
+                tokio::time::delay_until(tokio::time::Instant::now() + interval).await;
                 let _ = sender.send(token).await;
             };
             let mut future_task_sender = self.future_task_sender.clone();
@@ -548,7 +513,8 @@ where
             let waker = cx.waker().clone();
             let delay = self.delay.clone();
             tokio::spawn(async move {
-                tokio::timer::delay(Instant::now() + Duration::from_millis(200)).await;
+                tokio::time::delay_until(tokio::time::Instant::now() + Duration::from_millis(200))
+                    .await;
                 waker.wake();
                 delay.store(false, Ordering::Release);
             });
@@ -558,13 +524,13 @@ where
     #[inline(always)]
     fn close(&mut self) {
         self.receiver.close();
-        self.current_task.take();
+        self.current_task = false;
     }
 }
 
 impl<T> Drop for SessionProtocolStream<T> {
     fn drop(&mut self) {
-        if !self.shutdown.load(Ordering::SeqCst) && self.current_task.is_some() {
+        if !self.shutdown.load(Ordering::SeqCst) && self.current_task {
             let event = SessionEvent::ProtocolHandleError {
                 error: Error::SessionProtoHandleAbnormallyClosed(self.context.id),
                 proto_id: self.handle_context.proto_id,
@@ -584,42 +550,32 @@ where
     type Item = ();
 
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Option<Self::Item>> {
-        if self.handle_event() {
-            self.set_delay(cx);
-            return Poll::Pending;
-        }
-        loop {
+        let mut finished = false;
+        for _ in 0..64 {
             match Pin::new(&mut self.receiver).as_mut().poll_next(cx) {
-                Poll::Ready(Some(event)) => {
-                    self.current_task = Some(event);
-                    if self.handle_event() {
-                        self.set_delay(cx);
-                        break;
-                    }
-                }
+                Poll::Ready(Some(event)) => self.handle_event(event),
                 Poll::Ready(None) => {
                     self.close();
                     return Poll::Ready(None);
                 }
                 Poll::Pending => {
-                    self.set_delay(cx);
+                    finished = true;
                     break;
                 }
             }
         }
 
+        if !finished {
+            self.set_delay(cx);
+        }
+
         loop {
             match Pin::new(&mut self.notify_receiver).as_mut().poll_next(cx) {
                 Poll::Ready(Some(token)) => {
-                    self.current_task = Some(SessionProtocolEvent::Notify { token });
-                    if self.handle_event() {
-                        self.set_delay(cx);
-                        break;
-                    }
+                    self.handle_event(SessionProtocolEvent::Notify { token })
                 }
                 Poll::Ready(None) => unreachable!(),
                 Poll::Pending => {
-                    self.set_delay(cx);
                     break;
                 }
             }

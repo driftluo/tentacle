@@ -13,7 +13,7 @@ use p2p::{
     ProtocolId,
 };
 use std::{sync::Once, thread};
-use tokio::codec::length_delimited::Builder;
+use tokio_util::codec::length_delimited::Builder;
 
 static START_SECIO: Once = Once::new();
 static START_NO_SECIO: Once = Once::new();
@@ -105,8 +105,8 @@ pub fn init() {
         let mut service = create(true, meta, ());
         let control = service.control().clone();
         thread::spawn(move || {
-            let rt = tokio::runtime::Runtime::new().unwrap();
-            rt.spawn(async move {
+            let mut rt = tokio::runtime::Runtime::new().unwrap();
+            rt.block_on(async move {
                 let listen_addr = service
                     .listen("/ip4/127.0.0.1/tcp/0".parse().unwrap())
                     .await
@@ -118,15 +118,14 @@ pub fn init() {
                     }
                 }
             });
-            rt.shutdown_on_idle();
         });
 
         let (meta, client_receiver) = create_meta(1.into());
 
         thread::spawn(|| {
-            let rt = tokio::runtime::Runtime::new().unwrap();
+            let mut rt = tokio::runtime::Runtime::new().unwrap();
             let mut service = create(true, meta, ());
-            rt.spawn(async move {
+            rt.block_on(async move {
                 let listen_addr = addr_receiver.await.unwrap();
                 service
                     .dial(listen_addr, TargetProtocol::All)
@@ -138,7 +137,6 @@ pub fn init() {
                     }
                 }
             });
-            rt.shutdown_on_idle();
         });
 
         assert_eq!(client_receiver.recv(), Ok(Notify::Connected));
@@ -155,8 +153,8 @@ pub fn init() {
         let mut service = create(false, meta, ());
         let control = service.control().clone();
         thread::spawn(move || {
-            let rt = tokio::runtime::Runtime::new().unwrap();
-            rt.spawn(async move {
+            let mut rt = tokio::runtime::Runtime::new().unwrap();
+            rt.block_on(async move {
                 let listen_addr = service
                     .listen("/ip4/127.0.0.1/tcp/0".parse().unwrap())
                     .await
@@ -168,15 +166,14 @@ pub fn init() {
                     }
                 }
             });
-            rt.shutdown_on_idle();
         });
 
         let (meta, client_receiver) = create_meta(ProtocolId::new(1));
 
         thread::spawn(move || {
-            let rt = tokio::runtime::Runtime::new().unwrap();
+            let mut rt = tokio::runtime::Runtime::new().unwrap();
             let mut service = create(false, meta, ());
-            rt.spawn(async move {
+            rt.block_on(async move {
                 let listen_addr = addr_receiver.await.unwrap();
                 service
                     .dial(listen_addr, TargetProtocol::All)
@@ -188,7 +185,6 @@ pub fn init() {
                     }
                 }
             });
-            rt.shutdown_on_idle();
         });
 
         assert_eq!(client_receiver.recv(), Ok(Notify::Connected));
@@ -202,10 +198,17 @@ pub fn init() {
 fn secio_and_send_data(data: &[u8]) {
     unsafe {
         SECIO_CONTROL.as_mut().map(|control| {
-            control.filter_broadcast(TargetSession::All, ProtocolId::new(1), Bytes::from(data))
+            control.filter_broadcast(
+                TargetSession::All,
+                ProtocolId::new(1),
+                Bytes::from(data.to_owned()),
+            )
         });
         if let Some(rev) = SECIO_RECV.as_ref() {
-            assert_eq!(rev.recv(), Ok(Notify::Message(bytes::Bytes::from(data))))
+            assert_eq!(
+                rev.recv(),
+                Ok(Notify::Message(bytes::Bytes::from(data.to_owned())))
+            )
         }
     }
 }
@@ -213,11 +216,14 @@ fn secio_and_send_data(data: &[u8]) {
 fn no_secio_and_send_data(data: &[u8]) {
     unsafe {
         NO_SECIO_CONTROL.as_mut().map(|control| {
-            control.filter_broadcast(TargetSession::All, 1.into(), Bytes::from(data))
+            control.filter_broadcast(TargetSession::All, 1.into(), Bytes::from(data.to_owned()))
         });
 
         if let Some(rev) = NO_SECIO_RECV.as_ref() {
-            assert_eq!(rev.recv(), Ok(Notify::Message(bytes::Bytes::from(data))))
+            assert_eq!(
+                rev.recv(),
+                Ok(Notify::Message(bytes::Bytes::from(data.to_owned())))
+            )
         }
     }
 }

@@ -8,10 +8,10 @@ authors = ["Linfeng Qian <thewawar@gmail.com>", "Nervos Core Dev <dev@nervos.org
 edition = "2018"
 
 [dependencies]
-bytes = "0.4"
-byteorder = "1.2"
-futures = { version = "0.3.0-alpha.18", package = "futures-preview" }
-tokio = "0.2.0-alpha.3"
+bytes = "0.5.0"
+futures = { version = "0.3.0" }
+tokio = { version = "0.2.0", features = ["time", "io-util", "tcp", "dns"] }
+tokio-util = { version = "0.2.0", features = ["codec"] }
 log = "0.4"
 
 [dev-dependencies]

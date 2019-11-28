@@ -108,8 +108,8 @@ fn test_kill(secio: bool) {
     let mut service = create(secio, meta, ());
     let control = service.control().clone();
     thread::spawn(move || {
-        let rt = tokio::runtime::Runtime::new().unwrap();
-        rt.spawn(async move {
+        let mut rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async move {
             let listen_addr = service
                 .listen("/ip4/127.0.0.1/tcp/0".parse().unwrap())
                 .await
@@ -121,7 +121,6 @@ fn test_kill(secio: bool) {
                 }
             }
         });
-        rt.shutdown_on_idle();
     });
     thread::sleep(Duration::from_millis(100));
 
@@ -146,10 +145,10 @@ fn test_kill(secio: bool) {
             assert!((cpu_stop - cpu_start) / cpu_start < 0.1);
         }
         Ok(ForkResult::Child) => {
-            let rt = tokio::runtime::Runtime::new().unwrap();
+            let mut rt = tokio::runtime::Runtime::new().unwrap();
             let (meta, _receiver) = create_meta(1.into());
             let mut service = create(secio, meta, ());
-            rt.spawn(async move {
+            rt.block_on(async move {
                 let listen_addr = addr_receiver.await.unwrap();
                 service
                     .dial(listen_addr, TargetProtocol::All)
@@ -161,7 +160,6 @@ fn test_kill(secio: bool) {
                     }
                 }
             });
-            rt.shutdown_on_idle();
         }
     }
 }

@@ -101,10 +101,10 @@ fn create_meta(id: ProtocolId) -> (ProtocolMeta, Arc<AtomicUsize>) {
 
 fn main() {
     env_logger::init();
-    let rt = tokio::runtime::Runtime::new().unwrap();
+    let mut rt = tokio::runtime::Runtime::new().unwrap();
 
     if std::env::args().nth(1) == Some("server".to_string()) {
-        rt.spawn(async move {
+        rt.block_on(async move {
             let (meta, _) = create_meta(1.into());
             let mut service = create(false, meta, ());
             let listen_addr = service
@@ -119,7 +119,7 @@ fn main() {
             }
         });
     } else {
-        rt.spawn(async move {
+        rt.block_on(async move {
             let listen_addr = std::env::args().nth(1).unwrap().parse().unwrap();
             let (meta, _result) = create_meta(1.into());
             let mut service = create(false, meta, ());
@@ -134,6 +134,4 @@ fn main() {
             }
         });
     }
-
-    rt.shutdown_on_idle();
 }

@@ -47,7 +47,7 @@ impl Propose {
         let data = builder.finish();
 
         fbb.finish(data, None);
-        Bytes::from(fbb.finished_data())
+        Bytes::from(fbb.finished_data().to_owned())
     }
 
     /// Decode with Flatbuffer
@@ -64,7 +64,7 @@ impl Propose {
             (Some(rand), Some(pubkey), Some(exchange), Some(ciphers), Some(hashes)) => {
                 Some(Propose {
                     rand: rand.to_owned(),
-                    pubkey: Bytes::from(pubkey),
+                    pubkey: Bytes::from(pubkey.to_owned()),
                     exchange: exchange.to_owned(),
                     ciphers: ciphers.to_owned(),
                     hashes: hashes.to_owned(),
@@ -110,14 +110,17 @@ impl Propose {
                     .collect(),
             )
             .build();
-        handshake_mol::Propose::new_builder()
-            .rand(rand)
-            .pubkey(pubkey)
-            .exchanges(exchange)
-            .ciphers(ciphers)
-            .hashes(hashes)
-            .build()
-            .as_bytes()
+        Bytes::from(
+            handshake_mol::Propose::new_builder()
+                .rand(rand)
+                .pubkey(pubkey)
+                .exchanges(exchange)
+                .ciphers(ciphers)
+                .hashes(hashes)
+                .build()
+                .as_slice()
+                .to_owned(),
+        )
     }
 
     /// Decode with molecule
@@ -126,7 +129,7 @@ impl Propose {
         let reader = handshake_mol::ProposeReader::from_compatible_slice(data).ok()?;
         Some(Propose {
             rand: reader.rand().raw_data().to_owned(),
-            pubkey: Bytes::from(reader.pubkey().raw_data()),
+            pubkey: Bytes::from(reader.pubkey().raw_data().to_owned()),
             exchange: String::from_utf8(reader.exchanges().raw_data().to_owned()).ok()?,
             ciphers: String::from_utf8(reader.ciphers().raw_data().to_owned()).ok()?,
             hashes: String::from_utf8(reader.hashes().raw_data().to_owned()).ok()?,
@@ -158,7 +161,7 @@ impl Exchange {
         let data = builder.finish();
 
         fbb.finish(data, None);
-        Bytes::from(fbb.finished_data())
+        Bytes::from(fbb.finished_data().to_owned())
     }
 
     /// Decode with Flatbuffer
@@ -183,11 +186,14 @@ impl Exchange {
         let signature = handshake_mol::Bytes::new_builder()
             .set(self.signature.into_iter().map(Into::into).collect())
             .build();
-        handshake_mol::Exchange::new_builder()
-            .epubkey(epubkey)
-            .signature(signature)
-            .build()
-            .as_bytes()
+        Bytes::from(
+            handshake_mol::Exchange::new_builder()
+                .epubkey(epubkey)
+                .signature(signature)
+                .build()
+                .as_slice()
+                .to_owned(),
+        )
     }
 
     /// Decode with molecule
@@ -236,7 +242,7 @@ impl PublicKey {
         let data = builder.finish();
 
         fbb.finish(data, None);
-        Bytes::from(fbb.finished_data())
+        Bytes::from(fbb.finished_data().to_owned())
     }
 
     /// Decode with Flatbuffer
@@ -260,7 +266,7 @@ impl PublicKey {
         let pubkey = handshake_mol::PublicKey::new_builder()
             .set(secp256k1)
             .build();
-        pubkey.as_bytes()
+        Bytes::from(pubkey.as_slice().to_vec())
     }
 
     /// Decode with molecule

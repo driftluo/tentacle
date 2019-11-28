@@ -283,7 +283,7 @@ impl PingMessage {
         builder.add_payload(ping.as_union_value());
         let data = builder.finish();
         fbb.finish(data, None);
-        Bytes::from(fbb.finished_data())
+        Bytes::from(fbb.finished_data().to_owned())
     }
 
     #[cfg(feature = "flatc")]
@@ -299,7 +299,7 @@ impl PingMessage {
         builder.add_payload(pong.as_union_value());
         let data = builder.finish();
         fbb.finish(data, None);
-        Bytes::from(fbb.finished_data())
+        Bytes::from(fbb.finished_data().to_owned())
     }
 
     #[cfg(feature = "flatc")]
@@ -329,10 +329,13 @@ impl PingMessage {
             .build();
         let ping = protocol_mol::Ping::new_builder().nonce(nonce).build();
         let payload = protocol_mol::PingPayload::new_builder().set(ping).build();
-        protocol_mol::PingMessage::new_builder()
-            .payload(payload)
-            .build()
-            .as_bytes()
+        Bytes::from(
+            protocol_mol::PingMessage::new_builder()
+                .payload(payload)
+                .build()
+                .as_slice()
+                .to_owned(),
+        )
     }
 
     #[cfg(feature = "molc")]
@@ -346,10 +349,13 @@ impl PingMessage {
             .build();
         let pong = protocol_mol::Pong::new_builder().nonce(nonce).build();
         let payload = protocol_mol::PingPayload::new_builder().set(pong).build();
-        protocol_mol::PingMessage::new_builder()
-            .payload(payload)
-            .build()
-            .as_bytes()
+        Bytes::from(
+            protocol_mol::PingMessage::new_builder()
+                .payload(payload)
+                .build()
+                .as_slice()
+                .to_owned(),
+        )
     }
 
     #[cfg(feature = "molc")]

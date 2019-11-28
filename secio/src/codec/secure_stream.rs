@@ -1,15 +1,12 @@
-use bytes::{Bytes, BytesMut};
+use bytes::{Buf, Bytes, BytesMut};
 use futures::{
     channel::mpsc::{self, Receiver, Sender},
     stream::iter,
-    SinkExt, Stream,
+    Sink, SinkExt, Stream, StreamExt,
 };
 use log::{debug, trace};
-use tokio::{
-    codec::{length_delimited::LengthDelimitedCodec, Framed},
-    prelude::Sink,
-    prelude::{AsyncRead, AsyncWrite},
-};
+use tokio::prelude::{AsyncRead, AsyncWrite};
+use tokio_util::codec::{length_delimited::LengthDelimitedCodec, Framed};
 
 use std::{
     cmp::min,
@@ -21,7 +18,7 @@ use std::{
         Arc,
     },
     task::{Context, Poll},
-    time::{Duration, Instant},
+    time::Duration,
 };
 
 use crate::{
@@ -268,7 +265,7 @@ where
             let waker = cx.waker().clone();
             let delay = self.delay.clone();
             tokio::spawn(async move {
-                tokio::timer::delay(Instant::now() + DELAY_TIME).await;
+                tokio::time::delay_until(tokio::time::Instant::now() + DELAY_TIME).await;
                 waker.wake();
                 delay.store(false, Ordering::Release);
             });
@@ -280,7 +277,7 @@ where
         let events = self.read_buf.split_off(0);
         if let Some(mut sender) = self.frame_sender.take() {
             tokio::spawn(async move {
-                let mut iter = iter(events);
+                let mut iter = iter(events).map(Ok);
                 if let Err(e) = sender.send_all(&mut iter).await {
                     debug!("close event send to handle error: {:?}", e)
                 }
@@ -311,7 +308,10 @@ where
             frame.truncate(content_length);
         }
 
-        let mut out = self.decode_cipher.decrypt(&frame).map(BytesMut::from)?;
+        let mut out = self
+            .decode_cipher
+            .decrypt(&frame)
+            .map(|res| BytesMut::from(res.as_slice()))?;
 
         if !self.nonce.is_empty() {
             let n = min(out.len(), self.nonce.len());
@@ -319,7 +319,7 @@ where
                 return Err(SecioError::NonceVerificationFailed);
             }
             self.nonce.drain(..n);
-            out.split_to(n);
+            out.advance(n);
         }
         Ok(out)
     }
@@ -337,7 +337,7 @@ where
         let mut out = self
             .encode_cipher
             .encrypt(&data[..])
-            .map(BytesMut::from)
+            .map(|res| BytesMut::from(res.as_slice()))
             .unwrap();
         if let Some(ref mut hmac) = self.encode_hmac {
             let signature = hmac.sign(&out[..]);
@@ -409,11 +409,11 @@ mod tests {
     use bytes::BytesMut;
     use futures::{channel, StreamExt};
     use rand;
-    use tokio::codec::{length_delimited::LengthDelimitedCodec, Framed};
     use tokio::{
         io::{AsyncReadExt, AsyncWriteExt},
         net::{TcpListener, TcpStream},
     };
+    use tokio_util::codec::{length_delimited::LengthDelimitedCodec, Framed};
 
     fn test_decode_encode(cipher: CipherType) {
         let cipher_key = (0..cipher.key_size())
@@ -481,14 +481,14 @@ mod tests {
 
         let (sender, receiver) = channel::oneshot::channel::<bytes::BytesMut>();
         let (addr_sender, addr_receiver) = channel::oneshot::channel::<::std::net::SocketAddr>();
-        let rt = tokio::runtime::Runtime::new().unwrap();
+        let mut rt = tokio::runtime::Runtime::new().unwrap();
 
         let nonce2 = nonce.clone();
         rt.spawn(async move {
-            let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let mut listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
             let listener_addr = listener.local_addr().unwrap();
             let _ = addr_sender.send(listener_addr);
-            let (socket, _stream) = listener.incoming().into_future().await;
+            let (socket, _) = listener.accept().await.unwrap();
             let nonce2 = nonce2.clone();
             let (decode_hmac, encode_hmac) = match cipher {
                 CipherType::ChaCha20Poly1305 | CipherType::Aes128Gcm | CipherType::Aes256Gcm => {
@@ -501,7 +501,7 @@ mod tests {
                 ),
             };
             let mut secure = SecureStream::new(
-                Framed::new(socket.unwrap().unwrap(), LengthDelimitedCodec::new()),
+                Framed::new(socket, LengthDelimitedCodec::new()),
                 new_stream(
                     cipher,
                     &cipher_key_clone[..key_size],
@@ -534,7 +534,7 @@ mod tests {
 
             let mut data = [0u8; 11];
             handle.read_exact(&mut data).await.unwrap();
-            let _ = sender.send(BytesMut::from(data.to_vec()));
+            let _ = sender.send(BytesMut::from(&data[..]));
         });
 
         rt.spawn(async move {
@@ -586,12 +586,10 @@ mod tests {
             let _ = handle.write_all(&data_clone[..]).await;
         });
 
-        rt.spawn(async move {
+        rt.block_on(async move {
             let received = receiver.await.unwrap();
             assert_eq!(received.to_vec(), data);
         });
-
-        rt.shutdown_on_idle()
     }
 
     #[cfg(unix)]

@@ -16,7 +16,7 @@ use std::{
         Arc,
     },
     task::{Context, Poll},
-    time::{Duration, Instant},
+    time::Duration,
 };
 
 use log::debug;
@@ -173,7 +173,7 @@ impl StreamHandle {
 
     fn send_data(&mut self, data: &[u8]) -> Result<(), Error> {
         let flags = self.get_flags();
-        let frame = Frame::new_data(flags, self.id, Bytes::from(data));
+        let frame = Frame::new_data(flags, self.id, Bytes::from(data.to_owned()));
         self.send_frame(frame)
     }
 
@@ -321,7 +321,8 @@ impl StreamHandle {
             let waker = cx.waker().clone();
             let delay = self.delay.clone();
             tokio::spawn(async move {
-                tokio::timer::delay(Instant::now() + Duration::from_millis(200)).await;
+                tokio::time::delay_until(tokio::time::Instant::now() + Duration::from_millis(200))
+                    .await;
                 waker.wake();
                 delay.store(false, Ordering::Release);
             });
@@ -397,7 +398,7 @@ impl AsyncRead for StreamHandle {
             StreamState::RemoteClosing | StreamState::Closed | StreamState::Reset => (),
             _ => {
                 if self.send_window_update().is_err() {
-                    return Poll::Pending;
+                    return Poll::Ready(Err(io::ErrorKind::BrokenPipe.into()));
                 }
             }
         }

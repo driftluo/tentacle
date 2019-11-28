@@ -6,10 +6,7 @@ use std::{
     task::{Context, Poll},
     time::Duration,
 };
-use tokio::{
-    future::FutureExt as _,
-    net::{TcpListener, TcpStream},
-};
+use tokio::net::{TcpListener, TcpStream};
 
 use crate::{
     multiaddr::Multiaddr,
@@ -44,10 +41,12 @@ async fn connect(
 ) -> Result<(Multiaddr, TcpStream), TransportError> {
     let addr = address.await?;
     match multiaddr_to_socketaddr(&addr) {
-        Some(socket_address) => match TcpStream::connect(&socket_address).timeout(timeout).await {
-            Err(_) => Err(TransportError::Io(io::ErrorKind::TimedOut.into())),
-            Ok(res) => Ok((original.unwrap_or(addr), res.map_err(TransportError::Io)?)),
-        },
+        Some(socket_address) => {
+            match tokio::time::timeout(timeout, TcpStream::connect(&socket_address)).await {
+                Err(_) => Err(TransportError::Io(io::ErrorKind::TimedOut.into())),
+                Ok(res) => Ok((original.unwrap_or(addr), res.map_err(TransportError::Io)?)),
+            }
+        }
         None => Err(TransportError::NotSupport(original.unwrap_or(addr))),
     }
 }

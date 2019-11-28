@@ -25,7 +25,7 @@ fn main() {
             ))
         })
         .build();
-    let rt = tokio::runtime::Runtime::new().unwrap();
+    let mut rt = tokio::runtime::Runtime::new().unwrap();
     if std::env::args().nth(1) == Some("server".to_string()) {
         debug!("Starting server ......");
         let mut service = ServiceBuilder::default()
@@ -33,7 +33,7 @@ fn main() {
             .key_pair(SecioKeyPair::secp256k1_generated())
             .forever(true)
             .build(SimpleHandler {});
-        rt.spawn(async move {
+        rt.block_on(async move {
             service
                 .listen("/ip4/127.0.0.1/tcp/1337".parse().unwrap())
                 .await
@@ -51,7 +51,7 @@ fn main() {
             .key_pair(SecioKeyPair::secp256k1_generated())
             .forever(true)
             .build(SimpleHandler {});
-        rt.spawn(async move {
+        rt.block_on(async move {
             service
                 .dial(
                     "/ip4/127.0.0.1/tcp/1337".parse().unwrap(),
@@ -66,7 +66,6 @@ fn main() {
             }
         });
     }
-    rt.shutdown_on_idle();
 }
 
 #[derive(Clone)]

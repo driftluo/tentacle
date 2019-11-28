@@ -8,8 +8,8 @@ use std::{convert::TryFrom, io};
 use bytes::{Bytes, BytesMut};
 use log::debug;
 use p2p::multiaddr::Multiaddr;
-use tokio::codec::length_delimited::LengthDelimitedCodec;
-use tokio::codec::{Decoder, Encoder};
+use tokio_util::codec::length_delimited::LengthDelimitedCodec;
+use tokio_util::codec::{Decoder, Encoder};
 
 #[cfg(feature = "flatc")]
 use crate::protocol_generated::p2p::discovery::{
@@ -126,7 +126,7 @@ impl DiscoveryMessage {
             }
         };
         fbb.finish(offset, None);
-        Bytes::from(fbb.finished_data())
+        Bytes::from(fbb.finished_data().to_owned())
     }
 
     #[cfg(feature = "flatc")]
@@ -242,10 +242,13 @@ impl DiscoveryMessage {
                     .build()
             }
         };
-        protocol_mol::DiscoveryMessage::new_builder()
-            .payload(playload)
-            .build()
-            .as_bytes()
+        Bytes::from(
+            protocol_mol::DiscoveryMessage::new_builder()
+                .payload(playload)
+                .build()
+                .as_slice()
+                .to_owned(),
+        )
     }
 
     #[cfg(feature = "molc")]

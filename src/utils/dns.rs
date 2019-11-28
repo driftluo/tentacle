@@ -1,8 +1,9 @@
+use futures::FutureExt;
 use std::{
+    borrow::Cow,
     future::Future,
     io,
-    net::SocketAddr,
-    net::ToSocketAddrs,
+    net::{SocketAddr, ToSocketAddrs},
     pin::Pin,
     task::{Context, Poll},
     vec::IntoIter,
@@ -20,6 +21,7 @@ pub struct DNSResolver {
     peer_id: Option<PeerId>,
     port: u16,
     domain: String,
+    join_handle: Option<tokio::task::JoinHandle<::std::io::Result<IntoIter<SocketAddr>>>>,
 }
 
 impl DNSResolver {
@@ -56,6 +58,7 @@ impl DNSResolver {
                 domain: domain.to_string(),
                 source_address,
                 port,
+                join_handle: None,
             }),
             _ => None,
         }
@@ -85,22 +88,28 @@ impl DNSResolver {
 impl Future for DNSResolver {
     type Output = Result<Multiaddr, (Multiaddr, io::Error)>;
 
-    fn poll(mut self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Self::Output> {
-        match tokio_executor::threadpool::blocking(|| {
-            (self.domain.as_str(), self.port).to_socket_addrs()
-        }) {
-            Poll::Ready(Ok(res)) => match res {
-                Ok(iter) => self.new_addr(iter),
-                Err(e) => Poll::Ready(Err((self.source_address.clone(), e))),
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        if self.join_handle.is_none() {
+            let domain = self.domain.clone();
+            let port = self.port;
+
+            self.join_handle = Some(tokio::task::spawn_blocking(move || {
+                (&domain[..], port).to_socket_addrs()
+            }));
+        }
+
+        let mut handle = self.join_handle.take().unwrap();
+
+        match handle.poll_unpin(cx) {
+            Poll::Pending => {
+                self.join_handle = Some(handle);
+                Poll::Pending
+            }
+            Poll::Ready(res) => match res {
+                Ok(Ok(iter)) => self.new_addr(iter),
+                Err(e) => Poll::Ready(Err((self.source_address.clone(), e.into()))),
+                Ok(Err(e)) => Poll::Ready(Err((self.source_address.clone(), e))),
             },
-            // https://docs.rs/tokio-threadpool/0.1.14/tokio_threadpool/fn.blocking.html#return
-            // In this case, the big probability is that the tokio runtime is current thread runtime,
-            // so just use block search here
-            Poll::Ready(Err(_)) => match (self.domain.as_str(), self.port).to_socket_addrs() {
-                Ok(iter) => self.new_addr(iter),
-                Err(e) => Poll::Ready(Err((self.source_address.clone(), e))),
-            },
-            Poll::Pending => Poll::Pending,
         }
     }
 }
@@ -116,22 +125,7 @@ mod test {
     fn dns_parser() {
         let future: DNSResolver =
             DNSResolver::new("/dns4/localhost/tcp/80".parse().unwrap()).unwrap();
-        let rt = tokio::runtime::Runtime::new().unwrap();
-        let addr = rt.block_on(future).unwrap();
-        match addr.iter().next().unwrap() {
-            Protocol::IP4(_) => {
-                assert_eq!("/ip4/127.0.0.1/tcp/80".parse::<Multiaddr>().unwrap(), addr)
-            }
-            Protocol::IP6(_) => assert_eq!("/ip6/::1/tcp/80".parse::<Multiaddr>().unwrap(), addr),
-            _ => panic!("Dns resolver fail"),
-        }
-    }
-
-    #[test]
-    fn dns_parser_current_thread_runtime() {
-        let future: DNSResolver =
-            DNSResolver::new("/dns4/localhost/tcp/80".parse().unwrap()).unwrap();
-        let mut rt = tokio::runtime::current_thread::Runtime::new().unwrap();
+        let mut rt = tokio::runtime::Runtime::new().unwrap();
         let addr = rt.block_on(future).unwrap();
         match addr.iter().next().unwrap() {
             Protocol::IP4(_) => {

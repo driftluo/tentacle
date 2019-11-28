@@ -15,8 +15,8 @@ use futures::prelude::*;
 use log::debug;
 use std::cmp::Ordering;
 use std::{collections::HashMap, io};
-use tokio::codec::{length_delimited::LengthDelimitedCodec, Framed};
 use tokio::prelude::{AsyncRead, AsyncWrite};
+use tokio_util::codec::{length_delimited::LengthDelimitedCodec, Framed};
 
 #[cfg(feature = "flatc")]
 #[rustfmt::skip]
@@ -74,7 +74,7 @@ impl ProtocolInfo {
         let data = builder.finish();
 
         fbb.finish(data, None);
-        Bytes::from(fbb.finished_data())
+        Bytes::from(fbb.finished_data().to_owned())
     }
 
     /// Decode from flatbuffer
@@ -118,11 +118,14 @@ impl ProtocolInfo {
             .set(versions)
             .build();
 
-        protocol_select_mol::ProtocolInfo::new_builder()
-            .name(name)
-            .support_versions(versions)
-            .build()
-            .as_bytes()
+        Bytes::from(
+            protocol_select_mol::ProtocolInfo::new_builder()
+                .name(name)
+                .support_versions(versions)
+                .build()
+                .as_slice()
+                .to_owned(),
+        )
     }
 
     /// Decode with molecule
@@ -240,7 +243,7 @@ pub fn select_version<T: Ord + Clone>(local: &[T], remote: &[T]) -> Option<T> {
 #[cfg(test)]
 mod tests {
     use super::{client_select, select_version, server_select, ProtocolInfo};
-    use futures::{channel, prelude::*};
+    use futures::channel;
     use std::collections::HashMap;
     use tokio::net::{TcpListener, TcpStream};
 
@@ -284,14 +287,14 @@ mod tests {
         let (sender_2, receiver_2) = channel::oneshot::channel::<Option<String>>();
         let (addr_sender, addr_receiver) = channel::oneshot::channel::<::std::net::SocketAddr>();
 
-        let rt = tokio::runtime::Runtime::new().unwrap();
+        let mut rt = tokio::runtime::Runtime::new().unwrap();
 
         rt.spawn(async move {
-            let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let mut listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
             let listener_addr = listener.local_addr().unwrap();
             let _ = addr_sender.send(listener_addr);
 
-            let (connect, _stream) = listener.incoming().into_future().await;
+            let (connect, _) = listener.accept().await.unwrap();
 
             let mut message = ProtocolInfo::default();
             message.name = "test".to_owned();
@@ -299,9 +302,7 @@ mod tests {
             let mut messages = HashMap::new();
             messages.insert("test".to_owned(), (message, None));
 
-            let (_, _, a) = server_select(connect.unwrap().unwrap(), messages)
-                .await
-                .unwrap();
+            let (_, _, a) = server_select(connect, messages).await.unwrap();
             let _ = sender_1.send(a);
         });
 
@@ -317,12 +318,10 @@ mod tests {
             let _ = sender_2.send(a);
         });
 
-        rt.spawn(async move {
+        rt.block_on(async move {
             assert_eq!(receiver_1.await.unwrap(), result);
             assert_eq!(receiver_2.await.unwrap(), result);
         });
-
-        rt.shutdown_on_idle();
     }
 
     #[test]

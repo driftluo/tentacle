@@ -29,11 +29,11 @@ fn main() {
         .forever(true)
         .build(SHandle {});
 
-    let rt = tokio::runtime::Runtime::new().unwrap();
+    let mut rt = tokio::runtime::Runtime::new().unwrap();
     let first_arg = std::env::args().nth(1).unwrap();
     if first_arg == "server" {
         debug!("Starting server ......");
-        rt.spawn(async move {
+        rt.block_on(async move {
             service
                 .listen("/ip4/127.0.0.1/tcp/1337".parse().unwrap())
                 .await
@@ -46,7 +46,7 @@ fn main() {
         });
     } else {
         debug!("Starting client ......");
-        rt.spawn(async move {
+        rt.block_on(async move {
             service
                 .dial(
                     "/ip4/127.0.0.1/tcp/1337".parse().unwrap(),
@@ -65,8 +65,6 @@ fn main() {
             }
         });
     }
-
-    rt.shutdown_on_idle();
 }
 
 fn create_meta(id: ProtocolId, start: u16) -> ProtocolMeta {

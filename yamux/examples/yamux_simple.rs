@@ -18,15 +18,12 @@ fn main() {
 }
 
 fn run_server() {
-    let rt = tokio::runtime::Runtime::new().unwrap();
+    let mut rt = tokio::runtime::Runtime::new().unwrap();
 
-    rt.spawn(async move {
-        let mut incoming = TcpListener::bind("127.0.0.1:12345")
-            .await
-            .unwrap()
-            .incoming();
+    rt.block_on(async move {
+        let mut listener = TcpListener::bind("127.0.0.1:12345").await.unwrap();
 
-        while let Some(Ok(socket)) = incoming.next().await {
+        while let Ok((socket, _)) = listener.accept().await {
             info!("accepted a socket: {:?}", socket.peer_addr());
             let mut session = Session::new_server(socket, Config::default());
             tokio::spawn(async move {
@@ -48,14 +45,12 @@ fn run_server() {
             });
         }
     });
-
-    rt.shutdown_on_idle()
 }
 
 fn run_client() {
-    let rt = tokio::runtime::Runtime::new().unwrap();
+    let mut rt = tokio::runtime::Runtime::new().unwrap();
 
-    rt.spawn(async move {
+    rt.block_on(async move {
         let socket = TcpStream::connect("127.0.0.1:12345").await.unwrap();
         info!("[client] connected to server: {:?}", socket.peer_addr());
         let mut session = Session::new_client(socket, Config::default());
@@ -82,5 +77,4 @@ fn run_client() {
         stream.write_all(b"dd").await.unwrap();
         stream.shutdown().await.unwrap();
     });
-    rt.shutdown_on_idle()
 }

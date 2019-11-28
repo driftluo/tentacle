@@ -2,10 +2,9 @@
 
 use std::io;
 
-use byteorder::{BigEndian, ByteOrder};
-use bytes::{BufMut, Bytes, BytesMut};
+use bytes::{Buf, BufMut, Bytes, BytesMut};
 use log::trace;
-use tokio::codec::{Decoder, Encoder};
+use tokio_util::codec::{Decoder, Encoder};
 
 use crate::{
     config::INITIAL_STREAM_WINDOW, StreamId, HEADER_SIZE, PROTOCOL_VERSION, RESERVED_STREAM_ID,
@@ -267,9 +266,9 @@ impl Decoder for FrameCodec {
         let header = match self.unused_data_header.take() {
             Some(header) => header,
             None if src.len() >= HEADER_SIZE => {
-                let header_data = src.split_to(HEADER_SIZE);
+                let mut header_data = src.split_to(HEADER_SIZE);
 
-                let version = header_data[0];
+                let version = header_data.get_u8();
                 if version != PROTOCOL_VERSION {
                     let err = io::Error::new(
                         io::ErrorKind::InvalidData,
@@ -277,7 +276,7 @@ impl Decoder for FrameCodec {
                     );
                     return Err(err);
                 }
-                let ty_value = header_data[1];
+                let ty_value = header_data.get_u8();
                 let ty = match Type::try_from(ty_value) {
                     Some(ty) => ty,
                     None => {
@@ -289,9 +288,9 @@ impl Decoder for FrameCodec {
                     }
                 };
 
-                let flags = Flags(BigEndian::read_u16(&header_data[2..4]));
-                let stream_id = BigEndian::read_u32(&header_data[4..8]);
-                let length = BigEndian::read_u32(&header_data[8..12]);
+                let flags = Flags(header_data.get_u16());
+                let stream_id = header_data.get_u32();
+                let length = header_data.get_u32();
                 if length > self.max_frame_size {
                     let err = io::Error::new(
                         io::ErrorKind::InvalidData,
@@ -319,7 +318,7 @@ impl Decoder for FrameCodec {
                 self.unused_data_header = Some(header);
                 return Ok(None);
             } else {
-                Some(Bytes::from(src.split_to(header.length as usize)))
+                Some(src.split_to(header.length as usize).freeze())
             }
         } else {
             // Not data frame
@@ -337,11 +336,11 @@ impl Encoder for FrameCodec {
         // Must ensure that there is enough space in the buf
         dst.reserve(item.size());
         let (header, body) = item.into_parts();
-        dst.put(header.version);
-        dst.put(header.ty as u8);
-        dst.put_u16_be(header.flags.value());
-        dst.put_u32_be(header.stream_id);
-        dst.put_u32_be(header.length);
+        dst.put_u8(header.version);
+        dst.put_u8(header.ty as u8);
+        dst.put_u16(header.flags.value());
+        dst.put_u32(header.stream_id);
+        dst.put_u32(header.length);
         if let Some(data) = body {
             dst.put(data);
         }
@@ -354,7 +353,7 @@ impl Encoder for FrameCodec {
 mod test {
     use super::{Flags, Frame, FrameCodec, Type, HEADER_SIZE, INITIAL_STREAM_WINDOW};
     use bytes::{Bytes, BytesMut};
-    use tokio::codec::{Decoder, Encoder};
+    use tokio_util::codec::{Decoder, Encoder};
 
     #[test]
     fn test_decode_encode() {

@@ -224,9 +224,9 @@ fn test_repeated_dial(secio: bool) {
     let (addr_sender, addr_receiver) = channel::oneshot::channel::<Multiaddr>();
 
     thread::spawn(move || {
-        let rt = tokio::runtime::Runtime::new().unwrap();
+        let mut rt = tokio::runtime::Runtime::new().unwrap();
         let mut service = create(secio, meta_1, shandle);
-        rt.spawn(async move {
+        rt.block_on(async move {
             let listen_addr = service
                 .listen("/ip4/127.0.0.1/tcp/0".parse().unwrap())
                 .await
@@ -238,15 +238,14 @@ fn test_repeated_dial(secio: bool) {
                 }
             }
         });
-        rt.shutdown_on_idle();
     });
 
     let (shandle, error_receiver_2) = create_shandle(secio, false);
 
     thread::spawn(move || {
-        let rt = tokio::runtime::Runtime::new().unwrap();
+        let mut rt = tokio::runtime::Runtime::new().unwrap();
         let mut service = create(secio, meta_2, shandle);
-        rt.spawn(async move {
+        rt.block_on(async move {
             let listen_addr = addr_receiver.await.unwrap();
             service
                 .dial(listen_addr, TargetProtocol::All)
@@ -258,7 +257,6 @@ fn test_repeated_dial(secio: bool) {
                 }
             }
         });
-        rt.shutdown_on_idle();
     });
 
     if secio {
@@ -286,15 +284,14 @@ fn test_dial_with_no_notify(secio: bool) {
     let mut service = create(secio, meta, shandle);
     let control = service.control().clone();
     thread::spawn(move || {
-        let rt = tokio::runtime::Runtime::new().unwrap();
-        rt.spawn(async move {
+        let mut rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async move {
             loop {
                 if service.next().await.is_none() {
                     break;
                 }
             }
         });
-        rt.shutdown_on_idle();
     });
     // macOs can't dial 0 port
     for _ in 0..2 {
