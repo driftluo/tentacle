@@ -1,6 +1,6 @@
 [package]
 name = "tentacle-ping"
-version = "0.3.8"
+version = "0.3.9"
 authors = ["Nervos Core Dev <dev@nervos.org>"]
 license = "MIT"
 keywords = ["network", "peer-to-peer", "p2p", "ping"]
