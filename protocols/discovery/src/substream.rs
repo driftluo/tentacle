@@ -430,7 +430,7 @@ impl RemoteAddress {
                 .map(|proto| {
                     match proto {
                         // TODO: other transport, UDP for example
-                        Protocol::Tcp(_) => Protocol::Tcp(port),
+                        Protocol::TCP(_) => Protocol::TCP(port),
                         value => value,
                     }
                 })

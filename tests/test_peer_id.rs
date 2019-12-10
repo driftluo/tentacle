@@ -1,10 +1,10 @@
 use futures::prelude::Stream;
-use std::thread;
+use std::{borrow::Cow, thread};
 use tentacle::{
     builder::{MetaBuilder, ServiceBuilder},
     context::{ProtocolContext, ServiceContext},
     error::Error,
-    multiaddr::{multihash::Multihash, Protocol as MultiProtocol},
+    multiaddr::Protocol as MultiProtocol,
     secio::SecioKeyPair,
     service::{DialProtocol, ProtocolHandle, ProtocolMeta, Service, ServiceError, ServiceEvent},
     traits::{ServiceHandle, ServiceProtocol},
@@ -100,22 +100,14 @@ fn test_peer_id(fail: bool) {
     if fail {
         (1..11).for_each(|_| {
             let mut addr = listen_addr.clone();
-            addr.push(MultiProtocol::P2p(
-                Multihash::from_bytes(
-                    SecioKeyPair::secp256k1_generated()
-                        .peer_id()
-                        .as_bytes()
-                        .to_vec(),
-                )
-                .expect("Invalid peer id"),
-            ));
+            addr.push(MultiProtocol::P2P(Cow::Owned(
+                SecioKeyPair::secp256k1_generated().peer_id().into_bytes(),
+            )));
             control.dial(addr, DialProtocol::All).unwrap();
         });
         assert_eq!(error_receiver.recv(), Ok(9));
     } else {
-        listen_addr.push(MultiProtocol::P2p(
-            Multihash::from_bytes(key.peer_id().into_bytes()).expect("Invalid peer id"),
-        ));
+        listen_addr.push(MultiProtocol::P2P(Cow::Owned(key.peer_id().into_bytes())));
         control.dial(listen_addr, DialProtocol::All).unwrap();
         assert_eq!(error_receiver.recv(), Ok(0));
     }

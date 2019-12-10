@@ -6,14 +6,14 @@ use std::sync::{
     Arc,
 };
 use std::time::{Duration, Instant};
-use std::{error::Error as ErrorTrait, io};
+use std::{borrow::Cow, error::Error as ErrorTrait, io};
 use tokio::prelude::{AsyncRead, AsyncWrite, FutureExt};
 use tokio::timer::{Delay, Interval};
 
 use crate::{
     context::{ServiceContext, SessionContext, SessionController},
     error::Error,
-    multiaddr::{multihash::Multihash, Multiaddr, Protocol},
+    multiaddr::{Multiaddr, Protocol},
     protocol_handle_stream::{
         ServiceProtocolEvent, ServiceProtocolStream, SessionProtocolEvent, SessionProtocolStream,
     },
@@ -818,10 +818,7 @@ where
                             return;
                         }
                     } else {
-                        address.push(Protocol::P2p(
-                            Multihash::from_bytes(key.peer_id().into_bytes())
-                                .expect("Invalid peer id"),
-                        ))
+                        address.push(Protocol::P2P(Cow::Owned(key.peer_id().into_bytes())))
                     }
 
                     self.generate_next_session();
