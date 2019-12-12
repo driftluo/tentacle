@@ -111,7 +111,7 @@ where
     S: Sender<Event>,
 {
     fn init(&mut self, context: &mut ProtocolContext) {
-        // periodicly send ping to peers
+        // send ping to peers periodically
         let proto_id = context.proto_id;
         if context
             .set_service_notify(proto_id, self.interval, SEND_PING_TOKEN)
