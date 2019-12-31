@@ -1,17 +1,16 @@
 use futures::{Async, Future, Poll};
-use std::{io, net::SocketAddr, net::ToSocketAddrs, vec::IntoIter};
+use std::{borrow::Cow, io, net::SocketAddr, net::ToSocketAddrs, vec::IntoIter};
 
 use crate::{
-    multiaddr::{multihash::Multihash, Multiaddr, Protocol},
+    multiaddr::{Multiaddr, Protocol},
     secio::PeerId,
-    utils::{extract_peer_id, is_ws, socketaddr_to_multiaddr},
+    utils::{extract_peer_id, socketaddr_to_multiaddr},
 };
 
 /// DNS resolver, use on multi-thread tokio runtime
 pub struct DNSResolver {
     source_address: Multiaddr,
     peer_id: Option<PeerId>,
-    ws: bool,
     port: u16,
     domain: String,
 }
@@ -27,7 +26,7 @@ impl DNSResolver {
                 break (None, None);
             }
             match iter.peek() {
-                Some(Protocol::Dns4(_)) | Some(Protocol::Dns6(_)) => (),
+                Some(Protocol::DNS4(_)) | Some(Protocol::DNS6(_)) => (),
                 _ => {
                     let _ = iter.next();
                     continue;
@@ -38,8 +37,8 @@ impl DNSResolver {
             let proto2 = iter.next()?;
 
             match (proto1, proto2) {
-                (Protocol::Dns4(domain), Protocol::Tcp(port)) => break (Some(domain), Some(port)),
-                (Protocol::Dns6(domain), Protocol::Tcp(port)) => break (Some(domain), Some(port)),
+                (Protocol::DNS4(domain), Protocol::TCP(port)) => break (Some(domain), Some(port)),
+                (Protocol::DNS6(domain), Protocol::TCP(port)) => break (Some(domain), Some(port)),
                 _ => (),
             }
         };
@@ -47,7 +46,6 @@ impl DNSResolver {
         match (domain, port) {
             (Some(domain), Some(port)) => Some(DNSResolver {
                 peer_id: extract_peer_id(&source_address),
-                ws: is_ws(&source_address),
                 domain: domain.to_string(),
                 source_address,
                 port,
@@ -64,13 +62,8 @@ impl DNSResolver {
             Some(address) => {
                 let mut address = socketaddr_to_multiaddr(address);
 
-                if self.ws {
-                    address.push(Protocol::Ws);
-                }
                 if let Some(peer_id) = self.peer_id.take() {
-                    address.push(Protocol::P2p(
-                        Multihash::from_bytes(peer_id.into_bytes()).expect("Invalid peer id"),
-                    ))
+                    address.push(Protocol::P2P(Cow::Owned(peer_id.into_bytes())))
                 }
                 Ok(Async::Ready(address))
             }
@@ -116,10 +109,10 @@ mod test {
         let mut rt = tokio::runtime::Runtime::new().unwrap();
         let addr = rt.block_on(future).unwrap();
         match addr.iter().next().unwrap() {
-            Protocol::Ip4(_) => {
+            Protocol::IP4(_) => {
                 assert_eq!("/ip4/127.0.0.1/tcp/80".parse::<Multiaddr>().unwrap(), addr)
             }
-            Protocol::Ip6(_) => assert_eq!("/ip6/::1/tcp/80".parse::<Multiaddr>().unwrap(), addr),
+            Protocol::IP6(_) => assert_eq!("/ip6/::1/tcp/80".parse::<Multiaddr>().unwrap(), addr),
             _ => panic!("Dns resolver fail"),
         }
     }
@@ -131,10 +124,10 @@ mod test {
         let mut rt = tokio::runtime::current_thread::Runtime::new().unwrap();
         let addr = rt.block_on(future).unwrap();
         match addr.iter().next().unwrap() {
-            Protocol::Ip4(_) => {
+            Protocol::IP4(_) => {
                 assert_eq!("/ip4/127.0.0.1/tcp/80".parse::<Multiaddr>().unwrap(), addr)
             }
-            Protocol::Ip6(_) => assert_eq!("/ip6/::1/tcp/80".parse::<Multiaddr>().unwrap(), addr),
+            Protocol::IP6(_) => assert_eq!("/ip6/::1/tcp/80".parse::<Multiaddr>().unwrap(), addr),
             _ => panic!("Dns resolver fail"),
         }
     }
