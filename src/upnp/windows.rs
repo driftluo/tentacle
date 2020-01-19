@@ -5,13 +5,15 @@
 ///
 use std::{io, net::Ipv4Addr, ptr, slice::from_raw_parts};
 
-use libc::{c_void, free, malloc};
 use winapi::ctypes::*;
-use winapi::shared::{
-    basetsd::SIZE_T,
-    minwindef::{DWORD, ULONG},
-    winerror::{ERROR_BUFFER_OVERFLOW, ERROR_SUCCESS},
-    ws2def::{AF_INET, SOCKADDR},
+use winapi::{
+    shared::{
+        basetsd::SIZE_T,
+        minwindef::{DWORD, LPVOID, ULONG},
+        winerror::{ERROR_BUFFER_OVERFLOW, ERROR_SUCCESS},
+        ws2def::{AF_INET, SOCKADDR},
+    },
+    um::heapapi::{GetProcessHeap, HeapAlloc, HeapFree},
 };
 
 use crate::upnp::Network;
@@ -104,7 +106,9 @@ pub fn get_local_net_state() -> io::Result<Vec<Network>> {
 
     loop {
         unsafe {
-            p_adapter = malloc(WORKING_BUFFER_SIZEL) as *mut IpAdapterAddresses;
+            // https://docs.microsoft.com/en-us/windows/win32/api/heapapi/nf-heapapi-heapalloc
+            p_adapter =
+                HeapAlloc(GetProcessHeap(), 0, WORKING_BUFFER_SIZEL) as *mut IpAdapterAddresses;
             if p_adapter.is_null() {
                 return Err(io::Error::new(io::ErrorKind::Other, "Failed: malloc!"));
             }
@@ -121,7 +125,10 @@ pub fn get_local_net_state() -> io::Result<Vec<Network>> {
                 // 111, retry
                 ERROR_BUFFER_OVERFLOW => {
                     new_size *= 2;
-                    free(p_adapter as *mut c_void);
+                    let res = HeapFree(GetProcessHeap(), 0, p_adapter as LPVOID);
+                    if res == 0 {
+                        return Err(io::Error::new(io::ErrorKind::Other, "Failed: HeapFree!"));
+                    }
                     continue;
                 }
                 _ => {
@@ -163,7 +170,11 @@ pub fn get_local_net_state() -> io::Result<Vec<Network>> {
     }
 
     unsafe {
-        free(p_adapter as *mut c_void);
+        // https://docs.microsoft.com/en-us/windows/win32/api/heapapi/nf-heapapi-heapfree#return-value
+        let res = HeapFree(GetProcessHeap(), 0, p_adapter as LPVOID);
+        if res == 0 {
+            return Err(io::Error::new(io::ErrorKind::Other, "Failed: HeapFree!"));
+        }
     }
     Ok(result)
 }
