@@ -1,5 +1,5 @@
 use bytes::Bytes;
-use futures::{prelude::*, sync::mpsc};
+use futures::{channel::mpsc, prelude::*};
 use std::{
     collections::HashMap,
     ops::{Deref, DerefMut},
@@ -17,7 +17,7 @@ use crate::{
     secio::{PublicKey, SecioKeyPair},
     service::{
         event::{Priority, ServiceTask},
-        DialProtocol, ServiceControl, SessionType, TargetProtocol, TargetSession,
+        ServiceControl, SessionType, TargetProtocol, TargetSession,
     },
     session::SessionEvent,
     ProtocolId, SessionId,
@@ -152,7 +152,7 @@ impl ServiceContext {
 
     /// Initiate a connection request to address
     #[inline]
-    pub fn dial(&self, address: Multiaddr, target: DialProtocol) -> Result<(), Error> {
+    pub fn dial(&self, address: Multiaddr, target: TargetProtocol) -> Result<(), Error> {
         self.inner.dial(address, target)
     }
 
@@ -211,7 +211,7 @@ impl ServiceContext {
     #[inline]
     pub fn future_task<T>(&self, task: T) -> Result<(), Error>
     where
-        T: Future<Item = (), Error = ()> + 'static + Send,
+        T: Future<Output = ()> + 'static + Send,
     {
         self.inner.future_task(task)
     }

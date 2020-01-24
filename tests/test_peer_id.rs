@@ -1,19 +1,20 @@
-use futures::prelude::Stream;
-use std::{borrow::Cow, thread};
+use futures::StreamExt;
+use std::{borrow::Cow, sync::mpsc::channel, thread};
 use tentacle::{
     builder::{MetaBuilder, ServiceBuilder},
     context::{ProtocolContext, ServiceContext},
     error::Error,
+    multiaddr::Multiaddr,
     multiaddr::Protocol as MultiProtocol,
     secio::SecioKeyPair,
-    service::{DialProtocol, ProtocolHandle, ProtocolMeta, Service, ServiceError, ServiceEvent},
+    service::{ProtocolHandle, ProtocolMeta, Service, ServiceError, ServiceEvent, TargetProtocol},
     traits::{ServiceHandle, ServiceProtocol},
     ProtocolId,
 };
 
 pub fn create<F>(key_pair: SecioKeyPair, meta: ProtocolMeta, shandle: F) -> Service<F>
 where
-    F: ServiceHandle,
+    F: ServiceHandle + Unpin,
 {
     ServiceBuilder::default()
         .insert_protocol(meta)
@@ -84,18 +85,43 @@ fn create_meta(id: ProtocolId) -> ProtocolMeta {
 fn test_peer_id(fail: bool) {
     let meta = create_meta(1.into());
     let key = SecioKeyPair::secp256k1_generated();
+    let (addr_sender, addr_receiver) = channel::<Multiaddr>();
     let mut service = create(key.clone(), meta, ());
 
-    let mut listen_addr = service
-        .listen("/ip4/127.0.0.1/tcp/0".parse().unwrap())
-        .unwrap();
-    thread::spawn(|| tokio::run(service.for_each(|_| Ok(()))));
+    thread::spawn(move || {
+        let mut rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async move {
+            let listen_addr = service
+                .listen("/ip4/127.0.0.1/tcp/0".parse().unwrap())
+                .await
+                .unwrap();
+
+            addr_sender.send(listen_addr).unwrap();
+
+            loop {
+                if service.next().await.is_none() {
+                    break;
+                }
+            }
+        });
+    });
+
+    let mut listen_addr = addr_receiver.recv().unwrap();
 
     let (shandle, error_receiver) = create_shandle();
     let meta = create_meta(1.into());
-    let service = create(SecioKeyPair::secp256k1_generated(), meta, shandle);
+    let mut service = create(SecioKeyPair::secp256k1_generated(), meta, shandle);
     let control = service.control().clone();
-    thread::spawn(|| tokio::run(service.for_each(|_| Ok(()))));
+    thread::spawn(move || {
+        let mut rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async move {
+            loop {
+                if service.next().await.is_none() {
+                    break;
+                }
+            }
+        });
+    });
 
     if fail {
         (1..11).for_each(|_| {
@@ -103,12 +129,12 @@ fn test_peer_id(fail: bool) {
             addr.push(MultiProtocol::P2P(Cow::Owned(
                 SecioKeyPair::secp256k1_generated().peer_id().into_bytes(),
             )));
-            control.dial(addr, DialProtocol::All).unwrap();
+            control.dial(addr, TargetProtocol::All).unwrap();
         });
         assert_eq!(error_receiver.recv(), Ok(9));
     } else {
         listen_addr.push(MultiProtocol::P2P(Cow::Owned(key.peer_id().into_bytes())));
-        control.dial(listen_addr, DialProtocol::All).unwrap();
+        control.dial(listen_addr, TargetProtocol::All).unwrap();
         assert_eq!(error_receiver.recv(), Ok(0));
     }
 }

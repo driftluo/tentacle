@@ -1,5 +1,5 @@
 use crate::{secio::error::SecioError, SessionId};
-use futures::sync::mpsc;
+use futures::channel::mpsc;
 use std::{error, fmt, io};
 
 /// Error from p2p framework
@@ -46,9 +46,16 @@ impl From<io::Error> for Error {
     }
 }
 
-impl<T> From<mpsc::SendError<T>> for Error {
+impl From<mpsc::SendError> for Error {
     #[inline]
-    fn from(_err: mpsc::SendError<T>) -> Error {
+    fn from(_err: mpsc::SendError) -> Error {
+        Error::IoError(io::ErrorKind::BrokenPipe.into())
+    }
+}
+
+impl<T> From<mpsc::TrySendError<T>> for Error {
+    #[inline]
+    fn from(_err: mpsc::TrySendError<T>) -> Error {
         Error::IoError(io::ErrorKind::BrokenPipe.into())
     }
 }

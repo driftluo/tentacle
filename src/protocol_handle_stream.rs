@@ -1,14 +1,15 @@
-use futures::{prelude::*, sync::mpsc};
-use log::{debug, warn};
+use futures::{channel::mpsc, SinkExt, Stream};
+use log::debug;
 use std::collections::HashMap;
 use std::{
+    pin::Pin,
     sync::{
         atomic::{AtomicBool, Ordering},
         Arc,
     },
-    time::{Duration, Instant},
+    task::{Context, Poll},
+    time::Duration,
 };
-use tokio::timer::Delay;
 
 use crate::{
     context::{ProtocolContext, ServiceContext, SessionContext},
@@ -54,6 +55,25 @@ pub enum ServiceProtocolEvent {
     },
 }
 
+enum CurrentTask {
+    Idle,
+    Run(Option<SessionId>),
+}
+
+impl CurrentTask {
+    fn run_with_id(&mut self, id: SessionId) {
+        *self = CurrentTask::Run(Some(id))
+    }
+
+    fn run(&mut self) {
+        *self = CurrentTask::Run(None)
+    }
+
+    fn idle(&mut self) {
+        *self = CurrentTask::Idle
+    }
+}
+
 pub struct ServiceProtocolStream<T> {
     handle: T,
     /// External event is passed in from this
@@ -64,7 +84,7 @@ pub struct ServiceProtocolStream<T> {
     notify_sender: mpsc::Sender<u64>,
     notify_receiver: mpsc::Receiver<u64>,
     panic_report: mpsc::Sender<SessionEvent>,
-    current_task: Option<ServiceProtocolEvent>,
+    current_task: CurrentTask,
     delay: Arc<AtomicBool>,
     shutdown: Arc<AtomicBool>,
     future_task_sender: mpsc::Sender<BoxedFutureTask>,
@@ -72,7 +92,7 @@ pub struct ServiceProtocolStream<T> {
 
 impl<T> ServiceProtocolStream<T>
 where
-    T: ServiceProtocol + Send,
+    T: ServiceProtocol + Send + Unpin,
 {
     pub(crate) fn new(
         handle: T,
@@ -91,7 +111,7 @@ where
             notify_sender,
             notify_receiver,
             notify: HashMap::new(),
-            current_task: Some(ServiceProtocolEvent::Init),
+            current_task: CurrentTask::Idle,
             delay: Arc::new(AtomicBool::new(false)),
             shutdown,
             panic_report,
@@ -100,19 +120,16 @@ where
     }
 
     #[inline]
-    pub fn handle_event(&mut self) -> Async<()> {
+    pub fn handle_event(&mut self, event: ServiceProtocolEvent) {
         use self::ServiceProtocolEvent::*;
 
-        if self.current_task.is_none() {
-            return Async::Ready(());
-        }
+        let shutdown = self.shutdown.load(Ordering::SeqCst);
 
-        if self.shutdown.load(Ordering::SeqCst) {
-            match self.current_task.as_ref().unwrap() {
+        if shutdown {
+            match event {
                 Disconnected { .. } => (),
                 _ => {
-                    self.current_task.take();
-                    return Async::Ready(());
+                    return;
                 }
             }
         }
@@ -130,96 +147,89 @@ where
             }
         }
 
-        match self.current_task.clone().unwrap() {
-            Init => self.handle.init(&mut self.handle_context),
+        match event {
+            Init => {
+                self.current_task.run();
+                self.handle.init(&mut self.handle_context)
+            }
             Connected { session, version } => {
-                match tokio_threadpool::blocking(|| {
+                self.current_task.run_with_id(session.id);
+                tokio::task::block_in_place(|| {
                     self.handle
                         .connected(self.handle_context.as_mut(&session), &version)
-                }) {
-                    Ok(Async::Ready(_)) => (),
-                    Ok(Async::NotReady) => return Async::NotReady,
-                    Err(_) => self
-                        .handle
-                        .connected(self.handle_context.as_mut(&session), &version),
-                }
+                });
                 self.sessions.insert(session.id, session);
             }
             Disconnected { id } => {
+                self.current_task.run_with_id(id);
                 if let Some(session) = self.sessions.remove(&id) {
-                    match tokio_threadpool::blocking(|| {
+                    if shutdown {
                         self.handle
                             .disconnected(self.handle_context.as_mut(&session))
-                    }) {
-                        Ok(Async::Ready(_)) => (),
-                        Ok(Async::NotReady) => return Async::NotReady,
-                        Err(_) => self
-                            .handle
-                            .disconnected(self.handle_context.as_mut(&session)),
+                    } else {
+                        tokio::task::block_in_place(|| {
+                            self.handle
+                                .disconnected(self.handle_context.as_mut(&session))
+                        });
                     }
                 }
             }
             Received { id, data } => {
+                self.current_task.run_with_id(id);
                 if let Some(session) = self.sessions.get(&id).cloned() {
-                    if !session.closed.load(Ordering::SeqCst) {
-                        match tokio_threadpool::blocking(|| {
+                    if !session.closed.load(Ordering::SeqCst)
+                        && !self.shutdown.load(Ordering::SeqCst)
+                    {
+                        tokio::task::block_in_place(|| {
                             self.handle
                                 .received(self.handle_context.as_mut(&session), data.clone())
-                        }) {
-                            Ok(Async::Ready(_)) => (),
-                            Ok(Async::NotReady) => return Async::NotReady,
-                            Err(_) => self
-                                .handle
-                                .received(self.handle_context.as_mut(&session), data),
-                        }
+                        })
                     }
                 }
             }
             Notify { token } => {
-                match tokio_threadpool::blocking(|| {
-                    self.handle.notify(&mut self.handle_context, token)
-                }) {
-                    Ok(Async::Ready(_)) => (),
-                    Ok(Async::NotReady) => return Async::NotReady,
-                    Err(_) => self.handle.notify(&mut self.handle_context, token),
-                }
+                self.current_task.run();
+                tokio::task::block_in_place(|| self.handle.notify(&mut self.handle_context, token));
                 self.set_notify(token);
             }
             SetNotify { interval, token } => {
+                self.current_task.run();
                 self.notify.entry(token).or_insert(interval);
                 self.set_notify(token);
             }
             RemoveNotify { token } => {
+                self.current_task.run();
                 self.notify.remove(&token);
             }
             Update { listen_addrs } => {
+                self.current_task.run();
                 self.handle_context.update_listens(listen_addrs);
             }
         }
-        self.current_task.take();
-        Async::Ready(())
+        self.current_task.idle();
+    }
+
+    fn handle_poll(&mut self, cx: &mut Context) {
+        Pin::new(&mut self.handle).poll(cx, &mut self.handle_context);
     }
 
     fn set_notify(&mut self, token: u64) {
-        if let Some(interval) = self.notify.get(&token) {
-            let sender = self.notify_sender.clone();
+        if let Some(&interval) = self.notify.get(&token) {
+            let mut sender = self.notify_sender.clone();
             // NOTE: A Interval/Delay will block tokio runtime from gracefully shutdown.
             //       So we spawn it in FutureTaskManager
-            let task = Delay::new(Instant::now() + *interval).then(move |_| {
-                tokio::spawn(sender.send(token).map(|_| ()).map_err(|_| ()));
-                Ok(())
+            let task = async move {
+                tokio::time::delay_until(tokio::time::Instant::now() + interval).await;
+                let _ = sender.send(token).await;
+            };
+            let mut future_task_sender = self.future_task_sender.clone();
+            tokio::spawn(async move {
+                let _ = future_task_sender.send(Box::pin(task)).await;
             });
-            tokio::spawn(
-                self.future_task_sender
-                    .clone()
-                    .send(Box::new(task))
-                    .map(|_| ())
-                    .map_err(|_| ()),
-            );
         }
     }
 
-    fn set_delay(&mut self) {
+    fn set_delay(&mut self, cx: &mut Context) {
         // Why use `delay` instead of `notify`?
         //
         // In fact, on machines that can use multi-core normally, there is almost no problem with the `notify` behavior,
@@ -230,15 +240,14 @@ where
         // Under a single-core machine, `notify` may fall into the loop of infinitely preemptive CPU, causing starvation.
         if !self.delay.load(Ordering::Acquire) {
             self.delay.store(true, Ordering::Release);
-            let notify = futures::task::current();
+            let waker = cx.waker().clone();
             let delay = self.delay.clone();
-            let delay_task =
-                Delay::new(Instant::now() + Duration::from_millis(200)).then(move |_| {
-                    notify.notify();
-                    delay.store(false, Ordering::Release);
-                    Ok(())
-                });
-            tokio::spawn(delay_task);
+            tokio::spawn(async move {
+                tokio::time::delay_until(tokio::time::Instant::now() + Duration::from_millis(200))
+                    .await;
+                waker.wake();
+                delay.store(false, Ordering::Release);
+            });
         }
     }
 }
@@ -246,14 +255,7 @@ where
 impl<T> Drop for ServiceProtocolStream<T> {
     fn drop(&mut self) {
         if !self.shutdown.load(Ordering::SeqCst) {
-            use ServiceProtocolEvent::*;
-            if let Some(event) = self.current_task.take() {
-                let session_id = match event {
-                    Received { id, .. } => Some(id),
-                    Disconnected { id } => Some(id),
-                    Connected { session, .. } => Some(session.id),
-                    _ => None,
-                };
+            if let CurrentTask::Run(session_id) = self.current_task {
                 let proto_id = self.handle_context.proto_id;
                 let event = match session_id {
                     Some(id) => SessionEvent::ProtocolHandleError {
@@ -265,13 +267,10 @@ impl<T> Drop for ServiceProtocolStream<T> {
                         proto_id,
                     },
                 };
-                tokio::spawn(
-                    self.panic_report
-                        .clone()
-                        .send(event)
-                        .map(|_| ())
-                        .map_err(|_| ()),
-                );
+                let mut panic_sender = self.panic_report.clone();
+                tokio::spawn(async move {
+                    let _ = panic_sender.send(event).await;
+                });
             }
         }
     }
@@ -279,77 +278,66 @@ impl<T> Drop for ServiceProtocolStream<T> {
 
 impl<T> Stream for ServiceProtocolStream<T>
 where
-    T: ServiceProtocol + Send,
+    T: ServiceProtocol + Send + Unpin,
 {
     type Item = ();
-    type Error = ();
 
-    fn poll(&mut self) -> Poll<Option<Self::Item>, Self::Error> {
-        if let Async::NotReady = self.handle_event() {
-            self.set_delay();
-            return Ok(Async::NotReady);
+    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Option<Self::Item>> {
+        if self.shutdown.load(Ordering::SeqCst) {
+            debug!(
+                "ServiceProtocolStream({:?}) finished, shutdown",
+                self.handle_context.proto_id
+            );
+            self.current_task.idle();
+            return Poll::Ready(None);
         }
+
         let mut finished = false;
         for _ in 0..64 {
-            match self.receiver.poll() {
-                Ok(Async::Ready(Some(event))) => {
-                    self.current_task = Some(event);
-                    if let Async::NotReady = self.handle_event() {
-                        break;
-                    }
-                }
-                Ok(Async::Ready(None)) => {
+            match Pin::new(&mut self.receiver).as_mut().poll_next(cx) {
+                Poll::Ready(Some(event)) => self.handle_event(event),
+                Poll::Ready(None) => {
                     debug!(
                         "ServiceProtocolStream({:?}) finished",
                         self.handle_context.proto_id
                     );
-                    self.current_task.take();
-                    return Ok(Async::Ready(None));
+                    self.current_task.idle();
+                    return Poll::Ready(None);
                 }
-                Ok(Async::NotReady) => {
+                Poll::Pending => {
                     finished = true;
                     break;
-                }
-                Err(err) => {
-                    warn!(
-                        "service proto [{}] handle receive message error: {:?}",
-                        self.handle_context.proto_id, err
-                    );
-                    return Err(());
                 }
             }
         }
         if !finished {
-            self.set_delay();
+            self.set_delay(cx);
         }
 
         loop {
-            match self.notify_receiver.poll() {
-                Ok(Async::Ready(Some(token))) => {
-                    self.current_task = Some(ServiceProtocolEvent::Notify { token });
-                    if let Async::NotReady = self.handle_event() {
-                        self.set_delay();
-                        break;
-                    }
+            match Pin::new(&mut self.notify_receiver).as_mut().poll_next(cx) {
+                Poll::Ready(Some(token)) => {
+                    self.handle_event(ServiceProtocolEvent::Notify { token })
                 }
-                Ok(Async::Ready(None)) => unreachable!(),
-                Ok(Async::NotReady) => {
-                    self.set_delay();
+                Poll::Ready(None) => unreachable!(),
+                Poll::Pending => {
                     break;
-                }
-                Err(_) => {
-                    warn!(
-                        "service proto [{}] handle receive message error",
-                        self.handle_context.proto_id
-                    );
-                    return Err(());
                 }
             }
         }
 
-        self.handle.poll(&mut self.handle_context);
+        self.handle_poll(cx);
 
-        Ok(Async::NotReady)
+        if self.shutdown.load(Ordering::SeqCst) {
+            debug!(
+                "ServiceProtocolStream({:?}) finished, shutdown",
+                self.handle_context.proto_id
+            );
+            self.current_task.idle();
+            return Poll::Ready(None);
+        }
+
+        Poll::Pending
     }
 }
 
@@ -390,7 +378,7 @@ pub struct SessionProtocolStream<T> {
     notify: HashMap<u64, Duration>,
     notify_sender: mpsc::Sender<u64>,
     notify_receiver: mpsc::Receiver<u64>,
-    current_task: Option<SessionProtocolEvent>,
+    current_task: bool,
     panic_report: mpsc::Sender<SessionEvent>,
     delay: Arc<AtomicBool>,
     shutdown: Arc<AtomicBool>,
@@ -399,7 +387,7 @@ pub struct SessionProtocolStream<T> {
 
 impl<T> SessionProtocolStream<T>
 where
-    T: SessionProtocol + Send,
+    T: SessionProtocol + Send + Unpin,
 {
     pub(crate) fn new(
         handle: T,
@@ -420,7 +408,7 @@ where
             notify: HashMap::new(),
             context,
             panic_report,
-            current_task: None,
+            current_task: false,
             shutdown,
             delay: Arc::new(AtomicBool::new(false)),
             future_task_sender,
@@ -428,75 +416,51 @@ where
     }
 
     #[inline]
-    fn handle_event(&mut self) -> Async<()> {
+    fn handle_event(&mut self, mut event: SessionProtocolEvent) {
         use self::SessionProtocolEvent::*;
 
-        if self.current_task.is_none() {
-            return Async::Ready(());
-        }
-        if self.shutdown.load(Ordering::SeqCst) {
-            match self.current_task.as_ref().unwrap() {
+        self.current_task = true;
+        let shutdown = self.shutdown.load(Ordering::SeqCst);
+        if shutdown {
+            match event {
                 Disconnected {} => (),
                 _ => {
-                    self.current_task.take();
-                    return Async::Ready(());
+                    self.current_task = false;
+                    return;
                 }
             }
         }
 
         if self.context.closed.load(Ordering::SeqCst) {
-            self.current_task = Some(SessionProtocolEvent::Disconnected);
+            event = SessionProtocolEvent::Disconnected;
         }
 
-        match self.current_task.clone().unwrap() {
-            Connected { version } => {
-                match tokio_threadpool::blocking(|| {
-                    self.handle
-                        .connected(self.handle_context.as_mut(&self.context), &version)
-                }) {
-                    Ok(Async::Ready(_)) => (),
-                    Ok(Async::NotReady) => return Async::NotReady,
-                    Err(_) => self
-                        .handle
-                        .connected(self.handle_context.as_mut(&self.context), &version),
-                }
-            }
+        match event {
+            Connected { version } => tokio::task::block_in_place(|| {
+                self.handle
+                    .connected(self.handle_context.as_mut(&self.context), &version)
+            }),
             Disconnected => {
-                match tokio_threadpool::blocking(|| {
+                if shutdown {
                     self.handle
                         .disconnected(self.handle_context.as_mut(&self.context))
-                }) {
-                    Ok(Async::Ready(_)) => (),
-                    Ok(Async::NotReady) => return Async::NotReady,
-                    Err(_) => self
-                        .handle
-                        .disconnected(self.handle_context.as_mut(&self.context)),
+                } else {
+                    tokio::task::block_in_place(|| {
+                        self.handle
+                            .disconnected(self.handle_context.as_mut(&self.context))
+                    });
                 }
                 self.close();
             }
-            Received { data } => {
-                match tokio_threadpool::blocking(|| {
-                    self.handle
-                        .received(self.handle_context.as_mut(&self.context), data.clone())
-                }) {
-                    Ok(Async::Ready(_)) => (),
-                    Ok(Async::NotReady) => return Async::NotReady,
-                    Err(_) => self
-                        .handle
-                        .received(self.handle_context.as_mut(&self.context), data),
-                }
-            }
+            Received { data } => tokio::task::block_in_place(|| {
+                self.handle
+                    .received(self.handle_context.as_mut(&self.context), data.clone())
+            }),
             Notify { token } => {
-                match tokio_threadpool::blocking(|| {
+                tokio::task::block_in_place(|| {
                     self.handle
                         .notify(self.handle_context.as_mut(&self.context), token)
-                }) {
-                    Ok(Async::Ready(_)) => (),
-                    Ok(Async::NotReady) => return Async::NotReady,
-                    Err(_) => self
-                        .handle
-                        .notify(self.handle_context.as_mut(&self.context), token),
-                }
+                });
                 self.set_notify(token);
             }
             SetNotify { token, interval } => {
@@ -510,30 +474,32 @@ where
                 self.handle_context.update_listens(listen_addrs);
             }
         }
-        self.current_task.take();
-        Async::Ready(())
+        self.current_task = false;
+    }
+
+    fn handle_poll(&mut self, cx: &mut Context) {
+        Pin::new(&mut self.handle)
+            .as_mut()
+            .poll(cx, self.handle_context.as_mut(&self.context));
     }
 
     fn set_notify(&mut self, token: u64) {
-        if let Some(interval) = self.notify.get(&token) {
-            let sender = self.notify_sender.clone();
+        if let Some(&interval) = self.notify.get(&token) {
+            let mut sender = self.notify_sender.clone();
             // NOTE: A Interval/Delay will block tokio runtime from gracefully shutdown.
             //       So we spawn it in FutureTaskManager
-            let task = Delay::new(Instant::now() + *interval).then(move |_| {
-                tokio::spawn(sender.send(token).map(|_| ()).map_err(|_| ()));
-                Ok(())
+            let task = async move {
+                tokio::time::delay_until(tokio::time::Instant::now() + interval).await;
+                let _ = sender.send(token).await;
+            };
+            let mut future_task_sender = self.future_task_sender.clone();
+            tokio::spawn(async move {
+                let _ = future_task_sender.send(Box::pin(task)).await;
             });
-            tokio::spawn(
-                self.future_task_sender
-                    .clone()
-                    .send(Box::new(task))
-                    .map(|_| ())
-                    .map_err(|_| ()),
-            );
         }
     }
 
-    fn set_delay(&mut self) {
+    fn set_delay(&mut self, cx: &mut Context) {
         // Why use `delay` instead of `notify`?
         //
         // In fact, on machines that can use multi-core normally, there is almost no problem with the `notify` behavior,
@@ -544,108 +510,79 @@ where
         // Under a single-core machine, `notify` may fall into the loop of infinitely preemptive CPU, causing starvation.
         if !self.delay.load(Ordering::Acquire) {
             self.delay.store(true, Ordering::Release);
-            let notify = futures::task::current();
+            let waker = cx.waker().clone();
             let delay = self.delay.clone();
-            let delay_task =
-                Delay::new(Instant::now() + Duration::from_millis(200)).then(move |_| {
-                    notify.notify();
-                    delay.store(false, Ordering::Release);
-                    Ok(())
-                });
-            tokio::spawn(delay_task);
+            tokio::spawn(async move {
+                tokio::time::delay_until(tokio::time::Instant::now() + Duration::from_millis(200))
+                    .await;
+                waker.wake();
+                delay.store(false, Ordering::Release);
+            });
         }
     }
 
     #[inline(always)]
     fn close(&mut self) {
         self.receiver.close();
-        self.current_task.take();
+        self.current_task = false;
     }
 }
 
 impl<T> Drop for SessionProtocolStream<T> {
     fn drop(&mut self) {
-        if !self.shutdown.load(Ordering::SeqCst) && self.current_task.is_some() {
+        if !self.shutdown.load(Ordering::SeqCst) && self.current_task {
             let event = SessionEvent::ProtocolHandleError {
                 error: Error::SessionProtoHandleAbnormallyClosed(self.context.id),
                 proto_id: self.handle_context.proto_id,
             };
-            tokio::spawn(
-                self.panic_report
-                    .clone()
-                    .send(event)
-                    .map(|_| ())
-                    .map_err(|_| ()),
-            );
+            let mut panic_sender = self.panic_report.clone();
+            tokio::spawn(async move {
+                let _ = panic_sender.send(event).await;
+            });
         }
     }
 }
 
 impl<T> Stream for SessionProtocolStream<T>
 where
-    T: SessionProtocol + Send,
+    T: SessionProtocol + Send + Unpin,
 {
     type Item = ();
-    type Error = ();
 
-    fn poll(&mut self) -> Poll<Option<Self::Item>, Self::Error> {
-        if let Async::NotReady = self.handle_event() {
-            self.set_delay();
-            return Ok(Async::NotReady);
-        }
-        loop {
-            match self.receiver.poll() {
-                Ok(Async::Ready(Some(event))) => {
-                    self.current_task = Some(event);
-                    if let Async::NotReady = self.handle_event() {
-                        self.set_delay();
-                        break;
-                    }
-                }
-                Ok(Async::Ready(None)) => {
+    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Option<Self::Item>> {
+        let mut finished = false;
+        for _ in 0..64 {
+            match Pin::new(&mut self.receiver).as_mut().poll_next(cx) {
+                Poll::Ready(Some(event)) => self.handle_event(event),
+                Poll::Ready(None) => {
                     self.close();
-                    return Ok(Async::Ready(None));
+                    return Poll::Ready(None);
                 }
-                Ok(Async::NotReady) => {
-                    self.set_delay();
+                Poll::Pending => {
+                    finished = true;
                     break;
                 }
-                Err(err) => {
-                    warn!(
-                        "session proto [{}] handle receive message error: {:?}",
-                        self.handle_context.proto_id, err
-                    );
-                    return Err(());
-                }
             }
+        }
+
+        if !finished {
+            self.set_delay(cx);
         }
 
         loop {
-            match self.notify_receiver.poll() {
-                Ok(Async::Ready(Some(token))) => {
-                    self.current_task = Some(SessionProtocolEvent::Notify { token });
-                    if let Async::NotReady = self.handle_event() {
-                        self.set_delay();
-                        break;
-                    }
+            match Pin::new(&mut self.notify_receiver).as_mut().poll_next(cx) {
+                Poll::Ready(Some(token)) => {
+                    self.handle_event(SessionProtocolEvent::Notify { token })
                 }
-                Ok(Async::Ready(None)) => unreachable!(),
-                Ok(Async::NotReady) => {
-                    self.set_delay();
+                Poll::Ready(None) => unreachable!(),
+                Poll::Pending => {
                     break;
-                }
-                Err(_) => {
-                    warn!(
-                        "service proto [{}] handle receive message error",
-                        self.handle_context.proto_id
-                    );
-                    return Err(());
                 }
             }
         }
 
-        self.handle.poll(self.handle_context.as_mut(&self.context));
+        self.handle_poll(cx);
 
-        Ok(Async::NotReady)
+        Poll::Pending
     }
 }

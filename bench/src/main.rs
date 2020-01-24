@@ -1,16 +1,19 @@
 use bench::Bench;
 use bytes::Bytes;
-use futures::prelude::Stream;
+use futures::{channel, StreamExt};
 use p2p::{
     builder::{MetaBuilder, ServiceBuilder},
     context::{ProtocolContext, ProtocolContextMutRef},
+    multiaddr::Multiaddr,
     secio::SecioKeyPair,
-    service::{DialProtocol, ProtocolHandle, ProtocolMeta, Service, ServiceControl, TargetSession},
+    service::{
+        ProtocolHandle, ProtocolMeta, Service, ServiceControl, TargetProtocol, TargetSession,
+    },
     traits::{ServiceHandle, ServiceProtocol},
     ProtocolId,
 };
 use std::{sync::Once, thread};
-use tokio::codec::length_delimited::Builder;
+use tokio_util::codec::length_delimited::Builder;
 
 static START_SECIO: Once = Once::new();
 static START_NO_SECIO: Once = Once::new();
@@ -29,7 +32,7 @@ enum Notify {
 
 pub fn create<F>(secio: bool, meta: ProtocolMeta, shandle: F) -> Service<F>
 where
-    F: ServiceHandle,
+    F: ServiceHandle + Unpin,
 {
     let builder = ServiceBuilder::default()
         .insert_protocol(meta)
@@ -98,17 +101,43 @@ pub fn init() {
     // init secio two peers
     START_SECIO.call_once(|| {
         let (meta, _receiver) = create_meta(ProtocolId::new(1));
+        let (addr_sender, addr_receiver) = channel::oneshot::channel::<Multiaddr>();
         let mut service = create(true, meta, ());
-        let listen_addr = service
-            .listen("/ip4/127.0.0.1/tcp/0".parse().unwrap())
-            .unwrap();
         let control = service.control().clone();
-        thread::spawn(|| tokio::run(service.for_each(|_| Ok(()))));
+        thread::spawn(move || {
+            let mut rt = tokio::runtime::Runtime::new().unwrap();
+            rt.block_on(async move {
+                let listen_addr = service
+                    .listen("/ip4/127.0.0.1/tcp/0".parse().unwrap())
+                    .await
+                    .unwrap();
+                let _ = addr_sender.send(listen_addr);
+                loop {
+                    if service.next().await.is_none() {
+                        break;
+                    }
+                }
+            });
+        });
 
         let (meta, client_receiver) = create_meta(1.into());
-        let mut service = create(true, meta, ());
-        service.dial(listen_addr, DialProtocol::All).unwrap();
-        thread::spawn(|| tokio::run(service.for_each(|_| Ok(()))));
+
+        thread::spawn(|| {
+            let mut rt = tokio::runtime::Runtime::new().unwrap();
+            let mut service = create(true, meta, ());
+            rt.block_on(async move {
+                let listen_addr = addr_receiver.await.unwrap();
+                service
+                    .dial(listen_addr, TargetProtocol::All)
+                    .await
+                    .unwrap();
+                loop {
+                    if service.next().await.is_none() {
+                        break;
+                    }
+                }
+            });
+        });
 
         assert_eq!(client_receiver.recv(), Ok(Notify::Connected));
         unsafe {
@@ -120,17 +149,43 @@ pub fn init() {
     // init no secio two peers
     START_NO_SECIO.call_once(|| {
         let (meta, _receiver) = create_meta(ProtocolId::new(1));
+        let (addr_sender, addr_receiver) = channel::oneshot::channel::<Multiaddr>();
         let mut service = create(false, meta, ());
-        let listen_addr = service
-            .listen("/ip4/127.0.0.1/tcp/0".parse().unwrap())
-            .unwrap();
         let control = service.control().clone();
-        thread::spawn(|| tokio::run(service.for_each(|_| Ok(()))));
+        thread::spawn(move || {
+            let mut rt = tokio::runtime::Runtime::new().unwrap();
+            rt.block_on(async move {
+                let listen_addr = service
+                    .listen("/ip4/127.0.0.1/tcp/0".parse().unwrap())
+                    .await
+                    .unwrap();
+                let _ = addr_sender.send(listen_addr);
+                loop {
+                    if service.next().await.is_none() {
+                        break;
+                    }
+                }
+            });
+        });
 
         let (meta, client_receiver) = create_meta(ProtocolId::new(1));
-        let mut service = create(false, meta, ());
-        service.dial(listen_addr, DialProtocol::All).unwrap();
-        thread::spawn(|| tokio::run(service.for_each(|_| Ok(()))));
+
+        thread::spawn(move || {
+            let mut rt = tokio::runtime::Runtime::new().unwrap();
+            let mut service = create(false, meta, ());
+            rt.block_on(async move {
+                let listen_addr = addr_receiver.await.unwrap();
+                service
+                    .dial(listen_addr, TargetProtocol::All)
+                    .await
+                    .unwrap();
+                loop {
+                    if service.next().await.is_none() {
+                        break;
+                    }
+                }
+            });
+        });
 
         assert_eq!(client_receiver.recv(), Ok(Notify::Connected));
         unsafe {
@@ -143,10 +198,17 @@ pub fn init() {
 fn secio_and_send_data(data: &[u8]) {
     unsafe {
         SECIO_CONTROL.as_mut().map(|control| {
-            control.filter_broadcast(TargetSession::All, ProtocolId::new(1), Bytes::from(data))
+            control.filter_broadcast(
+                TargetSession::All,
+                ProtocolId::new(1),
+                Bytes::from(data.to_owned()),
+            )
         });
         if let Some(rev) = SECIO_RECV.as_ref() {
-            assert_eq!(rev.recv(), Ok(Notify::Message(bytes::Bytes::from(data))))
+            assert_eq!(
+                rev.recv(),
+                Ok(Notify::Message(bytes::Bytes::from(data.to_owned())))
+            )
         }
     }
 }
@@ -154,11 +216,14 @@ fn secio_and_send_data(data: &[u8]) {
 fn no_secio_and_send_data(data: &[u8]) {
     unsafe {
         NO_SECIO_CONTROL.as_mut().map(|control| {
-            control.filter_broadcast(TargetSession::All, 1.into(), Bytes::from(data))
+            control.filter_broadcast(TargetSession::All, 1.into(), Bytes::from(data.to_owned()))
         });
 
         if let Some(rev) = NO_SECIO_RECV.as_ref() {
-            assert_eq!(rev.recv(), Ok(Notify::Message(bytes::Bytes::from(data))))
+            assert_eq!(
+                rev.recv(),
+                Ok(Notify::Message(bytes::Bytes::from(data.to_owned())))
+            )
         }
     }
 }

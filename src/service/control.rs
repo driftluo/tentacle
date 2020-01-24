@@ -1,4 +1,4 @@
-use futures::{prelude::*, sync::mpsc};
+use futures::{channel::mpsc, prelude::*};
 
 use std::time::Duration;
 use std::{
@@ -14,10 +14,7 @@ use crate::{
     error::Error,
     multiaddr::Multiaddr,
     protocol_select::ProtocolInfo,
-    service::{
-        event::Priority, DialProtocol, ServiceTask, TargetProtocol, TargetSession,
-        RECEIVED_BUFFER_SIZE,
-    },
+    service::{event::Priority, ServiceTask, TargetProtocol, TargetSession, RECEIVED_BUFFER_SIZE},
     ProtocolId, SessionId,
 };
 use bytes::Bytes;
@@ -116,11 +113,8 @@ impl ServiceControl {
 
     /// Initiate a connection request to address
     #[inline]
-    pub fn dial(&self, address: Multiaddr, target: DialProtocol) -> Result<(), Error> {
-        self.quick_send(ServiceTask::Dial {
-            address,
-            target: target.into(),
-        })
+    pub fn dial(&self, address: Multiaddr, target: TargetProtocol) -> Result<(), Error> {
+        self.quick_send(ServiceTask::Dial { address, target })
     }
 
     /// Disconnect a connection
@@ -187,10 +181,10 @@ impl ServiceControl {
     #[inline]
     pub fn future_task<T>(&self, task: T) -> Result<(), Error>
     where
-        T: Future<Item = (), Error = ()> + 'static + Send,
+        T: Future<Output = ()> + 'static + Send,
     {
         self.send(ServiceTask::FutureTask {
-            task: Box::new(task),
+            task: Box::pin(task),
         })
     }
 

@@ -22,7 +22,7 @@ mod protocol_mol;
 use molecule::prelude::{Builder, Entity, Reader};
 
 use bytes::Bytes;
-use generic_channel::Sender;
+use futures::channel::mpsc::Sender;
 use log::{debug, error, warn};
 use p2p::{
     context::{ProtocolContext, ProtocolContextMutRef},
@@ -57,15 +57,15 @@ pub enum Event {
 ///
 /// The interval means that we send ping to peers.
 /// The timeout means that consider peer is timeout if during a timeout we still have not received pong from a peer
-pub struct PingHandler<S: Sender<Event>> {
+pub struct PingHandler {
     interval: Duration,
     timeout: Duration,
     connected_session_ids: HashMap<SessionId, PingStatus>,
-    event_sender: S,
+    event_sender: Sender<Event>,
 }
 
-impl<S: Sender<Event>> PingHandler<S> {
-    pub fn new(interval: Duration, timeout: Duration, event_sender: S) -> PingHandler<S> {
+impl PingHandler {
+    pub fn new(interval: Duration, timeout: Duration, event_sender: Sender<Event>) -> PingHandler {
         PingHandler {
             interval,
             timeout,
@@ -106,10 +106,7 @@ impl PingStatus {
     }
 }
 
-impl<S> ServiceProtocol for PingHandler<S>
-where
-    S: Sender<Event>,
-{
+impl ServiceProtocol for PingHandler {
     fn init(&mut self, context: &mut ProtocolContext) {
         // send ping to peers periodically
         let proto_id = context.proto_id;
@@ -286,7 +283,7 @@ impl PingMessage {
         builder.add_payload(ping.as_union_value());
         let data = builder.finish();
         fbb.finish(data, None);
-        Bytes::from(fbb.finished_data())
+        Bytes::from(fbb.finished_data().to_owned())
     }
 
     #[cfg(feature = "flatc")]
@@ -302,7 +299,7 @@ impl PingMessage {
         builder.add_payload(pong.as_union_value());
         let data = builder.finish();
         fbb.finish(data, None);
-        Bytes::from(fbb.finished_data())
+        Bytes::from(fbb.finished_data().to_owned())
     }
 
     #[cfg(feature = "flatc")]
@@ -332,10 +329,13 @@ impl PingMessage {
             .build();
         let ping = protocol_mol::Ping::new_builder().nonce(nonce).build();
         let payload = protocol_mol::PingPayload::new_builder().set(ping).build();
-        protocol_mol::PingMessage::new_builder()
-            .payload(payload)
-            .build()
-            .as_bytes()
+        Bytes::from(
+            protocol_mol::PingMessage::new_builder()
+                .payload(payload)
+                .build()
+                .as_slice()
+                .to_owned(),
+        )
     }
 
     #[cfg(feature = "molc")]
@@ -349,10 +349,13 @@ impl PingMessage {
             .build();
         let pong = protocol_mol::Pong::new_builder().nonce(nonce).build();
         let payload = protocol_mol::PingPayload::new_builder().set(pong).build();
-        protocol_mol::PingMessage::new_builder()
-            .payload(payload)
-            .build()
-            .as_bytes()
+        Bytes::from(
+            protocol_mol::PingMessage::new_builder()
+                .payload(payload)
+                .build()
+                .as_slice()
+                .to_owned(),
+        )
     }
 
     #[cfg(feature = "molc")]

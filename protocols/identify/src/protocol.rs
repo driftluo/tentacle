@@ -61,7 +61,7 @@ impl<'a> IdentifyMessage<'a> {
         let data = builder.finish();
 
         fbb.finish(data, None);
-        Bytes::from(fbb.finished_data())
+        Bytes::from(fbb.finished_data().to_owned())
     }
 
     #[cfg(feature = "flatc")]
@@ -125,12 +125,15 @@ impl<'a> IdentifyMessage<'a> {
             .set(listen_addrs)
             .build();
 
-        protocol_mol::IdentifyMessage::new_builder()
-            .listen_addrs(listen_addrs)
-            .observed_addr(observed_addr)
-            .identify(identify)
-            .build()
-            .as_bytes()
+        Bytes::from(
+            protocol_mol::IdentifyMessage::new_builder()
+                .listen_addrs(listen_addrs)
+                .observed_addr(observed_addr)
+                .identify(identify)
+                .build()
+                .as_slice()
+                .to_owned(),
+        )
     }
 
     #[cfg(feature = "molc")]

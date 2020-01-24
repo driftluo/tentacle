@@ -1,22 +1,24 @@
-use bytes::{Bytes, BytesMut};
-use futures::sync::mpsc::{self, Receiver, Sender};
-use futures::{prelude::*, sink::Sink, stream::iter_ok};
-use log::{debug, trace};
-use tokio::{
-    codec::{length_delimited::LengthDelimitedCodec, Framed},
-    prelude::{AsyncRead, AsyncWrite},
-    timer::Delay,
+use bytes::{Buf, Bytes, BytesMut};
+use futures::{
+    channel::mpsc::{self, Receiver, Sender},
+    stream::iter,
+    Sink, SinkExt, Stream, StreamExt,
 };
+use log::{debug, trace};
+use tokio::prelude::{AsyncRead, AsyncWrite};
+use tokio_util::codec::{length_delimited::LengthDelimitedCodec, Framed};
 
 use std::{
     cmp::min,
     collections::VecDeque,
     io,
+    pin::Pin,
     sync::{
         atomic::{AtomicBool, Ordering},
         Arc,
     },
-    time::{Duration, Instant},
+    task::{Context, Poll},
+    time::Duration,
 };
 
 use crate::{
@@ -24,6 +26,8 @@ use crate::{
     crypto::BoxStreamCipher,
     error::SecioError,
 };
+
+type PollResult<T, E> = Poll<Result<T, E>>;
 
 const DELAY_TIME: Duration = Duration::from_millis(300);
 
@@ -56,7 +60,7 @@ pub struct SecureStream<T> {
 
 impl<T> SecureStream<T>
 where
-    T: AsyncRead + AsyncWrite,
+    T: AsyncRead + AsyncWrite + Unpin,
 {
     /// New a secure stream
     pub(crate) fn new(
@@ -100,17 +104,23 @@ where
     /// Sink `start_send` Ready -> data in buffer or send
     /// Sink `start_send` NotReady -> buffer full need poll complete
     #[inline]
-    fn send_frame(&mut self) -> Result<(), io::Error> {
+    fn send_frame(&mut self, cx: &mut Context) -> Result<(), io::Error> {
         while let Some(frame) = self.pending.pop_front() {
-            if let AsyncSink::NotReady(data) = self.socket.start_send(frame)? {
-                debug!("socket not ready, can't send");
-                self.pending.push_front(data);
-                if self.poll_complete()? {
-                    break;
+            let mut sink = Pin::new(&mut self.socket);
+
+            match sink.as_mut().poll_ready(cx)? {
+                Poll::Ready(()) => sink.as_mut().start_send(frame)?,
+                Poll::Pending => {
+                    debug!("socket not ready, can't send");
+                    self.pending.push_front(frame);
+                    if self.poll_complete(cx)? {
+                        break;
+                    }
                 }
             }
         }
-        self.poll_complete()?;
+
+        self.poll_complete(cx)?;
         Ok(())
     }
 
@@ -119,108 +129,108 @@ where
     ///
     /// Sink `poll_complete` Ready -> no buffer remain, flush all
     /// Sink `poll_complete` NotReady -> there is more work left to do, may wake up next poll
-    fn poll_complete(&mut self) -> Result<bool, io::Error> {
-        if self.socket.poll_complete()?.is_not_ready() {
-            self.set_delay();
-            return Ok(true);
+    fn poll_complete(&mut self, cx: &mut Context) -> Result<bool, io::Error> {
+        match Pin::new(&mut self.socket).poll_flush(cx) {
+            Poll::Pending => {
+                self.set_delay(cx);
+                Ok(true)
+            }
+            Poll::Ready(res) => {
+                res?;
+                Ok(false)
+            }
         }
-        Ok(false)
     }
 
     #[inline]
-    fn handle_event(&mut self, event: StreamEvent) -> Poll<(), io::Error> {
+    fn handle_event(&mut self, event: StreamEvent, cx: &mut Context) -> PollResult<(), io::Error> {
         match event {
             StreamEvent::Frame(frame) => {
                 debug!("start send data: {:?}", frame);
                 self.encode(frame);
-                self.send_frame()?;
+                self.send_frame(cx)?;
             }
             StreamEvent::Close => {
                 self.dead = true;
                 let _ = self.socket.close();
             }
             StreamEvent::Flush => {
-                self.flush()?;
+                self.flush(cx)?;
                 debug!("secure stream flushed");
             }
         }
-        Ok(Async::Ready(()))
+        Poll::Ready(Ok(()))
     }
 
     #[inline]
-    fn recv_frame(&mut self) -> Poll<Option<()>, SecioError> {
+    fn recv_frame(&mut self, cx: &mut Context) -> PollResult<Option<()>, SecioError> {
         let mut finished = false;
         for _ in 0..128 {
-            match self.socket.poll() {
-                Ok(Async::Ready(Some(t))) => {
+            match Pin::new(&mut self.socket).as_mut().poll_next(cx) {
+                Poll::Ready(Some(Ok(t))) => {
                     trace!("receive raw data size: {:?}", t.len());
                     self.decode(t)?;
-                    self.send_to_handle()?;
+                    self.send_to_handle(cx)?;
                 }
-                Ok(Async::Ready(None)) => {
+                Poll::Ready(None) => {
                     debug!("shutdown");
                     self.dead = true;
-                    return Ok(Async::Ready(None));
+                    return Poll::Ready(Ok(None));
                 }
-                Ok(Async::NotReady) => {
+                Poll::Pending => {
                     finished = true;
                     debug!("receive not ready");
                     break;
                 }
-                Err(err) => {
+                Poll::Ready(Some(Err(err))) => {
                     self.dead = true;
-                    return Err(err.into());
+                    return Poll::Ready(Err(err.into()));
                 }
             };
         }
         if !finished {
-            self.set_delay();
+            self.set_delay(cx);
         }
-        Ok(Async::NotReady)
+        Poll::Pending
     }
 
     #[inline]
-    fn recv_event(&mut self) {
+    fn recv_event(&mut self, cx: &mut Context) {
         let mut finished = false;
         for _ in 0..128 {
             if self.dead {
                 return;
             }
-            match self.event_receiver.poll() {
-                Ok(Async::Ready(Some(event))) => match self.handle_event(event) {
-                    Err(err) => {
+            match Pin::new(&mut self.event_receiver).as_mut().poll_next(cx) {
+                Poll::Ready(Some(event)) => match self.handle_event(event, cx) {
+                    Poll::Ready(Err(err)) => {
                         debug!("send message error: {:?}", err);
                         break;
                     }
-                    Ok(Async::NotReady) => break,
+                    Poll::Pending => break,
                     _ => (),
                 },
-                Ok(Async::Ready(None)) => unreachable!(),
-                Ok(Async::NotReady) => {
+                Poll::Ready(None) => unreachable!(),
+                Poll::Pending => {
                     finished = true;
                     debug!("event not ready");
-                    break;
-                }
-                Err(err) => {
-                    finished = true;
-                    debug!("receive event error: {:?}", err);
                     break;
                 }
             }
         }
         if !finished {
-            self.set_delay();
+            self.set_delay(cx);
         }
     }
 
     #[inline]
-    fn send_to_handle(&mut self) -> Result<(), io::Error> {
+    fn send_to_handle(&mut self, cx: &mut Context) -> Result<(), io::Error> {
         if let Some(ref mut sender) = self.frame_sender {
             while let Some(event) = self.read_buf.pop_front() {
                 if let Err(e) = sender.try_send(event) {
                     if e.is_full() {
                         self.read_buf.push_front(e.into_inner());
-                        self.set_delay();
+                        self.set_delay(cx);
                         break;
                     } else {
                         debug!("send error: {}", e);
@@ -234,14 +244,14 @@ where
     }
 
     #[inline]
-    fn flush(&mut self) -> Result<(), io::Error> {
-        self.send_frame()?;
-        self.send_to_handle()?;
+    fn flush(&mut self, cx: &mut Context) -> Result<(), io::Error> {
+        self.send_frame(cx)?;
+        self.send_to_handle(cx)?;
         Ok(())
     }
 
     #[inline]
-    fn set_delay(&mut self) {
+    fn set_delay(&mut self, cx: &mut Context) {
         // Why use `delay` instead of `notify`?
         //
         // In fact, on machines that can use multi-core normally, there is almost no problem with the `notify` behavior,
@@ -252,27 +262,26 @@ where
         // Under a single-core machine, `notify` may fall into the loop of infinitely preemptive CPU, causing starvation.
         if !self.delay.load(Ordering::Acquire) {
             self.delay.store(true, Ordering::Release);
-            let notify = futures::task::current();
+            let waker = cx.waker().clone();
             let delay = self.delay.clone();
-            let delay_task = Delay::new(Instant::now() + DELAY_TIME).then(move |_| {
-                notify.notify();
+            tokio::spawn(async move {
+                tokio::time::delay_until(tokio::time::Instant::now() + DELAY_TIME).await;
+                waker.wake();
                 delay.store(false, Ordering::Release);
-                Ok(())
             });
-            tokio::spawn(delay_task);
         }
     }
 
     fn close(&mut self) {
         self.read_buf.push_back(StreamEvent::Close);
         let events = self.read_buf.split_off(0);
-        if let Some(sender) = self.frame_sender.take() {
-            tokio::spawn(
-                sender
-                    .send_all(iter_ok(events))
-                    .map(|_| ())
-                    .map_err(|e| debug!("close event send to handle error: {:?}", e)),
-            );
+        if let Some(mut sender) = self.frame_sender.take() {
+            tokio::spawn(async move {
+                let mut iter = iter(events).map(Ok);
+                if let Err(e) = sender.send_all(&mut iter).await {
+                    debug!("close event send to handle error: {:?}", e)
+                }
+            });
         }
     }
 
@@ -299,7 +308,10 @@ where
             frame.truncate(content_length);
         }
 
-        let mut out = self.decode_cipher.decrypt(&frame).map(BytesMut::from)?;
+        let mut out = self
+            .decode_cipher
+            .decrypt(&frame)
+            .map(|res| BytesMut::from(res.as_slice()))?;
 
         if !self.nonce.is_empty() {
             let n = min(out.len(), self.nonce.len());
@@ -307,7 +319,7 @@ where
                 return Err(SecioError::NonceVerificationFailed);
             }
             self.nonce.drain(..n);
-            out.split_to(n);
+            out.advance(n);
         }
         Ok(out)
     }
@@ -325,7 +337,7 @@ where
         let mut out = self
             .encode_cipher
             .encrypt(&data[..])
-            .map(BytesMut::from)
+            .map(|res| BytesMut::from(res.as_slice()))
             .unwrap();
         if let Some(ref mut hmac) = self.encode_hmac {
             let signature = hmac.sign(&out[..]);
@@ -342,44 +354,43 @@ where
 
 impl<T> Stream for SecureStream<T>
 where
-    T: AsyncRead + AsyncWrite,
+    T: AsyncRead + AsyncWrite + Unpin,
 {
-    type Item = ();
-    type Error = io::Error;
+    type Item = Result<(), io::Error>;
 
-    fn poll(&mut self) -> Poll<Option<Self::Item>, Self::Error> {
+    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Option<Self::Item>> {
         // Stream must ensure that the handshake is completed
         if self.dead && self.nonce.is_empty() {
-            return Ok(Async::Ready(None));
+            return Poll::Ready(None);
         }
 
         if !self.pending.is_empty() || !self.read_buf.is_empty() {
-            self.flush()?;
+            self.flush(cx)?;
         }
 
-        self.poll_complete()?;
+        self.poll_complete(cx)?;
 
-        match self.recv_frame() {
-            Ok(Async::Ready(None)) => {
+        match self.recv_frame(cx) {
+            Poll::Ready(Ok(None)) => {
                 self.close();
-                return Ok(Async::Ready(None));
+                return Poll::Ready(None);
             }
-            Err(err) => {
+            Poll::Ready(Err(err)) => {
                 debug!("receive frame error: {:?}", err);
                 self.close();
-                return Err(err.into());
+                return Poll::Ready(Some(Err(err.into())));
             }
             _ => (),
         }
 
-        self.recv_event();
+        self.recv_event(cx);
 
         // Double check stream state
         if self.dead && self.nonce.is_empty() {
-            return Ok(Async::Ready(None));
+            return Poll::Ready(None);
         }
 
-        Ok(Async::NotReady)
+        Poll::Pending
     }
 }
 
@@ -396,12 +407,13 @@ mod tests {
     #[cfg(unix)]
     use crate::Digest;
     use bytes::BytesMut;
-    use futures::{sync, Future, Stream};
+    use futures::{channel, StreamExt};
     use rand;
-    use std::io::Write;
-    use std::{thread, time};
-    use tokio::codec::{length_delimited::LengthDelimitedCodec, Framed};
-    use tokio::net::{TcpListener, TcpStream};
+    use tokio::{
+        io::{AsyncReadExt, AsyncWriteExt},
+        net::{TcpListener, TcpStream},
+    };
+    use tokio_util::codec::{length_delimited::LengthDelimitedCodec, Framed};
 
     fn test_decode_encode(cipher: CipherType) {
         let cipher_key = (0..cipher.key_size())
@@ -467,109 +479,117 @@ mod tests {
         let data_clone = &*data;
         let nonce = vec![0, 1, 2, 3, 4, 5, 6, 7, 8, 9];
 
-        let listener = TcpListener::bind(&"127.0.0.1:0".parse().unwrap()).unwrap();
-        let listener_addr = listener.local_addr().unwrap();
-
-        let (sender, receiver) = sync::oneshot::channel::<bytes::BytesMut>();
+        let (sender, receiver) = channel::oneshot::channel::<bytes::BytesMut>();
+        let (addr_sender, addr_receiver) = channel::oneshot::channel::<::std::net::SocketAddr>();
+        let mut rt = tokio::runtime::Runtime::new().unwrap();
 
         let nonce2 = nonce.clone();
-        let server = listener
-            .incoming()
-            .into_future()
-            .map_err(|_| ())
-            .map(move |(socket, _)| {
-                let nonce2 = nonce2.clone();
-                let (decode_hmac, encode_hmac) = match cipher {
-                    CipherType::ChaCha20Poly1305
-                    | CipherType::Aes128Gcm
-                    | CipherType::Aes256Gcm => (None, None),
-                    #[cfg(unix)]
-                    _ => (
-                        Some(Hmac::from_key(Digest::Sha256, &_hmac_key_clone)),
-                        Some(Hmac::from_key(Digest::Sha256, &_hmac_key_clone)),
-                    ),
-                };
-                let mut secure = SecureStream::new(
-                    Framed::new(socket.unwrap(), LengthDelimitedCodec::new()),
-                    new_stream(
-                        cipher,
-                        &cipher_key_clone[..key_size],
-                        &iv_clone,
-                        CryptoMode::Decrypt,
-                    ),
-                    decode_hmac,
-                    new_stream(
-                        cipher,
-                        &cipher_key_clone[..key_size],
-                        &iv_clone,
-                        CryptoMode::Encrypt,
-                    ),
-                    encode_hmac,
-                    nonce2,
-                );
-                let handle = secure.create_handle().unwrap();
+        rt.spawn(async move {
+            let mut listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let listener_addr = listener.local_addr().unwrap();
+            let _ = addr_sender.send(listener_addr);
+            let (socket, _) = listener.accept().await.unwrap();
+            let nonce2 = nonce2.clone();
+            let (decode_hmac, encode_hmac) = match cipher {
+                CipherType::ChaCha20Poly1305 | CipherType::Aes128Gcm | CipherType::Aes256Gcm => {
+                    (None, None)
+                }
+                #[cfg(unix)]
+                _ => (
+                    Some(Hmac::from_key(Digest::Sha256, &_hmac_key_clone)),
+                    Some(Hmac::from_key(Digest::Sha256, &_hmac_key_clone)),
+                ),
+            };
+            let mut secure = SecureStream::new(
+                Framed::new(socket, LengthDelimitedCodec::new()),
+                new_stream(
+                    cipher,
+                    &cipher_key_clone[..key_size],
+                    &iv_clone,
+                    CryptoMode::Decrypt,
+                ),
+                decode_hmac,
+                new_stream(
+                    cipher,
+                    &cipher_key_clone[..key_size],
+                    &iv_clone,
+                    CryptoMode::Encrypt,
+                ),
+                encode_hmac,
+                nonce2,
+            );
+            let mut handle = secure.create_handle().unwrap();
 
-                let task = tokio::io::read_exact(handle, [0u8; 11])
-                    .and_then(move |(_, data)| {
-                        let _ = sender.send(BytesMut::from(data.to_vec()));
-                        Ok(())
-                    })
-                    .map_err(|_| ());
-
-                tokio::spawn(secure.for_each(|_| Ok(())).map_err(|_| ()));
-                tokio::spawn(task);
+            tokio::spawn(async move {
+                loop {
+                    match secure.next().await {
+                        Some(Err(_)) => {
+                            break;
+                        }
+                        None => break,
+                        _ => (),
+                    }
+                }
             });
 
-        let client = TcpStream::connect(&listener_addr)
-            .map(move |stream| {
-                let (decode_hmac, encode_hmac) = match cipher {
-                    CipherType::ChaCha20Poly1305
-                    | CipherType::Aes128Gcm
-                    | CipherType::Aes256Gcm => (None, None),
-                    #[cfg(unix)]
-                    _ => (
-                        Some(Hmac::from_key(Digest::Sha256, &_hmac_key_clone)),
-                        Some(Hmac::from_key(Digest::Sha256, &_hmac_key_clone)),
-                    ),
-                };
-                let mut secure = SecureStream::new(
-                    Framed::new(stream, LengthDelimitedCodec::new()),
-                    new_stream(
-                        cipher,
-                        &cipher_key_clone[..key_size],
-                        &iv,
-                        CryptoMode::Decrypt,
-                    ),
-                    decode_hmac,
-                    new_stream(
-                        cipher,
-                        &cipher_key_clone[..key_size],
-                        &iv,
-                        CryptoMode::Encrypt,
-                    ),
-                    encode_hmac,
-                    Vec::new(),
-                );
-                let mut handle = secure.create_handle().unwrap();
-                tokio::spawn(secure.for_each(|_| Ok(())).map_err(|_| ()));
-
-                let _ = handle.write_all(&nonce);
-                let _ = handle.write_all(&data_clone[..]);
-                // wait test finish, don't drop handle
-                thread::sleep(time::Duration::from_secs(10));
-            })
-            .map_err(|_| ());
-
-        thread::spawn(|| {
-            tokio::run(server);
+            let mut data = [0u8; 11];
+            handle.read_exact(&mut data).await.unwrap();
+            let _ = sender.send(BytesMut::from(&data[..]));
         });
 
-        thread::spawn(|| {
-            tokio::run(client);
+        rt.spawn(async move {
+            let listener_addr = addr_receiver.await.unwrap();
+            let stream = TcpStream::connect(&listener_addr).await.unwrap();
+            let (decode_hmac, encode_hmac) = match cipher {
+                CipherType::ChaCha20Poly1305 | CipherType::Aes128Gcm | CipherType::Aes256Gcm => {
+                    (None, None)
+                }
+                #[cfg(unix)]
+                _ => (
+                    Some(Hmac::from_key(Digest::Sha256, &_hmac_key_clone)),
+                    Some(Hmac::from_key(Digest::Sha256, &_hmac_key_clone)),
+                ),
+            };
+            let mut secure = SecureStream::new(
+                Framed::new(stream, LengthDelimitedCodec::new()),
+                new_stream(
+                    cipher,
+                    &cipher_key_clone[..key_size],
+                    &iv,
+                    CryptoMode::Decrypt,
+                ),
+                decode_hmac,
+                new_stream(
+                    cipher,
+                    &cipher_key_clone[..key_size],
+                    &iv,
+                    CryptoMode::Encrypt,
+                ),
+                encode_hmac,
+                Vec::new(),
+            );
+            let mut handle = secure.create_handle().unwrap();
+
+            tokio::spawn(async move {
+                loop {
+                    match secure.next().await {
+                        Some(Err(_)) => {
+                            break;
+                        }
+                        None => break,
+                        _ => (),
+                    }
+                }
+            });
+
+            let _ = handle.write_all(&nonce).await;
+            let _ = handle.write_all(&data_clone[..]).await;
         });
 
-        let received = receiver.wait().unwrap();
-        assert_eq!(received.to_vec(), data);
+        rt.block_on(async move {
+            let received = receiver.await.unwrap();
+            assert_eq!(received.to_vec(), data);
+        });
     }
 
     #[cfg(unix)]

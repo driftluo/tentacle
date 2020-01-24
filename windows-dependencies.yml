@@ -1,5 +1,5 @@
 parameters:
-  rustup_toolchain: ''
+  rustup_toolchain: '1.40.0-x86_64-pc-windows-msvc'
 steps:
   - script: |
       curl -sSf -o rustup-init.exe https://win.rustup.rs

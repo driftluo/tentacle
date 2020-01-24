@@ -1,5 +1,5 @@
 use bytes::Bytes;
-use futures::prelude::Stream;
+use futures::StreamExt;
 use log::info;
 use std::collections::HashMap;
 use std::thread;
@@ -9,8 +9,8 @@ use tentacle::{
     context::{ProtocolContext, ProtocolContextMutRef, ServiceContext},
     secio::SecioKeyPair,
     service::{
-        DialProtocol, ProtocolHandle, ProtocolMeta, Service, ServiceError, ServiceEvent,
-        SessionType,
+        ProtocolHandle, ProtocolMeta, Service, ServiceError, ServiceEvent, SessionType,
+        TargetProtocol,
     },
     traits::{ServiceHandle, ServiceProtocol},
     ProtocolId, SessionId,
@@ -110,7 +110,7 @@ impl ServiceHandle for SHandle {
 
 pub fn create<F>(secio: bool, meta: ProtocolMeta, shandle: F) -> Service<F>
 where
-    F: ServiceHandle,
+    F: ServiceHandle + Unpin,
 {
     let builder = ServiceBuilder::default().insert_protocol(meta);
 
@@ -142,20 +142,37 @@ fn create_meta(id: ProtocolId) -> ProtocolMeta {
 
 fn main() {
     env_logger::init();
+    let mut rt = tokio::runtime::Runtime::new().unwrap();
 
     if std::env::args().nth(1) == Some("server".to_string()) {
-        let meta = create_meta(1.into());
-        let mut service = create(true, meta, SHandle);
-        let listen_addr = service
-            .listen("/ip4/127.0.0.1/tcp/8900".parse().unwrap())
-            .unwrap();
-        info!("listen_addr: {}", listen_addr);
-        tokio::run(service.for_each(|_| Ok(())));
+        rt.block_on(async move {
+            let meta = create_meta(1.into());
+            let mut service = create(true, meta, SHandle);
+            let listen_addr = service
+                .listen("/ip4/127.0.0.1/tcp/8900".parse().unwrap())
+                .await
+                .unwrap();
+            info!("listen_addr: {}", listen_addr);
+            loop {
+                if service.next().await.is_none() {
+                    break;
+                }
+            }
+        });
     } else {
-        let listen_addr = std::env::args().nth(1).unwrap().parse().unwrap();
-        let meta = create_meta(1.into());
-        let mut service = create(true, meta, SHandle);
-        service.dial(listen_addr, DialProtocol::All).unwrap();
-        tokio::run(service.for_each(|_| Ok(())));
+        rt.block_on(async move {
+            let listen_addr = std::env::args().nth(1).unwrap().parse().unwrap();
+            let meta = create_meta(1.into());
+            let mut service = create(true, meta, SHandle);
+            service
+                .dial(listen_addr, TargetProtocol::All)
+                .await
+                .unwrap();
+            loop {
+                if service.next().await.is_none() {
+                    break;
+                }
+            }
+        });
     }
 }

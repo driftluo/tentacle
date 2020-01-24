@@ -1,14 +1,19 @@
-use futures::{prelude::*, sync::mpsc};
-use log::{debug, error, trace, warn};
-use std::collections::{vec_deque::VecDeque, HashMap, HashSet};
-use std::sync::{
-    atomic::{AtomicBool, AtomicUsize, Ordering},
-    Arc,
+use futures::{channel::mpsc, prelude::*, stream::FusedStream};
+use log::{debug, error, trace};
+use std::{
+    borrow::Cow,
+    collections::{vec_deque::VecDeque, HashMap, HashSet},
+    error::Error as ErrorTrait,
+    io,
+    pin::Pin,
+    sync::{
+        atomic::{AtomicBool, AtomicUsize, Ordering},
+        Arc,
+    },
+    task::{Context, Poll},
+    time::Duration,
 };
-use std::time::{Duration, Instant};
-use std::{borrow::Cow, error::Error as ErrorTrait, io};
-use tokio::prelude::{AsyncRead, AsyncWrite, FutureExt};
-use tokio::timer::{Delay, Interval};
+use tokio::prelude::{AsyncRead, AsyncWrite};
 
 use crate::{
     context::{ServiceContext, SessionContext, SessionController},
@@ -39,7 +44,7 @@ pub(crate) mod event;
 pub(crate) mod future_task;
 
 pub use crate::service::{
-    config::{DialProtocol, ProtocolHandle, ProtocolMeta, TargetProtocol, TargetSession},
+    config::{ProtocolHandle, ProtocolMeta, TargetProtocol, TargetSession},
     control::ServiceControl,
     event::{ProtocolEvent, ServiceError, ServiceEvent},
 };
@@ -58,10 +63,18 @@ pub(crate) const DELAY_TIME: Duration = Duration::from_millis(300);
 /// Protocol handle value
 pub(crate) enum InnerProtocolHandle {
     /// Service level protocol
-    Service(Box<dyn ServiceProtocol + Send + 'static>),
+    Service(Box<dyn ServiceProtocol + Send + 'static + Unpin>),
     /// Session level protocol
-    Session(Box<dyn SessionProtocol + Send + 'static>),
+    Session(Box<dyn SessionProtocol + Send + 'static + Unpin>),
 }
+
+type SessionProtoHandles = HashMap<
+    (SessionId, ProtocolId),
+    (
+        Option<futures::channel::oneshot::Sender<()>>,
+        tokio::task::JoinHandle<()>,
+    ),
+>;
 
 /// An abstraction of p2p service, currently only supports TCP protocol
 pub struct Service<T> {
@@ -124,11 +137,17 @@ pub struct Service<T> {
     delay: Arc<AtomicBool>,
 
     shutdown: Arc<AtomicBool>,
+
+    wait_handle: Vec<(
+        Option<futures::channel::oneshot::Sender<()>>,
+        tokio::task::JoinHandle<()>,
+    )>,
+    session_wait_handle: SessionProtoHandles,
 }
 
 impl<T> Service<T>
 where
-    T: ServiceHandle,
+    T: ServiceHandle + Unpin,
 {
     /// New a Service
     pub(crate) fn new(
@@ -191,6 +210,8 @@ where
             pending_tasks: VecDeque::default(),
             delay: Arc::new(AtomicBool::new(false)),
             shutdown,
+            wait_handle: Vec::new(),
+            session_wait_handle: HashMap::new(),
         }
     }
 
@@ -216,54 +237,105 @@ where
     ///
     /// Return really listen multiaddr, but if use `/dns4/localhost/tcp/80`,
     /// it will return original value, and create a future task to DNS resolver later.
-    pub fn listen(&mut self, address: Multiaddr) -> Result<Multiaddr, io::Error> {
-        let (listen_future, listen_addr) = self
+    pub async fn listen(&mut self, address: Multiaddr) -> Result<Multiaddr, io::Error> {
+        let listen_future = self
             .multi_transport
             .listen(address.clone())
             .map_err::<io::Error, _>(Into::into)?;
-        let sender = self.session_event_sender.clone();
-        let task = listen_future.then(move |result| match result {
-            Ok(value) => tokio::spawn(
-                sender
-                    .send(SessionEvent::ListenStart {
-                        listen_address: value.0,
-                        incoming: value.1,
-                    })
-                    .map(|_| ())
-                    .map_err(|err| {
-                        error!("Listen address success send back error: {:?}", err);
-                    }),
-            ),
-            Err(err) => {
-                let event = if let TransportError::DNSResolverError((address, error)) = err {
-                    SessionEvent::ListenError {
-                        address,
-                        error: Error::DNSResolverError(error),
-                    }
-                } else {
-                    SessionEvent::ListenError {
-                        address,
-                        error: Error::DNSResolverError(io::ErrorKind::InvalidData.into()),
-                    }
-                };
-                tokio::spawn(sender.send(event).map(|_| ()).map_err(|err| {
-                    error!("Listen address fail send back error: {:?}", err);
-                }))
+
+        match listen_future.await {
+            Ok(value) => {
+                let listen_address = value.0.clone();
+
+                self.handle.handle_event(
+                    &mut self.service_context,
+                    ServiceEvent::ListenStarted {
+                        address: listen_address.clone(),
+                    },
+                );
+                if let Some(client) = self.igd_client.as_mut() {
+                    client.register(&listen_address)
+                }
+                self.listens.push((listen_address.clone(), value.1));
+
+                Ok(listen_address)
             }
-        });
-        self.pending_tasks.push_back(Box::new(task));
+            Err(err) => {
+                if let TransportError::DNSResolverError((_, error)) = err {
+                    Err(error)
+                } else {
+                    Err(err.into())
+                }
+            }
+        }
+    }
+
+    /// Use by inner
+    fn listen_inner(&mut self, address: Multiaddr) -> Result<(), io::Error> {
+        let listen_future = self
+            .multi_transport
+            .listen(address.clone())
+            .map_err::<io::Error, _>(Into::into)?;
+        let mut sender = self.session_event_sender.clone();
+        let task = async move {
+            let result = listen_future.await;
+            let event = match result {
+                Ok(value) => SessionEvent::ListenStart {
+                    listen_address: value.0,
+                    incoming: value.1,
+                },
+                Err(err) => {
+                    if let TransportError::DNSResolverError((address, error)) = err {
+                        SessionEvent::ListenError {
+                            address,
+                            error: Error::DNSResolverError(error),
+                        }
+                    } else {
+                        SessionEvent::ListenError {
+                            address,
+                            error: Error::IoError(err.into()),
+                        }
+                    }
+                }
+            };
+            if let Err(err) = sender.send(event).await {
+                error!("Listen address result send back error: {:?}", err);
+            }
+        };
+        self.pending_tasks.push_back(Box::pin(task));
         self.state.increase();
-        Ok(listen_addr)
+        Ok(())
     }
 
     /// Dial the given address, doesn't actually make a request, just generate a future
-    pub fn dial(
+    pub async fn dial(
         &mut self,
         address: Multiaddr,
-        target: DialProtocol,
+        target: TargetProtocol,
     ) -> Result<&mut Self, io::Error> {
-        self.dial_inner(address, target.into())?;
-        Ok(self)
+        let dial_future = self
+            .multi_transport
+            .dial(address.clone())
+            .map_err::<io::Error, _>(Into::into)?;
+
+        match dial_future.await {
+            Ok(value) => {
+                self.session_event_sender
+                    .send(SessionEvent::DialStart {
+                        remote_address: value.0,
+                        stream: value.1,
+                    })
+                    .await
+                    .map_err::<io::Error, _>(|_| io::ErrorKind::BrokenPipe.into())?;
+                self.dial_protocols.insert(address, target);
+                self.state.increase();
+                Ok(self)
+            }
+            Err(err) => match err {
+                TransportError::DNSResolverError((_, error)) => Err(error),
+                e => Err(e.into()),
+            },
+        }
     }
 
     /// Use by inner
@@ -275,21 +347,16 @@ where
             .dial(address.clone())
             .map_err::<io::Error, _>(Into::into)?;
 
-        let sender = self.session_event_sender.clone();
-        let task = dial_future.then(|result| match result {
-            Ok(value) => tokio::spawn(
-                sender
-                    .send(SessionEvent::DialStart {
-                        remote_address: value.0,
-                        stream: value.1,
-                    })
-                    .map(|_| ())
-                    .map_err(|err| {
-                        error!("dial address success send back error: {:?}", err);
-                    }),
-            ),
-            Err(err) => {
-                let event = match err {
+        let mut sender = self.session_event_sender.clone();
+        let task = async move {
+            let result = dial_future.await;
+
+            let event = match result {
+                Ok(value) => SessionEvent::DialStart {
+                    remote_address: value.0,
+                    stream: value.1,
+                },
+                Err(err) => match err {
                     TransportError::DNSResolverError((address, error)) => SessionEvent::DialError {
                         address,
                         error: Error::DNSResolverError(error),
@@ -298,14 +365,15 @@ where
                         address,
                         error: Error::IoError(e.into()),
                     },
-                };
-                tokio::spawn(sender.send(event).map(|_| ()).map_err(|err| {
-                    error!("dial address fail send back error: {:?}", err);
-                }))
-            }
-        });
+                },
+            };
 
-        self.pending_tasks.push_back(Box::new(task));
+            if let Err(err) = sender.send(event).await {
+                error!("dial address result send back error: {:?}", err);
+            }
+        };
+
+        self.pending_tasks.push_back(Box::pin(task));
         self.state.increase();
         Ok(())
     }
@@ -331,6 +399,7 @@ where
     #[inline(always)]
     fn distribute_to_session_process<D: Iterator<Item = (SessionId, SessionEvent)>>(
         &mut self,
+        cx: &mut Context,
         data: D,
         priority: Priority,
         block_sessions: &mut HashSet<SessionId>,
@@ -353,7 +422,7 @@ where
                         block_sessions.insert(id);
                         debug!("session [{}] is full", id);
                         self.push_back(priority, id, e.into_inner());
-                        self.set_delay();
+                        self.set_delay(cx);
                     } else {
                         debug!(
                             "session {} has been shutdown, message can't send, just drop it",
@@ -369,18 +438,18 @@ where
 
     /// Distribute event to sessions
     #[inline]
-    fn distribute_to_session(&mut self) {
+    fn distribute_to_session(&mut self, cx: &mut Context) {
         if self.shutdown.load(Ordering::SeqCst) {
             return;
         }
         let mut block_sessions = HashSet::new();
 
         let high = self.high_write_buf.split_off(0).into_iter();
-        self.distribute_to_session_process(high, Priority::High, &mut block_sessions);
+        self.distribute_to_session_process(cx, high, Priority::High, &mut block_sessions);
 
         if self.sessions.len() > block_sessions.len() {
             let normal = self.write_buf.split_off(0).into_iter();
-            self.distribute_to_session_process(normal, Priority::Normal, &mut block_sessions);
+            self.distribute_to_session_process(cx, normal, Priority::Normal, &mut block_sessions);
         }
 
         for id in block_sessions {
@@ -405,7 +474,7 @@ where
 
     /// Distribute event to user level
     #[inline(always)]
-    fn distribute_to_user_level(&mut self) {
+    fn distribute_to_user_level(&mut self, cx: &mut Context) {
         if self.shutdown.load(Ordering::SeqCst) {
             return;
         }
@@ -419,7 +488,7 @@ where
             .map(|(session_id, _)| *session_id)
             .collect::<HashSet<_>>();
         for id in closed_sessions {
-            self.session_close(id, Source::Internal);
+            self.session_close(cx, id, Source::Internal);
         }
 
         for (session_id, proto_id, event) in self.read_service_buf.split_off(0) {
@@ -435,7 +504,7 @@ where
                         debug!("service proto [{}] handle is full", proto_id);
                         self.read_service_buf
                             .push_back((session_id, proto_id, e.into_inner()));
-                        self.proto_handle_error(proto_id, None);
+                        self.proto_handle_error(cx, proto_id, None);
                         block_handles.insert(proto_id);
                     } else {
                         debug!(
@@ -466,7 +535,7 @@ where
                         );
                         self.read_session_buf
                             .push_back((session_id, proto_id, e.into_inner()));
-                        self.proto_handle_error(proto_id, Some(session_id));
+                        self.proto_handle_error(cx, proto_id, Some(session_id));
                     } else {
                         debug!(
                             "channel shutdown, session proto [{}] session [{}] message can't send to user",
@@ -488,7 +557,7 @@ where
 
         if error {
             // if handle panic, close service
-            self.handle_service_task(ServiceTask::Shutdown(false));
+            self.handle_service_task(cx, ServiceTask::Shutdown(false));
         }
 
         if self.read_service_buf.capacity() > BUF_SHRINK_THRESHOLD {
@@ -502,11 +571,16 @@ where
 
     /// When proto handle channel is full, call here
     #[inline]
-    fn proto_handle_error(&mut self, proto_id: ProtocolId, session_id: Option<SessionId>) {
+    fn proto_handle_error(
+        &mut self,
+        cx: &mut Context,
+        proto_id: ProtocolId,
+        session_id: Option<SessionId>,
+    ) {
         let error = session_id
             .map(Error::SessionProtoHandleBlock)
             .unwrap_or(Error::ServiceProtoHandleBlock);
-        self.set_delay();
+        self.set_delay(cx);
         self.handle.handle_error(
             &mut self.service_context,
             ServiceError::ProtocolHandleError { proto_id, error },
@@ -535,8 +609,23 @@ where
                     self.session_event_sender.clone(),
                     (self.shutdown.clone(), self.future_task_sender.clone()),
                 );
-                stream.handle_event();
-                tokio::spawn(stream.for_each(|_| Ok(())).map_err(|_| ()));
+                stream.handle_event(ServiceProtocolEvent::Init);
+                let (sender, receiver) = futures::channel::oneshot::channel();
+                let handle = tokio::spawn(async move {
+                    future::select(
+                        async move {
+                            loop {
+                                if stream.next().await.is_none() {
+                                    break;
+                                }
+                            }
+                        }
+                        .boxed(),
+                        receiver,
+                    )
+                    .await;
+                });
+                self.wait_handle.push((Some(sender), handle));
             }
 
             InnerProtocolHandle::Session(handle) => {
@@ -546,7 +635,7 @@ where
                     let (sender, receiver) = mpsc::channel(RECEIVED_SIZE);
                     self.session_proto_handles.insert((id, proto_id), sender);
 
-                    let stream = SessionProtocolStream::new(
+                    let mut stream = SessionProtocolStream::new(
                         handle,
                         self.service_context.clone_self(),
                         Arc::clone(&session_control.inner),
@@ -555,7 +644,23 @@ where
                         self.session_event_sender.clone(),
                         (self.shutdown.clone(), self.future_task_sender.clone()),
                     );
-                    tokio::spawn(stream.for_each(|_| Ok(())).map_err(|_| ()));
+                    let (sender, receiver) = futures::channel::oneshot::channel();
+                    let handle = tokio::spawn(async move {
+                        future::select(
+                            async move {
+                                loop {
+                                    if stream.next().await.is_none() {
+                                        break;
+                                    }
+                                }
+                            }
+                            .boxed(),
+                            receiver,
+                        )
+                        .await;
+                    });
+                    self.session_wait_handle
+                        .insert((id, proto_id), (Some(sender), handle));
                 }
             }
         }
@@ -583,6 +688,7 @@ where
 
     fn handle_message(
         &mut self,
+        cx: &mut Context,
         target: TargetSession,
         proto_id: ProtocolId,
         priority: Priority,
@@ -631,7 +737,7 @@ where
                 }
             }
         }
-        self.distribute_to_session();
+        self.distribute_to_session(cx);
     }
 
     /// Get the callback handle of the specified protocol
@@ -674,74 +780,77 @@ where
     #[inline]
     fn handshake<H>(
         &mut self,
+        cx: &mut Context,
         socket: H,
         ty: SessionType,
         remote_address: Multiaddr,
         listen_address: Option<Multiaddr>,
     ) where
-        H: AsyncRead + AsyncWrite + Send + 'static,
+        H: AsyncRead + AsyncWrite + Send + 'static + Unpin,
     {
         if let Some(key_pair) = self.service_context.key_pair() {
             let key_pair = key_pair.clone();
-            let sender = self.session_event_sender.clone();
+            let mut sender = self.session_event_sender.clone();
+            let max_frame_length = self.config.max_frame_length;
+            let timeout = self.config.timeout;
 
-            let handshake_task = Config::new(key_pair)
-                .max_frame_length(self.config.max_frame_length)
-                .handshake(socket)
-                .timeout(self.config.timeout)
-                .then(move |result| {
-                    let send_task = match result {
-                        Ok((handle, public_key, _)) => {
-                            sender.send(SessionEvent::HandshakeSuccess {
-                                handle,
-                                public_key,
-                                address: remote_address,
-                                ty,
-                                listen_address,
-                            })
+            let handshake_task = async move {
+                let result = tokio::time::timeout(
+                    timeout,
+                    Config::new(key_pair)
+                        .max_frame_length(max_frame_length)
+                        .handshake(socket),
+                )
+                .await;
+
+                let event = match result {
+                    Err(error) => {
+                        debug!(
+                            "Handshake with {} failed, error: {:?}",
+                            remote_address, error
+                        );
+                        // time out error
+                        let error =
+                            io::Error::new(io::ErrorKind::TimedOut, error.description()).into();
+                        SessionEvent::HandshakeFail {
+                            ty,
+                            error,
+                            address: remote_address,
                         }
-                        Err(err) => {
-                            let error = if err.is_timer() {
-                                // tokio timer error
-                                io::Error::new(io::ErrorKind::Other, err.description()).into()
-                            } else if err.is_elapsed() {
-                                // time out error
-                                io::Error::new(io::ErrorKind::TimedOut, err.description()).into()
-                            } else {
-                                // dialer error
-                                err.into_inner().unwrap().into()
-                            };
-
+                    }
+                    Ok(res) => match res {
+                        Ok((handle, public_key, _)) => SessionEvent::HandshakeSuccess {
+                            handle,
+                            public_key,
+                            address: remote_address,
+                            ty,
+                            listen_address,
+                        },
+                        Err(error) => {
                             debug!(
                                 "Handshake with {} failed, error: {:?}",
                                 remote_address, error
                             );
-
-                            sender.send(SessionEvent::HandshakeFail {
+                            SessionEvent::HandshakeFail {
                                 ty,
-                                error,
+                                error: error.into(),
                                 address: remote_address,
-                            })
+                            }
                         }
-                    };
+                    },
+                };
+                if let Err(err) = sender.send(event).await {
+                    error!("handshake result send back error: {:?}", err);
+                }
+            };
 
-                    tokio::spawn(send_task.map(|_| ()).map_err(|err| {
-                        error!("handshake result send back error: {:?}", err);
-                    }));
+            let mut future_task_sender = self.future_task_sender.clone();
 
-                    Ok(())
-                });
-
-            let future_task = self
-                .future_task_sender
-                .clone()
-                .send(Box::new(handshake_task))
-                .map(|_| ())
-                .map_err(|_| ());
-
-            tokio::spawn(future_task);
+            tokio::spawn(async move {
+                let _ = future_task_sender.send(Box::pin(handshake_task)).await;
+            });
         } else {
-            self.session_open(socket, None, remote_address, ty, listen_address);
+            self.session_open(cx, socket, None, remote_address, ty, listen_address);
         }
     }
 
@@ -758,13 +867,14 @@ where
     #[inline]
     fn session_open<H>(
         &mut self,
+        cx: &mut Context,
         mut handle: H,
         remote_pubkey: Option<PublicKey>,
         mut address: Multiaddr,
         ty: SessionType,
         listen_addr: Option<Multiaddr>,
     ) where
-        H: AsyncRead + AsyncWrite + Send + 'static,
+        H: AsyncRead + AsyncWrite + Send + 'static + Unpin,
     {
         if ty.is_outbound() {
             self.state.decrease();
@@ -783,7 +893,7 @@ where
             {
                 Some(context) => {
                     trace!("Connected to the connected node");
-                    let _ = handle.shutdown();
+                    let _ = Pin::new(&mut handle).poll_shutdown(cx);
                     if ty.is_outbound() {
                         self.handle.handle_error(
                             &mut self.service_context,
@@ -840,7 +950,7 @@ where
                 address,
                 ty,
                 remote_pubkey,
-                session_closed.clone(),
+                session_closed,
                 pending_data_size,
             )),
         );
@@ -922,7 +1032,13 @@ where
             }
         }
 
-        tokio::spawn(session.for_each(|_| Ok(())).map_err(|_| ()));
+        tokio::spawn(async move {
+            loop {
+                if session.next().await.is_none() {
+                    break;
+                }
+            }
+        });
 
         self.handle.handle_event(
             &mut self.service_context,
@@ -934,12 +1050,12 @@ where
 
     /// Close the specified session, clean up the handle
     #[inline]
-    fn session_close(&mut self, id: SessionId, source: Source) {
+    fn session_close(&mut self, cx: &mut Context, id: SessionId, source: Source) {
         if source == Source::External {
             debug!("try close service session [{}] ", id);
             self.write_buf
                 .push_back((id, SessionEvent::SessionClose { id }));
-            self.distribute_to_session();
+            self.distribute_to_session(cx);
             return;
         }
 
@@ -952,7 +1068,7 @@ where
         self.write_buf.retain(|&(session_id, _)| id != session_id);
         self.high_write_buf
             .retain(|&(session_id, _)| id != session_id);
-        self.set_delay();
+        self.set_delay(cx);
         if !self.config.keep_buffer {
             self.read_session_buf
                 .retain(|&(session_id, _, _)| id != session_id);
@@ -961,7 +1077,7 @@ where
         }
 
         close_proto_ids.into_iter().for_each(|proto_id| {
-            self.protocol_close(id, proto_id, Source::Internal);
+            self.protocol_close(cx, id, proto_id, Source::Internal);
         });
 
         if let Some(session_control) = self.sessions.remove(&id) {
@@ -979,6 +1095,7 @@ where
     #[inline]
     fn protocol_open(
         &mut self,
+        cx: &mut Context,
         id: SessionId,
         proto_id: ProtocolId,
         version: String,
@@ -1014,7 +1131,7 @@ where
                         session_sender: self.session_proto_handles.get(&(id, proto_id)).cloned(),
                     },
                 ));
-                self.distribute_to_session();
+                self.distribute_to_session(cx);
             }
             return;
         }
@@ -1036,7 +1153,7 @@ where
                     ProtocolEvent::Connected {
                         session_context: Arc::clone(&session_control.inner),
                         proto_id,
-                        version: version.clone(),
+                        version,
                     },
                 );
             }
@@ -1066,7 +1183,7 @@ where
                     ProtocolEvent::Received {
                         session_context: Arc::clone(&session_control.inner),
                         proto_id,
-                        data: data.clone(),
+                        data,
                     },
                 );
             }
@@ -1075,7 +1192,13 @@ where
 
     /// Protocol stream is closed, clean up data
     #[inline]
-    fn protocol_close(&mut self, session_id: SessionId, proto_id: ProtocolId, source: Source) {
+    fn protocol_close(
+        &mut self,
+        cx: &mut Context,
+        session_id: SessionId,
+        proto_id: ProtocolId,
+        source: Source,
+    ) {
         if source == Source::External {
             debug!("try close session [{}] proto [{}]", session_id, proto_id);
             self.write_buf.push_back((
@@ -1085,7 +1208,7 @@ where
                     proto_id,
                 },
             ));
-            self.distribute_to_session();
+            self.distribute_to_session(cx);
             return;
         }
 
@@ -1111,15 +1234,16 @@ where
             infos.remove(&proto_id);
         }
         self.session_proto_handles.remove(&(session_id, proto_id));
+        self.session_wait_handle.remove(&(session_id, proto_id));
     }
 
     #[inline(always)]
-    fn send_pending_task(&mut self) {
+    fn send_pending_task(&mut self, cx: &mut Context) {
         while let Some(task) = self.pending_tasks.pop_front() {
             if let Err(err) = self.future_task_sender.try_send(task) {
                 if err.is_full() {
                     self.pending_tasks.push_front(err.into_inner());
-                    self.set_delay();
+                    self.set_delay(cx);
                     break;
                 }
             }
@@ -1127,28 +1251,30 @@ where
     }
 
     #[inline]
-    fn send_future_task(&mut self, task: BoxedFutureTask) {
+    fn send_future_task(&mut self, cx: &mut Context, task: BoxedFutureTask) {
         self.pending_tasks.push_back(task);
-        self.send_pending_task();
+        self.send_pending_task(cx);
     }
 
     /// check queue if full
-    fn notify_queue(&mut self) {
-        let notify = futures::task::current();
+    fn notify_queue(&mut self, cx: &mut Context) {
+        let waker = cx.waker().clone();
         let quick_count = self.service_context.control().quick_count.clone();
         let normal_count = self.service_context.control().normal_count.clone();
-        let task = Interval::new(Instant::now(), Duration::from_millis(200))
-            .map_err(|_| ())
-            .for_each(move |_| {
+        let task = async move {
+            let mut interval =
+                tokio::time::interval_at(tokio::time::Instant::now(), Duration::from_millis(200));
+            loop {
+                let waker = waker.clone();
+                interval.tick().await;
                 if quick_count.load(Ordering::SeqCst) > RECEIVED_BUFFER_SIZE / 4
                     || normal_count.load(Ordering::SeqCst) > RECEIVED_BUFFER_SIZE / 2
                 {
-                    notify.notify();
+                    waker.wake();
                 }
-                Ok(())
-            })
-            .map_err(|_| debug!("queue notify close"));
-        self.send_future_task(Box::new(task))
+            }
+        };
+        self.send_future_task(cx, Box::pin(task))
     }
 
     fn init_proto_handles(&mut self) {
@@ -1169,7 +1295,7 @@ where
 
     /// When listen update, call here
     #[inline]
-    fn update_listens(&mut self) {
+    fn update_listens(&mut self, cx: &mut Context) {
         if self.listens.len() == self.service_context.listens().len() {
             return;
         }
@@ -1200,13 +1326,13 @@ where
             ));
         }
 
-        self.distribute_to_user_level();
+        self.distribute_to_user_level(cx);
     }
 
     /// Handling various events uploaded by the session
-    fn handle_session_event(&mut self, event: SessionEvent) {
+    fn handle_session_event(&mut self, cx: &mut Context, event: SessionEvent) {
         match event {
-            SessionEvent::SessionClose { id } => self.session_close(id, Source::Internal),
+            SessionEvent::SessionClose { id } => self.session_close(cx, id, Source::Internal),
             SessionEvent::HandshakeSuccess {
                 handle,
                 public_key,
@@ -1214,7 +1340,7 @@ where
                 ty,
                 listen_address,
             } => {
-                self.session_open(handle, Some(public_key), address, ty, listen_address);
+                self.session_open(cx, handle, Some(public_key), address, ty, listen_address);
             }
             SessionEvent::HandshakeFail { ty, error, address } => {
                 if ty.is_outbound() {
@@ -1234,9 +1360,9 @@ where
                 proto_id,
                 version,
                 ..
-            } => self.protocol_open(id, proto_id, version, Source::Internal),
+            } => self.protocol_open(cx, id, proto_id, version, Source::Internal),
             SessionEvent::ProtocolClose { id, proto_id } => {
-                self.protocol_close(id, proto_id, Source::Internal)
+                self.protocol_close(cx, id, proto_id, Source::Internal)
             }
             SessionEvent::ProtocolSelectError { id, proto_name } => {
                 if let Some(session_control) = self.sessions.get(&id) {
@@ -1312,26 +1438,26 @@ where
                 }
                 self.listens.push((listen_address, incoming));
                 self.state.decrease();
-                self.update_listens();
-                self.listen_poll();
+                self.update_listens(cx);
+                self.listen_poll(cx);
             }
             SessionEvent::DialStart {
                 remote_address,
                 stream,
-            } => self.handshake(stream, SessionType::Outbound, remote_address, None),
+            } => self.handshake(cx, stream, SessionType::Outbound, remote_address, None),
             SessionEvent::ProtocolHandleError { error, proto_id } => {
                 self.handle.handle_error(
                     &mut self.service_context,
                     ServiceError::ProtocolHandleError { error, proto_id },
                 );
                 // if handle panic, close service
-                self.handle_service_task(ServiceTask::Shutdown(false));
+                self.handle_service_task(cx, ServiceTask::Shutdown(false));
             }
         }
     }
 
     /// Handling various tasks sent externally
-    fn handle_service_task(&mut self, event: ServiceTask) {
+    fn handle_service_task(&mut self, cx: &mut Context, event: ServiceTask) {
         match event {
             ServiceTask::ProtocolMessage {
                 target,
@@ -1339,7 +1465,7 @@ where
                 priority,
                 data,
             } => {
-                self.handle_message(target, proto_id, priority, data);
+                self.handle_message(cx, target, proto_id, priority, data);
             }
             ServiceTask::Dial { address, target } => {
                 if !self.dial_protocols.contains_key(&address) {
@@ -1356,7 +1482,7 @@ where
             }
             ServiceTask::Listen { address } => {
                 if !self.listens.iter().any(|(addr, _)| addr == &address) {
-                    if let Err(e) = self.listen(address.clone()) {
+                    if let Err(e) = self.listen_inner(address.clone()) {
                         self.handle.handle_error(
                             &mut self.service_context,
                             ServiceError::ListenError {
@@ -1368,10 +1494,10 @@ where
                 }
             }
             ServiceTask::Disconnect { session_id } => {
-                self.session_close(session_id, Source::External)
+                self.session_close(cx, session_id, Source::External)
             }
             ServiceTask::FutureTask { task } => {
-                self.send_future_task(task);
+                self.send_future_task(cx, task);
             }
             ServiceTask::SetProtocolNotify {
                 proto_id,
@@ -1385,7 +1511,7 @@ where
                         proto_id,
                         ServiceProtocolEvent::SetNotify { interval, token },
                     ));
-                    self.distribute_to_user_level();
+                    self.distribute_to_user_level(cx);
                 }
             }
             ServiceTask::RemoveProtocolNotify { proto_id, token } => {
@@ -1395,7 +1521,7 @@ where
                         proto_id,
                         ServiceProtocolEvent::RemoveNotify { token },
                     ));
-                    self.distribute_to_user_level();
+                    self.distribute_to_user_level(cx);
                 }
             }
             ServiceTask::SetProtocolSessionNotify {
@@ -1414,7 +1540,7 @@ where
                         proto_id,
                         SessionProtocolEvent::SetNotify { interval, token },
                     ));
-                    self.distribute_to_user_level();
+                    self.distribute_to_user_level(cx);
                 }
             }
             ServiceTask::RemoveProtocolSessionNotify {
@@ -1441,20 +1567,20 @@ where
                         .map(ProtocolMeta::id)
                         .collect::<Vec<_>>();
                     ids.into_iter().for_each(|id| {
-                        self.protocol_open(session_id, id, String::default(), Source::External)
+                        self.protocol_open(cx, session_id, id, String::default(), Source::External)
                     });
                 }
                 TargetProtocol::Single(id) => {
-                    self.protocol_open(session_id, id, String::default(), Source::External)
+                    self.protocol_open(cx, session_id, id, String::default(), Source::External)
                 }
                 TargetProtocol::Multi(ids) => ids.into_iter().for_each(|id| {
-                    self.protocol_open(session_id, id, String::default(), Source::External)
+                    self.protocol_open(cx, session_id, id, String::default(), Source::External)
                 }),
             },
             ServiceTask::ProtocolClose {
                 session_id,
                 proto_id,
-            } => self.protocol_close(session_id, proto_id, Source::External),
+            } => self.protocol_close(cx, session_id, proto_id, Source::External),
             ServiceTask::Shutdown(quick) => {
                 self.state.pre_shutdown();
 
@@ -1487,11 +1613,11 @@ where
                     // don't care about any session action
                     sessions
                         .into_iter()
-                        .for_each(|i| self.session_close(i, Source::Internal));
+                        .for_each(|i| self.session_close(cx, i, Source::Internal));
                 } else {
                     sessions
                         .into_iter()
-                        .for_each(|i| self.session_close(i, Source::External));
+                        .for_each(|i| self.session_close(cx, i, Source::External));
                 }
             }
         }
@@ -1499,7 +1625,7 @@ where
 
     /// Poll listen connections
     #[inline]
-    fn listen_poll(&mut self) {
+    fn listen_poll(&mut self, cx: &mut Context) {
         if !self
             .listens
             .len()
@@ -1510,12 +1636,12 @@ where
         {
             return;
         }
-
         let mut update = false;
         for (address, mut listen) in self.listens.split_off(0) {
-            match listen.poll() {
-                Ok(Async::Ready(Some((remote_address, socket)))) => {
+            match Pin::new(&mut listen).as_mut().poll_next(cx) {
+                Poll::Ready(Some(Ok((remote_address, socket)))) => {
                     self.handshake(
+                        cx,
                         socket,
                         SessionType::Inbound,
                         remote_address,
@@ -1523,7 +1649,7 @@ where
                     );
                     self.listens.push((address, listen));
                 }
-                Ok(Async::Ready(None)) => {
+                Poll::Ready(None) => {
                     update = true;
                     if let Some(client) = self.igd_client.as_mut() {
                         client.remove(&address)
@@ -1533,10 +1659,10 @@ where
                         ServiceEvent::ListenClose { address },
                     );
                 }
-                Ok(Async::NotReady) => {
+                Poll::Pending => {
                     self.listens.push((address, listen));
                 }
-                Err(err) => {
+                Poll::Ready(Some(Err(err))) => {
                     update = true;
                     self.handle.handle_error(
                         &mut self.service_context,
@@ -1557,7 +1683,7 @@ where
         }
 
         if update || self.service_context.listens().is_empty() {
-            self.update_listens()
+            self.update_listens(cx)
         }
 
         if let Some(client) = self.igd_client.as_mut() {
@@ -1566,7 +1692,7 @@ where
     }
 
     #[inline]
-    fn user_task_poll(&mut self) {
+    fn user_task_poll(&mut self, cx: &mut Context) {
         let mut finished = false;
         for _ in 0..512 {
             if self.write_buf.len() > self.config.yamux_config.send_event_size()
@@ -1575,25 +1701,35 @@ where
                 break;
             }
 
-            let task = match self.quick_task_receiver.poll() {
-                Ok(Async::Ready(Some(task))) => {
+            if self.quick_task_receiver.is_terminated()
+                || self.service_task_receiver.is_terminated()
+            {
+                break;
+            }
+
+            let task = match Pin::new(&mut self.quick_task_receiver)
+                .as_mut()
+                .poll_next(cx)
+            {
+                Poll::Ready(Some(task)) => {
                     self.service_context.control().quick_count_sub();
                     Some(task)
                 }
-                Ok(Async::Ready(None)) => None,
-                Ok(Async::NotReady) => None,
-                Err(_) => None,
+                Poll::Ready(None) => None,
+                Poll::Pending => None,
             }
             .or_else(|| {
                 if self.write_buf.len() <= self.config.yamux_config.send_event_size() {
-                    match self.service_task_receiver.poll() {
-                        Ok(Async::Ready(Some(task))) => {
+                    match Pin::new(&mut self.service_task_receiver)
+                        .as_mut()
+                        .poll_next(cx)
+                    {
+                        Poll::Ready(Some(task)) => {
                             self.service_context.control().normal_count_sub();
                             Some(task)
                         }
-                        Ok(Async::Ready(None)) => None,
-                        Ok(Async::NotReady) => None,
-                        Err(_) => None,
+                        Poll::Ready(None) => None,
+                        Poll::Pending => None,
                     }
                 } else {
                     None
@@ -1601,7 +1737,7 @@ where
             });
 
             match task {
-                Some(task) => self.handle_service_task(task),
+                Some(task) => self.handle_service_task(cx, task),
                 None => {
                     finished = true;
                     break;
@@ -1609,11 +1745,11 @@ where
             }
         }
         if !finished {
-            self.set_delay();
+            self.set_delay(cx);
         }
     }
 
-    fn session_poll(&mut self) {
+    fn session_poll(&mut self, cx: &mut Context) {
         let mut finished = false;
         for _ in 0..64 {
             if self.read_service_buf.len() > self.config.yamux_config.recv_event_size()
@@ -1622,27 +1758,25 @@ where
                 break;
             }
 
-            match self.session_event_receiver.poll() {
-                Ok(Async::Ready(Some(event))) => self.handle_session_event(event),
-                Ok(Async::Ready(None)) => unreachable!(),
-                Ok(Async::NotReady) => {
-                    finished = true;
-                    break;
-                }
-                Err(_) => {
-                    warn!("receive session error");
+            match Pin::new(&mut self.session_event_receiver)
+                .as_mut()
+                .poll_next(cx)
+            {
+                Poll::Ready(Some(event)) => self.handle_session_event(cx, event),
+                Poll::Ready(None) => unreachable!(),
+                Poll::Pending => {
                     finished = true;
                     break;
                 }
             }
         }
         if !finished {
-            self.set_delay();
+            self.set_delay(cx);
         }
     }
 
     #[inline]
-    fn set_delay(&mut self) {
+    fn set_delay(&mut self, cx: &mut Context) {
         // Why use `delay` instead of `notify`?
         //
         // In fact, on machines that can use multi-core normally, there is almost no problem with the `notify` behavior,
@@ -1653,27 +1787,56 @@ where
         // Under a single-core machine, `notify` may fall into the loop of infinitely preemptive CPU, causing starvation.
         if !self.delay.load(Ordering::SeqCst) {
             self.delay.store(true, Ordering::SeqCst);
-            let notify = futures::task::current();
+            let waker = cx.waker().clone();
             let delay = self.delay.clone();
-            let delay_task = Delay::new(Instant::now() + DELAY_TIME).then(move |_| {
-                notify.notify();
-                delay.store(false, Ordering::SeqCst);
-                Ok(())
+            tokio::spawn(async move {
+                tokio::time::delay_until(tokio::time::Instant::now() + DELAY_TIME).await;
+                waker.wake();
+                delay.store(false, Ordering::Release);
             });
+        }
+    }
 
-            tokio::spawn(delay_task);
+    fn wait_handle_poll(&mut self, cx: &mut Context) -> Poll<Option<()>> {
+        for (sender, mut handle) in self.wait_handle.split_off(0) {
+            if let Some(sender) = sender {
+                let _ = sender.send(());
+            }
+            match handle.poll_unpin(cx) {
+                Poll::Pending => {
+                    self.wait_handle.push((None, handle));
+                }
+                Poll::Ready(_) => (),
+            }
+        }
+
+        for (_, (sender, mut handle)) in self.session_wait_handle.drain() {
+            if let Some(sender) = sender {
+                let _ = sender.send(());
+            }
+            match handle.poll_unpin(cx) {
+                Poll::Pending => {
+                    self.wait_handle.push((None, handle));
+                }
+                Poll::Ready(_) => (),
+            }
+        }
+
+        if self.wait_handle.is_empty() {
+            Poll::Ready(None)
+        } else {
+            Poll::Pending
         }
     }
 }
 
 impl<T> Stream for Service<T>
 where
-    T: ServiceHandle,
+    T: ServiceHandle + Unpin,
 {
     type Item = ();
-    type Error = ();
 
-    fn poll(&mut self) -> Poll<Option<Self::Item>, Self::Error> {
+    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Option<Self::Item>> {
         if self.listens.is_empty()
             && self.state.is_shutdown()
             && self.sessions.is_empty()
@@ -1681,31 +1844,46 @@ where
         {
             debug!("shutdown because all state is empty head");
             self.shutdown.store(true, Ordering::SeqCst);
-            return Ok(Async::Ready(None));
+            return self.wait_handle_poll(cx);
         }
 
-        if let Some(stream) = self.future_task_manager.take() {
-            tokio::spawn(stream.for_each(|_| Ok(())));
-            self.notify_queue();
+        if let Some(mut stream) = self.future_task_manager.take() {
+            let (sender, receiver) = futures::channel::oneshot::channel();
+            let handle = tokio::spawn(async move {
+                future::select(
+                    async move {
+                        loop {
+                            if stream.next().await.is_none() {
+                                break;
+                            }
+                        }
+                    }
+                    .boxed(),
+                    receiver,
+                )
+                .await;
+            });
+            self.wait_handle.push((Some(sender), handle));
+            self.notify_queue(cx);
             self.init_proto_handles();
         }
 
         if !self.write_buf.is_empty() || !self.high_write_buf.is_empty() {
-            self.distribute_to_session();
+            self.distribute_to_session(cx);
         }
         if !self.read_service_buf.is_empty() || !self.read_session_buf.is_empty() {
-            self.distribute_to_user_level();
+            self.distribute_to_user_level(cx);
         }
 
-        self.listen_poll();
+        self.listen_poll(cx);
 
-        self.session_poll();
+        self.session_poll(cx);
 
         // receive user task
-        self.user_task_poll();
+        self.user_task_poll(cx);
 
         // process any task buffer
-        self.send_pending_task();
+        self.send_pending_task(cx);
 
         // Double check service state
         if self.listens.is_empty()
@@ -1715,7 +1893,7 @@ where
         {
             debug!("shutdown because all state is empty tail");
             self.shutdown.store(true, Ordering::SeqCst);
-            return Ok(Async::Ready(None));
+            return self.wait_handle_poll(cx);
         }
 
         debug!(
@@ -1739,7 +1917,7 @@ where
             self.read_session_buf.len(),
         );
 
-        Ok(Async::NotReady)
+        Poll::Pending
     }
 }
 

@@ -1,4 +1,3 @@
-use futures::Future;
 use std::fmt;
 use std::sync::Arc;
 use std::time::Duration;
@@ -7,7 +6,7 @@ use crate::{
     context::SessionContext,
     error::Error,
     multiaddr::Multiaddr,
-    service::{TargetProtocol, TargetSession},
+    service::{future_task::BoxedFutureTask, TargetProtocol, TargetSession},
     ProtocolId, SessionId,
 };
 use bytes::Bytes;
@@ -198,7 +197,7 @@ pub(crate) enum ServiceTask {
     /// Future task
     FutureTask {
         /// Future
-        task: Box<dyn Future<Item = (), Error = ()> + 'static + Send>,
+        task: BoxedFutureTask,
     },
     /// Disconnect task
     Disconnect {

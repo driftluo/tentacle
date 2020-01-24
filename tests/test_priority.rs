@@ -1,25 +1,25 @@
 use bytes::Bytes;
-use futures::prelude::Stream;
+use futures::{channel, StreamExt};
 use std::{
     sync::{
         atomic::{AtomicBool, Ordering},
         Arc,
     },
     thread,
-    time::Duration,
 };
 use tentacle::{
     builder::{MetaBuilder, ServiceBuilder},
     context::{ProtocolContext, ProtocolContextMutRef},
+    multiaddr::Multiaddr,
     secio::SecioKeyPair,
-    service::{DialProtocol, ProtocolHandle, ProtocolMeta, Service},
+    service::{ProtocolHandle, ProtocolMeta, Service, TargetProtocol},
     traits::{ServiceHandle, ServiceProtocol},
     ProtocolId,
 };
 
 pub fn create<F>(secio: bool, meta: ProtocolMeta, shandle: F) -> Service<F>
 where
-    F: ServiceHandle,
+    F: ServiceHandle + Unpin,
 {
     let builder = ServiceBuilder::default()
         .insert_protocol(meta)
@@ -90,17 +90,43 @@ fn create_meta(id: ProtocolId) -> (ProtocolMeta, Arc<AtomicBool>) {
 
 fn test_priority(secio: bool) {
     let (meta, _) = create_meta(1.into());
-    let mut service = create(secio, meta, ());
-    let listen_addr = service
-        .listen("/ip4/127.0.0.1/tcp/0".parse().unwrap())
-        .unwrap();
-    thread::spawn(|| tokio::run(service.for_each(|_| Ok(()))));
-    thread::sleep(Duration::from_millis(100));
+    let (addr_sender, addr_receiver) = channel::oneshot::channel::<Multiaddr>();
+
+    thread::spawn(move || {
+        let mut rt = tokio::runtime::Runtime::new().unwrap();
+        let mut service = create(secio, meta, ());
+        rt.block_on(async move {
+            let listen_addr = service
+                .listen("/ip4/127.0.0.1/tcp/0".parse().unwrap())
+                .await
+                .unwrap();
+            let _ = addr_sender.send(listen_addr);
+            loop {
+                if service.next().await.is_none() {
+                    break;
+                }
+            }
+        });
+    });
 
     let (meta, result) = create_meta(1.into());
-    let mut service = create(secio, meta, ());
-    service.dial(listen_addr, DialProtocol::All).unwrap();
-    let handle_1 = thread::spawn(|| tokio::run(service.for_each(|_| Ok(()))));
+
+    let handle_1 = thread::spawn(move || {
+        let mut rt = tokio::runtime::Runtime::new().unwrap();
+        let mut service = create(secio, meta, ());
+        rt.block_on(async move {
+            let listen_addr = addr_receiver.await.unwrap();
+            service
+                .dial(listen_addr, TargetProtocol::All)
+                .await
+                .unwrap();
+            loop {
+                if service.next().await.is_none() {
+                    break;
+                }
+            }
+        });
+    });
     handle_1.join().unwrap();
 
     assert!(result.load(Ordering::SeqCst));

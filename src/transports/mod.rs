@@ -1,14 +1,17 @@
 use crate::{multiaddr::Multiaddr, utils::socketaddr_to_multiaddr};
 
-use futures::prelude::{Async, Future, Poll, Stream};
+use futures::{prelude::Stream, FutureExt};
 use log::debug;
 use std::{
     fmt,
-    io::{self, Read, Write},
+    future::Future,
+    io,
+    pin::Pin,
+    task::{Context, Poll},
     time::Duration,
 };
 use tokio::{
-    net::{tcp::Incoming, TcpStream},
+    net::{TcpListener, TcpStream},
     prelude::{AsyncRead, AsyncWrite},
 };
 
@@ -41,7 +44,7 @@ pub trait Transport {
     type DialFuture;
 
     /// Transport listen
-    fn listen(self, address: Multiaddr) -> Result<(Self::ListenFuture, Multiaddr), TransportError>;
+    fn listen(self, address: Multiaddr) -> Result<Self::ListenFuture, TransportError>;
     /// Transport dial
     fn dial(self, address: Multiaddr) -> Result<Self::DialFuture, TransportError>;
 }
@@ -61,9 +64,9 @@ impl Transport for MultiTransport {
     type ListenFuture = MultiListenFuture;
     type DialFuture = MultiDialFuture;
 
-    fn listen(self, address: Multiaddr) -> Result<(Self::ListenFuture, Multiaddr), TransportError> {
+    fn listen(self, address: Multiaddr) -> Result<Self::ListenFuture, TransportError> {
         match TcpTransport::new(self.timeout).listen(address) {
-            Ok(res) => Ok((MultiListenFuture::Tcp(res.0), res.1)),
+            Ok(future) => Ok(MultiListenFuture::Tcp(future)),
             Err(e) => Err(e),
         }
     }
@@ -81,13 +84,13 @@ pub enum MultiListenFuture {
 }
 
 impl Future for MultiListenFuture {
-    type Item = (Multiaddr, MultiIncoming);
-    type Error = TransportError;
+    type Output = Result<(Multiaddr, MultiIncoming), TransportError>;
 
-    fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
-        match self {
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        match self.get_mut() {
             MultiListenFuture::Tcp(inner) => {
-                inner.map(|res| (res.0, MultiIncoming::Tcp(res.1))).poll()
+                Pin::new(&mut inner.map(|res| res.map(|res| (res.0, MultiIncoming::Tcp(res.1)))))
+                    .poll(cx)
             }
         }
     }
@@ -98,12 +101,14 @@ pub enum MultiDialFuture {
 }
 
 impl Future for MultiDialFuture {
-    type Item = (Multiaddr, MultiStream);
-    type Error = TransportError;
+    type Output = Result<(Multiaddr, MultiStream), TransportError>;
 
-    fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
-        match self {
-            MultiDialFuture::Tcp(inner) => inner.map(|res| (res.0, MultiStream::Tcp(res.1))).poll(),
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        match self.get_mut() {
+            MultiDialFuture::Tcp(inner) => {
+                Pin::new(&mut inner.map(|res| res.map(|res| (res.0, MultiStream::Tcp(res.1)))))
+                    .poll(cx)
+            }
         }
     }
 }
@@ -120,76 +125,64 @@ impl fmt::Debug for MultiStream {
     }
 }
 
-impl Read for MultiStream {
-    #[inline]
-    fn read(&mut self, buf: &mut [u8]) -> Result<usize, io::Error> {
-        match self {
-            MultiStream::Tcp(inner) => inner.read(buf),
-        }
-    }
-}
-
-impl Write for MultiStream {
-    #[inline]
-    fn write(&mut self, buf: &[u8]) -> Result<usize, io::Error> {
-        match self {
-            MultiStream::Tcp(inner) => inner.write(buf),
-        }
-    }
-
-    #[inline]
-    fn flush(&mut self) -> Result<(), io::Error> {
-        match self {
-            MultiStream::Tcp(inner) => inner.flush(),
-        }
-    }
-}
-
 impl AsyncRead for MultiStream {
-    #[inline]
-    unsafe fn prepare_uninitialized_buffer(&self, buf: &mut [u8]) -> bool {
-        match self {
-            MultiStream::Tcp(inner) => inner.prepare_uninitialized_buffer(buf),
+    fn poll_read(
+        self: Pin<&mut Self>,
+        cx: &mut Context,
+        buf: &mut [u8],
+    ) -> Poll<io::Result<usize>> {
+        match self.get_mut() {
+            MultiStream::Tcp(inner) => Pin::new(inner).poll_read(cx, buf),
         }
     }
 }
 
 impl AsyncWrite for MultiStream {
+    fn poll_write(self: Pin<&mut Self>, cx: &mut Context, buf: &[u8]) -> Poll<io::Result<usize>> {
+        match self.get_mut() {
+            MultiStream::Tcp(inner) => Pin::new(inner).poll_write(cx, buf),
+        }
+    }
+
+    fn poll_flush(self: Pin<&mut Self>, cx: &mut Context) -> Poll<io::Result<()>> {
+        match self.get_mut() {
+            MultiStream::Tcp(inner) => Pin::new(inner).poll_flush(cx),
+        }
+    }
+
     #[inline]
-    fn shutdown(&mut self) -> Poll<(), io::Error> {
-        match self {
-            MultiStream::Tcp(inner) => inner.shutdown(),
+    fn poll_shutdown(self: Pin<&mut Self>, cx: &mut Context) -> Poll<io::Result<()>> {
+        match self.get_mut() {
+            MultiStream::Tcp(inner) => Pin::new(inner).poll_shutdown(cx),
         }
     }
 }
 
 #[derive(Debug)]
 pub enum MultiIncoming {
-    Tcp(Incoming),
+    Tcp(TcpListener),
 }
 
 impl Stream for MultiIncoming {
-    type Item = (Multiaddr, MultiStream);
-    type Error = io::Error;
+    type Item = Result<(Multiaddr, MultiStream), io::Error>;
 
-    fn poll(&mut self) -> Poll<Option<Self::Item>, Self::Error> {
-        match self {
-            MultiIncoming::Tcp(inner) => match inner.poll()? {
+    fn poll_next(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Option<Self::Item>> {
+        match self.get_mut() {
+            MultiIncoming::Tcp(inner) => match inner.accept().boxed_local().poll_unpin(cx)? {
                 // Why can't get the peer address of the connected stream ?
                 // Error will be "Transport endpoint is not connected",
                 // so why incoming will appear unconnected stream ?
-                Async::Ready(Some(stream)) => match stream.peer_addr() {
-                    Ok(remote_address) => Ok(Async::Ready(Some((
+                Poll::Ready((stream, _)) => match stream.peer_addr() {
+                    Ok(remote_address) => Poll::Ready(Some(Ok((
                         socketaddr_to_multiaddr(remote_address),
                         MultiStream::Tcp(stream),
                     )))),
                     Err(err) => {
                         debug!("stream get peer address error: {:?}", err);
-                        Ok(Async::NotReady)
+                        Poll::Pending
                     }
                 },
-                Async::Ready(None) => Ok(Async::Ready(None)),
-                Async::NotReady => Ok(Async::NotReady),
+                Poll::Pending => Poll::Pending,
             },
         }
     }

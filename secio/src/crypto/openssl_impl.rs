@@ -46,7 +46,7 @@ impl OpenSSLCrypt {
         OpenSSLCrypt {
             cipher,
             cipher_type,
-            key: Bytes::from(key),
+            key: Bytes::from(key.to_owned()),
             iv,
             aead,
         }
