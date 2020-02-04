@@ -242,13 +242,11 @@ impl DiscoveryMessage {
                     .build()
             }
         };
-        Bytes::from(
-            protocol_mol::DiscoveryMessage::new_builder()
-                .payload(playload)
-                .build()
-                .as_slice()
-                .to_owned(),
-        )
+
+        protocol_mol::DiscoveryMessage::new_builder()
+            .payload(playload)
+            .build()
+            .as_bytes()
     }
 
     #[cfg(feature = "molc")]

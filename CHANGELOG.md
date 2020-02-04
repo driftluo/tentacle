@@ -1,3 +1,9 @@
+## 0.3.0-alpha.1
+
+### Features
+- Upgrade moleculec to 0.5.0
+- Upgrade to async ecology
+
 ## 0.2.7
 
 ### Features

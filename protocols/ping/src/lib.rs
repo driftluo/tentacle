@@ -329,13 +329,11 @@ impl PingMessage {
             .build();
         let ping = protocol_mol::Ping::new_builder().nonce(nonce).build();
         let payload = protocol_mol::PingPayload::new_builder().set(ping).build();
-        Bytes::from(
-            protocol_mol::PingMessage::new_builder()
-                .payload(payload)
-                .build()
-                .as_slice()
-                .to_owned(),
-        )
+
+        protocol_mol::PingMessage::new_builder()
+            .payload(payload)
+            .build()
+            .as_bytes()
     }
 
     #[cfg(feature = "molc")]
@@ -349,13 +347,11 @@ impl PingMessage {
             .build();
         let pong = protocol_mol::Pong::new_builder().nonce(nonce).build();
         let payload = protocol_mol::PingPayload::new_builder().set(pong).build();
-        Bytes::from(
-            protocol_mol::PingMessage::new_builder()
-                .payload(payload)
-                .build()
-                .as_slice()
-                .to_owned(),
-        )
+
+        protocol_mol::PingMessage::new_builder()
+            .payload(payload)
+            .build()
+            .as_bytes()
     }
 
     #[cfg(feature = "molc")]
