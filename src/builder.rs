@@ -74,7 +74,7 @@ impl ServiceBuilder {
     /// Panic when max_frame_length < yamux_max_window_size
     pub fn yamux_config(mut self, config: Config) -> Self {
         assert!(self.config.max_frame_length as u32 >= config.max_stream_window_size);
-        self.config.yamux_config = config;
+        self.config.session_config.yamux_config = config;
         self
     }
 
@@ -82,20 +82,27 @@ impl ServiceBuilder {
     ///
     /// Panic when max_frame_length < yamux_max_window_size
     pub fn max_frame_length(mut self, size: usize) -> Self {
-        assert!(size as u32 >= self.config.yamux_config.max_stream_window_size);
+        assert!(
+            size as u32
+                >= self
+                    .config
+                    .session_config
+                    .yamux_config
+                    .max_stream_window_size
+        );
         self.config.max_frame_length = size;
         self
     }
 
     /// Set send buffer size, default is 1Mb
     pub fn set_send_buffer_size(mut self, size: usize) -> Self {
-        self.config.yamux_config.send_buffer_size = size;
+        self.config.session_config.send_buffer_size = size;
         self
     }
 
     /// Set receive buffer size, default is 1Mb
     pub fn set_recv_buffer_size(mut self, size: usize) -> Self {
-        self.config.yamux_config.recv_buffer_size = size;
+        self.config.session_config.recv_buffer_size = size;
         self
     }
 
