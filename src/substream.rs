@@ -18,9 +18,9 @@ use crate::{
     context::SessionContext,
     error::Error,
     protocol_handle_stream::{ServiceProtocolEvent, SessionProtocolEvent},
-    service::{event::Priority, DELAY_TIME},
+    service::{config::SessionConfig, event::Priority, DELAY_TIME},
     traits::Codec,
-    yamux::{Config, StreamHandle},
+    yamux::StreamHandle,
     ProtocolId, StreamId,
 };
 
@@ -79,7 +79,7 @@ pub(crate) struct SubStream<U> {
     context: Arc<SessionContext>,
     event: bool,
 
-    config: Config,
+    config: SessionConfig,
     /// The buffer will be prioritized for send to underlying network
     high_write_buf: VecDeque<bytes::Bytes>,
     // The buffer which will send to underlying network
@@ -591,7 +591,7 @@ pub(crate) struct SubstreamBuilder {
     id: StreamId,
     proto_id: ProtocolId,
     keep_buffer: bool,
-    config: Config,
+    config: SessionConfig,
     event: bool,
 
     context: Arc<SessionContext>,
@@ -625,7 +625,7 @@ impl SubstreamBuilder {
             id: 0,
             proto_id: 0.into(),
             keep_buffer: false,
-            config: Config::default(),
+            config: SessionConfig::default(),
             event: false,
         }
     }
@@ -640,7 +640,7 @@ impl SubstreamBuilder {
         self
     }
 
-    pub fn config(mut self, config: Config) -> Self {
+    pub fn config(mut self, config: SessionConfig) -> Self {
         self.config = config;
         self
     }

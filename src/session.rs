@@ -22,12 +22,15 @@ use crate::{
     protocol_select::{client_select, server_select, ProtocolInfo},
     secio::{codec::stream_handle::StreamHandle as SecureHandle, PublicKey},
     service::{
-        config::Meta, event::Priority, future_task::BoxedFutureTask, SessionType,
-        BUF_SHRINK_THRESHOLD, DELAY_TIME, RECEIVED_BUFFER_SIZE, RECEIVED_SIZE, SEND_SIZE,
+        config::{Meta, SessionConfig},
+        event::Priority,
+        future_task::BoxedFutureTask,
+        SessionType, BUF_SHRINK_THRESHOLD, DELAY_TIME, RECEIVED_BUFFER_SIZE, RECEIVED_SIZE,
+        SEND_SIZE,
     },
     substream::{ProtocolEvent, SubstreamBuilder},
     transports::{MultiIncoming, MultiStream},
-    yamux::{Config, Session as YamuxSession, StreamHandle},
+    yamux::{Session as YamuxSession, StreamHandle},
     ProtocolId, SessionId, StreamId,
 };
 
@@ -144,7 +147,7 @@ pub(crate) struct Session<T> {
 
     protocol_configs: HashMap<String, Arc<Meta>>,
 
-    config: Config,
+    config: SessionConfig,
 
     timeout: Duration,
 
@@ -203,7 +206,7 @@ where
         meta: SessionMeta,
         future_task_sender: mpsc::Sender<BoxedFutureTask>,
     ) -> Self {
-        let socket = YamuxSession::new(socket, meta.config, meta.context.ty.into());
+        let socket = YamuxSession::new(socket, meta.config.yamux_config, meta.context.ty.into());
         let (proto_event_sender, proto_event_receiver) = mpsc::channel(RECEIVED_SIZE);
         let mut interval = proto_event_sender.clone();
 
@@ -949,7 +952,7 @@ where
 }
 
 pub(crate) struct SessionMeta {
-    config: Config,
+    config: SessionConfig,
     protocol_configs: HashMap<String, Arc<Meta>>,
     context: Arc<SessionContext>,
     timeout: Duration,
@@ -962,7 +965,7 @@ pub(crate) struct SessionMeta {
 impl SessionMeta {
     pub fn new(timeout: Duration, context: Arc<SessionContext>) -> Self {
         SessionMeta {
-            config: Config::default(),
+            config: SessionConfig::default(),
             protocol_configs: HashMap::new(),
             context,
             timeout,
@@ -978,7 +981,7 @@ impl SessionMeta {
         self
     }
 
-    pub fn config(mut self, config: Config) -> Self {
+    pub fn config(mut self, config: SessionConfig) -> Self {
         self.config = config;
         self
     }

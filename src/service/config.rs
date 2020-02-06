@@ -8,9 +8,12 @@ use std::collections::HashSet;
 use std::sync::Arc;
 use std::time::Duration;
 
+/// Default max buffer size
+const MAX_BUF_SIZE: usize = 24 * 1024 * 1024;
+
 pub(crate) struct ServiceConfig {
     pub timeout: Duration,
-    pub yamux_config: YamuxConfig,
+    pub session_config: SessionConfig,
     pub max_frame_length: usize,
     /// event output or callback output
     pub event: HashSet<ProtocolId>,
@@ -23,12 +26,45 @@ impl Default for ServiceConfig {
     fn default() -> Self {
         ServiceConfig {
             timeout: Duration::from_secs(10),
-            yamux_config: YamuxConfig::default(),
+            session_config: SessionConfig::default(),
             max_frame_length: 1024 * 1024 * 8,
             event: HashSet::default(),
             keep_buffer: false,
             upnp: false,
             max_connection_number: 65535,
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+pub(crate) struct SessionConfig {
+    pub yamux_config: YamuxConfig,
+    /// default is 1Mb
+    pub send_buffer_size: usize,
+    /// default is 1Mb
+    pub recv_buffer_size: usize,
+}
+
+impl SessionConfig {
+    /// see https://github.com/rust-lang/rust/issues/57563
+    /// can't use `if` to filter out 0, so add one to avoid this case
+    pub const fn recv_event_size(&self) -> usize {
+        (self.recv_buffer_size / self.yamux_config.max_stream_window_size as usize) + 1
+    }
+
+    /// see https://github.com/rust-lang/rust/issues/57563
+    /// can't use `if` to filter out 0, so add one to avoid this case
+    pub const fn send_event_size(&self) -> usize {
+        (self.send_buffer_size / self.yamux_config.max_stream_window_size as usize) + 1
+    }
+}
+
+impl Default for SessionConfig {
+    fn default() -> Self {
+        SessionConfig {
+            recv_buffer_size: MAX_BUF_SIZE,
+            send_buffer_size: MAX_BUF_SIZE,
+            yamux_config: YamuxConfig::default(),
         }
     }
 }

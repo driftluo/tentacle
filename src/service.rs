@@ -220,7 +220,7 @@ where
     /// Panic when max_frame_length < yamux_max_window_size
     pub fn yamux_config(mut self, config: YamuxConfig) -> Self {
         assert!(self.config.max_frame_length as u32 >= config.max_stream_window_size);
-        self.config.yamux_config = config;
+        self.config.session_config.yamux_config = config;
         self
     }
 
@@ -228,7 +228,14 @@ where
     ///
     /// Panic when max_frame_length < yamux_max_window_size
     pub fn max_frame_length(mut self, size: usize) -> Self {
-        assert!(size as u32 >= self.config.yamux_config.max_stream_window_size);
+        assert!(
+            size as u32
+                >= self
+                    .config
+                    .session_config
+                    .yamux_config
+                    .max_stream_window_size
+        );
         self.config.max_frame_length = size;
         self
     }
@@ -981,7 +988,7 @@ where
                     .map(|(key, value)| (key.clone(), value.inner.clone()))
                     .collect(),
             )
-            .config(self.config.yamux_config)
+            .config(self.config.session_config)
             .keep_buffer(self.config.keep_buffer)
             .service_proto_senders(self.service_proto_handles.clone())
             .session_senders(
@@ -1695,8 +1702,8 @@ where
     fn user_task_poll(&mut self, cx: &mut Context) {
         let mut finished = false;
         for _ in 0..512 {
-            if self.write_buf.len() > self.config.yamux_config.send_event_size()
-                && self.high_write_buf.len() > self.config.yamux_config.send_event_size()
+            if self.write_buf.len() > self.config.session_config.send_event_size()
+                && self.high_write_buf.len() > self.config.session_config.send_event_size()
             {
                 break;
             }
@@ -1719,7 +1726,7 @@ where
                 Poll::Pending => None,
             }
             .or_else(|| {
-                if self.write_buf.len() <= self.config.yamux_config.send_event_size() {
+                if self.write_buf.len() <= self.config.session_config.send_event_size() {
                     match Pin::new(&mut self.service_task_receiver)
                         .as_mut()
                         .poll_next(cx)
@@ -1752,8 +1759,8 @@ where
     fn session_poll(&mut self, cx: &mut Context) {
         let mut finished = false;
         for _ in 0..64 {
-            if self.read_service_buf.len() > self.config.yamux_config.recv_event_size()
-                || self.read_session_buf.len() > self.config.yamux_config.recv_event_size()
+            if self.read_service_buf.len() > self.config.session_config.recv_event_size()
+                || self.read_session_buf.len() > self.config.session_config.recv_event_size()
             {
                 break;
             }
