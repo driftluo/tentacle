@@ -20,7 +20,7 @@ use futures::{
     future::select,
     FutureExt, Sink, SinkExt, Stream,
 };
-use log::{debug, warn};
+use log::debug;
 use tokio::prelude::{AsyncRead, AsyncWrite};
 use tokio_util::codec::Framed;
 
@@ -627,7 +627,7 @@ where
         if self.last_read_success.elapsed()
             > self.config.keepalive_interval + Duration::from_secs(15)
         {
-            warn!("yamux timeout");
+            debug!("yamux timeout");
             self.shutdown(cx)?;
             return Poll::Ready(Some(Err(io::ErrorKind::TimedOut.into())));
         }

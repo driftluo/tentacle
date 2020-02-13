@@ -125,15 +125,12 @@ impl<'a> IdentifyMessage<'a> {
             .set(listen_addrs)
             .build();
 
-        Bytes::from(
-            protocol_mol::IdentifyMessage::new_builder()
-                .listen_addrs(listen_addrs)
-                .observed_addr(observed_addr)
-                .identify(identify)
-                .build()
-                .as_slice()
-                .to_owned(),
-        )
+        protocol_mol::IdentifyMessage::new_builder()
+            .listen_addrs(listen_addrs)
+            .observed_addr(observed_addr)
+            .identify(identify)
+            .build()
+            .as_bytes()
     }
 
     #[cfg(feature = "molc")]
