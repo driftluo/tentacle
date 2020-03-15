@@ -97,11 +97,20 @@ impl RingAeadCipher {
     /// +----------------------------------------+-----------------------+
     /// ```
     pub fn decrypt(&mut self, input: &[u8]) -> Result<Vec<u8>, SecioError> {
-        let mut output = Vec::with_capacity(input.len() - self.cipher_type.tag_size());
-        let mut buf = Vec::with_capacity(self.cipher_type.tag_size() + input.len());
+        let output_len = input
+            .len()
+            .checked_sub(self.cipher_type.tag_size())
+            .ok_or(SecioError::FrameTooShort)?;
+        let mut output = Vec::with_capacity(output_len);
+        let mut buf = Vec::with_capacity(
+            self.cipher_type
+                .tag_size()
+                .checked_add(input.len())
+                .ok_or(SecioError::InvalidMessage)?,
+        );
 
         unsafe {
-            output.set_len(input.len() - self.cipher_type.tag_size());
+            output.set_len(output_len);
             buf.set_len(input.len());
         }
         buf.copy_from_slice(input);
