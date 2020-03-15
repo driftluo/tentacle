@@ -70,26 +70,7 @@ impl From<SecioError> for Error {
     }
 }
 
-impl error::Error for Error {
-    fn description(&self) -> &str {
-        match self {
-            Error::IoError(e) => error::Error::description(e),
-            Error::ConnectSelf => "Connect self",
-            Error::RepeatedConnection(_) => "Connected to the connected peer",
-            Error::PeerIdNotMatch => "When dial remote, peer id does not match",
-            Error::HandshakeError(e) => error::Error::description(e),
-            Error::DNSResolverError(_) => "DNS resolver error",
-            Error::ServiceProtoHandleBlock => "Service protocol handle block",
-            Error::ServiceProtoHandleAbnormallyClosed => {
-                "Service protocol handle abnormally closed"
-            }
-            Error::SessionProtoHandleBlock(_) => "Session protocol handle block",
-            Error::SessionProtoHandleAbnormallyClosed(_) => {
-                "Session protocol handle abnormally closed"
-            }
-        }
-    }
-}
+impl error::Error for Error {}
 
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
