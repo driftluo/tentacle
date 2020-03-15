@@ -1,0 +1,23 @@
+
+[package]
+name = "tentacle-fuzz"
+version = "0.0.1"
+license = "MIT"
+authors = ["Nervos Core Dev <dev@nervos.org>"]
+edition = "2018"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.3"
+tentacle-secio = { path = "../secio", features = ["molc"] }
+rand = "0.7"
+
+# Prevent this from interfering with workspaces
+[workspace]
+members = ["."]
+
+[[bin]]
+name = "secio_crypto_decrypt_cipher"
+path = "fuzz_targets/secio/crypto/decrypt_cipher.rs"
