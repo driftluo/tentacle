@@ -661,24 +661,20 @@ where
     }
 
     fn poll_inner_socket(&mut self, cx: &mut Context) {
-        let mut finished = false;
-        for _ in 0..64 {
+        loop {
             if !self.state.is_normal() {
                 break;
             }
             match Pin::new(&mut self.socket).as_mut().poll_next(cx) {
                 Poll::Ready(Some(Ok(sub_stream))) => self.handle_sub_stream(sub_stream),
                 Poll::Ready(None) => {
-                    finished = true;
                     self.state = SessionState::RemoteClose;
                     break;
                 }
                 Poll::Pending => {
-                    finished = true;
                     break;
                 }
                 Poll::Ready(Some(Err(err))) => {
-                    finished = true;
                     debug!("session poll error: {:?}", err);
                     self.write_buf.clear();
                     self.high_write_buf.clear();
@@ -709,14 +705,10 @@ where
                 }
             }
         }
-        if !finished {
-            self.set_delay(cx);
-        }
     }
 
     fn recv_substreams(&mut self, cx: &mut Context) {
-        let mut finished = false;
-        for _ in 0..128 {
+        loop {
             if self.read_buf.len() > self.config.recv_event_size() {
                 break;
             }
@@ -739,20 +731,14 @@ where
                     return;
                 }
                 Poll::Pending => {
-                    finished = true;
                     break;
                 }
             }
         }
-
-        if !finished {
-            self.set_delay(cx);
-        }
     }
 
     fn recv_service(&mut self, cx: &mut Context) {
-        let mut finished = false;
-        for _ in 0..64 {
+        loop {
             if self.high_write_buf.len() > RECEIVED_BUFFER_SIZE
                 && self.write_buf.len() > RECEIVED_BUFFER_SIZE
             {
@@ -805,14 +791,9 @@ where
             match task {
                 Some(task) => self.handle_session_event(cx, task),
                 None => {
-                    finished = true;
                     break;
                 }
             }
-        }
-
-        if !finished {
-            self.set_delay(cx);
         }
     }
 

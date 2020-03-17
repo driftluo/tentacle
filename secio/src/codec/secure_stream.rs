@@ -164,8 +164,7 @@ where
 
     #[inline]
     fn recv_frame(&mut self, cx: &mut Context) -> PollResult<Option<()>, SecioError> {
-        let mut finished = false;
-        for _ in 0..128 {
+        loop {
             match Pin::new(&mut self.socket).as_mut().poll_next(cx) {
                 Poll::Ready(Some(Ok(t))) => {
                     trace!("receive raw data size: {:?}", t.len());
@@ -178,7 +177,6 @@ where
                     return Poll::Ready(Ok(None));
                 }
                 Poll::Pending => {
-                    finished = true;
                     debug!("receive not ready");
                     break;
                 }
@@ -188,16 +186,12 @@ where
                 }
             };
         }
-        if !finished {
-            self.set_delay(cx);
-        }
         Poll::Pending
     }
 
     #[inline]
     fn recv_event(&mut self, cx: &mut Context) {
-        let mut finished = false;
-        for _ in 0..128 {
+        loop {
             if self.dead {
                 return;
             }
@@ -212,14 +206,10 @@ where
                 },
                 Poll::Ready(None) => unreachable!(),
                 Poll::Pending => {
-                    finished = true;
                     debug!("event not ready");
                     break;
                 }
             }
-        }
-        if !finished {
-            self.set_delay(cx);
         }
     }
 

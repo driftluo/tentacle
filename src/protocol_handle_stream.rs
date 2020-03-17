@@ -85,7 +85,6 @@ pub struct ServiceProtocolStream<T> {
     notify_receiver: mpsc::Receiver<u64>,
     panic_report: mpsc::Sender<SessionEvent>,
     current_task: CurrentTask,
-    delay: Arc<AtomicBool>,
     shutdown: Arc<AtomicBool>,
     future_task_sender: mpsc::Sender<BoxedFutureTask>,
 }
@@ -112,7 +111,6 @@ where
             notify_receiver,
             notify: HashMap::new(),
             current_task: CurrentTask::Idle,
-            delay: Arc::new(AtomicBool::new(false)),
             shutdown,
             panic_report,
             future_task_sender,
@@ -228,28 +226,6 @@ where
             });
         }
     }
-
-    fn set_delay(&mut self, cx: &mut Context) {
-        // Why use `delay` instead of `notify`?
-        //
-        // In fact, on machines that can use multi-core normally, there is almost no problem with the `notify` behavior,
-        // and even the efficiency will be higher.
-        //
-        // However, if you are on a single-core bully machine, `notify` may have a very amazing starvation behavior.
-        //
-        // Under a single-core machine, `notify` may fall into the loop of infinitely preemptive CPU, causing starvation.
-        if !self.delay.load(Ordering::Acquire) {
-            self.delay.store(true, Ordering::Release);
-            let waker = cx.waker().clone();
-            let delay = self.delay.clone();
-            tokio::spawn(async move {
-                tokio::time::delay_until(tokio::time::Instant::now() + Duration::from_millis(200))
-                    .await;
-                waker.wake();
-                delay.store(false, Ordering::Release);
-            });
-        }
-    }
 }
 
 impl<T> Drop for ServiceProtocolStream<T> {
@@ -292,8 +268,7 @@ where
             return Poll::Ready(None);
         }
 
-        let mut finished = false;
-        for _ in 0..64 {
+        loop {
             match Pin::new(&mut self.receiver).as_mut().poll_next(cx) {
                 Poll::Ready(Some(event)) => self.handle_event(event),
                 Poll::Ready(None) => {
@@ -305,13 +280,9 @@ where
                     return Poll::Ready(None);
                 }
                 Poll::Pending => {
-                    finished = true;
                     break;
                 }
             }
-        }
-        if !finished {
-            self.set_delay(cx);
         }
 
         loop {
@@ -380,7 +351,6 @@ pub struct SessionProtocolStream<T> {
     notify_receiver: mpsc::Receiver<u64>,
     current_task: bool,
     panic_report: mpsc::Sender<SessionEvent>,
-    delay: Arc<AtomicBool>,
     shutdown: Arc<AtomicBool>,
     future_task_sender: mpsc::Sender<BoxedFutureTask>,
 }
@@ -410,7 +380,6 @@ where
             panic_report,
             current_task: false,
             shutdown,
-            delay: Arc::new(AtomicBool::new(false)),
             future_task_sender,
         }
     }
@@ -499,28 +468,6 @@ where
         }
     }
 
-    fn set_delay(&mut self, cx: &mut Context) {
-        // Why use `delay` instead of `notify`?
-        //
-        // In fact, on machines that can use multi-core normally, there is almost no problem with the `notify` behavior,
-        // and even the efficiency will be higher.
-        //
-        // However, if you are on a single-core bully machine, `notify` may have a very amazing starvation behavior.
-        //
-        // Under a single-core machine, `notify` may fall into the loop of infinitely preemptive CPU, causing starvation.
-        if !self.delay.load(Ordering::Acquire) {
-            self.delay.store(true, Ordering::Release);
-            let waker = cx.waker().clone();
-            let delay = self.delay.clone();
-            tokio::spawn(async move {
-                tokio::time::delay_until(tokio::time::Instant::now() + Duration::from_millis(200))
-                    .await;
-                waker.wake();
-                delay.store(false, Ordering::Release);
-            });
-        }
-    }
-
     #[inline(always)]
     fn close(&mut self) {
         self.receiver.close();
@@ -550,8 +497,7 @@ where
     type Item = ();
 
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Option<Self::Item>> {
-        let mut finished = false;
-        for _ in 0..64 {
+        loop {
             match Pin::new(&mut self.receiver).as_mut().poll_next(cx) {
                 Poll::Ready(Some(event)) => self.handle_event(event),
                 Poll::Ready(None) => {
@@ -559,14 +505,9 @@ where
                     return Poll::Ready(None);
                 }
                 Poll::Pending => {
-                    finished = true;
                     break;
                 }
             }
-        }
-
-        if !finished {
-            self.set_delay(cx);
         }
 
         loop {
