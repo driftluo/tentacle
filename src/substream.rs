@@ -396,8 +396,7 @@ where
     }
 
     fn recv_frame(&mut self, cx: &mut Context) {
-        let mut finished = false;
-        for _ in 0..64 {
+        loop {
             if self.dead {
                 break;
             }
@@ -459,11 +458,9 @@ where
                     return;
                 }
                 Poll::Pending => {
-                    finished = true;
                     break;
                 }
                 Poll::Ready(Some(Err(err))) => {
-                    finished = true;
                     debug!("sub stream codec error: {:?}", err);
                     match err.kind() {
                         ErrorKind::BrokenPipe
@@ -478,9 +475,6 @@ where
                     }
                 }
             }
-        }
-        if !finished {
-            self.set_delay(cx);
         }
     }
 

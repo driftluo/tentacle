@@ -484,7 +484,7 @@ where
 
     // Receive frames from low level stream
     fn recv_frames(&mut self, cx: &mut Context) -> Result<(), io::Error> {
-        for _ in 0..64 {
+        loop {
             if self.is_dead() {
                 return Ok(());
             }
@@ -508,8 +508,6 @@ where
                 }
             }
         }
-        self.set_delay(cx);
-        Ok(())
     }
 
     fn handle_event(&mut self, cx: &mut Context, event: StreamEvent) -> Result<(), io::Error> {
@@ -542,7 +540,7 @@ where
     // Receive events from sub streams
     // TODO: should handle error
     fn recv_events(&mut self, cx: &mut Context) -> Result<(), io::Error> {
-        for _ in 0..64 {
+        loop {
             if self.is_dead() {
                 return Ok(());
             }
@@ -559,8 +557,6 @@ where
                 }
             }
         }
-        self.set_delay(cx);
-        Ok(())
     }
 
     #[inline]

@@ -17,3 +17,4 @@ log = "0.4"
 [dev-dependencies]
 env_logger = "0.6"
 rand = "0.6"
+bytesize = "1"

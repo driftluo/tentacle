@@ -1700,8 +1700,7 @@ where
 
     #[inline]
     fn user_task_poll(&mut self, cx: &mut Context) {
-        let mut finished = false;
-        for _ in 0..512 {
+        loop {
             if self.write_buf.len() > self.config.session_config.send_event_size()
                 && self.high_write_buf.len() > self.config.session_config.send_event_size()
             {
@@ -1746,19 +1745,14 @@ where
             match task {
                 Some(task) => self.handle_service_task(cx, task),
                 None => {
-                    finished = true;
                     break;
                 }
             }
         }
-        if !finished {
-            self.set_delay(cx);
-        }
     }
 
     fn session_poll(&mut self, cx: &mut Context) {
-        let mut finished = false;
-        for _ in 0..64 {
+        loop {
             if self.read_service_buf.len() > self.config.session_config.recv_event_size()
                 || self.read_session_buf.len() > self.config.session_config.recv_event_size()
             {
@@ -1772,13 +1766,9 @@ where
                 Poll::Ready(Some(event)) => self.handle_session_event(cx, event),
                 Poll::Ready(None) => unreachable!(),
                 Poll::Pending => {
-                    finished = true;
                     break;
                 }
             }
-        }
-        if !finished {
-            self.set_delay(cx);
         }
     }
 
