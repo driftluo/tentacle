@@ -84,7 +84,10 @@ impl OpenSSLCrypt {
     pub fn decrypt(&mut self, input: &[u8]) -> Result<Vec<u8>, SecioError> {
         if self.aead {
             nonce_advance(self.iv.as_mut());
-            let crypt_data_len = input.len() - self.cipher_type.tag_size();
+            let crypt_data_len = input
+                .len()
+                .checked_sub(self.cipher_type.tag_size())
+                .ok_or(SecioError::FrameTooShort)?;
             openssl::symm::decrypt_aead(
                 self.cipher,
                 &self.key,
