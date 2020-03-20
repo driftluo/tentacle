@@ -79,7 +79,7 @@ impl Into<io::Error> for SecioError {
     fn into(self) -> io::Error {
         match self {
             SecioError::IoError(e) => e,
-            e => io::Error::new(io::ErrorKind::BrokenPipe, error::Error::description(&e)),
+            e => io::Error::new(io::ErrorKind::BrokenPipe, e.to_string()),
         }
     }
 }
@@ -97,27 +97,7 @@ impl From<ring::error::Unspecified> for SecioError {
     }
 }
 
-impl error::Error for SecioError {
-    fn description(&self) -> &str {
-        match self {
-            SecioError::IoError(e) => error::Error::description(e),
-            #[cfg(unix)]
-            SecioError::Openssl(e) => error::Error::description(e),
-            SecioError::RingCryptoError => "Ring crypto error",
-            SecioError::EphemeralKeyGenerationFailed => "EphemeralKey Generation Failed",
-            SecioError::SecretGenerationFailed => "Secret Generation Failed",
-            SecioError::NoSupportIntersection => "No Support Intersection",
-            SecioError::NonceVerificationFailed => "Nonce Verification Failed",
-            SecioError::FrameTooShort => "Frame Too Short",
-            SecioError::HmacNotMatching => "Hmac Not Matching",
-            SecioError::ConnectSelf => "Connect Self",
-            SecioError::HandshakeParsingFailure => "Handshake Parsing Failure",
-            SecioError::InvalidMessage => "Invalid Message",
-            SecioError::SignatureVerificationFailed => "Signature Verification Failed",
-            SecioError::InvalidProposition(e) => e,
-        }
-    }
-}
+impl error::Error for SecioError {}
 
 impl fmt::Display for SecioError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {

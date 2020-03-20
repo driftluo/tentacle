@@ -3,7 +3,6 @@ use log::{debug, error, trace};
 use std::{
     borrow::Cow,
     collections::{vec_deque::VecDeque, HashMap, HashSet},
-    error::Error as ErrorTrait,
     io,
     pin::Pin,
     sync::{
@@ -818,7 +817,7 @@ where
                         );
                         // time out error
                         let error =
-                            io::Error::new(io::ErrorKind::TimedOut, error.description()).into();
+                            io::Error::new(io::ErrorKind::TimedOut, error.to_string()).into();
                         SessionEvent::HandshakeFail {
                             ty,
                             error,

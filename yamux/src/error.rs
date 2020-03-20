@@ -58,27 +58,7 @@ pub enum Error {
     WouldBlock,
 }
 
-impl error::Error for Error {
-    fn description(&self) -> &str {
-        match self {
-            Error::InvalidVersion => "Received a frame with an invalid version",
-            Error::InvalidMsgType => "Received a frame with an invalid message type",
-            Error::SessionShutdown => "Session shutdown",
-            Error::StreamsExhausted => "No more stream ids to issue",
-            Error::DuplicateStream => "Duplicate stream is opened inbound",
-            Error::RecvWindowExceeded => "Received window was exceeded",
-            Error::Timeout => "Reach an IO deadline",
-            Error::StreamClosed => "Using a closed stream",
-            Error::UnexpectedFlag => "Get an unexpected flag",
-            Error::RemoteGoAway => "Go away message from the other side",
-            Error::ConnectionReset => "Stream is reset",
-            Error::ConnectionWriteTimeout => "Timeout on write to the underlying stream connection",
-            Error::KeepAliveTimeout => "Keepalive timeout",
-            Error::SubStreamRemoteClosing => "Remote sub stream is closed",
-            Error::WouldBlock => "Sub stream send channel full",
-        }
-    }
-}
+impl error::Error for Error {}
 
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
