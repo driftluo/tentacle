@@ -17,14 +17,10 @@ pub enum Error {
     HandshakeError(SecioError),
     /// DNS resolver error
     DNSResolverError(io::Error),
-    /// Service protocol handle block, may be user's protocol handle implementation problem
-    ServiceProtoHandleBlock,
+    /// protocol handle block, may be user's protocol handle implementation problem
+    ProtoHandleBlock(Option<SessionId>),
     /// protocol handle abnormally closed, may be user's protocol handle implementation problem
-    ServiceProtoHandleAbnormallyClosed,
-    /// Session protocol handle block, may be user's protocol handle implementation problem
-    SessionProtoHandleBlock(SessionId),
-    /// protocol handle abnormally closed, may be user's protocol handle implementation problem
-    SessionProtoHandleAbnormallyClosed(SessionId),
+    ProtoHandleAbnormallyClosed(Option<SessionId>),
 }
 
 impl PartialEq for Error {
@@ -83,16 +79,22 @@ impl fmt::Display for Error {
             Error::PeerIdNotMatch => write!(f, "When dial remote, peer id does not match"),
             Error::HandshakeError(e) => fmt::Display::fmt(e, f),
             Error::DNSResolverError(e) => write!(f, "DNs resolver error: {:?}", e),
-            Error::ServiceProtoHandleBlock => write!(f, "Service protocol handle block"),
-            Error::ServiceProtoHandleAbnormallyClosed => {
-                write!(f, "Service protocol handle abnormally closed")
-            }
-            Error::SessionProtoHandleBlock(id) => {
-                write!(f, "Session [{}] protocol handle block", id)
-            }
-            Error::SessionProtoHandleAbnormallyClosed(id) => {
-                write!(f, "Session [{}] protocol handle abnormally closed", id)
-            }
+            Error::ProtoHandleBlock(id) => write!(
+                f,
+                "Protocol handle block{}",
+                match id {
+                    Some(id) => format!(", caused by session [{}]", id),
+                    None => "".to_string(),
+                }
+            ),
+            Error::ProtoHandleAbnormallyClosed(id) => write!(
+                f,
+                "Protocol handle abnormally closed{}",
+                match id {
+                    Some(id) => format!(", caused by session [{}]", id),
+                    None => "".to_string(),
+                }
+            ),
         }
     }
 }

@@ -523,7 +523,7 @@ where
                             &mut self.service_context,
                             ServiceError::ProtocolHandleError {
                                 proto_id,
-                                error: Error::ServiceProtoHandleAbnormallyClosed,
+                                error: Error::ProtoHandleAbnormallyClosed(None),
                             },
                         );
                     }
@@ -553,7 +553,7 @@ where
                             &mut self.service_context,
                             ServiceError::ProtocolHandleError {
                                 proto_id,
-                                error: Error::SessionProtoHandleAbnormallyClosed(session_id),
+                                error: Error::ProtoHandleAbnormallyClosed(Some(session_id)),
                             },
                         )
                     }
@@ -583,9 +583,7 @@ where
         proto_id: ProtocolId,
         session_id: Option<SessionId>,
     ) {
-        let error = session_id
-            .map(Error::SessionProtoHandleBlock)
-            .unwrap_or(Error::ServiceProtoHandleBlock);
+        let error = Error::ProtoHandleBlock(session_id);
         self.set_delay(cx);
         self.handle.handle_error(
             &mut self.service_context,
