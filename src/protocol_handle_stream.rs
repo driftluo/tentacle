@@ -235,11 +235,11 @@ impl<T> Drop for ServiceProtocolStream<T> {
                 let proto_id = self.handle_context.proto_id;
                 let event = match session_id {
                     Some(id) => SessionEvent::ProtocolHandleError {
-                        error: Error::SessionProtoHandleAbnormallyClosed(id),
+                        error: Error::ProtoHandleAbnormallyClosed(Some(id)),
                         proto_id,
                     },
                     None => SessionEvent::ProtocolHandleError {
-                        error: Error::ServiceProtoHandleAbnormallyClosed,
+                        error: Error::ProtoHandleAbnormallyClosed(None),
                         proto_id,
                     },
                 };
@@ -479,7 +479,7 @@ impl<T> Drop for SessionProtocolStream<T> {
     fn drop(&mut self) {
         if !self.shutdown.load(Ordering::SeqCst) && self.current_task {
             let event = SessionEvent::ProtocolHandleError {
-                error: Error::SessionProtoHandleAbnormallyClosed(self.context.id),
+                error: Error::ProtoHandleAbnormallyClosed(Some(self.context.id)),
                 proto_id: self.handle_context.proto_id,
             };
             let mut panic_sender = self.panic_report.clone();
