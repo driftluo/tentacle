@@ -1,3 +1,14 @@
+## 0.3.0-alpha.2
+
+### Bug Fix
+
+- Fix overflow on be attacked on Secio
+- Fix throughput issues caused by code limit
+
+### Features
+
+- Error type Changed
+
 ## 0.3.0-alpha.1
 
 ### Features
