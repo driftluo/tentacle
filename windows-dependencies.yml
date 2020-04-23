@@ -8,6 +8,8 @@ steps:
       echo "##vso[task.setvariable variable=PATH;]%PATH%;%USERPROFILE%\.cargo\bin"
     displayName: Install rust
   - script: |
+      rustup component add rustfmt
+      rustup component add clippy
       rustc --version
       cargo --version
     displayName: Test/query binaries
