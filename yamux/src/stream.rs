@@ -11,12 +11,8 @@ use std::{
     collections::VecDeque,
     io,
     pin::Pin,
-    sync::{
-        atomic::{AtomicBool, Ordering},
-        Arc,
-    },
+    sync::{atomic::AtomicBool, Arc},
     task::{Context, Poll},
-    time::Duration,
 };
 
 use log::debug;
@@ -278,7 +274,7 @@ impl StreamHandle {
     }
 
     fn recv_frames(&mut self, cx: &mut Context) -> Result<(), Error> {
-        for _ in 0..64 {
+        loop {
             match self.state {
                 StreamState::RemoteClosing => {
                     return Err(Error::SubStreamRemoteClosing);
@@ -298,35 +294,10 @@ impl StreamHandle {
                 Poll::Ready(None) => {
                     return Err(Error::SessionShutdown);
                 }
-                Poll::Pending => {
-                    return Ok(());
-                }
+                Poll::Pending => break,
             }
         }
-        self.set_delay(cx);
         Ok(())
-    }
-
-    fn set_delay(&mut self, cx: &mut Context) {
-        // Why use `delay` instead of `notify`?
-        //
-        // In fact, on machines that can use multi-core normally, there is almost no problem with the `notify` behavior,
-        // and even the efficiency will be higher.
-        //
-        // However, if you are on a single-core bully machine, `notify` may have a very amazing starvation behavior.
-        //
-        // Under a single-core machine, `notify` may fall into the loop of infinitely preemptive CPU, causing starvation.
-        if !self.delay.load(Ordering::Acquire) {
-            self.delay.store(true, Ordering::Release);
-            let waker = cx.waker().clone();
-            let delay = self.delay.clone();
-            tokio::spawn(async move {
-                tokio::time::delay_until(tokio::time::Instant::now() + Duration::from_millis(200))
-                    .await;
-                waker.wake();
-                delay.store(false, Ordering::Release);
-            });
-        }
     }
 
     fn check_self_state(&mut self, cx: &mut Context) -> Result<(), io::Error> {
