@@ -21,7 +21,7 @@ jobs:
     steps:
       - template: windows-dependencies.yml
         parameters:
-          rustup_toolchain: '1.40.0-x86_64-pc-windows-msvc'
+          rustup_toolchain: '1.42.0-x86_64-pc-windows-msvc'
       - script: |
           cargo fmt --all -- --check
           make clippy
@@ -45,7 +45,7 @@ jobs:
     steps:
       - template: windows-dependencies.yml
         parameters:
-          rustup_toolchain: '1.40.0-x86_64-pc-windows-msvc'
+          rustup_toolchain: '1.42.0-x86_64-pc-windows-msvc'
       - script: make test
         displayName: Run integration tests
         env:
@@ -67,7 +67,7 @@ jobs:
     steps:
       - template: windows-dependencies.yml
         parameters:
-          rustup_toolchain: '1.40.0-x86_64-pc-windows-msvc'
+          rustup_toolchain: '1.42.0-x86_64-pc-windows-msvc'
       - script: |
           make example
           make bench_p2p

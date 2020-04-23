@@ -1,7 +1,7 @@
 FLATC := flatc
 CFBC := cfbc
 MOLC    := moleculec
-MOLC_VERSION := 0.5.0
+MOLC_VERSION := 0.6.0
 
 FBS_FILES := \
   src/protocol_select/protocol_select.fbs \
