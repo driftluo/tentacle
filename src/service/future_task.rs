@@ -132,11 +132,12 @@ impl Stream for FutureTaskManager {
 
 #[cfg(test)]
 mod test {
-    use super::{Arc, AtomicBool, BoxedFutureTask, FutureTaskManager};
-
-    use std::{thread, time};
+    use super::{Arc, AtomicBool, BoxedFutureTask, FutureTaskManager, Ordering};
 
     use futures::{channel::mpsc::channel, stream::pending, SinkExt, StreamExt};
+    use std::sync::atomic::AtomicUsize;
+    use std::{thread, time};
+    use tokio::time::delay_for;
 
     #[test]
     fn test_manager_drop() {
@@ -171,6 +172,53 @@ mod test {
 
         thread::sleep(time::Duration::from_millis(300));
         drop(sender);
+
+        handle.join().unwrap()
+    }
+
+    #[test]
+    fn test_ensure_finish_signals_received() {
+        let (sender, receiver) = channel(128);
+        let shutdown = Arc::new(AtomicBool::new(false));
+        let mut manager = FutureTaskManager::new(receiver, shutdown);
+        let finished_tasks = Arc::new(AtomicUsize::new(0));
+        let finished_tasks_inner = Arc::clone(&finished_tasks);
+        let signals_len = Arc::new(AtomicUsize::new(usize::max_value()));
+        let signals_len_inner = Arc::clone(&signals_len);
+
+        let mut send_task = sender.clone();
+
+        let handle = thread::spawn(|| {
+            let mut rt = tokio::runtime::Runtime::new().unwrap();
+            rt.spawn(async move {
+                for i in 1..100u64 {
+                    let finished_tasks_inner_clone = Arc::clone(&finished_tasks_inner);
+                    let _ = send_task
+                        .send(Box::pin(async move {
+                            delay_for(time::Duration::from_millis(i * 2)).await;
+                            finished_tasks_inner_clone.fetch_add(1, Ordering::SeqCst);
+                        }) as BoxedFutureTask)
+                        .await;
+                }
+            });
+            rt.block_on(async move {
+                loop {
+                    // When `sender` dropped, FutureTaskManager will stop
+                    if manager.next().await.is_none() {
+                        signals_len_inner.store(manager.signals.len(), Ordering::SeqCst);
+                        break;
+                    }
+                }
+            });
+        });
+
+        // Wait for tasks finish, and manager receive all signals
+        thread::sleep(time::Duration::from_millis(300));
+        drop(sender);
+        // Wait for FutureTaskManager stop
+        thread::sleep(time::Duration::from_millis(100));
+        assert_eq!(finished_tasks.load(Ordering::SeqCst), 99);
+        assert_eq!(signals_len.load(Ordering::SeqCst), 0);
 
         handle.join().unwrap()
     }
