@@ -1000,7 +1000,6 @@ where
                     })
                     .collect(),
             )
-            .context(session_context.clone())
             .event(self.config.event.clone());
 
         let mut session = Session::new(
@@ -1046,9 +1045,7 @@ where
 
         self.handle.handle_event(
             &mut self.service_context,
-            ServiceEvent::SessionOpen {
-                session_context: Arc::clone(&session_context),
-            },
+            ServiceEvent::SessionOpen { session_context },
         );
     }
 
@@ -1082,6 +1079,9 @@ where
 
         close_proto_ids.into_iter().for_each(|proto_id| {
             self.protocol_close(cx, id, proto_id, Source::Internal);
+            // protocol handle close on session close
+            self.session_proto_handles.remove(&(id, proto_id));
+            self.session_wait_handle.remove(&(id, proto_id));
         });
 
         if let Some(session_control) = self.sessions.remove(&id) {
@@ -1111,28 +1111,19 @@ where
             //
             // 1. session must open
             // 2. session protocol mustn't open
-            // 3. session protocol handle mustn't exist
-            //
-            // Satisfy 2 but not 3 may cause an error, leading to the service's session handle sender
-            // to be inconsistent with the substream's sender, opened two different session protocol handles
             if self.sessions.contains_key(&id)
                 && !self
                     .session_service_protos
                     .get(&id)
                     .map(|protos| protos.contains(&proto_id))
                     .unwrap_or_default()
-                && !self.session_proto_handles.contains_key(&(id, proto_id))
             {
-                if let Some(handle) = self.proto_handle(true, proto_id) {
-                    self.handle_open(handle, proto_id, Some(self.next_session))
-                };
                 self.write_buf.push_back((
                     id,
                     SessionEvent::ProtocolOpen {
                         id,
                         proto_id,
                         version,
-                        session_sender: self.session_proto_handles.get(&(id, proto_id)).cloned(),
                     },
                 ));
                 self.distribute_to_session(cx);
@@ -1237,8 +1228,6 @@ where
         if let Some(infos) = self.session_service_protos.get_mut(&session_id) {
             infos.remove(&proto_id);
         }
-        self.session_proto_handles.remove(&(session_id, proto_id));
-        self.session_wait_handle.remove(&(session_id, proto_id));
     }
 
     #[inline(always)]
