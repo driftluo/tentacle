@@ -677,17 +677,16 @@ where
         priority: Priority,
         data: Bytes,
     ) {
-        let data_size = data.len();
         if let Some(controller) = self.sessions.get(&session_id) {
-            controller.inner.incr_pending_data_size(data_size);
+            controller.inner.incr_pending_data_size(data.len());
+            let message_event = SessionEvent::ProtocolMessage {
+                id: session_id,
+                proto_id,
+                priority,
+                data,
+            };
+            self.push_back(priority, session_id, message_event);
         }
-        let message_event = SessionEvent::ProtocolMessage {
-            id: session_id,
-            proto_id,
-            priority,
-            data,
-        };
-        self.push_back(priority, session_id, message_event);
     }
 
     fn handle_message(
@@ -705,20 +704,11 @@ where
         match target {
             // Send data to the specified protocol for the specified session.
             TargetSession::Single(id) => {
-                if !self.sessions.contains_key(&id) {
-                    return;
-                }
                 self.push_session_message(id, proto_id, priority, data);
             }
             // Send data to the specified protocol for the specified sessions.
             TargetSession::Multi(ids) => {
-                for id in self
-                    .sessions
-                    .keys()
-                    .filter(|id| ids.contains(id))
-                    .cloned()
-                    .collect::<Vec<SessionId>>()
-                {
+                for id in ids {
                     debug!(
                         "send message to session [{}], proto [{}], data len: {}",
                         id,
