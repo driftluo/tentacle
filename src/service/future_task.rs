@@ -63,7 +63,7 @@ impl FutureTaskManager {
         tokio::spawn(async move {
             future::select(task, receiver).await;
             trace!("future task({}) finished", task_id);
-            let _ = id_sender.send(task_id);
+            let _ = id_sender.send(task_id).await;
         });
     }
 
