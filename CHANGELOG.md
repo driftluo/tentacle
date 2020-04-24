@@ -1,3 +1,11 @@
+## 0.3.0-alpha.3
+
+### Bug Fix
+
+- Remove all internal loop restrictions
+- upgrade molecule dep
+- Fix FutureTask signals memory leak
+
 ## 0.3.0-alpha.2
 
 ### Bug Fix
