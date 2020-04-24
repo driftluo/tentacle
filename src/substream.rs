@@ -365,8 +365,7 @@ where
     }
 
     fn recv_event(&mut self, cx: &mut Context) {
-        let mut finished = false;
-        for _ in 0..64 {
+        loop {
             if self.dead {
                 break;
             }
@@ -385,13 +384,9 @@ where
                     return;
                 }
                 Poll::Pending => {
-                    finished = true;
                     break;
                 }
             }
-        }
-        if !finished {
-            self.set_delay(cx);
         }
     }
 
