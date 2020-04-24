@@ -1,64 +1,70 @@
 use futures::StreamExt;
-use std::{sync::mpsc::channel, thread};
+use std::{sync::mpsc::channel, thread, time::Duration};
 use tentacle::{
     builder::{MetaBuilder, ServiceBuilder},
-    context::{ProtocolContext, ProtocolContextMutRef, ServiceContext},
+    context::ProtocolContextMutRef,
     multiaddr::Multiaddr,
     secio::SecioKeyPair,
-    service::{ProtocolHandle, ProtocolMeta, Service, ServiceEvent, TargetProtocol},
-    traits::{ServiceHandle, ServiceProtocol, SessionProtocol},
+    service::{ProtocolHandle, ProtocolMeta, Service, TargetProtocol},
+    traits::{ServiceHandle, SessionProtocol},
 };
 
 /// test case:
-/// 1. open with dummy protocol
-/// 2. open test session protocol
-/// 3. test protocol disconnect current session
-/// 4. service handle dial with dummy protocol,
-///   4.1. goto 1
-///   4.2. count >= 10, test done
+/// 1. open with dummy session protocol
+/// 2. dummy protocol open test protocol
+/// 3. test protocol open/close self 10 times, each closed count + 1
+/// 4. when count >= 10, test done
 
 #[derive(Clone)]
-struct PHandle;
+struct Dummy;
 
-impl SessionProtocol for PHandle {
+impl SessionProtocol for Dummy {
     fn connected(&mut self, context: ProtocolContextMutRef, _version: &str) {
-        if context.session.ty.is_inbound() {
-            // Close the session after opening the protocol correctly
-            let _ = context.disconnect(context.session.id);
-        }
+        // dummy open the test protocol
+        context.open_protocol(context.session.id, 1.into()).unwrap();
     }
 }
 
-struct Dummy;
-
-impl ServiceProtocol for Dummy {
-    fn init(&mut self, _context: &mut ProtocolContext) {}
-}
-
-struct SHandle {
+#[derive(Clone)]
+struct PHandle {
     count: usize,
-    addr: Option<Multiaddr>,
 }
 
-impl ServiceHandle for SHandle {
-    fn handle_event(&mut self, control: &mut ServiceContext, event: ServiceEvent) {
-        if let ServiceEvent::SessionOpen { session_context } = event {
-            self.addr = Some(session_context.address.clone());
-            if session_context.ty.is_outbound() {
-                control.open_protocol(session_context.id, 1.into()).unwrap();
-            }
-        } else if let ServiceEvent::SessionClose { session_context } = event {
-            // Test ends after 10 connections and opening session protocol
-            if session_context.ty.is_outbound() {
-                self.count += 1;
-                if self.count >= 10 {
-                    control.shutdown().unwrap();
-                } else {
-                    let _ =
-                        control.dial(self.addr.clone().unwrap(), TargetProtocol::Single(0.into()));
-                }
+impl SessionProtocol for PHandle {
+    fn connected(&mut self, context: ProtocolContextMutRef, _version: &str) {
+        if context.session.ty.is_outbound() {
+            // close self protocol
+            context
+                .close_protocol(context.session.id, context.proto_id)
+                .unwrap();
+            // set a timer to open self protocol
+            // because service state may not clean
+            context
+                .set_session_notify(
+                    context.session.id,
+                    context.proto_id,
+                    Duration::from_millis(100),
+                    1,
+                )
+                .unwrap();
+        }
+    }
+
+    fn disconnected(&mut self, context: ProtocolContextMutRef) {
+        if context.session.ty.is_outbound() {
+            // each close add one
+            self.count += 1;
+            if self.count >= 10 {
+                context.shutdown().unwrap();
             }
         }
+    }
+
+    fn notify(&mut self, context: ProtocolContextMutRef, _token: u64) {
+        // try open self with remote
+        context
+            .open_protocol(context.session.id, context.proto_id)
+            .unwrap();
     }
 }
 
@@ -81,22 +87,13 @@ where
     }
 }
 
-fn test_session_handle_open(secio: bool) {
-    let p_handle_1 = PHandle;
-    let s_handle_1 = SHandle {
-        count: 0,
-        addr: None,
-    };
-
-    let p_handle_2 = PHandle;
-    let s_handle_2 = SHandle {
-        count: 0,
-        addr: None,
-    };
+fn test_session_proto_open_close(secio: bool) {
+    let p_handle_1 = PHandle { count: 0 };
+    let p_handle_2 = PHandle { count: 0 };
 
     let meta_dummy_1 = MetaBuilder::new()
         .id(0.into())
-        .service_handle(move || {
+        .session_handle(move || {
             let handle = Box::new(Dummy);
             ProtocolHandle::Callback(handle)
         })
@@ -104,7 +101,7 @@ fn test_session_handle_open(secio: bool) {
 
     let meta_dummy_2 = MetaBuilder::new()
         .id(0.into())
-        .service_handle(move || {
+        .session_handle(move || {
             let handle = Box::new(Dummy);
             ProtocolHandle::Callback(handle)
         })
@@ -126,10 +123,11 @@ fn test_session_handle_open(secio: bool) {
         })
         .build();
 
-    let mut service_1 = create(secio, vec![meta_dummy_1, meta_1].into_iter(), s_handle_1);
-    let mut service_2 = create(secio, vec![meta_dummy_2, meta_2].into_iter(), s_handle_2);
+    let mut service_1 = create(secio, vec![meta_dummy_1, meta_1].into_iter(), ());
+    let mut service_2 = create(secio, vec![meta_dummy_2, meta_2].into_iter(), ());
 
     let (addr_sender, addr_receiver) = channel::<Multiaddr>();
+
     thread::spawn(move || {
         let mut rt = tokio::runtime::Runtime::new().unwrap();
         rt.block_on(async move {
@@ -170,11 +168,11 @@ fn test_session_handle_open(secio: bool) {
 }
 
 #[test]
-fn test_session_handle_with_secio() {
-    test_session_handle_open(true)
+fn test_session_proto_open_close_with_secio() {
+    test_session_proto_open_close(true)
 }
 
 #[test]
-fn test_session_handle_with_no_secio() {
-    test_session_handle_open(false)
+fn test_session_proto_open_close_with_no_secio() {
+    test_session_proto_open_close(false)
 }

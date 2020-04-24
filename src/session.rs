@@ -480,7 +480,7 @@ where
         .stream_id(self.next_stream)
         .config(self.config)
         .service_proto_sender(self.service_proto_senders.get(&proto_id).cloned())
-        .session_proto_sender(self.session_proto_senders.remove(&proto_id))
+        .session_proto_sender(self.session_proto_senders.get(&proto_id).cloned())
         .keep_buffer(self.keep_buffer)
         .event(self.event.contains(&proto_id))
         .before_receive(before_receive_fn)
@@ -632,16 +632,16 @@ where
                 }
             }
             SessionEvent::ProtocolClose { proto_id, .. } => {
-                if !self.proto_streams.contains_key(&proto_id) {
-                    debug!("proto [{}] has been closed", proto_id);
-                } else {
+                if let Some(stream_id) = self.proto_streams.get(&proto_id) {
                     self.write_buf.push_back((
                         proto_id,
                         ProtocolEvent::Close {
-                            id: self.proto_streams[&proto_id],
+                            id: *stream_id,
                             proto_id,
                         },
                     ));
+                } else {
+                    debug!("proto [{}] has been closed", proto_id);
                 }
             }
             _ => (),

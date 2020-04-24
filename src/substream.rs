@@ -121,7 +121,7 @@ where
 
         if self.session_proto_sender.is_some() {
             self.session_proto_buf
-                .push_back(SessionProtocolEvent::Connected { version })
+                .push_back(SessionProtocolEvent::Opened { version })
         }
     }
 
@@ -227,7 +227,13 @@ where
 
         if self.session_proto_sender.is_some() {
             self.session_proto_buf
-                .push_back(SessionProtocolEvent::Disconnected);
+                .push_back(SessionProtocolEvent::Closed);
+
+            if self.closed.load(Ordering::SeqCst) {
+                self.session_proto_buf
+                    .push_back(SessionProtocolEvent::Disconnected);
+            }
+
             let events = self.session_proto_buf.split_off(0);
             let mut sender = self.session_proto_sender.take().unwrap();
             tokio::spawn(async move {
