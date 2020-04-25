@@ -16,7 +16,7 @@ p2p = { path = "..", package = "tentacle" }
 rand = "0.6.1"
 futures = { version = "0.3.0" }
 tokio = { version = "0.2.0", features = ["time", "io-util", "tcp", "dns", "rt-threaded", "blocking"] }
-tokio-util = { version = "0.2.0", features = ["codec"] }
+tokio-util = { version = "0.3.0", features = ["codec"] }
 crossbeam-channel = "0.3.6"
 env_logger = "0.6.0"
 bytes = "0.5.0"

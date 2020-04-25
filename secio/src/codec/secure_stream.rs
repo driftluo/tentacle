@@ -152,7 +152,6 @@ where
             }
             StreamEvent::Close => {
                 self.dead = true;
-                let _ = self.socket.close();
             }
             StreamEvent::Flush => {
                 self.flush(cx)?;

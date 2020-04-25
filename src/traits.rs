@@ -92,13 +92,13 @@ pub trait SessionProtocol {
 
 /// A trait can define codec, just wrapper `Decoder` and `Encoder`
 pub trait Codec:
-    Decoder<Item = bytes::BytesMut, Error = io::Error> + Encoder<Item = bytes::Bytes, Error = io::Error>
+    Decoder<Item = bytes::BytesMut, Error = io::Error> + Encoder<bytes::Bytes, Error = io::Error>
 {
 }
 
 impl<T> Codec for T where
     T: Decoder<Item = bytes::BytesMut, Error = io::Error>
-        + Encoder<Item = bytes::Bytes, Error = io::Error>
+        + Encoder<bytes::Bytes, Error = io::Error>
 {
 }
 
@@ -111,11 +111,10 @@ impl Decoder for Box<dyn Codec + Send + 'static> {
     }
 }
 
-impl Encoder for Box<dyn Codec + Send + 'static> {
-    type Item = bytes::Bytes;
+impl Encoder<bytes::Bytes> for Box<dyn Codec + Send + 'static> {
     type Error = io::Error;
 
-    fn encode(&mut self, item: Self::Item, dst: &mut bytes::BytesMut) -> Result<(), Self::Error> {
+    fn encode(&mut self, item: bytes::Bytes, dst: &mut bytes::BytesMut) -> Result<(), Self::Error> {
         Encoder::encode(&mut **self, item, dst)
     }
 }

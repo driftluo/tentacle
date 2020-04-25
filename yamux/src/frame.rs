@@ -329,10 +329,9 @@ impl Decoder for FrameCodec {
     }
 }
 
-impl Encoder for FrameCodec {
-    type Item = Frame;
+impl Encoder<Frame> for FrameCodec {
     type Error = io::Error;
-    fn encode(&mut self, item: Self::Item, dst: &mut BytesMut) -> Result<(), Self::Error> {
+    fn encode(&mut self, item: Frame, dst: &mut BytesMut) -> Result<(), Self::Error> {
         // Must ensure that there is enough space in the buf
         dst.reserve(item.size());
         let (header, body) = item.into_parts();
