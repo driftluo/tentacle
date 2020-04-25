@@ -465,8 +465,8 @@ where
         let raw_part = sub_stream.into_parts();
         let mut part = FramedParts::new(raw_part.io, (proto.codec)());
         // Replace buffered data
-        part.read_buf.unsplit(raw_part.read_buf);
-        part.write_buf.unsplit(raw_part.write_buf);
+        part.read_buf = raw_part.read_buf;
+        part.write_buf = raw_part.write_buf;
         let frame = Framed::from_parts(part);
         let (session_to_proto_sender, session_to_proto_receiver) = mpsc::channel(SEND_SIZE);
 
