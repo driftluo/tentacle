@@ -100,7 +100,6 @@ pub(crate) enum SessionEvent {
         proto_id: ProtocolId,
         /// Protocol version
         version: String,
-        session_sender: Option<mpsc::Sender<SessionProtocolEvent>>,
     },
     /// Protocol close event
     ProtocolClose {
@@ -481,7 +480,7 @@ where
         .stream_id(self.next_stream)
         .config(self.config)
         .service_proto_sender(self.service_proto_senders.get(&proto_id).cloned())
-        .session_proto_sender(self.session_proto_senders.remove(&proto_id))
+        .session_proto_sender(self.session_proto_senders.get(&proto_id).cloned())
         .keep_buffer(self.keep_buffer)
         .event(self.event.contains(&proto_id))
         .before_receive(before_receive_fn)
@@ -499,7 +498,6 @@ where
                 id: self.context.id,
                 proto_id,
                 version,
-                session_sender: None,
             },
         );
         self.next_stream += 1;
@@ -616,11 +614,7 @@ where
                     self.close_all_proto(cx);
                 }
             }
-            SessionEvent::ProtocolOpen {
-                proto_id,
-                session_sender,
-                ..
-            } => {
+            SessionEvent::ProtocolOpen { proto_id, .. } => {
                 if self.proto_streams.contains_key(&proto_id) {
                     debug!("proto [{}] has been open", proto_id);
                 } else {
@@ -632,27 +626,22 @@ where
                         }
                     });
                     match name {
-                        Some(name) => {
-                            if let Some(session_sender) = session_sender {
-                                self.session_proto_senders.insert(proto_id, session_sender);
-                            }
-                            self.open_proto_stream(&name)
-                        }
+                        Some(name) => self.open_proto_stream(&name),
                         None => debug!("This protocol [{}] is not supported", proto_id),
                     }
                 }
             }
             SessionEvent::ProtocolClose { proto_id, .. } => {
-                if !self.proto_streams.contains_key(&proto_id) {
-                    debug!("proto [{}] has been closed", proto_id);
-                } else {
+                if let Some(stream_id) = self.proto_streams.get(&proto_id) {
                     self.write_buf.push_back((
                         proto_id,
                         ProtocolEvent::Close {
-                            id: self.proto_streams[&proto_id],
+                            id: *stream_id,
                             proto_id,
                         },
                     ));
+                } else {
+                    debug!("proto [{}] has been closed", proto_id);
                 }
             }
             _ => (),
@@ -985,11 +974,6 @@ impl SessionMeta {
         senders: HashMap<ProtocolId, mpsc::Sender<SessionProtocolEvent>>,
     ) -> Self {
         self.session_proto_senders = senders;
-        self
-    }
-
-    pub fn context(mut self, context: Arc<SessionContext>) -> Self {
-        self.context = context;
         self
     }
 

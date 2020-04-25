@@ -314,9 +314,10 @@ where
 
 #[derive(Clone)]
 pub enum SessionProtocolEvent {
-    Connected {
+    Opened {
         version: String,
     },
+    Closed,
     Disconnected,
     /// Protocol data
     Received {
@@ -392,7 +393,7 @@ where
         let shutdown = self.shutdown.load(Ordering::SeqCst);
         if shutdown {
             match event {
-                Disconnected {} => (),
+                Disconnected | Closed => (),
                 _ => {
                     self.current_task = false;
                     return;
@@ -405,20 +406,17 @@ where
         }
 
         match event {
-            Connected { version } => tokio::task::block_in_place(|| {
+            Opened { version } => tokio::task::block_in_place(|| {
                 self.handle
                     .connected(self.handle_context.as_mut(&self.context), &version)
             }),
-            Disconnected => {
-                if shutdown {
+            Closed => {
+                tokio::task::block_in_place(|| {
                     self.handle
                         .disconnected(self.handle_context.as_mut(&self.context))
-                } else {
-                    tokio::task::block_in_place(|| {
-                        self.handle
-                            .disconnected(self.handle_context.as_mut(&self.context))
-                    });
-                }
+                });
+            }
+            Disconnected => {
                 self.close();
             }
             Received { data } => tokio::task::block_in_place(|| {

@@ -58,7 +58,7 @@ pub trait ServiceHandle {
 /// to the session, but the service handle will remain in the state until the service is closed.
 ///
 pub trait ServiceProtocol {
-    /// This function is called when the protocol is opened.
+    /// This function is called when the service start.
     ///
     /// The service handle will only be called once
     fn init(&mut self, context: &mut ProtocolContext);
