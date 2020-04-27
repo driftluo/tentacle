@@ -43,7 +43,7 @@ pub(crate) mod event;
 pub(crate) mod future_task;
 
 pub use crate::service::{
-    config::{ProtocolHandle, ProtocolMeta, TargetProtocol, TargetSession},
+    config::{BlockingFlag, ProtocolHandle, ProtocolMeta, TargetProtocol, TargetSession},
     control::ServiceControl,
     event::{ProtocolEvent, ServiceError, ServiceEvent},
 };
@@ -62,9 +62,19 @@ pub(crate) const DELAY_TIME: Duration = Duration::from_millis(300);
 /// Protocol handle value
 pub(crate) enum InnerProtocolHandle {
     /// Service level protocol
-    Service(Box<dyn ServiceProtocol + Send + 'static + Unpin>),
+    Service(
+        (
+            Box<dyn ServiceProtocol + Send + 'static + Unpin>,
+            BlockingFlag,
+        ),
+    ),
     /// Session level protocol
-    Session(Box<dyn SessionProtocol + Send + 'static + Unpin>),
+    Session(
+        (
+            Box<dyn SessionProtocol + Send + 'static + Unpin>,
+            BlockingFlag,
+        ),
+    ),
 }
 
 type SessionProtoHandles = HashMap<
@@ -600,7 +610,7 @@ where
         id: Option<SessionId>,
     ) {
         match handle {
-            InnerProtocolHandle::Service(handle) => {
+            InnerProtocolHandle::Service((handle, flag)) => {
                 debug!("init service level [{}] proto handle", proto_id);
                 let (sender, receiver) = mpsc::channel(RECEIVED_SIZE);
                 self.service_proto_handles.insert(proto_id, sender);
@@ -609,7 +619,7 @@ where
                     handle,
                     self.service_context.clone_self(),
                     receiver,
-                    proto_id,
+                    (proto_id, flag),
                     self.session_event_sender.clone(),
                     (self.shutdown.clone(), self.future_task_sender.clone()),
                 );
@@ -632,7 +642,7 @@ where
                 self.wait_handle.push((Some(sender), handle));
             }
 
-            InnerProtocolHandle::Session(handle) => {
+            InnerProtocolHandle::Session((handle, flag)) => {
                 let id = id.unwrap();
                 if let Some(session_control) = self.sessions.get(&id) {
                     debug!("init session [{}] level proto [{}] handle", id, proto_id);
@@ -644,7 +654,7 @@ where
                         self.service_context.clone_self(),
                         Arc::clone(&session_control.inner),
                         receiver,
-                        proto_id,
+                        (proto_id, flag),
                         self.session_event_sender.clone(),
                         (self.shutdown.clone(), self.future_task_sender.clone()),
                     );
@@ -741,16 +751,16 @@ where
             if proto.id() == proto_id {
                 if session {
                     match proto.session_handle() {
-                        ProtocolHandle::Callback(handle) | ProtocolHandle::Both(handle) => {
-                            Some(InnerProtocolHandle::Session(handle))
-                        }
+                        ProtocolHandle::Callback(handle) | ProtocolHandle::Both(handle) => Some(
+                            InnerProtocolHandle::Session((handle, proto.blocking_flag())),
+                        ),
                         _ => None,
                     }
                 } else {
                     match proto.service_handle() {
-                        ProtocolHandle::Callback(handle) | ProtocolHandle::Both(handle) => {
-                            Some(InnerProtocolHandle::Service(handle))
-                        }
+                        ProtocolHandle::Callback(handle) | ProtocolHandle::Both(handle) => Some(
+                            InnerProtocolHandle::Service((handle, proto.blocking_flag())),
+                        ),
                         _ => None,
                     }
                 }

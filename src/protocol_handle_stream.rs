@@ -15,11 +15,23 @@ use crate::{
     context::{ProtocolContext, ServiceContext, SessionContext},
     error::Error,
     multiaddr::Multiaddr,
-    service::future_task::BoxedFutureTask,
+    service::{config::BlockingFlag, future_task::BoxedFutureTask},
     session::SessionEvent,
     traits::{ServiceProtocol, SessionProtocol},
     ProtocolId, SessionId,
 };
+
+#[inline]
+fn block_in_place<F, R>(flag: bool, f: F) -> R
+where
+    F: FnOnce() -> R,
+{
+    if flag {
+        tokio::task::block_in_place(f)
+    } else {
+        f()
+    }
+}
 
 #[derive(Clone)]
 pub enum ServiceProtocolEvent {
@@ -87,6 +99,7 @@ pub struct ServiceProtocolStream<T> {
     current_task: CurrentTask,
     shutdown: Arc<AtomicBool>,
     future_task_sender: mpsc::Sender<BoxedFutureTask>,
+    flag: BlockingFlag,
 }
 
 impl<T> ServiceProtocolStream<T>
@@ -97,7 +110,7 @@ where
         handle: T,
         service_context: ServiceContext,
         receiver: mpsc::Receiver<ServiceProtocolEvent>,
-        proto_id: ProtocolId,
+        (proto_id, flag): (ProtocolId, BlockingFlag),
         panic_report: mpsc::Sender<SessionEvent>,
         (shutdown, future_task_sender): (Arc<AtomicBool>, mpsc::Sender<BoxedFutureTask>),
     ) -> Self {
@@ -114,6 +127,7 @@ where
             shutdown,
             panic_report,
             future_task_sender,
+            flag,
         }
     }
 
@@ -152,7 +166,7 @@ where
             }
             Connected { session, version } => {
                 self.current_task.run_with_id(session.id);
-                tokio::task::block_in_place(|| {
+                block_in_place(self.flag.connected(), || {
                     self.handle
                         .connected(self.handle_context.as_mut(&session), &version)
                 });
@@ -161,15 +175,10 @@ where
             Disconnected { id } => {
                 self.current_task.run_with_id(id);
                 if let Some(session) = self.sessions.remove(&id) {
-                    if shutdown {
+                    block_in_place(self.flag.disconnected(), || {
                         self.handle
                             .disconnected(self.handle_context.as_mut(&session))
-                    } else {
-                        tokio::task::block_in_place(|| {
-                            self.handle
-                                .disconnected(self.handle_context.as_mut(&session))
-                        });
-                    }
+                    })
                 }
             }
             Received { id, data } => {
@@ -178,16 +187,18 @@ where
                     if !session.closed.load(Ordering::SeqCst)
                         && !self.shutdown.load(Ordering::SeqCst)
                     {
-                        tokio::task::block_in_place(|| {
+                        block_in_place(self.flag.received(), || {
                             self.handle
-                                .received(self.handle_context.as_mut(&session), data.clone())
-                        })
+                                .received(self.handle_context.as_mut(&session), data)
+                        });
                     }
                 }
             }
             Notify { token } => {
                 self.current_task.run();
-                tokio::task::block_in_place(|| self.handle.notify(&mut self.handle_context, token));
+                block_in_place(self.flag.notify(), || {
+                    self.handle.notify(&mut self.handle_context, token)
+                });
                 self.set_notify(token);
             }
             SetNotify { interval, token } => {
@@ -354,6 +365,7 @@ pub struct SessionProtocolStream<T> {
     panic_report: mpsc::Sender<SessionEvent>,
     shutdown: Arc<AtomicBool>,
     future_task_sender: mpsc::Sender<BoxedFutureTask>,
+    flag: BlockingFlag,
 }
 
 impl<T> SessionProtocolStream<T>
@@ -365,7 +377,7 @@ where
         service_context: ServiceContext,
         context: Arc<SessionContext>,
         receiver: mpsc::Receiver<SessionProtocolEvent>,
-        proto_id: ProtocolId,
+        (proto_id, flag): (ProtocolId, BlockingFlag),
         panic_report: mpsc::Sender<SessionEvent>,
         (shutdown, future_task_sender): (Arc<AtomicBool>, mpsc::Sender<BoxedFutureTask>),
     ) -> Self {
@@ -382,6 +394,7 @@ where
             current_task: false,
             shutdown,
             future_task_sender,
+            flag,
         }
     }
 
@@ -406,12 +419,12 @@ where
         }
 
         match event {
-            Opened { version } => tokio::task::block_in_place(|| {
+            Opened { version } => block_in_place(self.flag.connected(), || {
                 self.handle
                     .connected(self.handle_context.as_mut(&self.context), &version)
             }),
             Closed => {
-                tokio::task::block_in_place(|| {
+                block_in_place(self.flag.disconnected(), || {
                     self.handle
                         .disconnected(self.handle_context.as_mut(&self.context))
                 });
@@ -419,12 +432,12 @@ where
             Disconnected => {
                 self.close();
             }
-            Received { data } => tokio::task::block_in_place(|| {
+            Received { data } => block_in_place(self.flag.received(), || {
                 self.handle
-                    .received(self.handle_context.as_mut(&self.context), data.clone())
+                    .received(self.handle_context.as_mut(&self.context), data)
             }),
             Notify { token } => {
-                tokio::task::block_in_place(|| {
+                block_in_place(self.flag.notify(), || {
                     self.handle
                         .notify(self.handle_context.as_mut(&self.context), token)
                 });
