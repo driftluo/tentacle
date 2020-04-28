@@ -45,13 +45,13 @@ impl ServiceProtocol for PHandle {
             // NOTE: 256 is the send channel buffer size
             let length = 1024;
             for i in 0..length {
-                let _ = context.send_message(Bytes::from(format!("{}-{}", prefix, i)));
+                let _res = context.send_message(Bytes::from(format!("{}-{}", prefix, i)));
             }
         }
     }
 
     fn disconnected(&mut self, context: ProtocolContextMutRef) {
-        let _ = context.shutdown();
+        let _res = context.shutdown();
     }
 
     fn received(&mut self, context: ProtocolContextMutRef, _data: Bytes) {
@@ -59,9 +59,8 @@ impl ServiceProtocol for PHandle {
             self.count.fetch_add(1, Ordering::SeqCst);
         }
         let count_now = self.count.load(Ordering::SeqCst);
-        //        println!("> receive {}", count_now);
         if count_now == 512 {
-            let _ = context.shutdown();
+            let _res = context.shutdown();
         }
     }
 }
@@ -73,13 +72,13 @@ impl SessionProtocol for PHandle {
             // NOTE: 256 is the send channel buffer size
             let length = 1024;
             for i in 0..length {
-                let _ = context.send_message(Bytes::from(format!("{}-{}", prefix, i)));
+                let _res = context.send_message(Bytes::from(format!("{}-{}", prefix, i)));
             }
         }
     }
 
     fn disconnected(&mut self, context: ProtocolContextMutRef) {
-        let _ = context.shutdown();
+        let _res = context.shutdown();
     }
 
     fn received(&mut self, context: ProtocolContextMutRef, _data: bytes::Bytes) {
@@ -90,7 +89,7 @@ impl SessionProtocol for PHandle {
         //        println!("> receive {}", count_now);
         log::warn!("count_now: {}", count_now);
         if count_now == 512 {
-            let _ = context.shutdown();
+            let _res = context.shutdown();
         }
     }
 }
@@ -142,7 +141,7 @@ fn test_block_send(secio: bool, session_protocol: bool) {
                 .listen("/ip4/127.0.0.1/tcp/0".parse().unwrap())
                 .await
                 .unwrap();
-            let _ = addr_sender.send(listen_addr);
+            let _res = addr_sender.send(listen_addr);
             loop {
                 if service.next().await.is_none() {
                     break;

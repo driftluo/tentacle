@@ -38,7 +38,9 @@ impl StreamHandle {
         match event {
             StreamEvent::Frame(frame) => self.read_buf.extend_from_slice(&frame),
             StreamEvent::Close => {
-                let _ = self.shutdown()?;
+                if let Poll::Ready(Err(e)) = self.shutdown() {
+                    return Err(e);
+                }
             }
             _ => (),
         }
@@ -150,7 +152,9 @@ pub(crate) enum StreamEvent {
 impl Drop for StreamHandle {
     fn drop(&mut self) {
         // when handle drop, shutdown this stream
-        let _ = self.shutdown();
+        if let Poll::Ready(Err(e)) = self.shutdown() {
+            log::trace!("stream handle drop err: {}", e)
+        }
         self.frame_receiver.close();
     }
 }

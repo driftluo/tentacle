@@ -646,7 +646,9 @@ where
 impl<T> Drop for Session<T> {
     fn drop(&mut self) {
         if let Some(send) = self.stop_signal_tx.take() {
-            let _ = send.send(());
+            if send.send(()).is_err() {
+                log::trace!("session drop send to timer err")
+            }
         }
     }
 }

@@ -59,7 +59,7 @@ impl ServiceHandle for EmptySHandle {
         } else {
             panic!("test fail {:?}", error);
         };
-        let _ = self.sender.try_send(error_type);
+        let _res = self.sender.try_send(error_type);
     }
 }
 
@@ -95,7 +95,7 @@ impl ServiceHandle for SHandle {
             _ => panic!("test fail"),
         };
 
-        let _ = self.sender.try_send(error_type);
+        let _res = self.sender.try_send(error_type);
     }
 
     fn handle_event(&mut self, _env: &mut ServiceContext, event: ServiceEvent) {
@@ -116,7 +116,7 @@ struct PHandle {
 impl ServiceProtocol for PHandle {
     fn init(&mut self, context: &mut ProtocolContext) {
         let proto_id = context.proto_id;
-        let _ = context.set_service_notify(proto_id, Duration::from_secs(1), 3);
+        let _res = context.set_service_notify(proto_id, Duration::from_secs(1), 3);
     }
 
     fn connected(&mut self, context: ProtocolContextMutRef, _version: &str) {
@@ -136,7 +136,7 @@ impl ServiceProtocol for PHandle {
 
     fn notify(&mut self, context: &mut ProtocolContext, _token: u64) {
         if self.dial_addr.is_some() {
-            let _ = context.dial(
+            let _res = context.dial(
                 self.dial_addr.as_ref().unwrap().clone(),
                 TargetProtocol::All,
             );
@@ -231,7 +231,7 @@ fn test_repeated_dial(secio: bool) {
                 .listen("/ip4/127.0.0.1/tcp/0".parse().unwrap())
                 .await
                 .unwrap();
-            let _ = addr_sender.send(listen_addr);
+            let _res = addr_sender.send(listen_addr);
             loop {
                 if service.next().await.is_none() {
                     break;

@@ -66,7 +66,7 @@ fn test_disconnect(secio: bool) {
                 .listen("/ip4/127.0.0.1/tcp/0".parse().unwrap())
                 .await
                 .unwrap();
-            let _ = addr_sender.send(listen_addr);
+            let _res = addr_sender.send(listen_addr);
             loop {
                 if service.next().await.is_none() {
                     break;

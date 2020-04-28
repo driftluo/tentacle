@@ -251,7 +251,8 @@ impl StreamHandle {
         // Send cached data
         if n != 0 {
             let b = self.write_buf.split_to(n);
-            let _ = Pin::new(self).poll_write(cx, &b);
+            // don't care about result here
+            let _ignore = Pin::new(self).poll_write(cx, &b);
         } else {
             cx.waker().clone().wake();
         }

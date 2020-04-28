@@ -208,7 +208,9 @@ where
     /// Close protocol sub stream
     fn close_proto_stream(&mut self, cx: &mut Context) {
         self.event_receiver.close();
-        let _ = Pin::new(self.sub_stream.get_mut()).poll_shutdown(cx);
+        if let Poll::Ready(Err(e)) = Pin::new(self.sub_stream.get_mut()).poll_shutdown(cx) {
+            log::trace!("sub stream poll shutdown err {}", e)
+        }
 
         if self.service_proto_sender.is_some() {
             self.service_proto_buf
@@ -386,7 +388,11 @@ where
                 Poll::Ready(None) => {
                     // Must be session close
                     self.dead = true;
-                    let _ = Pin::new(self.sub_stream.get_mut()).poll_shutdown(cx);
+                    if let Poll::Ready(Err(e)) =
+                        Pin::new(self.sub_stream.get_mut()).poll_shutdown(cx)
+                    {
+                        log::trace!("sub stream poll shutdown err {}", e)
+                    }
                     return;
                 }
                 Poll::Pending => {

@@ -57,7 +57,7 @@ impl ServiceProtocol for PHandle {
 
     fn connected(&mut self, _control: ProtocolContextMutRef, _version: &str) {
         self.connected_count += 1;
-        let _ = self.sender.send(Notify::Connected);
+        let _res = self.sender.send(Notify::Connected);
     }
 
     fn disconnected(&mut self, _control: ProtocolContextMutRef) {
@@ -65,7 +65,7 @@ impl ServiceProtocol for PHandle {
     }
 
     fn received(&mut self, _env: ProtocolContextMutRef, data: bytes::Bytes) {
-        let _ = self.sender.send(Notify::Message(data));
+        let _res = self.sender.send(Notify::Message(data));
     }
 }
 
@@ -111,7 +111,7 @@ pub fn init() {
                     .listen("/ip4/127.0.0.1/tcp/0".parse().unwrap())
                     .await
                     .unwrap();
-                let _ = addr_sender.send(listen_addr);
+                let _res = addr_sender.send(listen_addr);
                 loop {
                     if service.next().await.is_none() {
                         break;
@@ -159,7 +159,7 @@ pub fn init() {
                     .listen("/ip4/127.0.0.1/tcp/0".parse().unwrap())
                     .await
                     .unwrap();
-                let _ = addr_sender.send(listen_addr);
+                let _res = addr_sender.send(listen_addr);
                 loop {
                     if service.next().await.is_none() {
                         break;

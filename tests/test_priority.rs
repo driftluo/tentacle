@@ -46,9 +46,9 @@ impl ServiceProtocol for PHandle {
         if context.session.ty.is_inbound() {
             for i in 0..1024 {
                 if i == 254 {
-                    let _ = context.quick_send_message(Bytes::from("high"));
+                    let _res = context.quick_send_message(Bytes::from("high"));
                 }
-                let _ = context.send_message(Bytes::from("normal"));
+                let _res = context.send_message(Bytes::from("normal"));
             }
         }
     }
@@ -61,7 +61,7 @@ impl ServiceProtocol for PHandle {
             if self.count <= 254 {
                 self.test_result.store(true, Ordering::SeqCst);
             }
-            let _ = context.close();
+            let _res = context.close();
         }
     }
 }
@@ -100,7 +100,7 @@ fn test_priority(secio: bool) {
                 .listen("/ip4/127.0.0.1/tcp/0".parse().unwrap())
                 .await
                 .unwrap();
-            let _ = addr_sender.send(listen_addr);
+            let _res = addr_sender.send(listen_addr);
             loop {
                 if service.next().await.is_none() {
                     break;

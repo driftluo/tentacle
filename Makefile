@@ -6,16 +6,10 @@ MOLC_VERSION := 0.6.0
 FBS_FILES := \
   src/protocol_select/protocol_select.fbs \
   secio/src/handshake/handshake.fbs \
-  protocols/identify/src/protocol.fbs \
-  protocols/ping/src/protocol.fbs \
-  protocols/discovery/src/protocol.fbs
 
 MOL_FILES := \
   src/protocol_select/protocol_select.mol \
   secio/src/handshake/handshake.mol \
-  protocols/identify/src/protocol.mol \
-  protocols/ping/src/protocol.mol \
-  protocols/discovery/src/protocol.mol
 
 FLATC_RUST_FILES := $(patsubst %.fbs,%_generated.rs,${FBS_FILES})
 FLATBUFFERS_VERIFIER_FILES := $(patsubst %.fbs,%_generated_verifier.rs,${FBS_FILES})
@@ -24,19 +18,10 @@ MOL_RUST_FILES := $(patsubst %.mol,%_mol.rs,${MOL_FILES})
 
 fmt:
 	cargo fmt --all -- --check
-	cd protocols/ping && cargo fmt -- --check
-	cd protocols/discovery && cargo fmt -- --check
-	cd protocols/identify && cargo fmt -- --check
 
 clippy:
-	RUSTFLAGS='-F warnings' cargo clippy --all --tests --features molc
-	RUSTFLAGS='-F warnings' cargo clippy --all --tests --features flatc
-	cd protocols/ping && RUSTFLAGS='-F warnings' cargo clippy --all --tests --features molc \
-	    && RUSTFLAGS='-F warnings' cargo clippy --all --tests --features flatc
-	cd protocols/identify && RUSTFLAGS='-F warnings' cargo clippy --all --tests --features molc \
-	    && RUSTFLAGS='-F warnings' cargo clippy --all --tests --features flatc
-	cd protocols/discovery && RUSTFLAGS='-F warnings' cargo clippy --all --tests --features molc \
-	    && RUSTFLAGS='-F warnings' cargo clippy --all --tests --features flatc
+	RUSTFLAGS='-F warnings' cargo clippy --all --tests --features molc -- -D clippy::let_underscore_must_use
+	RUSTFLAGS='-F warnings' cargo clippy --all --tests --features flatc -- -D clippy::let_underscore_must_use
 
 test:
 	RUSTFLAGS='-F warnings' RUST_BACKTRACE=full cargo test --all --features molc

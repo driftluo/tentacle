@@ -40,17 +40,17 @@ impl ServiceProtocol for PHandle {
     fn connected(&mut self, context: ProtocolContextMutRef, _version: &str) {
         if context.session.ty.is_inbound() {
             let prefix = "x".repeat(10);
-            let _ = context.send_message(Bytes::from(prefix));
+            let _res = context.send_message(Bytes::from(prefix));
         }
     }
 
     fn disconnected(&mut self, context: ProtocolContextMutRef) {
-        let _ = context.shutdown();
+        let _res = context.shutdown();
     }
 
     fn received(&mut self, context: ProtocolContextMutRef, _data: Bytes) {
         if context.session.ty.is_outbound() {
-            let _ = context.shutdown();
+            let _res = context.shutdown();
         }
     }
 }
@@ -99,7 +99,7 @@ fn test_before_handle(secio: bool) {
                 .listen("/ip4/127.0.0.1/tcp/0".parse().unwrap())
                 .await
                 .unwrap();
-            let _ = addr_sender.send(listen_addr);
+            let _res = addr_sender.send(listen_addr);
             loop {
                 if service.next().await.is_none() {
                     break;

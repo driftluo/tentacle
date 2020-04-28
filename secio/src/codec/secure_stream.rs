@@ -397,7 +397,6 @@ mod tests {
     use crate::Digest;
     use bytes::BytesMut;
     use futures::{channel, StreamExt};
-    use rand;
     use tokio::{
         io::{AsyncReadExt, AsyncWriteExt},
         net::{TcpListener, TcpStream},
@@ -476,7 +475,7 @@ mod tests {
         rt.spawn(async move {
             let mut listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
             let listener_addr = listener.local_addr().unwrap();
-            let _ = addr_sender.send(listener_addr);
+            let _res = addr_sender.send(listener_addr);
             let (socket, _) = listener.accept().await.unwrap();
             let nonce2 = nonce2.clone();
             let (decode_hmac, encode_hmac) = match cipher {
@@ -523,7 +522,7 @@ mod tests {
 
             let mut data = [0u8; 11];
             handle.read_exact(&mut data).await.unwrap();
-            let _ = sender.send(BytesMut::from(&data[..]));
+            let _res = sender.send(BytesMut::from(&data[..]));
         });
 
         rt.spawn(async move {
@@ -571,8 +570,8 @@ mod tests {
                 }
             });
 
-            let _ = handle.write_all(&nonce).await;
-            let _ = handle.write_all(&data_clone[..]).await;
+            let _res = handle.write_all(&nonce).await;
+            let _res = handle.write_all(&data_clone[..]).await;
         });
 
         rt.block_on(async move {

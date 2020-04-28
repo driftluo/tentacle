@@ -39,27 +39,27 @@ impl ServiceProtocol for PHandle {
     fn init(&mut self, _context: &mut ProtocolContext) {}
 
     fn connected(&mut self, context: ProtocolContextMutRef, _version: &str) {
-        let _ = context.send_message(bytes::Bytes::from("hello"));
+        let _res = context.send_message(bytes::Bytes::from("hello"));
         if context.session.ty.is_inbound() && context.proto_id == 1.into() {
             self.count += 1;
             if self.count >= 4 {
                 let proto_id = context.proto_id;
-                let _ = context.set_service_notify(proto_id, Duration::from_secs(2), 0);
+                let _res = context.set_service_notify(proto_id, Duration::from_secs(2), 0);
             }
         }
     }
 
     fn received(&mut self, context: ProtocolContextMutRef, data: bytes::Bytes) {
-        let _ = context.send_message(data);
+        let _res = context.send_message(data);
     }
 
     fn notify(&mut self, context: &mut ProtocolContext, _token: u64) {
         self.count += 1;
         if self.count > 6 {
             if self.shutdown {
-                let _ = context.shutdown();
+                let _res = context.shutdown();
             } else {
-                let _ = context.close();
+                let _res = context.close();
             }
         }
     }

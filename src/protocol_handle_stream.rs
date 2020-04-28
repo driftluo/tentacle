@@ -1,5 +1,5 @@
 use futures::{channel::mpsc, SinkExt, Stream};
-use log::debug;
+use log::{debug, trace};
 use std::collections::HashMap;
 use std::{
     pin::Pin,
@@ -229,11 +229,15 @@ where
             //       So we spawn it in FutureTaskManager
             let task = async move {
                 tokio::time::delay_until(tokio::time::Instant::now() + interval).await;
-                let _ = sender.send(token).await;
+                if sender.send(token).await.is_err() {
+                    trace!("service notify token {} send err", token)
+                }
             };
             let mut future_task_sender = self.future_task_sender.clone();
             tokio::spawn(async move {
-                let _ = future_task_sender.send(Box::pin(task)).await;
+                if future_task_sender.send(Box::pin(task)).await.is_err() {
+                    trace!("service notify task send err")
+                }
             });
         }
     }
@@ -256,7 +260,9 @@ impl<T> Drop for ServiceProtocolStream<T> {
                 };
                 let mut panic_sender = self.panic_report.clone();
                 tokio::spawn(async move {
-                    let _ = panic_sender.send(event).await;
+                    if panic_sender.send(event).await.is_err() {
+                        trace!("service panic message send err")
+                    }
                 });
             }
         }
@@ -470,11 +476,15 @@ where
             //       So we spawn it in FutureTaskManager
             let task = async move {
                 tokio::time::delay_until(tokio::time::Instant::now() + interval).await;
-                let _ = sender.send(token).await;
+                if sender.send(token).await.is_err() {
+                    trace!("session notify token {} send err", token)
+                }
             };
             let mut future_task_sender = self.future_task_sender.clone();
             tokio::spawn(async move {
-                let _ = future_task_sender.send(Box::pin(task)).await;
+                if future_task_sender.send(Box::pin(task)).await.is_err() {
+                    trace!("session notify task send err")
+                }
             });
         }
     }
@@ -495,7 +505,9 @@ impl<T> Drop for SessionProtocolStream<T> {
             };
             let mut panic_sender = self.panic_report.clone();
             tokio::spawn(async move {
-                let _ = panic_sender.send(event).await;
+                if panic_sender.send(event).await.is_err() {
+                    trace!("session panic message send err")
+                }
             });
         }
     }

@@ -348,7 +348,7 @@ mod tests {
         rt.spawn(async move {
             let mut listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
             let listener_addr = listener.local_addr().unwrap();
-            let _ = addr_sender.send(listener_addr);
+            let _res = addr_sender.send(listener_addr);
             let (connect, _) = listener.accept().await.unwrap();
             let (mut handle, _, _) = config_1.handshake(connect).await.unwrap();
             let mut data = [0u8; 11];
@@ -363,7 +363,7 @@ mod tests {
             handle.write_all(data).await.unwrap();
             let mut data = [0u8; 11];
             handle.read_exact(&mut data).await.unwrap();
-            let _ = sender.send(BytesMut::from(&data[..]));
+            let _res = sender.send(BytesMut::from(&data[..]));
         });
 
         rt.block_on(async move {
