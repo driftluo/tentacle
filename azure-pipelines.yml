@@ -34,10 +34,9 @@ jobs:
     condition: |
       and(
         not(startsWith(variables['Build.SourceBranch'], 'refs/tags/')),
-        ne(variables['Build.Reason'], 'PullRequest'),
         or(
-          startsWith(variables['Build.SourceBranch'], 'refs/heads/rc/'),
-          in(variables['Build.SourceBranch'], 'refs/heads/master', 'refs/heads/develop')
+          eq(variables['Build.Reason'], 'PullRequest'),
+          eq(variables['Build.SourceBranch'], 'refs/heads/master')
         )
       )
     pool:
@@ -59,7 +58,7 @@ jobs:
         ne(variables['Build.Reason'], 'PullRequest'),
         or(
           startsWith(variables['Build.SourceBranch'], 'refs/heads/rc/'),
-          in(variables['Build.SourceBranch'], 'refs/heads/master', 'refs/heads/develop')
+          in(variables['Build.SourceBranch'], 'refs/heads/master')
         )
       )
     pool:
