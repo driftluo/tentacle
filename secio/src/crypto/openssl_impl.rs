@@ -116,7 +116,6 @@ impl StreamCipher for OpenSSLCrypt {
 #[cfg(test)]
 mod test {
     use super::{CipherType, OpenSSLCrypt};
-    use rand;
 
     fn test_openssl(mode: CipherType) {
         let key = (0..mode.key_size())

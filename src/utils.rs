@@ -66,7 +66,8 @@ pub fn multiaddr_to_socketaddr(addr: &Multiaddr) -> Option<SocketAddr> {
         match iter.peek() {
             Some(Protocol::IP4(_)) | Some(Protocol::IP6(_)) => (),
             _ => {
-                let _ = iter.next();
+                // ignore is true
+                let _ignore = iter.next();
                 continue;
             }
         }

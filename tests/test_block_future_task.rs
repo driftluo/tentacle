@@ -27,17 +27,17 @@ impl ServiceProtocol for PHandle {
     fn init(&mut self, context: &mut ProtocolContext) {
         let proto_id = context.proto_id;
 
-        let _ = context.set_service_notify(proto_id, Duration::from_secs(1), 1);
+        let _rse = context.set_service_notify(proto_id, Duration::from_secs(1), 1);
 
         for _ in 0..4096 {
-            let _ = context.future_task(pending());
+            let _res = context.future_task(pending());
         }
     }
 
     fn notify(&mut self, context: &mut ProtocolContext, _token: u64) {
         self.count += 1;
         if self.count > 3 {
-            let _ = context.shutdown();
+            let _res = context.shutdown();
         }
     }
 }

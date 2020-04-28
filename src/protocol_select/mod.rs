@@ -289,7 +289,7 @@ mod tests {
         rt.spawn(async move {
             let mut listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
             let listener_addr = listener.local_addr().unwrap();
-            let _ = addr_sender.send(listener_addr);
+            let _res = addr_sender.send(listener_addr);
 
             let (connect, _) = listener.accept().await.unwrap();
 
@@ -300,7 +300,7 @@ mod tests {
             messages.insert("test".to_owned(), (message, None));
 
             let (_, _, a) = server_select(connect, messages).await.unwrap();
-            let _ = sender_1.send(a);
+            let _res = sender_1.send(a);
         });
 
         rt.spawn(async move {
@@ -312,7 +312,7 @@ mod tests {
             message.support_versions = client;
 
             let (_, _, a) = client_select(connect, message).await.unwrap();
-            let _ = sender_2.send(a);
+            let _res = sender_2.send(a);
         });
 
         rt.block_on(async move {

@@ -24,7 +24,7 @@ impl SessionProtocol for PHandle {
     fn connected(&mut self, context: ProtocolContextMutRef, _version: &str) {
         if context.session.ty.is_inbound() {
             // Close the session after opening the protocol correctly
-            let _ = context.disconnect(context.session.id);
+            let _res = context.disconnect(context.session.id);
         }
     }
 }
@@ -54,7 +54,7 @@ impl ServiceHandle for SHandle {
                 if self.count >= 10 {
                     control.shutdown().unwrap();
                 } else {
-                    let _ =
+                    let _res =
                         control.dial(self.addr.clone().unwrap(), TargetProtocol::Single(0.into()));
                 }
             }

@@ -130,7 +130,8 @@ impl IGDClient {
     pub fn remove(&mut self, address: &Multiaddr) {
         if let Some(addr) = multiaddr_to_socketaddr(address) {
             if self.succeeded.remove(&addr) || self.leases.remove(&addr).is_some() {
-                let _ = self
+                // don't care about it
+                let _ignore = self
                     .gateway
                     .remove_port(igd::PortMappingProtocol::TCP, addr.port());
             }
@@ -145,7 +146,8 @@ impl IGDClient {
                 .unwrap_or(true);
 
             if register {
-                let _ = self.gateway.add_port(
+                // don't care about it
+                let _ignore = self.gateway.add_port(
                     igd::PortMappingProtocol::TCP,
                     addr.port(),
                     SocketAddrV4::new(self.state.address, addr.port()),
@@ -164,7 +166,8 @@ impl IGDClient {
             .drain()
             .chain(self.leases.drain().map(|item| item.0))
         {
-            let _ = self
+            // don't care about it
+            let _ignore = self
                 .gateway
                 .remove_port(igd::PortMappingProtocol::TCP, addr.port());
         }

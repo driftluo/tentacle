@@ -37,7 +37,8 @@ impl DNSResolver {
             match iter.peek() {
                 Some(Protocol::DNS4(_)) | Some(Protocol::DNS6(_)) => (),
                 _ => {
-                    let _ = iter.next();
+                    // this ignore is true
+                    let _ignore = iter.next();
                     continue;
                 }
             }

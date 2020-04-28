@@ -841,7 +841,13 @@ where
             let mut future_task_sender = self.future_task_sender.clone();
 
             tokio::spawn(async move {
-                let _ = future_task_sender.send(Box::pin(handshake_task)).await;
+                if future_task_sender
+                    .send(Box::pin(handshake_task))
+                    .await
+                    .is_err()
+                {
+                    trace!("handshake send err")
+                }
             });
         } else {
             self.session_open(cx, socket, None, remote_address, ty, listen_address);
@@ -887,7 +893,9 @@ where
             {
                 Some(context) => {
                     trace!("Connected to the connected node");
-                    let _ = Pin::new(&mut handle).poll_shutdown(cx);
+                    if let Poll::Ready(Err(e)) = Pin::new(&mut handle).poll_shutdown(cx) {
+                        trace!("handle poll shutdown err {}", e)
+                    }
                     if ty.is_outbound() {
                         self.handle.handle_error(
                             &mut self.service_context,
@@ -1773,7 +1781,8 @@ where
     fn wait_handle_poll(&mut self, cx: &mut Context) -> Poll<Option<()>> {
         for (sender, mut handle) in self.wait_handle.split_off(0) {
             if let Some(sender) = sender {
-                let _ = sender.send(());
+                // don't care about it
+                let _ignore = sender.send(());
             }
             match handle.poll_unpin(cx) {
                 Poll::Pending => {
@@ -1785,7 +1794,8 @@ where
 
         for (_, (sender, mut handle)) in self.session_wait_handle.drain() {
             if let Some(sender) = sender {
-                let _ = sender.send(());
+                // don't care about it
+                let _ignore = sender.send(());
             }
             match handle.poll_unpin(cx) {
                 Poll::Pending => {

@@ -39,7 +39,7 @@ struct PHandle {
 
 impl SessionProtocol for PHandle {
     fn connected(&mut self, context: ProtocolContextMutRef, _version: &str) {
-        let _ = context.set_session_notify(
+        let _res = context.set_session_notify(
             context.session.id,
             context.proto_id,
             Duration::from_millis(300),
@@ -48,7 +48,7 @@ impl SessionProtocol for PHandle {
     }
 
     fn disconnected(&mut self, context: ProtocolContextMutRef) {
-        let _ = context.shutdown();
+        let _res = context.shutdown();
     }
 
     fn notify(&mut self, context: ProtocolContextMutRef, token: u64) {
@@ -56,13 +56,13 @@ impl SessionProtocol for PHandle {
             1 => {
                 self.count_close += 1;
                 if self.count_close > 10 {
-                    let _ = context.shutdown();
+                    let _res = context.shutdown();
                 } else if self.count_close > 3 {
                     // 1. open protocol
                     // 2. set another notify
                     // 3. must notify same session protocol handle
-                    let _ = context.open_protocol(context.session.id, context.proto_id);
-                    let _ = context.set_session_notify(
+                    let _res = context.open_protocol(context.session.id, context.proto_id);
+                    let _res = context.set_session_notify(
                         context.session.id,
                         context.proto_id,
                         Duration::from_millis(300),
@@ -116,7 +116,7 @@ fn test_protocol_open(secio: bool) {
                 .listen("/ip4/127.0.0.1/tcp/0".parse().unwrap())
                 .await
                 .unwrap();
-            let _ = addr_sender.send(listen_addr);
+            let _res = addr_sender.send(listen_addr);
             loop {
                 if service.next().await.is_none() {
                     break;

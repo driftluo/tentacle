@@ -216,9 +216,13 @@ where
         tokio::spawn(async move {
             tokio::time::delay_until(tokio::time::Instant::now() + timeout).await;
             let task = Box::pin(async move {
-                let _ = interval.send(ProtocolEvent::TimeoutCheck).await;
+                if interval.send(ProtocolEvent::TimeoutCheck).await.is_err() {
+                    trace!("timeout check send err")
+                }
             });
-            let _ = future_task_sender_.send(task).await;
+            if future_task_sender_.send(task).await.is_err() {
+                trace!("timeout check task send err")
+            }
         });
 
         Session {
@@ -304,7 +308,9 @@ where
 
         let mut future_task_sender = self.future_task_sender.clone();
         tokio::spawn(async move {
-            let _ = future_task_sender.send(task).await;
+            if future_task_sender.send(task).await.is_err() {
+                trace!("select procedure send err")
+            }
         });
     }
 
@@ -822,7 +828,9 @@ where
         self.service_receiver.close();
         self.proto_event_receiver.close();
 
-        let _ = self.socket.shutdown(cx);
+        if let Err(e) = self.socket.shutdown(cx) {
+            trace!("socket shutdown err: {}", e)
+        }
     }
 
     #[inline]

@@ -298,7 +298,6 @@ mod tests {
     use super::{Exchange, Propose, PublicKey};
     use crate::SecioKeyPair;
     use bytes::Bytes;
-    use rand;
 
     #[test]
     fn decode_encode_pubkey() {

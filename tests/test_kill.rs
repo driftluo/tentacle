@@ -75,7 +75,7 @@ impl ServiceProtocol for PHandle {
 
     fn received(&mut self, context: ProtocolContextMutRef, data: bytes::Bytes) {
         let proto_id = context.proto_id;
-        let _ = context.filter_broadcast(TargetSession::All, proto_id, data);
+        let _res = context.filter_broadcast(TargetSession::All, proto_id, data);
     }
 }
 
@@ -114,7 +114,7 @@ fn test_kill(secio: bool) {
                 .listen("/ip4/127.0.0.1/tcp/0".parse().unwrap())
                 .await
                 .unwrap();
-            let _ = addr_sender.send(listen_addr);
+            let _res = addr_sender.send(listen_addr);
             loop {
                 if service.next().await.is_none() {
                     break;
@@ -130,7 +130,7 @@ fn test_kill(secio: bool) {
             // wait connected
             assert_eq!(receiver.recv(), Ok(()));
 
-            let _ =
+            let _res =
                 control.filter_broadcast(TargetSession::All, 1.into(), Bytes::from("hello world"));
             let mem_start = current_used_memory().unwrap();
             let cpu_start = current_used_cpu().unwrap();

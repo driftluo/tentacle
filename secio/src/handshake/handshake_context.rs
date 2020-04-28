@@ -14,7 +14,6 @@ use crate::{
 
 use bytes::{Bytes, BytesMut};
 use log::{debug, trace};
-use rand;
 use ring::agreement;
 
 use std::cmp::Ordering;

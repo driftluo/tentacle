@@ -63,7 +63,9 @@ impl FutureTaskManager {
         tokio::spawn(async move {
             future::select(task, receiver).await;
             trace!("future task({}) finished", task_id);
-            let _ = id_sender.send(task_id).await;
+            if id_sender.send(task_id).await.is_err() {
+                trace!("future task({}) send back err", task_id)
+            }
         });
     }
 
@@ -80,7 +82,7 @@ impl Drop for FutureTaskManager {
         // all future task as soon as possible
         self.signals.drain().for_each(|(id, sender)| {
             trace!("future task send stop signal to {}", id);
-            let _ = sender.send(());
+            let _ignore = sender.send(());
         })
     }
 }
@@ -151,7 +153,7 @@ mod test {
             let mut rt = tokio::runtime::Runtime::new().unwrap();
             rt.spawn(async move {
                 for _ in 1..100 {
-                    let _ = send_task
+                    let _res = send_task
                         .send(Box::pin(async {
                             let mut stream = pending::<()>();
                             loop {
@@ -193,7 +195,7 @@ mod test {
             rt.spawn(async move {
                 for i in 1..100u64 {
                     let finished_tasks_inner_clone = Arc::clone(&finished_tasks_inner);
-                    let _ = send_task
+                    let _res = send_task
                         .send(Box::pin(async move {
                             delay_for(time::Duration::from_millis(i * 2)).await;
                             finished_tasks_inner_clone.fetch_add(1, Ordering::SeqCst);

@@ -46,13 +46,13 @@ impl ServiceHandle for EmptySHandle {
         }
 
         if self.error_count > 8 {
-            let _ = self.sender.try_send(self.error_count);
+            let _res = self.sender.try_send(self.error_count);
         }
     }
 
     fn handle_event(&mut self, _control: &mut ServiceContext, event: ServiceEvent) {
         if let ServiceEvent::SessionOpen { .. } = event {
-            let _ = self.sender.try_send(self.error_count);
+            let _res = self.sender.try_send(self.error_count);
         }
     }
 }
