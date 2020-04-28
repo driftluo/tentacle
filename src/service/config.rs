@@ -121,6 +121,7 @@ pub struct ProtocolMeta {
     pub(crate) service_handle: ProtocolHandle<Box<dyn ServiceProtocol + Send + 'static + Unpin>>,
     pub(crate) session_handle: SessionHandleFn,
     pub(crate) before_send: Option<Box<dyn Fn(bytes::Bytes) -> bytes::Bytes + Send + 'static>>,
+    pub(crate) flag: BlockingFlag,
 }
 
 impl ProtocolMeta {
@@ -182,6 +183,11 @@ impl ProtocolMeta {
         &mut self,
     ) -> ProtocolHandle<Box<dyn SessionProtocol + Send + 'static + Unpin>> {
         (self.session_handle)()
+    }
+
+    /// Control whether the protocol handle method requires blocking to run
+    pub fn blocking_flag(&self) -> BlockingFlag {
+        self.flag
     }
 }
 
@@ -254,6 +260,83 @@ impl<T> ProtocolHandle<T> {
     }
 }
 
+/// Control whether the protocol handle method requires blocking to run
+/// default is 0b1111, all function use blocking
+///
+/// flag & 0b1000 > 0 means `connected` use blocking
+/// flag & 0b0100 > 0 means `disconnected` use blocking
+/// flag & 0b0010 > 0 means `received` use blocking
+/// flag & 0b0001 > 0 means `notify` use blocking
+#[derive(Copy, Clone, Debug)]
+pub struct BlockingFlag(u8);
+
+impl BlockingFlag {
+    /// connected don't use blocking
+    #[inline]
+    pub fn disable_connected(&mut self) {
+        self.0 &= 0b0111
+    }
+
+    /// disconnected don't use blocking
+    #[inline]
+    pub fn disable_disconnected(&mut self) {
+        self.0 &= 0b1011
+    }
+
+    /// received don't use blocking
+    #[inline]
+    pub fn disable_received(&mut self) {
+        self.0 &= 0b1101
+    }
+
+    /// notify don't use blocking
+    pub fn disable_notify(&mut self) {
+        self.0 &= 0b1110
+    }
+
+    /// all function use blocking
+    #[inline]
+    pub fn enable_all(&mut self) {
+        self.0 |= 0b1111
+    }
+
+    /// all function don't use blocking
+    #[inline]
+    pub fn disable_all(&mut self) {
+        self.0 &= 0b0000
+    }
+
+    /// return true if connected enable
+    #[inline]
+    pub const fn connected(self) -> bool {
+        self.0 & 0b1000 > 0
+    }
+
+    /// return true if disconnected enable
+    #[inline]
+    pub const fn disconnected(self) -> bool {
+        self.0 & 0b0100 > 0
+    }
+
+    /// return true if received enable
+    #[inline]
+    pub const fn received(self) -> bool {
+        self.0 & 0b0010 > 0
+    }
+
+    /// return true if notify enable
+    #[inline]
+    pub const fn notify(self) -> bool {
+        self.0 & 0b0001 > 0
+    }
+}
+
+impl Default for BlockingFlag {
+    fn default() -> Self {
+        BlockingFlag(0b1111)
+    }
+}
+
 /// Service state
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Hash)]
 pub enum State {
@@ -318,7 +401,7 @@ impl State {
 
 #[cfg(test)]
 mod test {
-    use super::State;
+    use super::{BlockingFlag, State};
 
     #[test]
     fn test_state_no_forever() {
@@ -352,5 +435,31 @@ mod test {
         state.increase();
         state.pre_shutdown();
         assert_eq!(state, State::PreShutdown);
+    }
+
+    #[test]
+    fn test_proto_flag() {
+        let mut p = BlockingFlag::default();
+
+        assert_eq!(p.connected(), true);
+        assert_eq!(p.disconnected(), true);
+        assert_eq!(p.received(), true);
+        assert_eq!(p.notify(), true);
+
+        p.disable_connected();
+        assert_eq!(p.connected(), false);
+        p.disable_disconnected();
+        assert_eq!(p.disconnected(), false);
+        p.disable_received();
+        assert_eq!(p.received(), false);
+        p.disable_notify();
+        assert_eq!(p.notify(), false);
+
+        p.enable_all();
+        p.disable_all();
+        assert_eq!(p.connected(), false);
+        assert_eq!(p.disconnected(), false);
+        assert_eq!(p.received(), false);
+        assert_eq!(p.notify(), false);
     }
 }
