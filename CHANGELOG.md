@@ -1,3 +1,18 @@
+## 0.3.0-alpha.4
+
+### Bug Fix
+
+- Fix session proto open/close by user part(#220)
+
+### Features
+
+- Replace unsplit with assignment(#225)
+- Upgrade tokio util(#224)
+- Avoids unnecessary session id checking(#223)
+- Check all underscore(#228)
+- Use flag to control how to use `block_in_place`(#226)
+- More test(#227/#220)
+
 ## 0.3.0-alpha.3
 
 ### Bug Fix

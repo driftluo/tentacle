@@ -86,7 +86,7 @@
 
 #### 握手
 
-1. 握手期间的 exchange 和 propose 目前使用 flatbuffers 进行序列化和反序列化，libp2p 使用 protobuf；
+1. 握手期间的 exchange 和 propose 目前使用 molecule 进行序列化和反序列化，libp2p 使用 protobuf；
 2. 握手目前只支持 Secp256k1 算法的公钥交换；
 3. order 的确定，使用原始的 public key 与 nonce，libp2p 使用 protobuf bytes 的 public key；
 
@@ -96,9 +96,9 @@
 
 #### 自定义协议选择过程
 
-每个连接打开协议的过程也是一个握手过程，通信的格式为 `flatbuffer`，结构为：
+每个连接打开协议的过程也是一个握手过程，通信的格式为 `molecule`，结构为：
 
-```flatbuffer
+```molecule
 table ProtocolInfo {
     name: string;
     support_versions: [string];
