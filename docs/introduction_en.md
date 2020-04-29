@@ -88,7 +88,7 @@ As you can see, for all connections, the data stream works in the form of aggreg
 
 #### Handshake
 
-1. During the handshake, exchange and propose use flatbuffers for serialization and deserialization, libp2p uses protobuf;
+1. During the handshake, exchange and propose use molecule for serialization and deserialization, libp2p uses protobuf;
 2. The handshake currently supports the public key exchange of Secp256k1 algorithm;
 3. The original public key and nonce determine the order, while libp2p uses the public key of protobuf bytes.
 
@@ -98,7 +98,7 @@ As you can see, for all connections, the data stream works in the form of aggreg
 
 #### Custom protocol selection process
 
-The process of each protocol's opening is a handshake process as well, and the communication format is `flatbuffer`. The structure is:
+The process of each protocol's opening is a handshake process as well, and the communication format is `molecule`. The structure is:
 
 ```
 table ProtocolInfo {
