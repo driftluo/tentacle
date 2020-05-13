@@ -168,7 +168,7 @@ impl Stream for MultiIncoming {
 
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Option<Self::Item>> {
         match self.get_mut() {
-            MultiIncoming::Tcp(inner) => match inner.accept().boxed_local().poll_unpin(cx)? {
+            MultiIncoming::Tcp(inner) => match inner.poll_accept(cx)? {
                 // Why can't get the peer address of the connected stream ?
                 // Error will be "Transport endpoint is not connected",
                 // so why incoming will appear unconnected stream ?
