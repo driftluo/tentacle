@@ -5,7 +5,7 @@ authors = ["Qian Linfeng <thewawar@gmail.com>"]
 license = "MIT"
 description = "p2p identify protocol"
 keywords = ["network", "peer-to-peer", "p2p", "identify"]
-repository = "https://github.com/nervosnetwork/p2p"
+repository = "https://github.com/nervosnetwork/tentacle"
 categories = ["network-programming", "asynchronous"]
 edition = "2018"
 

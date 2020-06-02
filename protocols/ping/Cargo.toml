@@ -5,7 +5,7 @@ authors = ["Nervos Core Dev <dev@nervos.org>"]
 license = "MIT"
 keywords = ["network", "peer-to-peer", "p2p", "ping"]
 categories = ["network-programming", "asynchronous"]
-repository = "https://github.com/nervosnetwork/p2p"
+repository = "https://github.com/nervosnetwork/tentacle"
 description = "ping protocol implementation for tentacle"
 edition = "2018"
 
