@@ -1,6 +1,6 @@
 # P2P
 
-[![Build Status](https://api.travis-ci.org/driftluo/p2p.svg?branch=master)](https://travis-ci.org/driftluo/p2p)
+[![Build Status](https://api.travis-ci.org/nervosnetwork/tentacle.svg?branch=master)](https://travis-ci.org/nervosnetwork/tentacle)
 ![image](https://img.shields.io/badge/rustc-1.42-blue.svg)
 
 ## Overview
@@ -46,7 +46,7 @@ tentacle = { version = "0.2", features = ["molc"] }
 1. Clone
 
 ```bash
-$ git clone https://github.com/nervosnetwork/p2p.git
+$ git clone https://github.com/nervosnetwork/tentacle.git
 ```
 
 2. On one terminal:

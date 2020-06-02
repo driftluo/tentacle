@@ -2,7 +2,7 @@
 name = "tokio-yamux"
 version = "0.2.3"
 license = "MIT"
-repository = "https://github.com/nervosnetwork/p2p"
+repository = "https://github.com/nervosnetwork/tentacle"
 description = "Rust implementation of Yamux"
 authors = ["Linfeng Qian <thewawar@gmail.com>", "Nervos Core Dev <dev@nervos.org>"]
 edition = "2018"
