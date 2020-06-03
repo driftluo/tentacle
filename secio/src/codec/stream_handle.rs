@@ -1,4 +1,3 @@
-use bytes::BytesMut;
 use futures::{
     channel::mpsc::{Receiver, Sender},
     stream::FusedStream,
@@ -11,11 +10,13 @@ use std::{
     pin::Pin,
     task::{Context, Poll},
 };
+// default yamux stream window size
+const BUF_SHRINK_THRESHOLD: usize = 1024 * 256 * 20;
 
 /// Stream handle
 #[derive(Debug)]
 pub struct StreamHandle {
-    read_buf: BytesMut,
+    read_buf: Vec<u8>,
 
     frame_receiver: Receiver<StreamEvent>,
 
@@ -30,13 +31,13 @@ impl StreamHandle {
         StreamHandle {
             frame_receiver,
             event_sender,
-            read_buf: BytesMut::default(),
+            read_buf: Vec::default(),
         }
     }
 
-    fn handle_event(&mut self, _cx: &mut Context, event: StreamEvent) -> Result<(), io::Error> {
+    fn handle_event(&mut self, event: StreamEvent) -> Result<(), io::Error> {
         match event {
-            StreamEvent::Frame(frame) => self.read_buf.extend_from_slice(&frame),
+            StreamEvent::Frame(mut frame) => self.read_buf.append(&mut frame),
             StreamEvent::Close => {
                 if let Poll::Ready(Err(e)) = self.shutdown() {
                     return Err(e);
@@ -54,7 +55,7 @@ impl StreamHandle {
                 break;
             }
             match Pin::new(&mut self.frame_receiver).poll_next(cx) {
-                Poll::Ready(Some(event)) => self.handle_event(cx, event)?,
+                Poll::Ready(Some(event)) => self.handle_event(event)?,
                 Poll::Ready(None) => {
                     return Err(io::ErrorKind::BrokenPipe.into());
                 }
@@ -94,9 +95,11 @@ impl AsyncRead for StreamHandle {
             return Poll::Pending;
         }
 
-        let b = self.read_buf.split_to(n);
-
-        buf[..n].copy_from_slice(&b);
+        buf[..n].copy_from_slice(&self.read_buf[..n]);
+        self.read_buf.drain(..n);
+        if self.read_buf.capacity() > BUF_SHRINK_THRESHOLD {
+            self.read_buf.shrink_to_fit();
+        }
         Poll::Ready(Ok(n))
     }
 }
@@ -109,8 +112,7 @@ impl AsyncWrite for StreamHandle {
     ) -> Poll<io::Result<usize>> {
         self.recv_frames(cx)?;
 
-        let byte = BytesMut::from(buf);
-        match self.event_sender.try_send(StreamEvent::Frame(byte)) {
+        match self.event_sender.try_send(StreamEvent::Frame(buf.to_vec())) {
             Ok(_) => Poll::Ready(Ok(buf.len())),
             Err(e) => {
                 if e.is_full() {
@@ -144,7 +146,7 @@ impl AsyncWrite for StreamHandle {
 
 #[derive(Debug)]
 pub(crate) enum StreamEvent {
-    Frame(BytesMut),
+    Frame(Vec<u8>),
     Close,
     Flush,
 }

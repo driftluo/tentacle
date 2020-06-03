@@ -29,7 +29,7 @@ pub struct HandshakeContext<T> {
 pub struct Local {
     // Locally-generated random number. The array size can be changed without any repercussion.
     pub(crate) nonce: [u8; 16],
-    // Our local public key flatbuffer bytes:
+    // Our local public key bytes:
     pub(crate) public_key: Vec<u8>,
     // Our local proposition's raw bytes:
     pub(crate) proposition_bytes: Bytes,
@@ -150,7 +150,7 @@ impl HandshakeContext<Local> {
             }
         };
 
-        if public_key == self.config.key.public_key() {
+        if public_key.inner_ref() == &self.state.public_key {
             return Err(SecioError::ConnectSelf);
         }
 
