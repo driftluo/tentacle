@@ -16,7 +16,7 @@ use tokio_util::codec::{Framed, FramedParts, LengthDelimitedCodec};
 
 use crate::{
     context::SessionContext,
-    error::Error,
+    error::{HandshakeErrorKind, ProtocolHandleErrorKind, TransportErrorKind},
     multiaddr::Multiaddr,
     protocol_handle_stream::{ServiceProtocolEvent, SessionProtocolEvent},
     protocol_select::{client_select, server_select, ProtocolInfo},
@@ -61,25 +61,25 @@ pub(crate) enum SessionEvent {
         /// listen addr
         listen_address: Option<Multiaddr>,
     },
-    HandshakeFail {
+    HandshakeError {
         /// remote address
         address: Multiaddr,
         /// Session type
         ty: SessionType,
         /// error
-        error: Error,
+        error: HandshakeErrorKind,
     },
     DialError {
         /// remote address
         address: Multiaddr,
         /// error
-        error: Error,
+        error: TransportErrorKind,
     },
     ListenError {
         /// listen address
         address: Multiaddr,
         /// error
-        error: Error,
+        error: TransportErrorKind,
     },
     /// Protocol data
     ProtocolMessage {
@@ -125,16 +125,16 @@ pub(crate) enum SessionEvent {
         /// Protocol id
         proto_id: ProtocolId,
         /// Codec error
-        error: Error,
+        error: std::io::Error,
     },
     MuxerError {
         id: SessionId,
-        error: Error,
+        error: std::io::Error,
     },
     /// Protocol handle error, will cause memory leaks/abnormal CPU usage
     ProtocolHandleError {
         /// Error message
-        error: Error,
+        error: ProtocolHandleErrorKind,
         /// Protocol id
         proto_id: ProtocolId,
     },
@@ -689,7 +689,7 @@ where
                                 cx,
                                 SessionEvent::MuxerError {
                                     id: self.context.id,
-                                    error: err.into(),
+                                    error: err,
                                 },
                             );
                             self.state = SessionState::Abnormal;

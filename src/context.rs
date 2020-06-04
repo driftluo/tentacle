@@ -11,7 +11,7 @@ use std::{
 };
 
 use crate::{
-    error::Error,
+    error::SendErrorKind,
     multiaddr::Multiaddr,
     protocol_select::ProtocolInfo,
     secio::{PublicKey, SecioKeyPair},
@@ -46,7 +46,7 @@ impl SessionController {
         &mut self,
         priority: Priority,
         event: SessionEvent,
-    ) -> Result<(), mpsc::TrySendError<SessionEvent>> {
+    ) -> std::result::Result<(), mpsc::TrySendError<SessionEvent>> {
         if priority.is_high() {
             self.quick_sender.try_send(event)
         } else {
@@ -112,6 +112,8 @@ impl SessionContext {
     }
 }
 
+type Result = std::result::Result<(), SendErrorKind>;
+
 /// The Service runtime can send some instructions to the inside of the handle.
 /// This is the sending channel.
 // TODO: Need to maintain the network topology map here?
@@ -146,19 +148,19 @@ impl ServiceContext {
 
     /// Create a new listener
     #[inline]
-    pub fn listen(&self, address: Multiaddr) -> Result<(), Error> {
+    pub fn listen(&self, address: Multiaddr) -> Result {
         self.inner.listen(address)
     }
 
     /// Initiate a connection request to address
     #[inline]
-    pub fn dial(&self, address: Multiaddr, target: TargetProtocol) -> Result<(), Error> {
+    pub fn dial(&self, address: Multiaddr, target: TargetProtocol) -> Result {
         self.inner.dial(address, target)
     }
 
     /// Disconnect a connection
     #[inline]
-    pub fn disconnect(&self, session_id: SessionId) -> Result<(), Error> {
+    pub fn disconnect(&self, session_id: SessionId) -> Result {
         self.inner.disconnect(session_id)
     }
 
@@ -169,7 +171,7 @@ impl ServiceContext {
         session_id: SessionId,
         proto_id: ProtocolId,
         data: Bytes,
-    ) -> Result<(), Error> {
+    ) -> Result {
         self.inner.send_message_to(session_id, proto_id, data)
     }
 
@@ -180,7 +182,7 @@ impl ServiceContext {
         session_id: SessionId,
         proto_id: ProtocolId,
         data: Bytes,
-    ) -> Result<(), Error> {
+    ) -> Result {
         self.inner.quick_send_message_to(session_id, proto_id, data)
     }
 
@@ -191,7 +193,7 @@ impl ServiceContext {
         session_ids: TargetSession,
         proto_id: ProtocolId,
         data: Bytes,
-    ) -> Result<(), Error> {
+    ) -> Result {
         self.inner.filter_broadcast(session_ids, proto_id, data)
     }
 
@@ -202,14 +204,14 @@ impl ServiceContext {
         session_ids: TargetSession,
         proto_id: ProtocolId,
         data: Bytes,
-    ) -> Result<(), Error> {
+    ) -> Result {
         self.inner
             .quick_filter_broadcast(session_ids, proto_id, data)
     }
 
     /// Send a future task
     #[inline]
-    pub fn future_task<T>(&self, task: T) -> Result<(), Error>
+    pub fn future_task<T>(&self, task: T) -> Result
     where
         T: Future<Output = ()> + 'static + Send,
     {
@@ -220,7 +222,7 @@ impl ServiceContext {
     ///
     /// If the protocol has been open, do nothing
     #[inline]
-    pub fn open_protocol(&self, session_id: SessionId, proto_id: ProtocolId) -> Result<(), Error> {
+    pub fn open_protocol(&self, session_id: SessionId, proto_id: ProtocolId) -> Result {
         self.inner.open_protocol(session_id, proto_id)
     }
 
@@ -228,11 +230,7 @@ impl ServiceContext {
     ///
     /// If the protocol has been open, do nothing
     #[inline]
-    pub fn open_protocols(
-        &self,
-        session_id: SessionId,
-        target: TargetProtocol,
-    ) -> Result<(), Error> {
+    pub fn open_protocols(&self, session_id: SessionId, target: TargetProtocol) -> Result {
         self.inner.open_protocols(session_id, target)
     }
 
@@ -240,7 +238,7 @@ impl ServiceContext {
     ///
     /// If the protocol has been closed, do nothing
     #[inline]
-    pub fn close_protocol(&self, session_id: SessionId, proto_id: ProtocolId) -> Result<(), Error> {
+    pub fn close_protocol(&self, session_id: SessionId, proto_id: ProtocolId) -> Result {
         self.inner.close_protocol(session_id, proto_id)
     }
 
@@ -280,7 +278,7 @@ impl ServiceContext {
         proto_id: ProtocolId,
         interval: Duration,
         token: u64,
-    ) -> Result<(), Error> {
+    ) -> Result {
         self.inner.set_service_notify(proto_id, interval, token)
     }
 
@@ -291,13 +289,13 @@ impl ServiceContext {
         proto_id: ProtocolId,
         interval: Duration,
         token: u64,
-    ) -> Result<(), Error> {
+    ) -> Result {
         self.inner
             .set_session_notify(session_id, proto_id, interval, token)
     }
 
     /// Remove a service timer by a token
-    pub fn remove_service_notify(&self, proto_id: ProtocolId, token: u64) -> Result<(), Error> {
+    pub fn remove_service_notify(&self, proto_id: ProtocolId, token: u64) -> Result {
         self.inner.remove_service_notify(proto_id, token)
     }
 
@@ -307,7 +305,7 @@ impl ServiceContext {
         session_id: SessionId,
         proto_id: ProtocolId,
         token: u64,
-    ) -> Result<(), Error> {
+    ) -> Result {
         self.inner
             .remove_session_notify(session_id, proto_id, token)
     }
@@ -319,12 +317,12 @@ impl ServiceContext {
     /// 2. try close all session's protocol stream
     /// 3. try close all session
     /// 4. close service
-    pub fn close(&self) -> Result<(), Error> {
+    pub fn close(&self) -> Result {
         self.inner.close()
     }
 
     /// Shutdown service, don't care anything, may cause partial message loss
-    pub fn shutdown(&self) -> Result<(), Error> {
+    pub fn shutdown(&self) -> Result {
         self.inner.shutdown()
     }
 
@@ -374,14 +372,14 @@ pub struct ProtocolContextMutRef<'a> {
 impl<'a> ProtocolContextMutRef<'a> {
     /// Send message to current protocol current session
     #[inline]
-    pub fn send_message(&self, data: Bytes) -> Result<(), Error> {
+    pub fn send_message(&self, data: Bytes) -> Result {
         let proto_id = self.proto_id();
         self.inner.send_message_to(self.session.id, proto_id, data)
     }
 
     /// Send message to current protocol current session on quick channel
     #[inline]
-    pub fn quick_send_message(&self, data: Bytes) -> Result<(), Error> {
+    pub fn quick_send_message(&self, data: Bytes) -> Result {
         let proto_id = self.proto_id();
         self.inner
             .quick_send_message_to(self.session.id, proto_id, data)

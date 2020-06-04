@@ -1,4 +1,4 @@
-use crate::{multiaddr::Multiaddr, utils::socketaddr_to_multiaddr};
+use crate::{error::TransportErrorKind, multiaddr::Multiaddr, utils::socketaddr_to_multiaddr};
 
 use futures::{prelude::Stream, FutureExt};
 use log::debug;
@@ -19,24 +19,7 @@ use self::tcp::{TcpDialFuture, TcpListenFuture, TcpTransport};
 
 mod tcp;
 
-/// Transport Error
-pub enum TransportError {
-    /// Protocol not support
-    NotSupport(Multiaddr),
-    /// Dns resolver error
-    DNSResolverError((Multiaddr, io::Error)),
-    /// Io error
-    Io(io::Error),
-}
-
-impl Into<io::Error> for TransportError {
-    fn into(self) -> io::Error {
-        match self {
-            TransportError::Io(err) => err,
-            _ => io::ErrorKind::InvalidData.into(),
-        }
-    }
-}
+type Result<T> = std::result::Result<T, TransportErrorKind>;
 
 /// Definition of transport protocol behavior
 pub trait Transport {
@@ -44,9 +27,9 @@ pub trait Transport {
     type DialFuture;
 
     /// Transport listen
-    fn listen(self, address: Multiaddr) -> Result<Self::ListenFuture, TransportError>;
+    fn listen(self, address: Multiaddr) -> Result<Self::ListenFuture>;
     /// Transport dial
-    fn dial(self, address: Multiaddr) -> Result<Self::DialFuture, TransportError>;
+    fn dial(self, address: Multiaddr) -> Result<Self::DialFuture>;
 }
 
 #[derive(Clone, Copy)]
@@ -64,14 +47,14 @@ impl Transport for MultiTransport {
     type ListenFuture = MultiListenFuture;
     type DialFuture = MultiDialFuture;
 
-    fn listen(self, address: Multiaddr) -> Result<Self::ListenFuture, TransportError> {
+    fn listen(self, address: Multiaddr) -> Result<Self::ListenFuture> {
         match TcpTransport::new(self.timeout).listen(address) {
             Ok(future) => Ok(MultiListenFuture::Tcp(future)),
             Err(e) => Err(e),
         }
     }
 
-    fn dial(self, address: Multiaddr) -> Result<Self::DialFuture, TransportError> {
+    fn dial(self, address: Multiaddr) -> Result<Self::DialFuture> {
         match TcpTransport::new(self.timeout).dial(address) {
             Ok(res) => Ok(MultiDialFuture::Tcp(res)),
             Err(e) => Err(e),
@@ -84,7 +67,7 @@ pub enum MultiListenFuture {
 }
 
 impl Future for MultiListenFuture {
-    type Output = Result<(Multiaddr, MultiIncoming), TransportError>;
+    type Output = Result<(Multiaddr, MultiIncoming)>;
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         match self.get_mut() {
@@ -101,7 +84,7 @@ pub enum MultiDialFuture {
 }
 
 impl Future for MultiDialFuture {
-    type Output = Result<(Multiaddr, MultiStream), TransportError>;
+    type Output = Result<(Multiaddr, MultiStream)>;
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         match self.get_mut() {
@@ -164,7 +147,7 @@ pub enum MultiIncoming {
 }
 
 impl Stream for MultiIncoming {
-    type Item = Result<(Multiaddr, MultiStream), io::Error>;
+    type Item = std::result::Result<(Multiaddr, MultiStream), io::Error>;
 
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Option<Self::Item>> {
         match self.get_mut() {

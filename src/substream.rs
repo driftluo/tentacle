@@ -16,7 +16,6 @@ use tokio_util::codec::{length_delimited::LengthDelimitedCodec, Framed};
 use crate::{
     builder::BeforeReceive,
     context::SessionContext,
-    error::Error,
     protocol_handle_stream::{ServiceProtocolEvent, SessionProtocolEvent},
     service::{config::SessionConfig, event::Priority, DELAY_TIME},
     traits::Codec,
@@ -64,7 +63,7 @@ pub(crate) enum ProtocolEvent {
         /// Protocol id
         proto_id: ProtocolId,
         /// Codec error
-        error: Error,
+        error: std::io::Error,
     },
     TimeoutCheck,
 }
@@ -275,7 +274,7 @@ where
         self.read_buf.push_back(ProtocolEvent::Error {
             id: self.id,
             proto_id: self.proto_id,
-            error: error.into(),
+            error,
         });
         self.close_proto_stream(cx);
     }
@@ -300,7 +299,7 @@ where
                         ProtocolEvent::Error {
                             id: self.id,
                             proto_id: self.proto_id,
-                            error: err.into(),
+                            error: err,
                         },
                     );
                     self.dead = true;

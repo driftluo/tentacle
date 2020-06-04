@@ -3,7 +3,6 @@ use futures::{channel::mpsc, prelude::*};
 use std::time::Duration;
 use std::{
     collections::HashMap,
-    io,
     sync::{
         atomic::{AtomicUsize, Ordering},
         Arc,
@@ -11,7 +10,7 @@ use std::{
 };
 
 use crate::{
-    error::Error,
+    error::SendErrorKind,
     multiaddr::Multiaddr,
     protocol_select::ProtocolInfo,
     service::{event::Priority, ServiceTask, TargetProtocol, TargetSession, RECEIVED_BUFFER_SIZE},
@@ -19,6 +18,8 @@ use crate::{
 };
 use bytes::Bytes;
 use std::sync::atomic::AtomicBool;
+
+type Result = std::result::Result<(), SendErrorKind>;
 
 /// Service control, used to send commands externally at runtime
 #[derive(Clone)]
@@ -66,20 +67,22 @@ impl ServiceControl {
         event: ServiceTask,
         counter: &Arc<AtomicUsize>,
         limit: usize,
-    ) -> Result<(), Error> {
+    ) -> Result {
         if self.closed.load(Ordering::SeqCst) {
-            return Err(Error::IoError(io::ErrorKind::BrokenPipe.into()));
+            return Err(SendErrorKind::BrokenPipe);
         }
         if counter.load(Ordering::SeqCst) < limit {
             counter.fetch_add(1, Ordering::SeqCst);
-            sender.unbounded_send(event).map_err(Into::into)
+            sender
+                .unbounded_send(event)
+                .map_err(|_err| SendErrorKind::BrokenPipe)
         } else {
-            Err(Error::IoError(io::ErrorKind::WouldBlock.into()))
+            Err(SendErrorKind::WouldBlock)
         }
     }
 
     /// Send raw event
-    pub(crate) fn send(&self, event: ServiceTask) -> Result<(), Error> {
+    pub(crate) fn send(&self, event: ServiceTask) -> Result {
         self.block_send(
             &self.service_task_sender,
             event,
@@ -90,7 +93,7 @@ impl ServiceControl {
 
     /// Send raw event on quick channel
     #[inline]
-    fn quick_send(&self, event: ServiceTask) -> Result<(), Error> {
+    fn quick_send(&self, event: ServiceTask) -> Result {
         self.block_send(
             &self.quick_task_sender,
             event,
@@ -107,19 +110,19 @@ impl ServiceControl {
 
     /// Create a new listener
     #[inline]
-    pub fn listen(&self, address: Multiaddr) -> Result<(), Error> {
+    pub fn listen(&self, address: Multiaddr) -> Result {
         self.quick_send(ServiceTask::Listen { address })
     }
 
     /// Initiate a connection request to address
     #[inline]
-    pub fn dial(&self, address: Multiaddr, target: TargetProtocol) -> Result<(), Error> {
+    pub fn dial(&self, address: Multiaddr, target: TargetProtocol) -> Result {
         self.quick_send(ServiceTask::Dial { address, target })
     }
 
     /// Disconnect a connection
     #[inline]
-    pub fn disconnect(&self, session_id: SessionId) -> Result<(), Error> {
+    pub fn disconnect(&self, session_id: SessionId) -> Result {
         self.quick_send(ServiceTask::Disconnect { session_id })
     }
 
@@ -130,7 +133,7 @@ impl ServiceControl {
         session_id: SessionId,
         proto_id: ProtocolId,
         data: Bytes,
-    ) -> Result<(), Error> {
+    ) -> Result {
         self.filter_broadcast(TargetSession::Single(session_id), proto_id, data)
     }
 
@@ -141,7 +144,7 @@ impl ServiceControl {
         session_id: SessionId,
         proto_id: ProtocolId,
         data: Bytes,
-    ) -> Result<(), Error> {
+    ) -> Result {
         self.quick_filter_broadcast(TargetSession::Single(session_id), proto_id, data)
     }
 
@@ -152,7 +155,7 @@ impl ServiceControl {
         target: TargetSession,
         proto_id: ProtocolId,
         data: Bytes,
-    ) -> Result<(), Error> {
+    ) -> Result {
         self.send(ServiceTask::ProtocolMessage {
             target,
             proto_id,
@@ -168,7 +171,7 @@ impl ServiceControl {
         target: TargetSession,
         proto_id: ProtocolId,
         data: Bytes,
-    ) -> Result<(), Error> {
+    ) -> Result {
         self.quick_send(ServiceTask::ProtocolMessage {
             target,
             proto_id,
@@ -179,7 +182,7 @@ impl ServiceControl {
 
     /// Send a future task
     #[inline]
-    pub fn future_task<T>(&self, task: T) -> Result<(), Error>
+    pub fn future_task<T>(&self, task: T) -> Result
     where
         T: Future<Output = ()> + 'static + Send,
     {
@@ -192,7 +195,7 @@ impl ServiceControl {
     ///
     /// If the protocol has been open, do nothing
     #[inline]
-    pub fn open_protocol(&self, session_id: SessionId, proto_id: ProtocolId) -> Result<(), Error> {
+    pub fn open_protocol(&self, session_id: SessionId, proto_id: ProtocolId) -> Result {
         self.quick_send(ServiceTask::ProtocolOpen {
             session_id,
             target: proto_id.into(),
@@ -203,11 +206,7 @@ impl ServiceControl {
     ///
     /// If the protocol has been open, do nothing
     #[inline]
-    pub fn open_protocols(
-        &self,
-        session_id: SessionId,
-        target: TargetProtocol,
-    ) -> Result<(), Error> {
+    pub fn open_protocols(&self, session_id: SessionId, target: TargetProtocol) -> Result {
         self.quick_send(ServiceTask::ProtocolOpen { session_id, target })
     }
 
@@ -215,7 +214,7 @@ impl ServiceControl {
     ///
     /// If the protocol has been closed, do nothing
     #[inline]
-    pub fn close_protocol(&self, session_id: SessionId, proto_id: ProtocolId) -> Result<(), Error> {
+    pub fn close_protocol(&self, session_id: SessionId, proto_id: ProtocolId) -> Result {
         self.quick_send(ServiceTask::ProtocolClose {
             session_id,
             proto_id,
@@ -228,7 +227,7 @@ impl ServiceControl {
         proto_id: ProtocolId,
         interval: Duration,
         token: u64,
-    ) -> Result<(), Error> {
+    ) -> Result {
         self.send(ServiceTask::SetProtocolNotify {
             proto_id,
             interval,
@@ -237,7 +236,7 @@ impl ServiceControl {
     }
 
     /// remove a service notify token
-    pub fn remove_service_notify(&self, proto_id: ProtocolId, token: u64) -> Result<(), Error> {
+    pub fn remove_service_notify(&self, proto_id: ProtocolId, token: u64) -> Result {
         self.send(ServiceTask::RemoveProtocolNotify { proto_id, token })
     }
 
@@ -248,7 +247,7 @@ impl ServiceControl {
         proto_id: ProtocolId,
         interval: Duration,
         token: u64,
-    ) -> Result<(), Error> {
+    ) -> Result {
         self.send(ServiceTask::SetProtocolSessionNotify {
             session_id,
             proto_id,
@@ -263,7 +262,7 @@ impl ServiceControl {
         session_id: SessionId,
         proto_id: ProtocolId,
         token: u64,
-    ) -> Result<(), Error> {
+    ) -> Result {
         self.send(ServiceTask::RemoveProtocolSessionNotify {
             session_id,
             proto_id,
@@ -278,12 +277,12 @@ impl ServiceControl {
     /// 2. try close all session's protocol stream
     /// 3. try close all session
     /// 4. close service
-    pub fn close(&self) -> Result<(), Error> {
+    pub fn close(&self) -> Result {
         self.quick_send(ServiceTask::Shutdown(false))
     }
 
     /// Shutdown service, don't care anything, may cause partial message loss
-    pub fn shutdown(&self) -> Result<(), Error> {
+    pub fn shutdown(&self) -> Result {
         self.quick_send(ServiceTask::Shutdown(true))
     }
 }

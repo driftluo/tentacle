@@ -16,7 +16,10 @@ use tokio::prelude::{AsyncRead, AsyncWrite};
 
 use crate::{
     context::{ServiceContext, SessionContext, SessionController},
-    error::Error,
+    error::{
+        DialerErrorKind, HandshakeErrorKind, ListenErrorKind, ProtocolHandleErrorKind,
+        TransportErrorKind,
+    },
     multiaddr::{Multiaddr, Protocol},
     protocol_handle_stream::{
         ServiceProtocolEvent, ServiceProtocolStream, SessionProtocolEvent, SessionProtocolStream,
@@ -30,7 +33,7 @@ use crate::{
     },
     session::{Session, SessionEvent, SessionMeta},
     traits::{ServiceHandle, ServiceProtocol, SessionProtocol},
-    transports::{MultiIncoming, MultiTransport, Transport, TransportError},
+    transports::{MultiIncoming, MultiTransport, Transport},
     upnp::IGDClient,
     utils::extract_peer_id,
     yamux::{session::SessionType as YamuxType, Config as YamuxConfig},
@@ -84,6 +87,8 @@ type SessionProtoHandles = HashMap<
         tokio::task::JoinHandle<()>,
     ),
 >;
+
+type Result<T> = std::result::Result<T, TransportErrorKind>;
 
 /// An abstraction of p2p service, currently only supports TCP protocol
 pub struct Service<T> {
@@ -253,11 +258,8 @@ where
     ///
     /// Return really listen multiaddr, but if use `/dns4/localhost/tcp/80`,
     /// it will return original value, and create a future task to DNS resolver later.
-    pub async fn listen(&mut self, address: Multiaddr) -> Result<Multiaddr, io::Error> {
-        let listen_future = self
-            .multi_transport
-            .listen(address.clone())
-            .map_err::<io::Error, _>(Into::into)?;
+    pub async fn listen(&mut self, address: Multiaddr) -> Result<Multiaddr> {
+        let listen_future = self.multi_transport.listen(address.clone())?;
 
         match listen_future.await {
             Ok(value) => {
@@ -276,22 +278,14 @@ where
 
                 Ok(listen_address)
             }
-            Err(err) => {
-                if let TransportError::DNSResolverError((_, error)) = err {
-                    Err(error)
-                } else {
-                    Err(err.into())
-                }
-            }
+            Err(err) => Err(err),
         }
     }
 
     /// Use by inner
-    fn listen_inner(&mut self, address: Multiaddr) -> Result<(), io::Error> {
-        let listen_future = self
-            .multi_transport
-            .listen(address.clone())
-            .map_err::<io::Error, _>(Into::into)?;
+    fn listen_inner(&mut self, address: Multiaddr) -> Result<()> {
+        let listen_future = self.multi_transport.listen(address.clone())?;
+
         let mut sender = self.session_event_sender.clone();
         let task = async move {
             let result = listen_future.await;
@@ -300,19 +294,7 @@ where
                     listen_address: value.0,
                     incoming: value.1,
                 },
-                Err(err) => {
-                    if let TransportError::DNSResolverError((address, error)) = err {
-                        SessionEvent::ListenError {
-                            address,
-                            error: Error::DNSResolverError(error),
-                        }
-                    } else {
-                        SessionEvent::ListenError {
-                            address,
-                            error: Error::IoError(err.into()),
-                        }
-                    }
-                }
+                Err(error) => SessionEvent::ListenError { address, error },
             };
             if let Err(err) = sender.send(event).await {
                 error!("Listen address result send back error: {:?}", err);
@@ -324,15 +306,8 @@ where
     }
 
     /// Dial the given address, doesn't actually make a request, just generate a future
-    pub async fn dial(
-        &mut self,
-        address: Multiaddr,
-        target: TargetProtocol,
-    ) -> Result<&mut Self, io::Error> {
-        let dial_future = self
-            .multi_transport
-            .dial(address.clone())
-            .map_err::<io::Error, _>(Into::into)?;
+    pub async fn dial(&mut self, address: Multiaddr, target: TargetProtocol) -> Result<&mut Self> {
+        let dial_future = self.multi_transport.dial(address.clone())?;
 
         match dial_future.await {
             Ok(value) => {
@@ -342,26 +317,20 @@ where
                         stream: value.1,
                     })
                     .await
-                    .map_err::<io::Error, _>(|_| io::ErrorKind::BrokenPipe.into())?;
+                    .map_err(|_| TransportErrorKind::Io(io::ErrorKind::BrokenPipe.into()))?;
                 self.dial_protocols.insert(address, target);
                 self.state.increase();
                 Ok(self)
             }
-            Err(err) => match err {
-                TransportError::DNSResolverError((_, error)) => Err(error),
-                e => Err(e.into()),
-            },
+            Err(err) => Err(err),
         }
     }
 
     /// Use by inner
     #[inline(always)]
-    fn dial_inner(&mut self, address: Multiaddr, target: TargetProtocol) -> Result<(), io::Error> {
+    fn dial_inner(&mut self, address: Multiaddr, target: TargetProtocol) -> Result<()> {
         self.dial_protocols.insert(address.clone(), target);
-        let dial_future = self
-            .multi_transport
-            .dial(address.clone())
-            .map_err::<io::Error, _>(Into::into)?;
+        let dial_future = self.multi_transport.dial(address.clone())?;
 
         let mut sender = self.session_event_sender.clone();
         let task = async move {
@@ -372,16 +341,7 @@ where
                     remote_address: value.0,
                     stream: value.1,
                 },
-                Err(err) => match err {
-                    TransportError::DNSResolverError((address, error)) => SessionEvent::DialError {
-                        address,
-                        error: Error::DNSResolverError(error),
-                    },
-                    e => SessionEvent::DialError {
-                        address,
-                        error: Error::IoError(e.into()),
-                    },
-                },
+                Err(error) => SessionEvent::DialError { address, error },
             };
 
             if let Err(err) = sender.send(event).await {
@@ -533,7 +493,7 @@ where
                             &mut self.service_context,
                             ServiceError::ProtocolHandleError {
                                 proto_id,
-                                error: Error::ProtoHandleAbnormallyClosed(None),
+                                error: ProtocolHandleErrorKind::AbnormallyClosed(None),
                             },
                         );
                     }
@@ -563,7 +523,7 @@ where
                             &mut self.service_context,
                             ServiceError::ProtocolHandleError {
                                 proto_id,
-                                error: Error::ProtoHandleAbnormallyClosed(Some(session_id)),
+                                error: ProtocolHandleErrorKind::AbnormallyClosed(Some(session_id)),
                             },
                         )
                     }
@@ -593,7 +553,7 @@ where
         proto_id: ProtocolId,
         session_id: Option<SessionId>,
     ) {
-        let error = Error::ProtoHandleBlock(session_id);
+        let error = ProtocolHandleErrorKind::Block(session_id);
         self.set_delay(cx);
         self.handle.handle_error(
             &mut self.service_context,
@@ -814,11 +774,9 @@ where
                             remote_address, error
                         );
                         // time out error
-                        let error =
-                            io::Error::new(io::ErrorKind::TimedOut, error.to_string()).into();
-                        SessionEvent::HandshakeFail {
+                        SessionEvent::HandshakeError {
                             ty,
-                            error,
+                            error: HandshakeErrorKind::Timeout(error.to_string()),
                             address: remote_address,
                         }
                     }
@@ -835,9 +793,9 @@ where
                                 "Handshake with {} failed, error: {:?}",
                                 remote_address, error
                             );
-                            SessionEvent::HandshakeFail {
+                            SessionEvent::HandshakeError {
                                 ty,
-                                error: error.into(),
+                                error: HandshakeErrorKind::SecioError(error),
                                 address: remote_address,
                             }
                         }
@@ -910,7 +868,7 @@ where
                         self.handle.handle_error(
                             &mut self.service_context,
                             ServiceError::DialerError {
-                                error: Error::RepeatedConnection(context.inner.id),
+                                error: DialerErrorKind::RepeatedConnection(context.inner.id),
                                 address,
                             },
                         );
@@ -918,7 +876,7 @@ where
                         self.handle.handle_error(
                             &mut self.service_context,
                             ServiceError::ListenError {
-                                error: Error::RepeatedConnection(context.inner.id),
+                                error: ListenErrorKind::RepeatedConnection(context.inner.id),
                                 address: listen_addr.expect("listen address must exist"),
                             },
                         );
@@ -933,7 +891,7 @@ where
                             self.handle.handle_error(
                                 &mut self.service_context,
                                 ServiceError::DialerError {
-                                    error: Error::PeerIdNotMatch,
+                                    error: DialerErrorKind::PeerIdNotMatch,
                                     address,
                                 },
                             );
@@ -1343,13 +1301,16 @@ where
             } => {
                 self.session_open(cx, handle, Some(public_key), address, ty, listen_address);
             }
-            SessionEvent::HandshakeFail { ty, error, address } => {
+            SessionEvent::HandshakeError { ty, error, address } => {
                 if ty.is_outbound() {
                     self.state.decrease();
                     self.dial_protocols.remove(&address);
                     self.handle.handle_error(
                         &mut self.service_context,
-                        ServiceError::DialerError { address, error },
+                        ServiceError::DialerError {
+                            address,
+                            error: DialerErrorKind::HandshakeError(error),
+                        },
                     )
                 }
             }
@@ -1393,14 +1354,20 @@ where
                 self.dial_protocols.remove(&address);
                 self.handle.handle_error(
                     &mut self.service_context,
-                    ServiceError::DialerError { address, error },
+                    ServiceError::DialerError {
+                        address,
+                        error: DialerErrorKind::TransportError(error),
+                    },
                 )
             }
             SessionEvent::ListenError { address, error } => {
                 self.state.decrease();
                 self.handle.handle_error(
                     &mut self.service_context,
-                    ServiceError::ListenError { address, error },
+                    ServiceError::ListenError {
+                        address,
+                        error: ListenErrorKind::TransportError(error),
+                    },
                 )
             }
             SessionEvent::SessionTimeout { id } => {
@@ -1475,7 +1442,7 @@ where
                             &mut self.service_context,
                             ServiceError::DialerError {
                                 address,
-                                error: e.into(),
+                                error: DialerErrorKind::TransportError(e),
                             },
                         );
                     }
@@ -1488,7 +1455,7 @@ where
                             &mut self.service_context,
                             ServiceError::ListenError {
                                 address,
-                                error: e.into(),
+                                error: ListenErrorKind::TransportError(e),
                             },
                         );
                     }
@@ -1669,7 +1636,7 @@ where
                         &mut self.service_context,
                         ServiceError::ListenError {
                             address: address.clone(),
-                            error: err.into(),
+                            error: ListenErrorKind::IoError(err),
                         },
                     );
                     if let Some(client) = self.igd_client.as_mut() {

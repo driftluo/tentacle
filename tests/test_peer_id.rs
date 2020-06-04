@@ -3,7 +3,7 @@ use std::{borrow::Cow, sync::mpsc::channel, thread};
 use tentacle::{
     builder::{MetaBuilder, ServiceBuilder},
     context::{ProtocolContext, ServiceContext},
-    error::Error,
+    error::DialerErrorKind,
     multiaddr::Multiaddr,
     multiaddr::Protocol as MultiProtocol,
     secio::SecioKeyPair,
@@ -40,7 +40,13 @@ impl ServiceHandle for EmptySHandle {
         self.error_count += 1;
 
         if let ServiceError::DialerError { error, .. } = error {
-            assert_eq!(error, Error::PeerIdNotMatch);
+            match error {
+                DialerErrorKind::PeerIdNotMatch => {}
+                err => panic!(
+                    "test fail, expected DialerErrorKind::PeerIdNotMatch, got {:?}",
+                    err
+                ),
+            }
         } else {
             panic!("test fail {:?}", error);
         }
