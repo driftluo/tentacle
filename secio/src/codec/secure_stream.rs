@@ -1,4 +1,4 @@
-use bytes::{Buf, Bytes, BytesMut};
+use bytes::{Bytes, BytesMut};
 use futures::{
     channel::mpsc::{self, Receiver, Sender},
     stream::iter,
@@ -276,7 +276,7 @@ where
 
     /// Decoding data
     #[inline]
-    fn decode_inner(&mut self, mut frame: BytesMut) -> Result<BytesMut, SecioError> {
+    fn decode_inner(&mut self, mut frame: BytesMut) -> Result<Vec<u8>, SecioError> {
         if let Some(ref mut hmac) = self.decode_hmac {
             if frame.len() < hmac.num_bytes() {
                 debug!("frame too short when decoding secio frame");
@@ -297,10 +297,7 @@ where
             frame.truncate(content_length);
         }
 
-        let mut out = self
-            .decode_cipher
-            .decrypt(&frame)
-            .map(|res| BytesMut::from(res.as_slice()))?;
+        let mut out = self.decode_cipher.decrypt(&frame)?;
 
         if !self.nonce.is_empty() {
             let n = min(out.len(), self.nonce.len());
@@ -308,7 +305,8 @@ where
                 return Err(SecioError::NonceVerificationFailed);
             }
             self.nonce.drain(..n);
-            out.advance(n);
+            self.nonce.shrink_to_fit();
+            out.drain(..n);
         }
         Ok(out)
     }
@@ -322,22 +320,18 @@ where
 
     /// Encoding data
     #[inline]
-    fn encode_inner(&mut self, data: BytesMut) -> BytesMut {
-        let mut out = self
-            .encode_cipher
-            .encrypt(&data[..])
-            .map(|res| BytesMut::from(res.as_slice()))
-            .unwrap();
+    fn encode_inner(&mut self, data: Vec<u8>) -> Bytes {
+        let mut out = self.encode_cipher.encrypt(&data[..]).unwrap();
         if let Some(ref mut hmac) = self.encode_hmac {
             let signature = hmac.sign(&out[..]);
             out.extend_from_slice(signature.as_ref());
         }
-        out
+        Bytes::from(out)
     }
 
-    fn encode(&mut self, data: BytesMut) {
+    fn encode(&mut self, data: Vec<u8>) {
         let frame = self.encode_inner(data);
-        self.pending.push_back(frame.freeze());
+        self.pending.push_back(frame);
     }
 }
 
