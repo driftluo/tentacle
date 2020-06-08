@@ -31,7 +31,7 @@ async fn bind(
 
             Ok((listen_addr, tcp))
         }
-        None => Err(TransportErrorKind::NotSupport(addr)),
+        None => Err(TransportErrorKind::NotSupported(addr)),
     }
 }
 
@@ -52,7 +52,7 @@ async fn connect(
                 )),
             }
         }
-        None => Err(TransportErrorKind::NotSupport(original.unwrap_or(addr))),
+        None => Err(TransportErrorKind::NotSupported(original.unwrap_or(addr))),
     }
 }
 
@@ -75,7 +75,9 @@ impl Transport for TcpTransport {
     fn listen(self, address: Multiaddr) -> Result<Self::ListenFuture> {
         match DNSResolver::new(address.clone()) {
             Some(dns) => {
-                let task = bind(dns.map_err(TransportErrorKind::DNSResolverError));
+                let task = bind(dns.map_err(|(multiaddr, io_error)| {
+                    TransportErrorKind::DNSResolverError(multiaddr, io_error)
+                }));
                 Ok(TcpListenFuture::new(task))
             }
             None => {
@@ -91,7 +93,9 @@ impl Transport for TcpTransport {
                 // Why do this?
                 // Because here need to save the original address as an index to open the specified protocol.
                 let task = connect(
-                    dns.map_err(TransportErrorKind::DNSResolverError),
+                    dns.map_err(|(multiaddr, io_error)| {
+                        TransportErrorKind::DNSResolverError(multiaddr, io_error)
+                    }),
                     self.timeout,
                     Some(address),
                 );
