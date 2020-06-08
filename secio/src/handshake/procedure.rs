@@ -130,7 +130,7 @@ where
     let raw_exchanges = match socket.next().await {
         Some(raw) => raw?,
         None => {
-            let err = io::Error::new(io::ErrorKind::BrokenPipe, "unexpected eof");
+            let err = io::Error::new(io::ErrorKind::UnexpectedEof, "unexpected eof");
             debug!("unexpected eof while waiting for remote's proposition");
             return Err(err.into());
         }
