@@ -225,6 +225,16 @@ impl PublicKey {
         }
     }
 
+    /// Creates a public key directly from a slice
+    pub fn secp256k1_raw_key<K>(key: K) -> Result<Self, crate::error::SecioError>
+    where
+        K: AsRef<[u8]>,
+    {
+        secp256k1::key::PublicKey::from_slice(key.as_ref())
+            .map(|key| PublicKey::Secp256k1(key.serialize().to_vec()))
+            .map_err(|_| crate::error::SecioError::SecretGenerationFailed)
+    }
+
     /// Encode with flatbuffer
     #[cfg(feature = "flatc")]
     pub fn encode(&self) -> Bytes {
@@ -328,5 +338,21 @@ mod tests {
         let byte = raw.clone().encode();
 
         assert_eq!(raw, Exchange::decode(&byte).unwrap())
+    }
+
+    #[test]
+    fn test_pubkey_from_slice() {
+        let privkey = SecioKeyPair::secp256k1_generated();
+        let raw = privkey.public_key();
+        let inner = raw.inner_ref();
+
+        let other = PublicKey::secp256k1_raw_key(inner).unwrap();
+        assert_eq!(raw, other);
+        let uncompressed = secp256k1::key::PublicKey::from_slice(inner)
+            .map(|key| key.serialize_uncompressed().to_vec())
+            .unwrap();
+
+        let other_1 = PublicKey::secp256k1_raw_key(uncompressed).unwrap();
+        assert_eq!(raw, other_1);
     }
 }
