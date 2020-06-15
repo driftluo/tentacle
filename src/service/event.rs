@@ -4,7 +4,7 @@ use std::time::Duration;
 
 use crate::{
     context::SessionContext,
-    error::Error,
+    error::{DialerErrorKind, ListenErrorKind, ProtocolHandleErrorKind},
     multiaddr::Multiaddr,
     service::{future_task::BoxedFutureTask, TargetProtocol, TargetSession},
     ProtocolId, SessionId,
@@ -19,14 +19,14 @@ pub enum ServiceError {
         /// Remote address
         address: Multiaddr,
         /// error
-        error: Error,
+        error: DialerErrorKind,
     },
     /// When listen error
     ListenError {
         /// Listen address
         address: Multiaddr,
         /// error
-        error: Error,
+        error: ListenErrorKind,
     },
     /// Protocol select fail
     ProtocolSelectError {
@@ -43,7 +43,7 @@ pub enum ServiceError {
         /// Protocol id
         proto_id: ProtocolId,
         /// Codec error
-        error: Error,
+        error: std::io::Error,
     },
     /// After initializing the connection, the session does not open any protocol,
     /// suspected fd attack
@@ -56,14 +56,14 @@ pub enum ServiceError {
         /// Session context
         session_context: Arc<SessionContext>,
         /// error, such as `InvalidData`
-        error: Error,
+        error: std::io::Error,
     },
     /// Protocol handle error, will cause memory leaks/abnormal CPU usage
     ProtocolHandleError {
-        /// Error message
-        error: Error,
         /// Protocol id
         proto_id: ProtocolId,
+        /// error
+        error: ProtocolHandleErrorKind,
     },
     /// Session blocked, can't send message, may blocking global system,
     /// If the task is too heavy in a short time, it may be repeated multiple times.

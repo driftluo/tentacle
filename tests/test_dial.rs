@@ -6,7 +6,7 @@ use std::{
 use tentacle::{
     builder::{MetaBuilder, ServiceBuilder},
     context::{ProtocolContext, ProtocolContextMutRef, ServiceContext},
-    error::Error,
+    error::{DialerErrorKind, ListenErrorKind, TransportErrorKind},
     multiaddr::Multiaddr,
     secio::SecioKeyPair,
     service::{
@@ -52,8 +52,8 @@ impl ServiceHandle for EmptySHandle {
 
         let error_type = if let ServiceError::DialerError { error, .. } = error {
             match error {
-                Error::IoError(e) => assert_eq!(e.kind(), io::ErrorKind::ConnectionRefused),
-                e => panic!("test fail {}", e),
+                DialerErrorKind::TransportError(TransportErrorKind::Io(e)) => assert_eq!(io::ErrorKind::ConnectionRefused, e.kind()),
+                e => panic!("test fail, expected DialerErrorKind::TransportError(TransportErrorKind::Io), got {:?}", e),
             }
             ServiceErrorType::Dialer
         } else {
@@ -75,21 +75,24 @@ impl ServiceHandle for SHandle {
     fn handle_error(&mut self, _env: &mut ServiceContext, error: ServiceError) {
         let error_type = match error {
             ServiceError::DialerError { error, .. } => {
-                if self.kind.is_inbound() {
-                    match error {
-                        Error::ConnectSelf => (),
-                        _ => panic!("server test fail: {:?}", error),
-                    }
-                } else {
-                    match error {
-                        Error::RepeatedConnection(id) => assert_eq!(id, self.session_id),
-                        _ => panic!("client test fail: {:?}", error),
-                    }
+                match error {
+                    DialerErrorKind::HandshakeError(_) => (),
+                    DialerErrorKind::RepeatedConnection(id) => assert_eq!(id, self.session_id),
+                    err => panic!(
+                        "test fail, expected DialerErrorKind::RepeatedConnection, got {:?}",
+                        err
+                    ),
                 }
                 ServiceErrorType::Dialer
             }
             ServiceError::ListenError { error, .. } => {
-                assert_eq!(error, Error::RepeatedConnection(self.session_id));
+                match error {
+                    ListenErrorKind::RepeatedConnection(id) => assert_eq!(id, self.session_id),
+                    err => panic!(
+                        "test fail, expected ListenErrorKind::RepeatedConnection, got {:?}",
+                        err
+                    ),
+                }
                 ServiceErrorType::Listen
             }
             _ => panic!("test fail"),

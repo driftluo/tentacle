@@ -1,100 +1,85 @@
 use crate::{secio::error::SecioError, SessionId};
-use futures::channel::mpsc;
-use std::{error, fmt, io};
+use multiaddr::Multiaddr;
+use std::io::Error as IOError;
+use thiserror::Error;
 
-/// Error from p2p framework
-#[derive(Debug)]
-pub enum Error {
+#[derive(Error, Debug)]
+/// Transport Error
+pub enum TransportErrorKind {
     /// IO error
-    IoError(io::Error),
-    /// Connect self
-    ConnectSelf,
+    #[error("transport io error: `{0:?}`")]
+    Io(IOError),
+    /// Protocol not support
+    #[error("multiaddr `{0:?}` is not supported")]
+    NotSupported(Multiaddr),
+    /// Dns resolver error
+    #[error("can not resolve `{0:?}`, io error: `{1:?}`")]
+    DNSResolverError(Multiaddr, IOError),
+}
+
+#[derive(Error, Debug)]
+/// Protocol handle error
+pub enum ProtocolHandleErrorKind {
+    /// protocol handle block, may be user's protocol handle implementation problem
+    #[error("protocol handle block, session id: `{0:?}`")]
+    Block(Option<SessionId>),
+    /// protocol handle abnormally closed, may be user's protocol handle implementation problem
+    #[error("protocol handle abnormally closed, session id: `{0:?}`")]
+    AbnormallyClosed(Option<SessionId>),
+}
+
+#[derive(Error, Debug)]
+/// Detail error kind when dial remote error
+pub enum DialerErrorKind {
+    /// IO error
+    #[error("dialler io error: `{0:?}`")]
+    IoError(IOError),
     /// When dial remote, peer id does not match
+    #[error("peer id not match")]
     PeerIdNotMatch,
     /// Connected to the connected peer
+    #[error("repeated connection, sessio id: `{0:?}`")]
     RepeatedConnection(SessionId),
     /// Handshake error
-    HandshakeError(SecioError),
-    /// DNS resolver error
-    DNSResolverError(io::Error),
-    /// protocol handle block, may be user's protocol handle implementation problem
-    ProtoHandleBlock(Option<SessionId>),
-    /// protocol handle abnormally closed, may be user's protocol handle implementation problem
-    ProtoHandleAbnormallyClosed(Option<SessionId>),
+    #[error("handshake error: `{0:?}`")]
+    HandshakeError(HandshakeErrorKind),
+    /// Transport error
+    #[error("transport error: `{0:?}`")]
+    TransportError(TransportErrorKind),
 }
 
-impl PartialEq for Error {
-    fn eq(&self, other: &Error) -> bool {
-        use self::Error::*;
-        match (self, other) {
-            (ConnectSelf, ConnectSelf) | (PeerIdNotMatch, PeerIdNotMatch) => true,
-            (RepeatedConnection(i), RepeatedConnection(j)) => i == j,
-            (HandshakeError(i), HandshakeError(j)) => i == j,
-            _ => false,
-        }
-    }
+#[derive(Error, Debug)]
+/// Handshake error
+pub enum HandshakeErrorKind {
+    /// Handshake timeout error
+    #[error("timeout error: `{0:?}`")]
+    Timeout(String),
+    /// Secio error
+    #[error("secio error: `{0:?}`")]
+    SecioError(SecioError),
 }
 
-impl From<io::Error> for Error {
-    #[inline]
-    fn from(err: io::Error) -> Error {
-        Error::IoError(err)
-    }
+#[derive(Error, Debug)]
+/// Listener error kind when dial remote error
+pub enum ListenErrorKind {
+    /// IO error
+    #[error("listen io error: `{0:?}`")]
+    IoError(IOError),
+    /// Connected to the connected peer
+    #[error("repeated connection, sessio id: `{0:?}`")]
+    RepeatedConnection(SessionId),
+    /// Transport error
+    #[error("transport error: `{0:?}`")]
+    TransportError(TransportErrorKind),
 }
 
-impl From<mpsc::SendError> for Error {
-    #[inline]
-    fn from(_err: mpsc::SendError) -> Error {
-        Error::IoError(io::ErrorKind::BrokenPipe.into())
-    }
-}
-
-impl<T> From<mpsc::TrySendError<T>> for Error {
-    #[inline]
-    fn from(_err: mpsc::TrySendError<T>) -> Error {
-        Error::IoError(io::ErrorKind::BrokenPipe.into())
-    }
-}
-
-impl From<SecioError> for Error {
-    #[inline]
-    fn from(err: SecioError) -> Error {
-        match err {
-            SecioError::ConnectSelf => Error::ConnectSelf,
-            error => Error::HandshakeError(error),
-        }
-    }
-}
-
-impl error::Error for Error {}
-
-impl fmt::Display for Error {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        match self {
-            Error::IoError(e) => fmt::Display::fmt(e, f),
-            Error::ConnectSelf => write!(f, "Connect self"),
-            Error::RepeatedConnection(id) => {
-                write!(f, "Connected to the connected peer, session id: [{}]", id)
-            }
-            Error::PeerIdNotMatch => write!(f, "When dial remote, peer id does not match"),
-            Error::HandshakeError(e) => fmt::Display::fmt(e, f),
-            Error::DNSResolverError(e) => write!(f, "DNs resolver error: {:?}", e),
-            Error::ProtoHandleBlock(id) => write!(
-                f,
-                "Protocol handle block{}",
-                match id {
-                    Some(id) => format!(", caused by session [{}]", id),
-                    None => "".to_string(),
-                }
-            ),
-            Error::ProtoHandleAbnormallyClosed(id) => write!(
-                f,
-                "Protocol handle abnormally closed{}",
-                match id {
-                    Some(id) => format!(", caused by session [{}]", id),
-                    None => "".to_string(),
-                }
-            ),
-        }
-    }
+#[derive(Error, Debug)]
+/// Send error kind when send service task
+pub enum SendErrorKind {
+    /// Sending failed because a pipe was closed.
+    #[error("broken pipe")]
+    BrokenPipe,
+    /// The operation needs to block to complete, but the blocking operation was requested to not occur.
+    #[error("would block")]
+    WouldBlock,
 }
