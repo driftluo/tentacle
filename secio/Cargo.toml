@@ -1,6 +1,6 @@
 [package]
 name = "tentacle-secio"
-version = "0.3.3"
+version = "0.3.4"
 license = "MIT"
 description = "Secio encryption protocol for p2p"
 authors = ["piaoliu <441594700@qq.com>", "Nervos Core Dev <dev@nervos.org>"]

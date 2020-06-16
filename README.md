@@ -1,4 +1,4 @@
-# P2P
+# Tentacle
 
 [![Build Status](https://api.travis-ci.org/nervosnetwork/tentacle.svg?branch=master)](https://travis-ci.org/nervosnetwork/tentacle)
 ![image](https://img.shields.io/badge/rustc-1.42-blue.svg)
