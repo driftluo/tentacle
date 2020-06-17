@@ -200,15 +200,30 @@ pub(crate) struct Meta {
     pub(crate) before_receive: BeforeReceiveFn,
 }
 
-/// Protocol handle
+/// Protocol handle Contains four modes, each of which has a corresponding behavior,
+/// please carefully consider which mode should be used in the protocol
 pub enum ProtocolHandle<T: Sized> {
-    /// No operation
+    /// No operation: Receive messages, but do not process, silently discard
     Neither,
-    /// Event output
+    /// Event output: It is only received through the `ServiceHandle::handle_proto` interface.
+    /// Any protocol that registers this mode will pass the protocol behavior out of the interface.
+    /// Therefore, this makes the interface a single point of performance bottleneck.
+    /// Please carefully consider whether you need to use this behavior mode.
     Event,
-    /// Both event and callback
+    /// Both event and callback: This is the result of permutation and combination, but this mode is generally not recommended.
+    /// It makes a copy of all protocol data and outputs it to both the Event and Callback receivers.
+    /// This means that it not only has a single point of performance problems,
+    /// but also has data replication consumption and redundant execution actions
+    ///
+    /// ---
+    ///
+    /// By the way, if a protocol registers `ServiceProtocol` and `SessionProtocol` at the same time,
+    /// it is also sent to two receiving ends at the same time, and if use both mode, there will be three copies
     Both(T),
-    /// Callback handle
+    /// Callback handle: The behavior of receiving the protocol through the corresponding
+    /// `ServiceProtocol` or `SessionProtocol`, according to the registered trait, has different
+    /// behaviors, each has its own advantages and disadvantages, please carefully consider.
+    /// This is also the recommended way to use this crate.
     Callback(T),
 }
 
@@ -334,6 +349,12 @@ impl BlockingFlag {
 impl Default for BlockingFlag {
     fn default() -> Self {
         BlockingFlag(0b1111)
+    }
+}
+
+impl From<u8> for BlockingFlag {
+    fn from(inner: u8) -> BlockingFlag {
+        BlockingFlag(inner)
     }
 }
 

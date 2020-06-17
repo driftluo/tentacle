@@ -1,3 +1,12 @@
+## 0.3.0-alpha.5
+
+### Features
+- Reduce box new consume on listen(#230)
+- Secio: reduce one copy behavior during transmission(#233)
+- BreakChange: split the big `Error` enum into a several small `ErrorKind` enums(#234)
+- Support parse slice to pubkey(#235)
+- Add doc for `ProtocolHandle`
+
 ## 0.3.0-alpha.4
 
 ### Bug Fix
