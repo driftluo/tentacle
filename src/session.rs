@@ -144,7 +144,8 @@ pub(crate) enum SessionEvent {
 pub(crate) struct Session<T> {
     socket: YamuxSession<T>,
 
-    protocol_configs: HashMap<String, Arc<Meta>>,
+    protocol_configs_by_name: HashMap<String, Arc<Meta>>,
+    protocol_configs_by_id: HashMap<ProtocolId, Arc<Meta>>,
 
     config: SessionConfig,
 
@@ -187,7 +188,6 @@ pub(crate) struct Session<T> {
     /// Delay notify with abnormally poor machines
     delay: Arc<AtomicBool>,
 
-    substreams_control: Arc<AtomicBool>,
     last_sent: Instant,
     future_task_sender: mpsc::Sender<BoxedFutureTask>,
 }
@@ -227,7 +227,8 @@ where
 
         Session {
             socket,
-            protocol_configs: meta.protocol_configs,
+            protocol_configs_by_name: meta.protocol_configs_by_name,
+            protocol_configs_by_id: meta.protocol_configs_by_id,
             config: meta.config,
             timeout: meta.timeout,
             context: meta.context,
@@ -247,7 +248,6 @@ where
             session_proto_senders: meta.session_proto_senders,
             delay: Arc::new(AtomicBool::new(false)),
             state: SessionState::Normal,
-            substreams_control: Arc::new(AtomicBool::new(false)),
             event: meta.event,
             last_sent: Instant::now(),
             future_task_sender,
@@ -324,7 +324,9 @@ where
             }
         };
         debug!("try open proto, {}", proto_name);
-        let versions = self.protocol_configs[proto_name].support_versions.clone();
+        let versions = self.protocol_configs_by_name[proto_name]
+            .support_versions
+            .clone();
         let proto_info = ProtocolInfo::new(&proto_name, versions);
 
         let task = client_select(handle, proto_info);
@@ -424,7 +426,7 @@ where
     /// Handling client-initiated open protocol sub stream requests
     fn handle_sub_stream(&mut self, sub_stream: StreamHandle) {
         let proto_metas = self
-            .protocol_configs
+            .protocol_configs_by_name
             .values()
             .map(|proto_meta| {
                 let name = (proto_meta.name)(proto_meta.id);
@@ -445,7 +447,7 @@ where
         version: String,
         sub_stream: Box<Framed<StreamHandle, LengthDelimitedCodec>>,
     ) {
-        let proto = match self.protocol_configs.get(&name) {
+        let proto = match self.protocol_configs_by_name.get(&name) {
             Some(proto) => proto,
             None => {
                 // if the server intentionally returns malicious protocol data with arbitrary
@@ -479,7 +481,6 @@ where
         let mut proto_stream = SubstreamBuilder::new(
             self.proto_event_sender.clone(),
             session_to_proto_receiver,
-            self.substreams_control.clone(),
             self.context.clone(),
         )
         .proto_id(proto_id)
@@ -623,18 +624,14 @@ where
             SessionEvent::ProtocolOpen { proto_id, .. } => {
                 if self.proto_streams.contains_key(&proto_id) {
                     debug!("proto [{}] has been open", proto_id);
+                } else if let Some(name) = self
+                    .protocol_configs_by_id
+                    .get(&proto_id)
+                    .map(|meta| (meta.name)(meta.id))
+                {
+                    self.open_proto_stream(&name)
                 } else {
-                    let name = self.protocol_configs.values().find_map(|meta| {
-                        if meta.id == proto_id {
-                            Some((meta.name)(meta.id))
-                        } else {
-                            None
-                        }
-                    });
-                    match name {
-                        Some(name) => self.open_proto_stream(&name),
-                        None => debug!("This protocol [{}] is not supported", proto_id),
-                    }
+                    debug!("This protocol [{}] is not supported", proto_id)
                 }
             }
             SessionEvent::ProtocolClose { proto_id, .. } => {
@@ -795,17 +792,16 @@ where
     /// Try close all protocol
     #[inline]
     fn close_all_proto(&mut self, cx: &mut Context) {
-        if self.substreams_control.load(Ordering::SeqCst) {
+        if self.context.closed.load(Ordering::SeqCst) {
             self.close_session(cx)
         }
-        self.substreams_control.store(true, Ordering::SeqCst);
+        self.context.closed.store(true, Ordering::SeqCst);
         self.set_delay(cx);
     }
 
     /// Close session
     fn close_session(&mut self, cx: &mut Context) {
         self.context.closed.store(true, Ordering::SeqCst);
-        self.substreams_control.store(true, Ordering::SeqCst);
 
         self.read_buf.push_back(SessionEvent::SessionClose {
             id: self.context.id,
@@ -931,7 +927,8 @@ where
 
 pub(crate) struct SessionMeta {
     config: SessionConfig,
-    protocol_configs: HashMap<String, Arc<Meta>>,
+    protocol_configs_by_name: HashMap<String, Arc<Meta>>,
+    protocol_configs_by_id: HashMap<ProtocolId, Arc<Meta>>,
     context: Arc<SessionContext>,
     timeout: Duration,
     keep_buffer: bool,
@@ -944,7 +941,8 @@ impl SessionMeta {
     pub fn new(timeout: Duration, context: Arc<SessionContext>) -> Self {
         SessionMeta {
             config: SessionConfig::default(),
-            protocol_configs: HashMap::new(),
+            protocol_configs_by_name: HashMap::new(),
+            protocol_configs_by_id: HashMap::new(),
             context,
             timeout,
             keep_buffer: false,
@@ -954,8 +952,13 @@ impl SessionMeta {
         }
     }
 
-    pub fn protocol(mut self, config: HashMap<String, Arc<Meta>>) -> Self {
-        self.protocol_configs = config;
+    pub fn protocol_by_name(mut self, config: HashMap<String, Arc<Meta>>) -> Self {
+        self.protocol_configs_by_name = config;
+        self
+    }
+
+    pub fn protocol_by_id(mut self, config: HashMap<ProtocolId, Arc<Meta>>) -> Self {
+        self.protocol_configs_by_id = config;
         self
     }
 

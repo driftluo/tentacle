@@ -32,7 +32,7 @@ use crate::{
         future_task::{BoxedFutureTask, FutureTaskManager},
     },
     session::{Session, SessionEvent, SessionMeta},
-    traits::{ServiceHandle, ServiceProtocol, SessionProtocol},
+    traits::ServiceHandle,
     transports::{MultiIncoming, MultiTransport, Transport},
     upnp::IGDClient,
     utils::extract_peer_id,
@@ -62,24 +62,6 @@ pub(crate) const RECEIVED_SIZE: usize = 512;
 pub(crate) const SEND_SIZE: usize = 512;
 pub(crate) const DELAY_TIME: Duration = Duration::from_millis(300);
 
-/// Protocol handle value
-pub(crate) enum InnerProtocolHandle {
-    /// Service level protocol
-    Service(
-        (
-            Box<dyn ServiceProtocol + Send + 'static + Unpin>,
-            BlockingFlag,
-        ),
-    ),
-    /// Session level protocol
-    Session(
-        (
-            Box<dyn SessionProtocol + Send + 'static + Unpin>,
-            BlockingFlag,
-        ),
-    ),
-}
-
 type SessionProtoHandles = HashMap<
     (SessionId, ProtocolId),
     (
@@ -92,7 +74,7 @@ type Result<T> = std::result::Result<T, TransportErrorKind>;
 
 /// An abstraction of p2p service, currently only supports TCP protocol
 pub struct Service<T> {
-    protocol_configs: HashMap<String, ProtocolMeta>,
+    protocol_configs: HashMap<ProtocolId, ProtocolMeta>,
 
     sessions: HashMap<SessionId, SessionController>,
 
@@ -165,7 +147,7 @@ where
 {
     /// New a Service
     pub(crate) fn new(
-        protocol_configs: HashMap<String, ProtocolMeta>,
+        protocol_configs: HashMap<ProtocolId, ProtocolMeta>,
         handle: T,
         key_pair: Option<SecioKeyPair>,
         forever: bool,
@@ -216,7 +198,6 @@ where
                 proto_infos,
                 key_pair,
                 shutdown.clone(),
-                config.timeout,
             ),
             config,
             service_task_receiver,
@@ -355,7 +336,7 @@ where
     }
 
     /// Get service current protocol configure
-    pub fn protocol_configs(&self) -> &HashMap<String, ProtocolMeta> {
+    pub fn protocol_configs(&self) -> &HashMap<ProtocolId, ProtocolMeta> {
         &self.protocol_configs
     }
 
@@ -563,58 +544,22 @@ where
 
     /// Spawn protocol handle
     #[inline]
-    fn handle_open(
-        &mut self,
-        handle: InnerProtocolHandle,
-        proto_id: ProtocolId,
-        id: Option<SessionId>,
-    ) {
-        match handle {
-            InnerProtocolHandle::Service((handle, flag)) => {
-                debug!("init service level [{}] proto handle", proto_id);
-                let (sender, receiver) = mpsc::channel(RECEIVED_SIZE);
-                self.service_proto_handles.insert(proto_id, sender);
-
-                let mut stream = ServiceProtocolStream::new(
-                    handle,
-                    self.service_context.clone_self(),
-                    receiver,
-                    (proto_id, flag),
-                    self.session_event_sender.clone(),
-                    (self.shutdown.clone(), self.future_task_sender.clone()),
-                );
-                stream.handle_event(ServiceProtocolEvent::Init);
-                let (sender, receiver) = futures::channel::oneshot::channel();
-                let handle = tokio::spawn(async move {
-                    future::select(
-                        async move {
-                            loop {
-                                if stream.next().await.is_none() {
-                                    break;
-                                }
-                            }
-                        }
-                        .boxed(),
-                        receiver,
-                    )
-                    .await;
-                });
-                self.wait_handle.push((Some(sender), handle));
-            }
-
-            InnerProtocolHandle::Session((handle, flag)) => {
-                let id = id.unwrap();
+    fn session_handles_open(&mut self, id: SessionId) {
+        for (proto_id, meta) in self.protocol_configs.iter_mut() {
+            if let ProtocolHandle::Callback(handle) | ProtocolHandle::Both(handle) =
+                meta.session_handle()
+            {
                 if let Some(session_control) = self.sessions.get(&id) {
                     debug!("init session [{}] level proto [{}] handle", id, proto_id);
                     let (sender, receiver) = mpsc::channel(RECEIVED_SIZE);
-                    self.session_proto_handles.insert((id, proto_id), sender);
+                    self.session_proto_handles.insert((id, *proto_id), sender);
 
                     let mut stream = SessionProtocolStream::new(
                         handle,
                         self.service_context.clone_self(),
                         Arc::clone(&session_control.inner),
                         receiver,
-                        (proto_id, flag),
+                        (*proto_id, meta.blocking_flag()),
                         self.session_event_sender.clone(),
                         (self.shutdown.clone(), self.future_task_sender.clone()),
                     );
@@ -634,31 +579,30 @@ where
                         .await;
                     });
                     self.session_wait_handle
-                        .insert((id, proto_id), (Some(sender), handle));
+                        .insert((id, *proto_id), (Some(sender), handle));
                 }
+            } else {
+                debug!("can't find proto [{}] session handle", proto_id);
             }
         }
     }
 
     fn push_session_message(
-        &mut self,
-        session_id: SessionId,
-        proto_id: ProtocolId,
+        ctx: &SessionController,
         priority: Priority,
+        proto_id: ProtocolId,
+        buf: &mut VecDeque<(SessionId, SessionEvent)>,
         data: Bytes,
     ) {
-        if let Some(controller) = self.sessions.get(&session_id) {
-            controller.inner.incr_pending_data_size(data.len());
-            let message_event = SessionEvent::ProtocolMessage {
-                id: session_id,
-                proto_id,
-                priority,
-                data,
-            };
-            self.push_back(priority, session_id, message_event);
-        }
+        ctx.inner.incr_pending_data_size(data.len());
+        let message_event = SessionEvent::ProtocolMessage {
+            id: ctx.inner.id,
+            proto_id,
+            priority,
+            data,
+        };
+        buf.push_back((ctx.inner.id, message_event));
     }
-
     fn handle_message(
         &mut self,
         cx: &mut Context,
@@ -671,10 +615,16 @@ where
             Some(function) => function(data),
             None => data,
         };
+        let buf = match priority {
+            Priority::Normal => &mut self.write_buf,
+            Priority::High => &mut self.high_write_buf,
+        };
         match target {
             // Send data to the specified protocol for the specified session.
             TargetSession::Single(id) => {
-                self.push_session_message(id, proto_id, priority, data);
+                if let Some(control) = self.sessions.get(&id) {
+                    Service::<()>::push_session_message(control, priority, proto_id, buf, data)
+                }
             }
             // Send data to the specified protocol for the specified sessions.
             TargetSession::Multi(ids) => {
@@ -685,7 +635,15 @@ where
                         proto_id,
                         data.len()
                     );
-                    self.push_session_message(id, proto_id, priority, data.clone());
+                    if let Some(control) = self.sessions.get(&id) {
+                        Service::<()>::push_session_message(
+                            control,
+                            priority,
+                            proto_id,
+                            buf,
+                            data.clone(),
+                        )
+                    }
                 }
             }
             // Broadcast data for a specified protocol.
@@ -696,48 +654,19 @@ where
                     proto_id,
                     data.len()
                 );
-                for id in self.sessions.keys().cloned().collect::<Vec<SessionId>>() {
-                    self.push_session_message(id, proto_id, priority, data.clone());
+                for control in self.sessions.values() {
+                    // Partial-borrowed problem on here
+                    Service::<()>::push_session_message(
+                        control,
+                        priority,
+                        proto_id,
+                        buf,
+                        data.clone(),
+                    )
                 }
             }
         }
         self.distribute_to_session(cx);
-    }
-
-    /// Get the callback handle of the specified protocol
-    #[inline]
-    fn proto_handle(&mut self, session: bool, proto_id: ProtocolId) -> Option<InnerProtocolHandle> {
-        let handle = self.protocol_configs.values_mut().find_map(|proto| {
-            if proto.id() == proto_id {
-                if session {
-                    match proto.session_handle() {
-                        ProtocolHandle::Callback(handle) | ProtocolHandle::Both(handle) => Some(
-                            InnerProtocolHandle::Session((handle, proto.blocking_flag())),
-                        ),
-                        _ => None,
-                    }
-                } else {
-                    match proto.service_handle() {
-                        ProtocolHandle::Callback(handle) | ProtocolHandle::Both(handle) => Some(
-                            InnerProtocolHandle::Service((handle, proto.blocking_flag())),
-                        ),
-                        _ => None,
-                    }
-                }
-            } else {
-                None
-            }
-        });
-
-        if handle.is_none() {
-            debug!(
-                "can't find proto [{}] {} handle",
-                proto_id,
-                if session { "session" } else { "service" }
-            );
-        }
-
-        handle
     }
 
     /// Handshake
@@ -900,13 +829,11 @@ where
                     } else {
                         address.push(Protocol::P2P(Cow::Owned(key.peer_id().into_bytes())))
                     }
-
-                    self.generate_next_session();
                 }
             }
-        } else {
-            self.generate_next_session();
         }
+
+        self.generate_next_session();
 
         let session_closed = Arc::new(AtomicBool::new(false));
         let pending_data_size = Arc::new(AtomicUsize::new(0));
@@ -932,25 +859,18 @@ where
             .insert(session_control.inner.id, session_control);
 
         // Open all session protocol handles
-        let proto_ids = self
-            .protocol_configs
-            .values()
-            .map(ProtocolMeta::id)
-            .collect::<Vec<ProtocolId>>();
+        self.session_handles_open(self.next_session);
 
-        for proto_id in proto_ids {
-            if let Some(handle) = self.proto_handle(true, proto_id) {
-                self.handle_open(handle, proto_id, Some(self.next_session))
-            }
-        }
+        let mut by_name = HashMap::with_capacity(self.protocol_configs.len());
+        let mut by_id = HashMap::with_capacity(self.protocol_configs.len());
+        self.protocol_configs.iter().for_each(|(key, value)| {
+            by_name.insert(value.name(), value.inner.clone());
+            by_id.insert(*key, value.inner.clone());
+        });
 
         let meta = SessionMeta::new(self.config.timeout, session_context.clone())
-            .protocol(
-                self.protocol_configs
-                    .iter()
-                    .map(|(key, value)| (key.clone(), value.inner.clone()))
-                    .collect(),
-            )
+            .protocol_by_name(by_name)
+            .protocol_by_id(by_id)
             .config(self.config.session_config)
             .keep_buffer(self.config.keep_buffer)
             .service_proto_senders(self.service_proto_handles.clone())
@@ -981,23 +901,19 @@ where
             match target {
                 TargetProtocol::All => {
                     self.protocol_configs
-                        .keys()
-                        .for_each(|name| session.open_proto_stream(name));
+                        .values()
+                        .for_each(|meta| session.open_proto_stream(&meta.name()));
                 }
                 TargetProtocol::Single(proto_id) => {
-                    self.protocol_configs
-                        .values()
-                        .find(|meta| meta.id() == proto_id)
-                        .and_then(|meta| {
-                            session.open_proto_stream(&meta.name());
-                            Some(())
-                        });
+                    if let Some(meta) = self.protocol_configs.get(&proto_id) {
+                        session.open_proto_stream(&meta.name());
+                    }
                 }
-                TargetProtocol::Multi(proto_ids) => self
-                    .protocol_configs
-                    .values()
-                    .filter(|meta| proto_ids.contains(&meta.id()))
-                    .for_each(|meta| session.open_proto_stream(&meta.name())),
+                TargetProtocol::Multi(proto_ids) => proto_ids.into_iter().for_each(|id| {
+                    if let Some(meta) = self.protocol_configs.get(&id) {
+                        session.open_proto_stream(&meta.name());
+                    }
+                }),
             }
         }
 
@@ -1237,17 +1153,44 @@ where
     }
 
     fn init_proto_handles(&mut self) {
-        let ids = self
-            .protocol_configs
-            .values_mut()
-            .map(|meta| (meta.id(), meta.before_send.take()))
-            .collect::<Vec<(ProtocolId, _)>>();
-        for (id, before_send) in ids {
-            if let Some(handle) = self.proto_handle(false, id) {
-                self.handle_open(handle, id, None);
+        for (proto_id, meta) in self.protocol_configs.iter_mut() {
+            if let ProtocolHandle::Callback(handle) | ProtocolHandle::Both(handle) =
+                meta.service_handle()
+            {
+                debug!("init service level [{}] proto handle", proto_id);
+                let (sender, receiver) = mpsc::channel(RECEIVED_SIZE);
+                self.service_proto_handles.insert(*proto_id, sender);
+
+                let mut stream = ServiceProtocolStream::new(
+                    handle,
+                    self.service_context.clone_self(),
+                    receiver,
+                    (*proto_id, meta.blocking_flag()),
+                    self.session_event_sender.clone(),
+                    (self.shutdown.clone(), self.future_task_sender.clone()),
+                );
+                stream.handle_event(ServiceProtocolEvent::Init);
+                let (sender, receiver) = futures::channel::oneshot::channel();
+                let handle = tokio::spawn(async move {
+                    future::select(
+                        async move {
+                            loop {
+                                if stream.next().await.is_none() {
+                                    break;
+                                }
+                            }
+                        }
+                        .boxed(),
+                        receiver,
+                    )
+                    .await;
+                });
+                self.wait_handle.push((Some(sender), handle));
+            } else {
+                debug!("can't find proto [{}] service handle", proto_id);
             }
-            if let Some(function) = before_send {
-                self.before_sends.insert(id, function);
+            if let Some(function) = meta.before_send.take() {
+                self.before_sends.insert(*proto_id, function);
             }
         }
     }
@@ -1529,11 +1472,7 @@ where
             }
             ServiceTask::ProtocolOpen { session_id, target } => match target {
                 TargetProtocol::All => {
-                    let ids = self
-                        .protocol_configs
-                        .values()
-                        .map(ProtocolMeta::id)
-                        .collect::<Vec<_>>();
+                    let ids = self.protocol_configs.keys().copied().collect::<Vec<_>>();
                     ids.into_iter().for_each(|id| {
                         self.protocol_open(cx, session_id, id, String::default(), Source::External)
                     });

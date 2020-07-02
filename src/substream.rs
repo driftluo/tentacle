@@ -101,8 +101,6 @@ pub(crate) struct SubStream<U> {
 
     /// Delay notify with abnormally poor machines
     delay: Arc<AtomicBool>,
-
-    closed: Arc<AtomicBool>,
 }
 
 impl<U> SubStream<U>
@@ -230,7 +228,7 @@ where
             self.session_proto_buf
                 .push_back(SessionProtocolEvent::Closed);
 
-            if self.closed.load(Ordering::SeqCst) {
+            if self.context.closed.load(Ordering::SeqCst) {
                 self.session_proto_buf
                     .push_back(SessionProtocolEvent::Disconnected);
             }
@@ -250,7 +248,7 @@ where
             proto_id: self.proto_id,
         });
 
-        if !self.closed.load(Ordering::SeqCst) {
+        if !self.context.closed.load(Ordering::SeqCst) {
             let events = self.read_buf.split_off(0);
             let mut sender = self.event_sender.clone();
 
@@ -525,9 +523,9 @@ where
 
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Option<Self::Item>> {
         // double check here
-        if self.dead || self.closed.load(Ordering::SeqCst) {
+        if self.dead || self.context.closed.load(Ordering::SeqCst) {
             debug!(
-                "SubStream({}) finished, self.dead || self.closed.load(Ordering::SeqCst), head",
+                "SubStream({}) finished, self.dead || self.context.closed.load(Ordering::SeqCst), head",
                 self.id
             );
             self.close_proto_stream(cx);
@@ -571,9 +569,9 @@ where
 
         self.recv_event(cx);
 
-        if self.dead || self.closed.load(Ordering::SeqCst) {
+        if self.dead || self.context.closed.load(Ordering::SeqCst) {
             debug!(
-                "SubStream({}) finished, self.dead || self.closed.load(Ordering::SeqCst), tail",
+                "SubStream({}) finished, self.dead || self.context.closed.load(Ordering::SeqCst), tail",
                 self.id
             );
             if !self.keep_buffer {
@@ -604,14 +602,12 @@ pub(crate) struct SubstreamBuilder {
     event_sender: mpsc::Sender<ProtocolEvent>,
     /// Receive events from session
     event_receiver: mpsc::Receiver<ProtocolEvent>,
-    closed: Arc<AtomicBool>,
 }
 
 impl SubstreamBuilder {
     pub fn new(
         event_sender: mpsc::Sender<ProtocolEvent>,
         event_receiver: mpsc::Receiver<ProtocolEvent>,
-        closed: Arc<AtomicBool>,
         context: Arc<SessionContext>,
     ) -> Self {
         SubstreamBuilder {
@@ -620,7 +616,6 @@ impl SubstreamBuilder {
             before_receive: None,
             event_receiver,
             event_sender,
-            closed,
             context,
             id: 0,
             proto_id: 0.into(),
@@ -705,8 +700,6 @@ impl SubstreamBuilder {
             before_receive: self.before_receive,
 
             delay: Arc::new(AtomicBool::new(false)),
-
-            closed: self.closed,
         }
     }
 }

@@ -131,16 +131,9 @@ impl ServiceContext {
         proto_infos: HashMap<ProtocolId, ProtocolInfo>,
         key_pair: Option<SecioKeyPair>,
         closed: Arc<AtomicBool>,
-        timeout: Duration,
     ) -> Self {
         ServiceContext {
-            inner: ServiceControl::new(
-                service_task_sender,
-                quick_task_sender,
-                proto_infos,
-                timeout,
-                closed,
-            ),
+            inner: ServiceControl::new(service_task_sender, quick_task_sender, proto_infos, closed),
             key_pair,
             listens: Vec::new(),
         }

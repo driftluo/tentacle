@@ -29,7 +29,6 @@ pub struct ServiceControl {
     pub(crate) proto_infos: Arc<HashMap<ProtocolId, ProtocolInfo>>,
     pub(crate) normal_count: Arc<AtomicUsize>,
     pub(crate) quick_count: Arc<AtomicUsize>,
-    timeout: Duration,
     closed: Arc<AtomicBool>,
 }
 
@@ -39,7 +38,6 @@ impl ServiceControl {
         service_task_sender: mpsc::UnboundedSender<ServiceTask>,
         quick_task_sender: mpsc::UnboundedSender<ServiceTask>,
         proto_infos: HashMap<ProtocolId, ProtocolInfo>,
-        timeout: Duration,
         closed: Arc<AtomicBool>,
     ) -> Self {
         ServiceControl {
@@ -48,7 +46,6 @@ impl ServiceControl {
             proto_infos: Arc::new(proto_infos),
             normal_count: Arc::new(AtomicUsize::new(0)),
             quick_count: Arc::new(AtomicUsize::new(0)),
-            timeout,
             closed,
         }
     }

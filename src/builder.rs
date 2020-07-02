@@ -16,7 +16,7 @@ use crate::{
 
 /// Builder for Service
 pub struct ServiceBuilder {
-    inner: HashMap<String, ProtocolMeta>,
+    inner: HashMap<ProtocolId, ProtocolMeta>,
     key_pair: Option<SecioKeyPair>,
     forever: bool,
     config: ServiceConfig,
@@ -42,7 +42,7 @@ impl ServiceBuilder {
             self.config.event.insert(protocol.id());
         }
 
-        self.inner.insert(protocol.name(), protocol);
+        self.inner.insert(protocol.id(), protocol);
         self
     }
 
