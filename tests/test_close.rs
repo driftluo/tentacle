@@ -44,7 +44,7 @@ impl ServiceProtocol for PHandle {
             self.count += 1;
             if self.count >= 4 {
                 let proto_id = context.proto_id;
-                let _res = context.set_service_notify(proto_id, Duration::from_secs(2), 0);
+                let _res = context.set_service_notify(proto_id, Duration::from_millis(200), 0);
             }
         }
     }
