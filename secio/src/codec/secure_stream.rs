@@ -552,17 +552,7 @@ mod tests {
             );
             let mut handle = secure.create_handle().unwrap();
 
-            tokio::spawn(async move {
-                loop {
-                    match secure.next().await {
-                        Some(Err(_)) => {
-                            break;
-                        }
-                        None => break,
-                        _ => (),
-                    }
-                }
-            });
+            tokio::spawn(secure.for_each(|_| futures::future::ready(())));
 
             let _res = handle.write_all(&nonce).await;
             let _res = handle.write_all(&data_clone[..]).await;
