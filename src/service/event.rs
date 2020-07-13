@@ -139,8 +139,6 @@ pub(crate) enum ServiceTask {
         target: TargetSession,
         /// protocol id
         proto_id: ProtocolId,
-        /// Message sending priority
-        priority: Priority,
         /// data
         data: Bytes,
     },
@@ -228,12 +226,11 @@ impl fmt::Debug for ServiceTask {
             ProtocolMessage {
                 target,
                 proto_id,
-                priority,
                 data,
             } => write!(
                 f,
-                "id: {:?}, proto_id: {}, message: {:?}, priority: {:?}",
-                target, proto_id, data, priority
+                "id: {:?}, proto_id: {}, message: {:?}",
+                target, proto_id, data
             ),
             SetProtocolNotify {
                 proto_id, token, ..
@@ -272,23 +269,6 @@ impl fmt::Debug for ServiceTask {
                 proto_id,
             } => write!(f, "Close session [{}] proto [{}]", session_id, proto_id),
             Shutdown(_) => write!(f, "Try close service"),
-        }
-    }
-}
-
-/// Priority for send
-#[derive(Copy, Clone, Debug, Eq, PartialEq, Hash)]
-pub enum Priority {
-    High,
-    Normal,
-}
-
-impl Priority {
-    #[inline]
-    pub fn is_high(self) -> bool {
-        match self {
-            Priority::High => true,
-            Priority::Normal => false,
         }
     }
 }

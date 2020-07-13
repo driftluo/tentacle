@@ -14,7 +14,7 @@ mod unbound;
 pub(crate) mod mpsc {
     pub use super::bound::{channel, Receiver, Sender};
     pub use super::unbound::{unbounded, UnboundedReceiver, UnboundedSender};
-    pub use super::{SendError, TrySendError};
+    pub use super::{Priority, SendError, TrySendError};
 }
 
 use std::fmt;
@@ -165,5 +165,22 @@ impl fmt::Debug for TryRecvError {
 impl fmt::Display for TryRecvError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "receiver channel is empty")
+    }
+}
+
+/// Priority for send
+#[derive(Copy, Clone, Debug, Eq, PartialEq, Hash)]
+pub enum Priority {
+    High,
+    Normal,
+}
+
+impl Priority {
+    #[inline]
+    pub fn is_high(self) -> bool {
+        match self {
+            Priority::High => true,
+            Priority::Normal => false,
+        }
     }
 }

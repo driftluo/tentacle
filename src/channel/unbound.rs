@@ -1,9 +1,6 @@
-use crate::{
-    channel::{
-        decode_state, encode_state, queue::Queue, SendError, SendErrorKind, TryRecvError,
-        TrySendError, INIT_STATE, MAX_BUFFER, MAX_CAPACITY, OPEN_MASK,
-    },
-    service::event::Priority,
+use crate::channel::{
+    decode_state, encode_state, queue::Queue, Priority, SendError, SendErrorKind, TryRecvError,
+    TrySendError, INIT_STATE, MAX_BUFFER, MAX_CAPACITY, OPEN_MASK,
 };
 use futures::{
     stream::{FusedStream, Stream},

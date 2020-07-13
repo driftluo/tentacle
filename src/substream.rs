@@ -15,10 +15,10 @@ use tokio_util::codec::{length_delimited::LengthDelimitedCodec, Framed};
 
 use crate::{
     builder::BeforeReceive,
-    channel::mpsc as priority_mpsc,
+    channel::{mpsc as priority_mpsc, mpsc::Priority},
     context::SessionContext,
     protocol_handle_stream::{ServiceProtocolEvent, SessionProtocolEvent},
-    service::{config::SessionConfig, event::Priority, DELAY_TIME},
+    service::{config::SessionConfig, DELAY_TIME},
     traits::Codec,
     yamux::StreamHandle,
     ProtocolId, StreamId,
@@ -49,8 +49,6 @@ pub(crate) enum ProtocolEvent {
         id: StreamId,
         /// Protocol id
         proto_id: ProtocolId,
-        /// priority
-        priority: Priority,
         /// Data
         data: bytes::Bytes,
     },
@@ -279,9 +277,9 @@ where
     }
 
     /// Handling commands send by session
-    fn handle_proto_event(&mut self, cx: &mut Context, event: ProtocolEvent) {
+    fn handle_proto_event(&mut self, cx: &mut Context, event: ProtocolEvent, priority: Priority) {
         match event {
-            ProtocolEvent::Message { data, priority, .. } => {
+            ProtocolEvent::Message { data, .. } => {
                 debug!("proto [{}] send data: {}", self.proto_id, data.len());
                 self.push_back(priority, data);
 
@@ -382,7 +380,9 @@ where
             }
 
             match Pin::new(&mut self.event_receiver).as_mut().poll_next(cx) {
-                Poll::Ready(Some((_, event))) => self.handle_proto_event(cx, event),
+                Poll::Ready(Some((priority, event))) => {
+                    self.handle_proto_event(cx, event, priority)
+                }
                 Poll::Ready(None) => {
                     // Must be session close
                     self.dead = true;
@@ -452,7 +452,6 @@ where
                                 id: self.id,
                                 proto_id: self.proto_id,
                                 data,
-                                priority: Priority::Normal,
                             },
                         )
                     }

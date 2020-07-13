@@ -18,7 +18,7 @@ use std::{
 use tokio::prelude::{AsyncRead, AsyncWrite};
 
 use crate::{
-    channel::mpsc as priority_mpsc,
+    channel::{mpsc as priority_mpsc, mpsc::Priority},
     context::{ServiceContext, SessionContext, SessionController},
     error::{DialerErrorKind, ListenErrorKind, ProtocolHandleErrorKind, TransportErrorKind},
     multiaddr::{Multiaddr, Protocol},
@@ -29,7 +29,7 @@ use crate::{
     secio::{PublicKey, SecioKeyPair},
     service::{
         config::{ServiceConfig, State},
-        event::{Priority, ServiceTask},
+        event::ServiceTask,
         future_task::{BoxedFutureTask, FutureTaskManager},
         helper::{HandshakeContext, Listener, Source},
     },
@@ -523,7 +523,7 @@ where
 
         if error {
             // if handle panic, close service
-            self.handle_service_task(cx, ServiceTask::Shutdown(false));
+            self.handle_service_task(cx, ServiceTask::Shutdown(false), Priority::High);
         }
 
         if self.read_service_buf.capacity() > BUF_SHRINK_THRESHOLD {
@@ -594,7 +594,6 @@ where
 
     fn push_session_message(
         ctx: &SessionController,
-        priority: Priority,
         proto_id: ProtocolId,
         buf: &mut VecDeque<(SessionId, SessionEvent)>,
         data: Bytes,
@@ -603,7 +602,6 @@ where
         let message_event = SessionEvent::ProtocolMessage {
             id: ctx.inner.id,
             proto_id,
-            priority,
             data,
         };
         buf.push_back((ctx.inner.id, message_event));
@@ -629,7 +627,7 @@ where
             // Send data to the specified protocol for the specified session.
             TargetSession::Single(id) => {
                 if let Some(control) = self.sessions.get(&id) {
-                    Self::push_session_message(control, priority, proto_id, buf, data)
+                    Self::push_session_message(control, proto_id, buf, data)
                 }
             }
             // Send data to the specified protocol for the specified sessions.
@@ -642,7 +640,7 @@ where
                         data.len()
                     );
                     if let Some(control) = self.sessions.get(&id) {
-                        Self::push_session_message(control, priority, proto_id, buf, data.clone())
+                        Self::push_session_message(control, proto_id, buf, data.clone())
                     }
                 }
             }
@@ -656,7 +654,7 @@ where
                 );
                 for control in self.sessions.values() {
                     // Partial-borrowed problem on here
-                    Self::push_session_message(control, priority, proto_id, buf, data.clone())
+                    Self::push_session_message(control, proto_id, buf, data.clone())
                 }
             }
         }
@@ -1258,18 +1256,17 @@ where
                     ServiceError::ProtocolHandleError { error, proto_id },
                 );
                 // if handle panic, close service
-                self.handle_service_task(cx, ServiceTask::Shutdown(false));
+                self.handle_service_task(cx, ServiceTask::Shutdown(false), Priority::High);
             }
         }
     }
 
     /// Handling various tasks sent externally
-    fn handle_service_task(&mut self, cx: &mut Context, event: ServiceTask) {
+    fn handle_service_task(&mut self, cx: &mut Context, event: ServiceTask, priority: Priority) {
         match event {
             ServiceTask::ProtocolMessage {
                 target,
                 proto_id,
-                priority,
                 data,
             } => {
                 self.handle_message(cx, target, proto_id, priority, data);
@@ -1441,7 +1438,7 @@ where
                 .as_mut()
                 .poll_next(cx)
             {
-                Poll::Ready(Some((_, task))) => self.handle_service_task(cx, task),
+                Poll::Ready(Some((priority, task))) => self.handle_service_task(cx, task, priority),
                 Poll::Ready(None) => break,
                 Poll::Pending => break,
             }

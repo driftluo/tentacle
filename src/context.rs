@@ -11,15 +11,12 @@ use std::{
 };
 
 use crate::{
-    channel::mpsc,
+    channel::{mpsc, mpsc::Priority},
     error::SendErrorKind,
     multiaddr::Multiaddr,
     protocol_select::ProtocolInfo,
     secio::{PublicKey, SecioKeyPair},
-    service::{
-        event::{Priority, ServiceTask},
-        ServiceControl, SessionType, TargetProtocol, TargetSession,
-    },
+    service::{event::ServiceTask, ServiceControl, SessionType, TargetProtocol, TargetSession},
     session::SessionEvent,
     ProtocolId, SessionId,
 };

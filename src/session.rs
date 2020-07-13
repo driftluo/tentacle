@@ -15,7 +15,7 @@ use tokio::prelude::{AsyncRead, AsyncWrite};
 use tokio_util::codec::{Framed, FramedParts, LengthDelimitedCodec};
 
 use crate::{
-    channel::mpsc as priority_mpsc,
+    channel::{mpsc as priority_mpsc, mpsc::Priority},
     context::SessionContext,
     error::{HandshakeErrorKind, ProtocolHandleErrorKind, TransportErrorKind},
     multiaddr::Multiaddr,
@@ -24,7 +24,6 @@ use crate::{
     secio::PublicKey,
     service::{
         config::{Meta, SessionConfig},
-        event::Priority,
         future_task::BoxedFutureTask,
         SessionType, BUF_SHRINK_THRESHOLD, DELAY_TIME, RECEIVED_BUFFER_SIZE, RECEIVED_SIZE,
         SEND_SIZE,
@@ -89,8 +88,6 @@ pub(crate) enum SessionEvent {
         id: SessionId,
         /// Protocol id
         proto_id: ProtocolId,
-        /// priority
-        priority: Priority,
         /// Data
         data: bytes::Bytes,
     },
@@ -557,7 +554,6 @@ where
                         id: self.context.id,
                         proto_id,
                         data,
-                        priority: Priority::Normal,
                     },
                 )
             }
@@ -597,19 +593,13 @@ where
 
     /// Handling events send by the service
     #[allow(clippy::map_entry)]
-    fn handle_session_event(&mut self, cx: &mut Context, event: SessionEvent) {
+    fn handle_session_event(&mut self, cx: &mut Context, event: SessionEvent, priority: Priority) {
         match event {
-            SessionEvent::ProtocolMessage {
-                proto_id,
-                data,
-                priority,
-                ..
-            } => {
+            SessionEvent::ProtocolMessage { proto_id, data, .. } => {
                 if let Some(stream_id) = self.proto_streams.get(&proto_id) {
                     let event = ProtocolEvent::Message {
                         id: *stream_id,
                         proto_id,
-                        priority,
                         data,
                     };
                     self.push_back(priority, proto_id, event);
@@ -743,11 +733,11 @@ where
             }
 
             match Pin::new(&mut self.service_receiver).as_mut().poll_next(cx) {
-                Poll::Ready(Some((_, event))) => {
+                Poll::Ready(Some((priority, event))) => {
                     if !self.state.is_normal() {
                         break;
                     } else {
-                        self.handle_session_event(cx, event)
+                        self.handle_session_event(cx, event, priority)
                     }
                 }
                 Poll::Ready(None) => {

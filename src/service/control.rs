@@ -11,7 +11,7 @@ use crate::{
     error::SendErrorKind,
     multiaddr::Multiaddr,
     protocol_select::ProtocolInfo,
-    service::{event::Priority, ServiceTask, TargetProtocol, TargetSession, RECEIVED_BUFFER_SIZE},
+    service::{ServiceTask, TargetProtocol, TargetSession, RECEIVED_BUFFER_SIZE},
     ProtocolId, SessionId,
 };
 use bytes::Bytes;
@@ -137,7 +137,6 @@ impl ServiceControl {
         self.send(ServiceTask::ProtocolMessage {
             target,
             proto_id,
-            priority: Priority::Normal,
             data,
         })
     }
@@ -153,7 +152,6 @@ impl ServiceControl {
         self.quick_send(ServiceTask::ProtocolMessage {
             target,
             proto_id,
-            priority: Priority::High,
             data,
         })
     }
