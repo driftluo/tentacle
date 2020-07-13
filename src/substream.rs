@@ -15,6 +15,7 @@ use tokio_util::codec::{length_delimited::LengthDelimitedCodec, Framed};
 
 use crate::{
     builder::BeforeReceive,
+    channel::mpsc as priority_mpsc,
     context::SessionContext,
     protocol_handle_stream::{ServiceProtocolEvent, SessionProtocolEvent},
     service::{config::SessionConfig, event::Priority, DELAY_TIME},
@@ -93,7 +94,7 @@ pub(crate) struct SubStream<U> {
     /// Send event to session
     event_sender: mpsc::Sender<ProtocolEvent>,
     /// Receive events from session
-    event_receiver: mpsc::Receiver<ProtocolEvent>,
+    event_receiver: priority_mpsc::Receiver<ProtocolEvent>,
 
     service_proto_sender: Option<mpsc::Sender<ServiceProtocolEvent>>,
     session_proto_sender: Option<mpsc::Sender<SessionProtocolEvent>>,
@@ -381,7 +382,7 @@ where
             }
 
             match Pin::new(&mut self.event_receiver).as_mut().poll_next(cx) {
-                Poll::Ready(Some(event)) => self.handle_proto_event(cx, event),
+                Poll::Ready(Some((_, event))) => self.handle_proto_event(cx, event),
                 Poll::Ready(None) => {
                     // Must be session close
                     self.dead = true;
@@ -601,13 +602,13 @@ pub(crate) struct SubstreamBuilder {
     /// Send event to session
     event_sender: mpsc::Sender<ProtocolEvent>,
     /// Receive events from session
-    event_receiver: mpsc::Receiver<ProtocolEvent>,
+    event_receiver: priority_mpsc::Receiver<ProtocolEvent>,
 }
 
 impl SubstreamBuilder {
     pub fn new(
         event_sender: mpsc::Sender<ProtocolEvent>,
-        event_receiver: mpsc::Receiver<ProtocolEvent>,
+        event_receiver: priority_mpsc::Receiver<ProtocolEvent>,
         context: Arc<SessionContext>,
     ) -> Self {
         SubstreamBuilder {

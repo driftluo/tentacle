@@ -1,15 +1,13 @@
-use futures::{channel::mpsc, prelude::*};
+use futures::prelude::*;
 
 use std::time::Duration;
 use std::{
     collections::HashMap,
-    sync::{
-        atomic::{AtomicUsize, Ordering},
-        Arc,
-    },
+    sync::{atomic::Ordering, Arc},
 };
 
 use crate::{
+    channel::mpsc,
     error::SendErrorKind,
     multiaddr::Multiaddr,
     protocol_select::ProtocolInfo,
@@ -24,53 +22,37 @@ type Result = std::result::Result<(), SendErrorKind>;
 /// Service control, used to send commands externally at runtime
 #[derive(Clone)]
 pub struct ServiceControl {
-    pub(crate) service_task_sender: mpsc::UnboundedSender<ServiceTask>,
-    pub(crate) quick_task_sender: mpsc::UnboundedSender<ServiceTask>,
+    pub(crate) task_sender: mpsc::UnboundedSender<ServiceTask>,
     pub(crate) proto_infos: Arc<HashMap<ProtocolId, ProtocolInfo>>,
-    pub(crate) normal_count: Arc<AtomicUsize>,
-    pub(crate) quick_count: Arc<AtomicUsize>,
     closed: Arc<AtomicBool>,
 }
 
 impl ServiceControl {
     /// New
     pub(crate) fn new(
-        service_task_sender: mpsc::UnboundedSender<ServiceTask>,
-        quick_task_sender: mpsc::UnboundedSender<ServiceTask>,
+        task_sender: mpsc::UnboundedSender<ServiceTask>,
         proto_infos: HashMap<ProtocolId, ProtocolInfo>,
         closed: Arc<AtomicBool>,
     ) -> Self {
         ServiceControl {
-            service_task_sender,
-            quick_task_sender,
+            task_sender,
             proto_infos: Arc::new(proto_infos),
-            normal_count: Arc::new(AtomicUsize::new(0)),
-            quick_count: Arc::new(AtomicUsize::new(0)),
             closed,
         }
     }
 
-    pub(crate) fn normal_count_sub(&self) {
-        self.normal_count.fetch_sub(1, Ordering::SeqCst);
-    }
-
-    pub(crate) fn quick_count_sub(&self) {
-        self.quick_count.fetch_sub(1, Ordering::SeqCst);
-    }
-
-    fn block_send(
-        &self,
-        sender: &mpsc::UnboundedSender<ServiceTask>,
-        event: ServiceTask,
-        counter: &Arc<AtomicUsize>,
-        limit: usize,
-    ) -> Result {
+    /// Send raw event
+    pub(crate) fn send(&self, event: ServiceTask) -> Result {
         if self.closed.load(Ordering::SeqCst) {
             return Err(SendErrorKind::BrokenPipe);
         }
-        if counter.load(Ordering::SeqCst) < limit {
-            counter.fetch_add(1, Ordering::SeqCst);
-            sender
+        if self
+            .task_sender
+            .len()
+            .map(|len| len < RECEIVED_BUFFER_SIZE)
+            .unwrap_or_default()
+        {
+            self.task_sender
                 .unbounded_send(event)
                 .map_err(|_err| SendErrorKind::BrokenPipe)
         } else {
@@ -78,25 +60,24 @@ impl ServiceControl {
         }
     }
 
-    /// Send raw event
-    pub(crate) fn send(&self, event: ServiceTask) -> Result {
-        self.block_send(
-            &self.service_task_sender,
-            event,
-            &self.normal_count,
-            RECEIVED_BUFFER_SIZE,
-        )
-    }
-
     /// Send raw event on quick channel
     #[inline]
     fn quick_send(&self, event: ServiceTask) -> Result {
-        self.block_send(
-            &self.quick_task_sender,
-            event,
-            &self.quick_count,
-            RECEIVED_BUFFER_SIZE / 2,
-        )
+        if self.closed.load(Ordering::SeqCst) {
+            return Err(SendErrorKind::BrokenPipe);
+        }
+        if self
+            .task_sender
+            .len()
+            .map(|len| len < RECEIVED_BUFFER_SIZE)
+            .unwrap_or_default()
+        {
+            self.task_sender
+                .quick_unbounded_send(event)
+                .map_err(|_err| SendErrorKind::BrokenPipe)
+        } else {
+            Err(SendErrorKind::WouldBlock)
+        }
     }
 
     /// Get service protocol message, Map(ID, Name), but can't modify

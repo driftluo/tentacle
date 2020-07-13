@@ -1,5 +1,5 @@
 use bytes::Bytes;
-use futures::{channel::mpsc, prelude::*};
+use futures::prelude::*;
 use std::{
     collections::HashMap,
     ops::{Deref, DerefMut},
@@ -11,6 +11,7 @@ use std::{
 };
 
 use crate::{
+    channel::mpsc,
     error::SendErrorKind,
     multiaddr::Multiaddr,
     protocol_select::ProtocolInfo,
@@ -24,19 +25,16 @@ use crate::{
 };
 
 pub(crate) struct SessionController {
-    quick_sender: mpsc::Sender<SessionEvent>,
     event_sender: mpsc::Sender<SessionEvent>,
     pub(crate) inner: Arc<SessionContext>,
 }
 
 impl SessionController {
     pub(crate) fn new(
-        quick_sender: mpsc::Sender<SessionEvent>,
         event_sender: mpsc::Sender<SessionEvent>,
         inner: Arc<SessionContext>,
     ) -> Self {
         Self {
-            quick_sender,
             event_sender,
             inner,
         }
@@ -48,7 +46,7 @@ impl SessionController {
         event: SessionEvent,
     ) -> std::result::Result<(), mpsc::TrySendError<SessionEvent>> {
         if priority.is_high() {
-            self.quick_sender.try_send(event)
+            self.event_sender.try_quick_send(event)
         } else {
             self.event_sender.try_send(event)
         }
@@ -126,14 +124,13 @@ pub struct ServiceContext {
 impl ServiceContext {
     /// New
     pub(crate) fn new(
-        service_task_sender: mpsc::UnboundedSender<ServiceTask>,
-        quick_task_sender: mpsc::UnboundedSender<ServiceTask>,
+        task_sender: mpsc::UnboundedSender<ServiceTask>,
         proto_infos: HashMap<ProtocolId, ProtocolInfo>,
         key_pair: Option<SecioKeyPair>,
         closed: Arc<AtomicBool>,
     ) -> Self {
         ServiceContext {
-            inner: ServiceControl::new(service_task_sender, quick_task_sender, proto_infos, closed),
+            inner: ServiceControl::new(task_sender, proto_infos, closed),
             key_pair,
             listens: Vec::new(),
         }

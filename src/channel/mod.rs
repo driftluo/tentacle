@@ -11,9 +11,10 @@ mod sink_impl;
 mod tests;
 mod unbound;
 
-mod mpsc {
+pub(crate) mod mpsc {
     pub use super::bound::{channel, Receiver, Sender};
     pub use super::unbound::{unbounded, UnboundedReceiver, UnboundedSender};
+    pub use super::{SendError, TrySendError};
 }
 
 use std::fmt;

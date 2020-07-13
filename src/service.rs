@@ -18,6 +18,7 @@ use std::{
 use tokio::prelude::{AsyncRead, AsyncWrite};
 
 use crate::{
+    channel::mpsc as priority_mpsc,
     context::{ServiceContext, SessionContext, SessionController},
     error::{DialerErrorKind, ListenErrorKind, ProtocolHandleErrorKind, TransportErrorKind},
     multiaddr::{Multiaddr, Protocol},
@@ -117,8 +118,7 @@ pub struct Service<T> {
     /// External event is passed in from this
     service_context: ServiceContext,
     /// External event receiver
-    service_task_receiver: mpsc::UnboundedReceiver<ServiceTask>,
-    quick_task_receiver: mpsc::UnboundedReceiver<ServiceTask>,
+    service_task_receiver: priority_mpsc::UnboundedReceiver<ServiceTask>,
 
     pending_tasks: VecDeque<BoxedFutureTask>,
     /// Delay notify with abnormally poor machines
@@ -145,8 +145,7 @@ where
         config: ServiceConfig,
     ) -> Self {
         let (session_event_sender, session_event_receiver) = mpsc::channel(RECEIVED_SIZE);
-        let (service_task_sender, service_task_receiver) = mpsc::unbounded();
-        let (quick_task_sender, quick_task_receiver) = mpsc::unbounded();
+        let (task_sender, task_receiver) = priority_mpsc::unbounded();
         let proto_infos = protocol_configs
             .values()
             .map(|meta| {
@@ -183,15 +182,13 @@ where
             session_event_sender,
             session_event_receiver,
             service_context: ServiceContext::new(
-                service_task_sender,
-                quick_task_sender,
+                task_sender,
                 proto_infos,
                 key_pair,
                 shutdown.clone(),
             ),
             config,
-            service_task_receiver,
-            quick_task_receiver,
+            service_task_receiver: task_receiver,
             pending_tasks: VecDeque::default(),
             delay: Arc::new(AtomicBool::new(false)),
             shutdown,
@@ -792,10 +789,8 @@ where
 
         let session_closed = Arc::new(AtomicBool::new(false));
         let pending_data_size = Arc::new(AtomicUsize::new(0));
-        let (service_event_sender, service_event_receiver) = mpsc::channel(SEND_SIZE);
-        let (quick_event_sender, quick_event_receiver) = mpsc::channel(SEND_SIZE);
+        let (service_event_sender, service_event_receiver) = priority_mpsc::channel(SEND_SIZE);
         let session_control = SessionController::new(
-            quick_event_sender,
             service_event_sender,
             Arc::new(SessionContext::new(
                 self.next_session,
@@ -848,7 +843,6 @@ where
             handle,
             self.session_event_sender.clone(),
             service_event_receiver,
-            quick_event_receiver,
             meta,
             self.future_task_sender.clone(),
         );
@@ -1408,7 +1402,6 @@ where
                 let sessions = self.sessions.keys().cloned().collect::<Vec<SessionId>>();
 
                 if quick {
-                    self.quick_task_receiver.close();
                     self.service_task_receiver.close();
                     self.session_event_receiver.close();
                     // clean buffer
@@ -1440,46 +1433,17 @@ where
                 break;
             }
 
-            if self.quick_task_receiver.is_terminated()
-                || self.service_task_receiver.is_terminated()
-            {
+            if self.service_task_receiver.is_terminated() {
                 break;
             }
 
-            let task = match Pin::new(&mut self.quick_task_receiver)
+            match Pin::new(&mut self.service_task_receiver)
                 .as_mut()
                 .poll_next(cx)
             {
-                Poll::Ready(Some(task)) => {
-                    self.service_context.control().quick_count_sub();
-                    Some(task)
-                }
-                Poll::Ready(None) => None,
-                Poll::Pending => None,
-            }
-            .or_else(|| {
-                if self.write_buf.len() <= self.config.session_config.send_event_size() {
-                    match Pin::new(&mut self.service_task_receiver)
-                        .as_mut()
-                        .poll_next(cx)
-                    {
-                        Poll::Ready(Some(task)) => {
-                            self.service_context.control().normal_count_sub();
-                            Some(task)
-                        }
-                        Poll::Ready(None) => None,
-                        Poll::Pending => None,
-                    }
-                } else {
-                    None
-                }
-            });
-
-            match task {
-                Some(task) => self.handle_service_task(cx, task),
-                None => {
-                    break;
-                }
+                Poll::Ready(Some((_, task))) => self.handle_service_task(cx, task),
+                Poll::Ready(None) => break,
+                Poll::Pending => break,
             }
         }
     }
@@ -1605,19 +1569,11 @@ where
 
         debug!(
             "listens count: {}, state: {:?}, sessions count: {}, \
-             pending task: {}, normal_count: {}, quick_count: {}, high_write_buf: {}, write_buf: {}, read_service_buf: {}, read_session_buf: {}",
+             pending task: {}, high_write_buf: {}, write_buf: {}, read_service_buf: {}, read_session_buf: {}",
             self.listens.len(),
             self.state,
             self.sessions.len(),
             self.pending_tasks.len(),
-            self.service_context
-                .control()
-                .normal_count
-                .load(Ordering::SeqCst),
-            self.service_context
-                .control()
-                .quick_count
-                .load(Ordering::SeqCst),
             self.high_write_buf.len(),
             self.write_buf.len(),
             self.read_service_buf.len(),

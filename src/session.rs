@@ -1,5 +1,5 @@
 use futures::{channel::mpsc, prelude::*, stream::iter};
-use log::{debug, error, trace, warn};
+use log::{debug, error, trace};
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::{
     io::{self, ErrorKind},
@@ -15,6 +15,7 @@ use tokio::prelude::{AsyncRead, AsyncWrite};
 use tokio_util::codec::{Framed, FramedParts, LengthDelimitedCodec};
 
 use crate::{
+    channel::mpsc as priority_mpsc,
     context::SessionContext,
     error::{HandshakeErrorKind, ProtocolHandleErrorKind, TransportErrorKind},
     multiaddr::Multiaddr,
@@ -163,7 +164,7 @@ pub(crate) struct Session<T> {
     next_stream: StreamId,
 
     /// Sub streams maps a stream id to a sender of sub stream
-    sub_streams: HashMap<StreamId, mpsc::Sender<ProtocolEvent>>,
+    sub_streams: HashMap<StreamId, priority_mpsc::Sender<ProtocolEvent>>,
     proto_streams: HashMap<ProtocolId, StreamId>,
     /// The buffer will be prioritized for distribute to sub streams
     high_write_buf: VecDeque<(ProtocolId, ProtocolEvent)>,
@@ -180,8 +181,7 @@ pub(crate) struct Session<T> {
     /// Send events to service
     service_sender: mpsc::Sender<SessionEvent>,
     /// Receive event from service
-    service_receiver: mpsc::Receiver<SessionEvent>,
-    quick_receiver: mpsc::Receiver<SessionEvent>,
+    service_receiver: priority_mpsc::Receiver<SessionEvent>,
 
     service_proto_senders: HashMap<ProtocolId, mpsc::Sender<ServiceProtocolEvent>>,
     session_proto_senders: HashMap<ProtocolId, mpsc::Sender<SessionProtocolEvent>>,
@@ -205,8 +205,7 @@ where
     pub fn new(
         socket: T,
         service_sender: mpsc::Sender<SessionEvent>,
-        service_receiver: mpsc::Receiver<SessionEvent>,
-        quick_receiver: mpsc::Receiver<SessionEvent>,
+        service_receiver: priority_mpsc::Receiver<SessionEvent>,
         meta: SessionMeta,
         future_task_sender: mpsc::Sender<BoxedFutureTask>,
     ) -> Self {
@@ -248,7 +247,6 @@ where
             proto_event_receiver,
             service_sender,
             service_receiver,
-            quick_receiver,
             service_proto_senders: meta.service_proto_senders,
             session_proto_senders: meta.session_proto_senders,
             delay: Arc::new(AtomicBool::new(false)),
@@ -482,7 +480,8 @@ where
         part.read_buf = raw_part.read_buf;
         part.write_buf = raw_part.write_buf;
         let frame = Framed::from_parts(part);
-        let (session_to_proto_sender, session_to_proto_receiver) = mpsc::channel(SEND_SIZE);
+        let (session_to_proto_sender, session_to_proto_receiver) =
+            priority_mpsc::channel(SEND_SIZE);
 
         let mut proto_stream = SubstreamBuilder::new(
             self.proto_event_sender.clone(),
@@ -743,54 +742,21 @@ where
                 break;
             }
 
-            let task = match Pin::new(&mut self.quick_receiver).as_mut().poll_next(cx) {
-                Poll::Ready(Some(event)) => {
+            match Pin::new(&mut self.service_receiver).as_mut().poll_next(cx) {
+                Poll::Ready(Some((_, event))) => {
                     if !self.state.is_normal() {
-                        None
+                        break;
                     } else {
-                        Some(event)
+                        self.handle_session_event(cx, event)
                     }
                 }
                 Poll::Ready(None) => {
                     // Must drop by service
                     self.state = SessionState::LocalClose;
                     self.clean(cx);
-                    None
-                }
-                Poll::Pending => None,
-            }
-            .or_else(|| {
-                if self.write_buf.len() > RECEIVED_BUFFER_SIZE {
-                    if self.last_sent.elapsed() > Duration::from_secs(5) {
-                        warn!("session send timeout");
-                        self.state = SessionState::LocalClose;
-                    }
-                    None
-                } else {
-                    match Pin::new(&mut self.service_receiver).as_mut().poll_next(cx) {
-                        Poll::Ready(Some(event)) => {
-                            if !self.state.is_normal() {
-                                None
-                            } else {
-                                Some(event)
-                            }
-                        }
-                        Poll::Ready(None) => {
-                            // Must drop by service
-                            self.state = SessionState::LocalClose;
-                            self.clean(cx);
-                            None
-                        }
-                        Poll::Pending => None,
-                    }
-                }
-            });
-
-            match task {
-                Some(task) => self.handle_session_event(cx, task),
-                None => {
                     break;
                 }
+                Poll::Pending => break,
             }
         }
     }
