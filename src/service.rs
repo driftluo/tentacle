@@ -246,8 +246,8 @@ where
         let listen_future = self.multi_transport.listen(address.clone())?;
 
         match listen_future.await {
-            Ok(value) => {
-                let listen_address = value.0.clone();
+            Ok((addr, incoming)) => {
+                let listen_address = addr.clone();
 
                 self.handle.handle_event(
                     &mut self.service_context,
@@ -260,9 +260,9 @@ where
                 }
                 self.listens.insert(listen_address.clone());
 
-                self.spawn_listener(value.1, listen_address);
+                self.spawn_listener(incoming, listen_address);
 
-                Ok(value.0)
+                Ok(addr)
             }
             Err(err) => Err(err),
         }
@@ -297,9 +297,9 @@ where
         let task = async move {
             let result = listen_future.await;
             let event = match result {
-                Ok(value) => SessionEvent::ListenStart {
-                    listen_address: value.0,
-                    incoming: value.1,
+                Ok((addr, incoming)) => SessionEvent::ListenStart {
+                    listen_address: addr,
+                    incoming,
                 },
                 Err(error) => SessionEvent::ListenError { address, error },
             };
@@ -317,8 +317,8 @@ where
         let dial_future = self.multi_transport.dial(address.clone())?;
 
         match dial_future.await {
-            Ok(value) => {
-                self.handshake(value.1, SessionType::Outbound, value.0, None);
+            Ok((addr, incoming)) => {
+                self.handshake(incoming, SessionType::Outbound, addr, None);
                 self.dial_protocols.insert(address, target);
                 self.state.increase();
                 Ok(self)
@@ -342,17 +342,17 @@ where
             let result = dial_future.await;
 
             match result {
-                Ok(value) => {
+                Ok((addr, incoming)) => {
                     HandshakeContext {
                         ty: SessionType::Outbound,
-                        remote_address: value.0,
+                        remote_address: addr,
                         listen_address: None,
                         key_pair,
                         event_sender: sender,
                         max_frame_length,
                         timeout,
                     }
-                    .handshake(value.1)
+                    .handshake(incoming)
                     .await;
                 }
                 Err(error) => {
@@ -628,6 +628,7 @@ where
         };
         buf.push_back((ctx.inner.id, message_event));
     }
+
     fn handle_message(
         &mut self,
         cx: &mut Context,
@@ -648,7 +649,7 @@ where
             // Send data to the specified protocol for the specified session.
             TargetSession::Single(id) => {
                 if let Some(control) = self.sessions.get(&id) {
-                    Service::<()>::push_session_message(control, priority, proto_id, buf, data)
+                    Self::push_session_message(control, priority, proto_id, buf, data)
                 }
             }
             // Send data to the specified protocol for the specified sessions.
@@ -661,13 +662,7 @@ where
                         data.len()
                     );
                     if let Some(control) = self.sessions.get(&id) {
-                        Service::<()>::push_session_message(
-                            control,
-                            priority,
-                            proto_id,
-                            buf,
-                            data.clone(),
-                        )
+                        Self::push_session_message(control, priority, proto_id, buf, data.clone())
                     }
                 }
             }
@@ -681,13 +676,7 @@ where
                 );
                 for control in self.sessions.values() {
                     // Partial-borrowed problem on here
-                    Service::<()>::push_session_message(
-                        control,
-                        priority,
-                        proto_id,
-                        buf,
-                        data.clone(),
-                    )
+                    Self::push_session_message(control, priority, proto_id, buf, data.clone())
                 }
             }
         }
@@ -736,6 +725,14 @@ where
                 break;
             }
         }
+    }
+
+    fn reached_max_connection_limit(&self) -> bool {
+        self.sessions
+            .len()
+            .checked_add(self.state.into_inner().unwrap_or_default())
+            .map(|count| self.config.max_connection_number < count)
+            .unwrap_or_default()
     }
 
     /// Session open
@@ -1181,19 +1178,9 @@ where
                 if ty.is_outbound() {
                     self.state.decrease();
                 }
-                let is_continue = self
-                    .listens
-                    .len()
-                    .checked_add(self.sessions.len())
-                    .and_then(|count| {
-                        count.checked_add(self.state.into_inner().unwrap_or_default())
-                    })
-                    .map(|count| self.config.max_connection_number >= count)
-                    .unwrap_or_default();
-                if !is_continue {
-                    return;
+                if !self.reached_max_connection_limit() {
+                    self.session_open(cx, handle, public_key, address, ty, listen_address);
                 }
-                self.session_open(cx, handle, public_key, address, ty, listen_address);
             }
             SessionEvent::HandshakeError { ty, error, address } => {
                 if ty.is_outbound() {
