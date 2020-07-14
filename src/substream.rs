@@ -4,10 +4,7 @@ use std::{
     collections::VecDeque,
     io::{self, ErrorKind},
     pin::Pin,
-    sync::{
-        atomic::{AtomicBool, Ordering},
-        Arc,
-    },
+    sync::{atomic::Ordering, Arc},
     task::{Context, Poll},
 };
 use tokio::prelude::AsyncWrite;
@@ -18,7 +15,7 @@ use crate::{
     channel::{mpsc as priority_mpsc, mpsc::Priority},
     context::SessionContext,
     protocol_handle_stream::{ServiceProtocolEvent, SessionProtocolEvent},
-    service::{config::SessionConfig, DELAY_TIME},
+    service::config::SessionConfig,
     traits::Codec,
     yamux::StreamHandle,
     ProtocolId, StreamId,
@@ -97,9 +94,6 @@ pub(crate) struct SubStream<U> {
     service_proto_sender: Option<mpsc::Sender<ServiceProtocolEvent>>,
     session_proto_sender: Option<mpsc::Sender<SessionProtocolEvent>>,
     before_receive: Option<BeforeReceive>,
-
-    /// Delay notify with abnormally poor machines
-    delay: Arc<AtomicBool>,
 }
 
 impl<U> SubStream<U>
@@ -190,10 +184,7 @@ where
     /// Sink `poll_complete` NotReady -> there is more work left to do, may wake up next poll
     fn poll_complete(&mut self, cx: &mut Context) -> Result<bool, io::Error> {
         match Pin::new(&mut self.sub_stream).poll_flush(cx) {
-            Poll::Pending => {
-                self.set_delay(cx);
-                Ok(true)
-            }
+            Poll::Pending => Ok(true),
             Poll::Ready(res) => {
                 res?;
                 Ok(false)
@@ -313,14 +304,25 @@ where
     fn distribute_to_user_level(&mut self, cx: &mut Context) {
         if let Some(ref mut sender) = self.service_proto_sender {
             while let Some(event) = self.service_proto_buf.pop_front() {
-                if let Err(e) = sender.try_send(event) {
-                    if e.is_full() {
-                        debug!("service proto [{}] handle is full", self.proto_id);
-                        self.service_proto_buf.push_front(e.into_inner());
-                        self.set_delay(cx);
+                match sender.poll_ready(cx) {
+                    Poll::Ready(Ok(())) => {
+                        if let Err(e) = sender.try_send(event) {
+                            if e.is_full() {
+                                debug!("service proto [{}] handle is full", self.proto_id);
+                                self.service_proto_buf.push_front(e.into_inner());
+                            } else {
+                                self.dead = true;
+                            }
+                            break;
+                        }
+                    }
+                    Poll::Pending => {
+                        self.service_proto_buf.push_front(event);
                         break;
-                    } else {
+                    }
+                    Poll::Ready(Err(_)) => {
                         self.dead = true;
+                        break;
                     }
                 }
             }
@@ -328,14 +330,25 @@ where
 
         if let Some(ref mut sender) = self.session_proto_sender {
             while let Some(event) = self.session_proto_buf.pop_front() {
-                if let Err(e) = sender.try_send(event) {
-                    if e.is_full() {
-                        debug!("service proto [{}] handle is full", self.proto_id);
-                        self.session_proto_buf.push_front(e.into_inner());
-                        self.set_delay(cx);
+                match sender.poll_ready(cx) {
+                    Poll::Ready(Ok(())) => {
+                        if let Err(e) = sender.try_send(event) {
+                            if e.is_full() {
+                                debug!("service proto [{}] handle is full", self.proto_id);
+                                self.session_proto_buf.push_front(e.into_inner());
+                            } else {
+                                self.dead = true;
+                            }
+                            break;
+                        }
+                    }
+                    Poll::Pending => {
+                        self.session_proto_buf.push_front(event);
                         break;
-                    } else {
+                    }
+                    Poll::Ready(Err(_)) => {
                         self.dead = true;
+                        break;
                     }
                 }
             }
@@ -355,15 +368,27 @@ where
     #[inline]
     fn output(&mut self, cx: &mut Context) {
         while let Some(event) = self.read_buf.pop_front() {
-            if let Err(e) = self.event_sender.try_send(event) {
-                if e.is_full() {
-                    self.read_buf.push_front(e.into_inner());
-                    self.set_delay(cx);
-                } else {
+            match self.event_sender.poll_ready(cx) {
+                Poll::Ready(Ok(())) => {
+                    if let Err(e) = self.event_sender.try_send(event) {
+                        if e.is_full() {
+                            self.read_buf.push_front(e.into_inner());
+                        } else {
+                            debug!("proto send to session error: {}, may be kill by remote", e);
+                            self.dead = true;
+                        }
+                        break;
+                    }
+                }
+                Poll::Pending => {
+                    self.read_buf.push_front(event);
+                    break;
+                }
+                Poll::Ready(Err(e)) => {
                     debug!("proto send to session error: {}, may be kill by remote", e);
                     self.dead = true;
+                    break;
                 }
-                break;
             }
         }
     }
@@ -375,7 +400,6 @@ where
             }
 
             if self.write_buf.len() > self.config.send_event_size() {
-                self.set_delay(cx);
                 break;
             }
 
@@ -407,7 +431,6 @@ where
             }
 
             if self.read_buf.len() > self.config.recv_event_size() {
-                self.set_delay(cx);
                 break;
             }
 
@@ -483,34 +506,23 @@ where
     }
 
     #[inline]
-    fn set_delay(&mut self, cx: &mut Context) {
-        // Why use `delay` instead of `notify`?
-        //
-        // In fact, on machines that can use multi-core normally, there is almost no problem with the `notify` behavior,
-        // and even the efficiency will be higher.
-        //
-        // However, if you are on a single-core bully machine, `notify` may have a very amazing starvation behavior.
-        //
-        // Under a single-core machine, `notify` may fall into the loop of infinitely preemptive CPU, causing starvation.
-        if !self.delay.load(Ordering::Acquire) {
-            self.delay.store(true, Ordering::Release);
-            let waker = cx.waker().clone();
-            let delay = self.delay.clone();
-            tokio::spawn(async move {
-                tokio::time::delay_until(tokio::time::Instant::now() + DELAY_TIME).await;
-                waker.wake();
-                delay.store(false, Ordering::Release);
-            });
-        }
-    }
-
-    #[inline]
     fn flush(&mut self, cx: &mut Context) -> Result<(), io::Error> {
-        self.output(cx);
+        if !self.service_proto_buf.is_empty() || !self.session_proto_buf.is_empty() {
+            self.distribute_to_user_level(cx);
+        }
 
-        match self.send_data(cx) {
-            Ok(()) => Ok(()),
-            Err(err) => Err(err),
+        if !self.read_buf.is_empty()
+            || !self.write_buf.is_empty()
+            || !self.high_write_buf.is_empty()
+        {
+            self.output(cx);
+
+            match self.send_data(cx) {
+                Ok(()) => Ok(()),
+                Err(err) => Err(err),
+            }
+        } else {
+            Ok(())
         }
     }
 }
@@ -532,27 +544,9 @@ where
             return Poll::Ready(None);
         }
 
-        if !self.service_proto_buf.is_empty() || !self.session_proto_buf.is_empty() {
-            self.distribute_to_user_level(cx);
-        }
-
-        if !self.read_buf.is_empty()
-            || !self.write_buf.is_empty()
-            || !self.high_write_buf.is_empty()
-        {
-            if let Err(err) = self.flush(cx) {
-                debug!(
-                    "SubStream({}) finished with flush error: {:?}",
-                    self.id, err
-                );
-                self.error_close(cx, err);
-                return Poll::Ready(None);
-            }
-        }
-
-        if let Err(err) = self.poll_complete(cx) {
+        if let Err(err) = self.flush(cx) {
             debug!(
-                "SubStream({}) finished with poll_complete error: {:?}",
+                "SubStream({}) finished with flush error: {:?}",
                 self.id, err
             );
             self.error_close(cx, err);
@@ -578,6 +572,15 @@ where
                 self.read_buf.clear()
             }
             self.close_proto_stream(cx);
+            return Poll::Ready(None);
+        }
+
+        if let Err(err) = self.flush(cx) {
+            debug!(
+                "SubStream({}) finished with flush error: {:?}",
+                self.id, err
+            );
+            self.error_close(cx, err);
             return Poll::Ready(None);
         }
 
@@ -698,8 +701,6 @@ impl SubstreamBuilder {
             service_proto_sender: self.service_proto_sender,
             session_proto_sender: self.session_proto_sender,
             before_receive: self.before_receive,
-
-            delay: Arc::new(AtomicBool::new(false)),
         }
     }
 }

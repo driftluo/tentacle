@@ -4,10 +4,6 @@ use std::{
     collections::{BTreeMap, HashMap, HashSet, VecDeque},
     io,
     pin::Pin,
-    sync::{
-        atomic::{AtomicBool, Ordering},
-        Arc,
-    },
     task::{Context, Poll},
     time::{Duration, Instant},
 };
@@ -33,7 +29,6 @@ use crate::{
 };
 
 const BUF_SHRINK_THRESHOLD: usize = u8::max_value() as usize;
-const DELAY_TIME: Duration = Duration::from_millis(300);
 const TIMEOUT: Duration = Duration::from_secs(30);
 
 /// The session
@@ -81,8 +76,6 @@ pub struct Session<T> {
     event_receiver: Receiver<StreamEvent>,
 
     keepalive_receiver: Option<Receiver<()>>,
-    /// Delay notify with abnormally poor network status
-    delay: Arc<AtomicBool>,
     /// Last successful send time
     last_send_success: Instant,
     /// Last successful read time
@@ -172,7 +165,6 @@ where
             event_sender,
             event_receiver,
             keepalive_receiver,
-            delay: Arc::new(AtomicBool::new(false)),
             last_send_success: Instant::now(),
             last_read_success: Instant::now(),
             stop_signal_tx,
@@ -204,9 +196,11 @@ where
 
     // Send all pending frames to remote streams
     fn flush(&mut self, cx: &mut Context) -> Result<(), io::Error> {
-        self.recv_events(cx)?;
-        self.send_all(cx)?;
-        self.distribute_to_substream(cx)?;
+        if !self.read_pending_frames.is_empty() || !self.write_pending_frames.is_empty() {
+            self.recv_events(cx)?;
+            self.send_all(cx)?;
+            self.distribute_to_substream(cx)?;
+        }
         Ok(())
     }
 
@@ -289,7 +283,7 @@ where
             self.config.max_stream_window_size,
             self.config.max_stream_window_size,
         );
-        if let Err(err) = stream.send_window_update() {
+        if let Err(err) = stream.send_window_update(None) {
             debug!("[{:?}] stream.send_window_update error={:?}", self.ty, err);
         }
         Ok(stream)
@@ -337,10 +331,7 @@ where
     /// Sink `poll_complete` NotReady -> there is more work left to do, may wake up next poll
     fn poll_complete(&mut self, cx: &mut Context) -> Result<bool, io::Error> {
         match Pin::new(&mut self.framed_stream).poll_flush(cx) {
-            Poll::Pending => {
-                self.set_delay(cx);
-                Ok(true)
-            }
+            Poll::Pending => Ok(true),
             Poll::Ready(res) => {
                 res?;
                 Ok(false)
@@ -405,18 +396,28 @@ where
             let disconnected = {
                 if let Some(frame_sender) = self.streams.get_mut(&stream_id) {
                     debug!("@> sending frame to stream: {}", stream_id);
-                    match frame_sender.try_send(frame) {
-                        Ok(_) => false,
-                        Err(err) => {
-                            if err.is_full() {
-                                self.read_pending_frames.push_back(err.into_inner());
-                                self.set_delay(cx);
-                                block_substream.insert(stream_id);
-                                false
-                            } else {
-                                debug!("send to stream error: {:?}", err);
-                                true
+                    match frame_sender.poll_ready(cx) {
+                        Poll::Ready(Ok(())) => match frame_sender.try_send(frame) {
+                            Ok(_) => false,
+                            Err(err) => {
+                                if err.is_full() {
+                                    self.read_pending_frames.push_back(err.into_inner());
+                                    block_substream.insert(stream_id);
+                                    false
+                                } else {
+                                    debug!("send to stream error: {:?}", err);
+                                    true
+                                }
                             }
+                        },
+                        Poll::Pending => {
+                            self.read_pending_frames.push_back(frame);
+                            block_substream.insert(stream_id);
+                            false
+                        }
+                        Poll::Ready(Err(err)) => {
+                            debug!("send to stream error: {:?}", err);
+                            true
                         }
                     }
                 } else {
@@ -558,28 +559,6 @@ where
             }
         }
     }
-
-    #[inline]
-    fn set_delay(&mut self, cx: &mut Context) {
-        // Why use `delay` instead of `notify`?
-        //
-        // In fact, on machines that can use multi-core normally, there is almost no problem with the `notify` behavior,
-        // and even the efficiency will be higher.
-        //
-        // However, if you are on a single-core bully machine, `notify` may have a very amazing starvation behavior.
-        //
-        // Under a single-core machine, `notify` may fall into the loop of infinitely preemptive CPU, causing starvation.
-        if !self.delay.load(Ordering::Acquire) {
-            self.delay.store(true, Ordering::Release);
-            let waker = cx.waker().clone();
-            let delay = self.delay.clone();
-            tokio::spawn(async move {
-                tokio::time::delay_until(tokio::time::Instant::now() + DELAY_TIME).await;
-                waker.wake();
-                delay.store(false, Ordering::Release);
-            });
-        }
-    }
 }
 
 impl<T> Stream for Session<T>
@@ -594,9 +573,7 @@ where
             return Poll::Ready(None);
         }
 
-        if !self.read_pending_frames.is_empty() || !self.write_pending_frames.is_empty() {
-            self.flush(cx)?;
-        }
+        self.flush(cx)?;
 
         self.poll_complete(cx)?;
 
@@ -630,6 +607,8 @@ where
 
         self.recv_frames(cx)?;
         self.recv_events(cx)?;
+
+        self.flush(cx)?;
 
         if self.is_dead() {
             debug!("yamux::Session finished because is_dead, end");

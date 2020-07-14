@@ -129,7 +129,7 @@ where
     }
 
     async fn read_socket(&mut self, buf: &mut [u8]) -> io::Result<usize> {
-        // when there is somthing in recv_buffer
+        // when there is something in recv_buffer
         let copied = self.drain(buf);
         if copied > 0 {
             return Ok(copied);

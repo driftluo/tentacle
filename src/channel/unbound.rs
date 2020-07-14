@@ -263,6 +263,13 @@ impl<T> UnboundedSender<T> {
         })
     }
 
+    /// Try signal to the receiver
+    pub fn wake(&self) {
+        if let Some(inner) = &self.0 {
+            inner.inner.recv_task.wake()
+        }
+    }
+
     // Do the send without parking current task.
     fn do_send_nb(&self, msg: T, priority: Priority) -> Result<(), TrySendError<T>> {
         if let Some(inner) = &self.0 {

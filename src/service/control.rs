@@ -56,6 +56,7 @@ impl ServiceControl {
                 .unbounded_send(event)
                 .map_err(|_err| SendErrorKind::BrokenPipe)
         } else {
+            self.task_sender.wake();
             Err(SendErrorKind::WouldBlock)
         }
     }
@@ -76,6 +77,7 @@ impl ServiceControl {
                 .quick_unbounded_send(event)
                 .map_err(|_err| SendErrorKind::BrokenPipe)
         } else {
+            self.task_sender.wake();
             Err(SendErrorKind::WouldBlock)
         }
     }
