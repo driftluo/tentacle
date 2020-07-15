@@ -1,9 +1,12 @@
-use futures::{channel::mpsc, prelude::*, stream::FusedStream};
+use futures::{
+    channel::mpsc,
+    prelude::*,
+    stream::{FusedStream, StreamExt},
+};
 use log::{debug, error, trace};
 use std::{
     borrow::Cow,
     collections::{vec_deque::VecDeque, HashMap, HashSet},
-    io,
     pin::Pin,
     sync::{
         atomic::{AtomicBool, AtomicUsize, Ordering},
@@ -16,27 +19,25 @@ use tokio::prelude::{AsyncRead, AsyncWrite};
 
 use crate::{
     context::{ServiceContext, SessionContext, SessionController},
-    error::{
-        DialerErrorKind, HandshakeErrorKind, ListenErrorKind, ProtocolHandleErrorKind,
-        TransportErrorKind,
-    },
+    error::{DialerErrorKind, ListenErrorKind, ProtocolHandleErrorKind, TransportErrorKind},
     multiaddr::{Multiaddr, Protocol},
     protocol_handle_stream::{
         ServiceProtocolEvent, ServiceProtocolStream, SessionProtocolEvent, SessionProtocolStream,
     },
     protocol_select::ProtocolInfo,
-    secio::{handshake::Config, PublicKey, SecioKeyPair},
+    secio::{PublicKey, SecioKeyPair},
     service::{
         config::{ServiceConfig, State},
         event::{Priority, ServiceTask},
         future_task::{BoxedFutureTask, FutureTaskManager},
+        helper::{HandshakeContext, Listener, Source},
     },
     session::{Session, SessionEvent, SessionMeta},
     traits::ServiceHandle,
     transports::{MultiIncoming, MultiTransport, Transport},
     upnp::IGDClient,
     utils::extract_peer_id,
-    yamux::{session::SessionType as YamuxType, Config as YamuxConfig},
+    yamux::Config as YamuxConfig,
     ProtocolId, SessionId,
 };
 
@@ -44,11 +45,13 @@ pub(crate) mod config;
 mod control;
 pub(crate) mod event;
 pub(crate) mod future_task;
+mod helper;
 
 pub use crate::service::{
     config::{BlockingFlag, ProtocolHandle, ProtocolMeta, TargetProtocol, TargetSession},
     control::ServiceControl,
     event::{ProtocolEvent, ServiceError, ServiceEvent},
+    helper::SessionType,
 };
 use bytes::Bytes;
 
@@ -80,7 +83,7 @@ pub struct Service<T> {
 
     multi_transport: MultiTransport,
 
-    listens: Vec<(Multiaddr, MultiIncoming)>,
+    listens: HashSet<Multiaddr>,
 
     igd_client: Option<IGDClient>,
 
@@ -181,7 +184,7 @@ where
             session_service_protos: HashMap::default(),
             service_proto_handles: HashMap::default(),
             session_proto_handles: HashMap::default(),
-            listens: Vec::new(),
+            listens: HashSet::new(),
             igd_client,
             dial_protocols: HashMap::default(),
             state: State::new(forever),
@@ -243,8 +246,8 @@ where
         let listen_future = self.multi_transport.listen(address.clone())?;
 
         match listen_future.await {
-            Ok(value) => {
-                let listen_address = value.0.clone();
+            Ok((addr, incoming)) => {
+                let listen_address = addr.clone();
 
                 self.handle.handle_event(
                     &mut self.service_context,
@@ -255,12 +258,35 @@ where
                 if let Some(client) = self.igd_client.as_mut() {
                     client.register(&listen_address)
                 }
-                self.listens.push((listen_address.clone(), value.1));
+                self.listens.insert(listen_address.clone());
 
-                Ok(listen_address)
+                self.spawn_listener(incoming, listen_address);
+
+                Ok(addr)
             }
             Err(err) => Err(err),
         }
+    }
+
+    fn spawn_listener(&mut self, incoming: MultiIncoming, listen_address: Multiaddr) {
+        let listener = Listener {
+            inner: incoming,
+            key_pair: self.service_context.key_pair().cloned(),
+            event_sender: self.session_event_sender.clone(),
+            max_frame_length: self.config.max_frame_length,
+            timeout: self.config.timeout,
+            listen_addr: listen_address,
+            future_task_sender: self.future_task_sender.clone(),
+        };
+        let mut sender = self.future_task_sender.clone();
+        tokio::spawn(async move {
+            let res = sender
+                .send(Box::pin(listener.for_each(|_| future::ready(()))))
+                .await;
+            if res.is_err() {
+                trace!("spawn listener fail")
+            }
+        });
     }
 
     /// Use by inner
@@ -271,9 +297,9 @@ where
         let task = async move {
             let result = listen_future.await;
             let event = match result {
-                Ok(value) => SessionEvent::ListenStart {
-                    listen_address: value.0,
-                    incoming: value.1,
+                Ok((addr, incoming)) => SessionEvent::ListenStart {
+                    listen_address: addr,
+                    incoming,
                 },
                 Err(error) => SessionEvent::ListenError { address, error },
             };
@@ -291,14 +317,8 @@ where
         let dial_future = self.multi_transport.dial(address.clone())?;
 
         match dial_future.await {
-            Ok(value) => {
-                self.session_event_sender
-                    .send(SessionEvent::DialStart {
-                        remote_address: value.0,
-                        stream: value.1,
-                    })
-                    .await
-                    .map_err(|_| TransportErrorKind::Io(io::ErrorKind::BrokenPipe.into()))?;
+            Ok((addr, incoming)) => {
+                self.handshake(incoming, SessionType::Outbound, addr, None);
                 self.dial_protocols.insert(address, target);
                 self.state.increase();
                 Ok(self)
@@ -313,21 +333,37 @@ where
         self.dial_protocols.insert(address.clone(), target);
         let dial_future = self.multi_transport.dial(address.clone())?;
 
+        let key_pair = self.service_context.key_pair().cloned();
+        let timeout = self.config.timeout;
+        let max_frame_length = self.config.max_frame_length;
+
         let mut sender = self.session_event_sender.clone();
         let task = async move {
             let result = dial_future.await;
 
-            let event = match result {
-                Ok(value) => SessionEvent::DialStart {
-                    remote_address: value.0,
-                    stream: value.1,
-                },
-                Err(error) => SessionEvent::DialError { address, error },
+            match result {
+                Ok((addr, incoming)) => {
+                    HandshakeContext {
+                        ty: SessionType::Outbound,
+                        remote_address: addr,
+                        listen_address: None,
+                        key_pair,
+                        event_sender: sender,
+                        max_frame_length,
+                        timeout,
+                    }
+                    .handshake(incoming)
+                    .await;
+                }
+                Err(error) => {
+                    if let Err(err) = sender
+                        .send(SessionEvent::DialError { address, error })
+                        .await
+                    {
+                        error!("dial address result send back error: {:?}", err);
+                    }
+                }
             };
-
-            if let Err(err) = sender.send(event).await {
-                error!("dial address result send back error: {:?}", err);
-            }
         };
 
         self.pending_tasks.push_back(Box::pin(task));
@@ -554,7 +590,7 @@ where
                     let (sender, receiver) = mpsc::channel(RECEIVED_SIZE);
                     self.session_proto_handles.insert((id, *proto_id), sender);
 
-                    let mut stream = SessionProtocolStream::new(
+                    let stream = SessionProtocolStream::new(
                         handle,
                         self.service_context.clone_self(),
                         Arc::clone(&session_control.inner),
@@ -565,18 +601,7 @@ where
                     );
                     let (sender, receiver) = futures::channel::oneshot::channel();
                     let handle = tokio::spawn(async move {
-                        future::select(
-                            async move {
-                                loop {
-                                    if stream.next().await.is_none() {
-                                        break;
-                                    }
-                                }
-                            }
-                            .boxed(),
-                            receiver,
-                        )
-                        .await;
+                        future::select(stream.for_each(|_| future::ready(())), receiver).await;
                     });
                     self.session_wait_handle
                         .insert((id, *proto_id), (Some(sender), handle));
@@ -603,6 +628,7 @@ where
         };
         buf.push_back((ctx.inner.id, message_event));
     }
+
     fn handle_message(
         &mut self,
         cx: &mut Context,
@@ -623,7 +649,7 @@ where
             // Send data to the specified protocol for the specified session.
             TargetSession::Single(id) => {
                 if let Some(control) = self.sessions.get(&id) {
-                    Service::<()>::push_session_message(control, priority, proto_id, buf, data)
+                    Self::push_session_message(control, priority, proto_id, buf, data)
                 }
             }
             // Send data to the specified protocol for the specified sessions.
@@ -636,13 +662,7 @@ where
                         data.len()
                     );
                     if let Some(control) = self.sessions.get(&id) {
-                        Service::<()>::push_session_message(
-                            control,
-                            priority,
-                            proto_id,
-                            buf,
-                            data.clone(),
-                        )
+                        Self::push_session_message(control, priority, proto_id, buf, data.clone())
                     }
                 }
             }
@@ -656,13 +676,7 @@ where
                 );
                 for control in self.sessions.values() {
                     // Partial-borrowed problem on here
-                    Service::<()>::push_session_message(
-                        control,
-                        priority,
-                        proto_id,
-                        buf,
-                        data.clone(),
-                    )
+                    Self::push_session_message(control, priority, proto_id, buf, data.clone())
                 }
             }
         }
@@ -673,7 +687,6 @@ where
     #[inline]
     fn handshake<H>(
         &mut self,
-        cx: &mut Context,
         socket: H,
         ty: SessionType,
         remote_address: Multiaddr,
@@ -681,74 +694,28 @@ where
     ) where
         H: AsyncRead + AsyncWrite + Send + 'static + Unpin,
     {
-        if let Some(key_pair) = self.service_context.key_pair() {
-            let key_pair = key_pair.clone();
-            let mut sender = self.session_event_sender.clone();
-            let max_frame_length = self.config.max_frame_length;
-            let timeout = self.config.timeout;
-
-            let handshake_task = async move {
-                let result = tokio::time::timeout(
-                    timeout,
-                    Config::new(key_pair)
-                        .max_frame_length(max_frame_length)
-                        .handshake(socket),
-                )
-                .await;
-
-                let event = match result {
-                    Err(error) => {
-                        debug!(
-                            "Handshake with {} failed, error: {:?}",
-                            remote_address, error
-                        );
-                        // time out error
-                        SessionEvent::HandshakeError {
-                            ty,
-                            error: HandshakeErrorKind::Timeout(error.to_string()),
-                            address: remote_address,
-                        }
-                    }
-                    Ok(res) => match res {
-                        Ok((handle, public_key, _)) => SessionEvent::HandshakeSuccess {
-                            handle,
-                            public_key,
-                            address: remote_address,
-                            ty,
-                            listen_address,
-                        },
-                        Err(error) => {
-                            debug!(
-                                "Handshake with {} failed, error: {:?}",
-                                remote_address, error
-                            );
-                            SessionEvent::HandshakeError {
-                                ty,
-                                error: HandshakeErrorKind::SecioError(error),
-                                address: remote_address,
-                            }
-                        }
-                    },
-                };
-                if let Err(err) = sender.send(event).await {
-                    error!("handshake result send back error: {:?}", err);
-                }
-            };
-
-            let mut future_task_sender = self.future_task_sender.clone();
-
-            tokio::spawn(async move {
-                if future_task_sender
-                    .send(Box::pin(handshake_task))
-                    .await
-                    .is_err()
-                {
-                    trace!("handshake send err")
-                }
-            });
-        } else {
-            self.session_open(cx, socket, None, remote_address, ty, listen_address);
+        let handshake_task = HandshakeContext {
+            ty,
+            remote_address,
+            listen_address,
+            key_pair: self.service_context.key_pair().cloned(),
+            event_sender: self.session_event_sender.clone(),
+            max_frame_length: self.config.max_frame_length,
+            timeout: self.config.timeout,
         }
+        .handshake(socket);
+
+        let mut future_task_sender = self.future_task_sender.clone();
+
+        tokio::spawn(async move {
+            if future_task_sender
+                .send(Box::pin(handshake_task))
+                .await
+                .is_err()
+            {
+                trace!("handshake send err")
+            }
+        });
     }
 
     fn generate_next_session(&mut self) {
@@ -758,6 +725,14 @@ where
                 break;
             }
         }
+    }
+
+    fn reached_max_connection_limit(&self) -> bool {
+        self.sessions
+            .len()
+            .checked_add(self.state.into_inner().unwrap_or_default())
+            .map(|count| self.config.max_connection_number < count)
+            .unwrap_or_default()
     }
 
     /// Session open
@@ -773,9 +748,6 @@ where
     ) where
         H: AsyncRead + AsyncWrite + Send + 'static + Unpin,
     {
-        if ty.is_outbound() {
-            self.state.decrease();
-        }
         let target = self
             .dial_protocols
             .remove(&address)
@@ -917,13 +889,7 @@ where
             }
         }
 
-        tokio::spawn(async move {
-            loop {
-                if session.next().await.is_none() {
-                    break;
-                }
-            }
-        });
+        tokio::spawn(session.for_each(|_| future::ready(())));
 
         self.handle.handle_event(
             &mut self.service_context,
@@ -1131,27 +1097,6 @@ where
         self.send_pending_task(cx);
     }
 
-    /// check queue if full
-    fn notify_queue(&mut self, cx: &mut Context) {
-        let waker = cx.waker().clone();
-        let quick_count = self.service_context.control().quick_count.clone();
-        let normal_count = self.service_context.control().normal_count.clone();
-        let task = async move {
-            let mut interval =
-                tokio::time::interval_at(tokio::time::Instant::now(), Duration::from_millis(200));
-            loop {
-                let waker = waker.clone();
-                interval.tick().await;
-                if quick_count.load(Ordering::SeqCst) > RECEIVED_BUFFER_SIZE / 4
-                    || normal_count.load(Ordering::SeqCst) > RECEIVED_BUFFER_SIZE / 2
-                {
-                    waker.wake();
-                }
-            }
-        };
-        self.send_future_task(cx, Box::pin(task))
-    }
-
     fn init_proto_handles(&mut self) {
         for (proto_id, meta) in self.protocol_configs.iter_mut() {
             if let ProtocolHandle::Callback(handle) | ProtocolHandle::Both(handle) =
@@ -1172,18 +1117,7 @@ where
                 stream.handle_event(ServiceProtocolEvent::Init);
                 let (sender, receiver) = futures::channel::oneshot::channel();
                 let handle = tokio::spawn(async move {
-                    future::select(
-                        async move {
-                            loop {
-                                if stream.next().await.is_none() {
-                                    break;
-                                }
-                            }
-                        }
-                        .boxed(),
-                        receiver,
-                    )
-                    .await;
+                    future::select(stream.for_each(|_| future::ready(())), receiver).await;
                 });
                 self.wait_handle.push((Some(sender), handle));
             } else {
@@ -1197,15 +1131,14 @@ where
 
     /// When listen update, call here
     #[inline]
-    fn update_listens(&mut self, cx: &mut Context) {
+    fn try_update_listens(&mut self, cx: &mut Context) {
+        if let Some(client) = self.igd_client.as_mut() {
+            client.process_only_leases_support()
+        }
         if self.listens.len() == self.service_context.listens().len() {
             return;
         }
-        let new_listens = self
-            .listens
-            .iter()
-            .map(|(address, _)| address.clone())
-            .collect::<Vec<Multiaddr>>();
+        let new_listens = self.listens.iter().cloned().collect::<Vec<Multiaddr>>();
         self.service_context.update_listens(new_listens.clone());
 
         for proto_id in self.service_proto_handles.keys() {
@@ -1242,7 +1175,12 @@ where
                 ty,
                 listen_address,
             } => {
-                self.session_open(cx, handle, Some(public_key), address, ty, listen_address);
+                if ty.is_outbound() {
+                    self.state.decrease();
+                }
+                if !self.reached_max_connection_limit() {
+                    self.session_open(cx, handle, public_key, address, ty, listen_address);
+                }
             }
             SessionEvent::HandshakeError { ty, error, address } => {
                 if ty.is_outbound() {
@@ -1304,14 +1242,26 @@ where
                 )
             }
             SessionEvent::ListenError { address, error } => {
-                self.state.decrease();
                 self.handle.handle_error(
                     &mut self.service_context,
                     ServiceError::ListenError {
-                        address,
+                        address: address.clone(),
                         error: ListenErrorKind::TransportError(error),
                     },
-                )
+                );
+                if self.listens.remove(&address) {
+                    if let Some(ref mut client) = self.igd_client {
+                        client.remove(&address);
+                    }
+
+                    self.handle.handle_event(
+                        &mut self.service_context,
+                        ServiceEvent::ListenClose { address },
+                    )
+                } else {
+                    // try start listen error
+                    self.state.decrease();
+                }
             }
             SessionEvent::SessionTimeout { id } => {
                 if let Some(session_control) = self.sessions.get(&id) {
@@ -1344,18 +1294,14 @@ where
                         address: listen_address.clone(),
                     },
                 );
+                self.listens.insert(listen_address.clone());
+                self.state.decrease();
+                self.try_update_listens(cx);
                 if let Some(client) = self.igd_client.as_mut() {
                     client.register(&listen_address)
                 }
-                self.listens.push((listen_address, incoming));
-                self.state.decrease();
-                self.update_listens(cx);
-                self.listen_poll(cx);
+                self.spawn_listener(incoming, listen_address);
             }
-            SessionEvent::DialStart {
-                remote_address,
-                stream,
-            } => self.handshake(cx, stream, SessionType::Outbound, remote_address, None),
             SessionEvent::ProtocolHandleError { error, proto_id } => {
                 self.handle.handle_error(
                     &mut self.service_context,
@@ -1392,7 +1338,7 @@ where
                 }
             }
             ServiceTask::Listen { address } => {
-                if !self.listens.iter().any(|(addr, _)| addr == &address) {
+                if !self.listens.contains(&address) {
                     if let Err(e) = self.listen_inner(address.clone()) {
                         self.handle.handle_error(
                             &mut self.service_context,
@@ -1491,8 +1437,7 @@ where
             ServiceTask::Shutdown(quick) => {
                 self.state.pre_shutdown();
 
-                while let Some((address, incoming)) = self.listens.pop() {
-                    drop(incoming);
+                for address in self.listens.drain() {
                     self.handle.handle_event(
                         &mut self.service_context,
                         ServiceEvent::ListenClose { address },
@@ -1527,74 +1472,6 @@ where
                         .for_each(|i| self.session_close(cx, i, Source::External));
                 }
             }
-        }
-    }
-
-    /// Poll listen connections
-    #[inline]
-    fn listen_poll(&mut self, cx: &mut Context) {
-        if !self
-            .listens
-            .len()
-            .checked_add(self.sessions.len())
-            .and_then(|count| count.checked_add(self.state.into_inner().unwrap_or_default()))
-            .map(|count| self.config.max_connection_number >= count)
-            .unwrap_or_default()
-        {
-            return;
-        }
-        let mut update = false;
-        for (address, mut listen) in self.listens.split_off(0) {
-            match Pin::new(&mut listen).as_mut().poll_next(cx) {
-                Poll::Ready(Some(Ok((remote_address, socket)))) => {
-                    self.handshake(
-                        cx,
-                        socket,
-                        SessionType::Inbound,
-                        remote_address,
-                        Some(address.clone()),
-                    );
-                    self.listens.push((address, listen));
-                }
-                Poll::Ready(None) => {
-                    update = true;
-                    if let Some(client) = self.igd_client.as_mut() {
-                        client.remove(&address)
-                    }
-                    self.handle.handle_event(
-                        &mut self.service_context,
-                        ServiceEvent::ListenClose { address },
-                    );
-                }
-                Poll::Pending => {
-                    self.listens.push((address, listen));
-                }
-                Poll::Ready(Some(Err(err))) => {
-                    update = true;
-                    self.handle.handle_error(
-                        &mut self.service_context,
-                        ServiceError::ListenError {
-                            address: address.clone(),
-                            error: ListenErrorKind::IoError(err),
-                        },
-                    );
-                    if let Some(client) = self.igd_client.as_mut() {
-                        client.remove(&address)
-                    }
-                    self.handle.handle_event(
-                        &mut self.service_context,
-                        ServiceEvent::ListenClose { address },
-                    );
-                }
-            }
-        }
-
-        if update || self.service_context.listens().is_empty() {
-            self.update_listens(cx)
-        }
-
-        if let Some(client) = self.igd_client.as_mut() {
-            client.process_only_leases_support()
         }
     }
 
@@ -1682,8 +1559,8 @@ where
         // However, if you are on a single-core bully machine, `notify` may have a very amazing starvation behavior.
         //
         // Under a single-core machine, `notify` may fall into the loop of infinitely preemptive CPU, causing starvation.
-        if !self.delay.load(Ordering::SeqCst) {
-            self.delay.store(true, Ordering::SeqCst);
+        if !self.delay.load(Ordering::Acquire) {
+            self.delay.store(true, Ordering::Release);
             let waker = cx.waker().clone();
             let delay = self.delay.clone();
             tokio::spawn(async move {
@@ -1746,24 +1623,12 @@ where
             return self.wait_handle_poll(cx);
         }
 
-        if let Some(mut stream) = self.future_task_manager.take() {
+        if let Some(stream) = self.future_task_manager.take() {
             let (sender, receiver) = futures::channel::oneshot::channel();
             let handle = tokio::spawn(async move {
-                future::select(
-                    async move {
-                        loop {
-                            if stream.next().await.is_none() {
-                                break;
-                            }
-                        }
-                    }
-                    .boxed(),
-                    receiver,
-                )
-                .await;
+                future::select(stream.for_each(|_| future::ready(())), receiver).await;
             });
             self.wait_handle.push((Some(sender), handle));
-            self.notify_queue(cx);
             self.init_proto_handles();
         }
 
@@ -1774,7 +1639,7 @@ where
             self.distribute_to_user_level(cx);
         }
 
-        self.listen_poll(cx);
+        self.try_update_listens(cx);
 
         self.session_poll(cx);
 
@@ -1796,7 +1661,7 @@ where
         }
 
         debug!(
-            "> listens count: {}, state: {:?}, sessions count: {}, \
+            "listens count: {}, state: {:?}, sessions count: {}, \
              pending task: {}, normal_count: {}, quick_count: {}, high_write_buf: {}, write_buf: {}, read_service_buf: {}, read_session_buf: {}",
             self.listens.len(),
             self.state,
@@ -1817,59 +1682,5 @@ where
         );
 
         Poll::Pending
-    }
-}
-
-#[derive(Copy, Clone, Debug, Eq, PartialEq)]
-enum Source {
-    /// Event from user
-    External,
-    /// Event from session
-    Internal,
-}
-
-/// Indicates the session type
-#[derive(Copy, Clone, Debug, Eq, PartialEq, Hash)]
-pub enum SessionType {
-    /// Representing yourself as the active party means that you are the client side
-    Outbound,
-    /// Representing yourself as a passive recipient means that you are the server side
-    Inbound,
-}
-
-impl SessionType {
-    /// is outbound
-    #[inline]
-    pub fn is_outbound(self) -> bool {
-        match self {
-            SessionType::Outbound => true,
-            SessionType::Inbound => false,
-        }
-    }
-
-    /// is inbound
-    #[inline]
-    pub fn is_inbound(self) -> bool {
-        !self.is_outbound()
-    }
-}
-
-impl From<YamuxType> for SessionType {
-    #[inline]
-    fn from(ty: YamuxType) -> Self {
-        match ty {
-            YamuxType::Client => SessionType::Outbound,
-            YamuxType::Server => SessionType::Inbound,
-        }
-    }
-}
-
-impl Into<YamuxType> for SessionType {
-    #[inline]
-    fn into(self) -> YamuxType {
-        match self {
-            SessionType::Outbound => YamuxType::Client,
-            SessionType::Inbound => YamuxType::Server,
-        }
     }
 }

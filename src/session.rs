@@ -20,7 +20,7 @@ use crate::{
     multiaddr::Multiaddr,
     protocol_handle_stream::{ServiceProtocolEvent, SessionProtocolEvent},
     protocol_select::{client_select, server_select, ProtocolInfo},
-    secio::{codec::stream_handle::StreamHandle as SecureHandle, PublicKey},
+    secio::PublicKey,
     service::{
         config::{Meta, SessionConfig},
         event::Priority,
@@ -29,10 +29,14 @@ use crate::{
         SEND_SIZE,
     },
     substream::{ProtocolEvent, SubstreamBuilder},
-    transports::{MultiIncoming, MultiStream},
+    transports::MultiIncoming,
     yamux::{Session as YamuxSession, StreamHandle},
     ProtocolId, SessionId, StreamId,
 };
+
+pub trait AsyncRW: AsyncWrite + AsyncRead {}
+
+impl<T: AsyncRead + AsyncWrite> AsyncRW for T {}
 
 /// Event generated/received by the Session
 pub(crate) enum SessionEvent {
@@ -45,15 +49,12 @@ pub(crate) enum SessionEvent {
         listen_address: Multiaddr,
         incoming: MultiIncoming,
     },
-    DialStart {
-        remote_address: Multiaddr,
-        stream: MultiStream,
-    },
     HandshakeSuccess {
-        /// Secure handle
-        handle: SecureHandle,
+        /// In order to be compatible with multiple underlying connection abstractions,
+        /// the dyn trait needs to be used here
+        handle: Box<dyn AsyncRW + Send + Unpin + 'static>,
         /// Remote Public key
-        public_key: PublicKey,
+        public_key: Option<PublicKey>,
         /// Remote address
         address: Multiaddr,
         /// Session type
@@ -510,13 +511,7 @@ where
         self.next_stream += 1;
 
         debug!("session [{}] proto [{}] open", self.context.id, proto_id);
-        tokio::spawn(async move {
-            loop {
-                if proto_stream.next().await.is_none() {
-                    break;
-                }
-            }
-        });
+        tokio::spawn(proto_stream.for_each(|_| future::ready(())));
     }
 
     /// Handling events uploaded by the protocol stream
@@ -681,7 +676,7 @@ where
                         | ErrorKind::NotConnected
                         | ErrorKind::UnexpectedEof => self.state = SessionState::RemoteClose,
                         _ => {
-                            warn!("MuxerError: {:?}", err);
+                            debug!("MuxerError: {:?}", err);
                             self.event_output(
                                 cx,
                                 SessionEvent::MuxerError {
