@@ -65,14 +65,6 @@ pub(crate) const RECEIVED_SIZE: usize = 512;
 pub(crate) const SEND_SIZE: usize = 512;
 pub(crate) const DELAY_TIME: Duration = Duration::from_millis(300);
 
-type SessionProtoHandles = HashMap<
-    (SessionId, ProtocolId),
-    (
-        Option<futures::channel::oneshot::Sender<()>>,
-        tokio::task::JoinHandle<()>,
-    ),
->;
-
 type Result<T> = std::result::Result<T, TransportErrorKind>;
 
 /// An abstraction of p2p service, currently only supports TCP protocol
@@ -113,9 +105,6 @@ pub struct Service<T> {
     // TODO: use this to spawn every task
     future_task_sender: mpsc::Sender<BoxedFutureTask>,
 
-    // The service protocols open with the session
-    session_service_protos: HashMap<SessionId, HashSet<ProtocolId>>,
-
     service_proto_handles: HashMap<ProtocolId, mpsc::Sender<ServiceProtocolEvent>>,
 
     session_proto_handles: HashMap<(SessionId, ProtocolId), mpsc::Sender<SessionProtocolEvent>>,
@@ -141,7 +130,6 @@ pub struct Service<T> {
         Option<futures::channel::oneshot::Sender<()>>,
         tokio::task::JoinHandle<()>,
     )>,
-    session_wait_handle: SessionProtoHandles,
 }
 
 impl<T> Service<T>
@@ -181,7 +169,6 @@ where
                 shutdown.clone(),
             )),
             sessions: HashMap::default(),
-            session_service_protos: HashMap::default(),
             service_proto_handles: HashMap::default(),
             session_proto_handles: HashMap::default(),
             listens: HashSet::new(),
@@ -209,7 +196,6 @@ where
             delay: Arc::new(AtomicBool::new(false)),
             shutdown,
             wait_handle: Vec::new(),
-            session_wait_handle: HashMap::new(),
         }
     }
 
@@ -474,16 +460,6 @@ where
         let mut error = false;
         let mut block_handles = HashSet::new();
 
-        let closed_sessions = self
-            .sessions
-            .iter()
-            .filter(|(_, control)| control.inner.closed.load(Ordering::SeqCst))
-            .map(|(session_id, _)| *session_id)
-            .collect::<HashSet<_>>();
-        for id in closed_sessions {
-            self.session_close(cx, id, Source::Internal);
-        }
-
         for (session_id, proto_id, event) in self.read_service_buf.split_off(0) {
             // Guarantee the order in which messages are sent
             if block_handles.contains(&proto_id) {
@@ -580,7 +556,14 @@ where
 
     /// Spawn protocol handle
     #[inline]
-    fn session_handles_open(&mut self, id: SessionId) {
+    fn session_handles_open(
+        &mut self,
+        id: SessionId,
+    ) -> Vec<(
+        Option<futures::channel::oneshot::Sender<()>>,
+        tokio::task::JoinHandle<()>,
+    )> {
+        let mut handles = Vec::new();
         for (proto_id, meta) in self.protocol_configs.iter_mut() {
             if let ProtocolHandle::Callback(handle) | ProtocolHandle::Both(handle) =
                 meta.session_handle()
@@ -603,13 +586,13 @@ where
                     let handle = tokio::spawn(async move {
                         future::select(stream.for_each(|_| future::ready(())), receiver).await;
                     });
-                    self.session_wait_handle
-                        .insert((id, *proto_id), (Some(sender), handle));
+                    handles.push((Some(sender), handle));
                 }
             } else {
                 debug!("can't find proto [{}] session handle", proto_id);
             }
         }
+        handles
     }
 
     fn push_session_message(
@@ -831,7 +814,7 @@ where
             .insert(session_control.inner.id, session_control);
 
         // Open all session protocol handles
-        self.session_handles_open(self.next_session);
+        let handles = self.session_handles_open(self.next_session);
 
         let mut by_name = HashMap::with_capacity(self.protocol_configs.len());
         let mut by_id = HashMap::with_capacity(self.protocol_configs.len());
@@ -858,6 +841,7 @@ where
                     })
                     .collect(),
             )
+            .session_proto_handles(handles)
             .event(self.config.event.clone());
 
         let mut session = Session::new(
@@ -910,27 +894,20 @@ where
 
         debug!("close service session [{}]", id);
 
-        // Close all open proto
-        let close_proto_ids = self.session_service_protos.remove(&id).unwrap_or_default();
-        debug!("session [{}] close proto [{:?}]", id, close_proto_ids);
         // clean write buffer
         self.write_buf.retain(|&(session_id, _)| id != session_id);
         self.high_write_buf
             .retain(|&(session_id, _)| id != session_id);
-        self.set_delay(cx);
+
+        // clean session proto handles sender
+        self.session_proto_handles.retain(|key, _| id != key.0);
+
         if !self.config.keep_buffer {
             self.read_session_buf
                 .retain(|&(session_id, _, _)| id != session_id);
             self.read_service_buf
                 .retain(|&(session_id, _, _)| Some(id) != session_id);
         }
-
-        close_proto_ids.into_iter().for_each(|proto_id| {
-            self.protocol_close(cx, id, proto_id, Source::Internal);
-            // protocol handle close on session close
-            self.session_proto_handles.remove(&(id, proto_id));
-            self.session_wait_handle.remove(&(id, proto_id));
-        });
 
         if let Some(session_control) = self.sessions.remove(&id) {
             // Service handle processing flow
@@ -955,17 +932,7 @@ where
     ) {
         if source == Source::External {
             debug!("try open session [{}] proto [{}]", id, proto_id);
-            // The following 3 conditions must be met at the same time to send an event:
-            //
-            // 1. session must open
-            // 2. session protocol mustn't open
-            if self.sessions.contains_key(&id)
-                && !self
-                    .session_service_protos
-                    .get(&id)
-                    .map(|protos| protos.contains(&proto_id))
-                    .unwrap_or_default()
-            {
+            if self.sessions.contains_key(&id) {
                 self.write_buf.push_back((
                     id,
                     SessionEvent::ProtocolOpen {
@@ -980,13 +947,6 @@ where
         }
 
         debug!("service session [{}] proto [{}] open", id, proto_id);
-
-        // Regardless of the existence of the session level handle,
-        // you **must record** which protocols are opened for each session.
-        self.session_service_protos
-            .entry(id)
-            .or_default()
-            .insert(proto_id);
 
         if self.config.event.contains(&proto_id) {
             if let Some(session_control) = self.sessions.get(&id) {
@@ -1071,11 +1031,7 @@ where
                 )
             }
         }
-
-        // Session proto info remove
-        if let Some(infos) = self.session_service_protos.get_mut(&session_id) {
-            infos.remove(&proto_id);
-        }
+        self.session_proto_handles.remove(&(session_id, proto_id));
     }
 
     #[inline(always)]
@@ -1573,19 +1529,6 @@ where
 
     fn wait_handle_poll(&mut self, cx: &mut Context) -> Poll<Option<()>> {
         for (sender, mut handle) in self.wait_handle.split_off(0) {
-            if let Some(sender) = sender {
-                // don't care about it
-                let _ignore = sender.send(());
-            }
-            match handle.poll_unpin(cx) {
-                Poll::Pending => {
-                    self.wait_handle.push((None, handle));
-                }
-                Poll::Ready(_) => (),
-            }
-        }
-
-        for (_, (sender, mut handle)) in self.session_wait_handle.drain() {
             if let Some(sender) = sender {
                 // don't care about it
                 let _ignore = sender.send(());

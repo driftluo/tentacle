@@ -191,6 +191,10 @@ pub(crate) struct Session<T> {
 
     last_sent: Instant,
     future_task_sender: mpsc::Sender<BoxedFutureTask>,
+    wait_handle: Vec<(
+        Option<futures::channel::oneshot::Sender<()>>,
+        tokio::task::JoinHandle<()>,
+    )>,
 }
 
 impl<T> Session<T>
@@ -252,6 +256,7 @@ where
             event: meta.event,
             last_sent: Instant::now(),
             future_task_sender,
+            wait_handle: meta.session_proto_handles,
         }
     }
 
@@ -500,14 +505,17 @@ where
 
         proto_stream.proto_open(version.clone());
 
-        self.event_output(
-            cx,
-            SessionEvent::ProtocolOpen {
-                id: self.context.id,
-                proto_id,
-                version,
-            },
-        );
+        if self.event.contains(&proto_id) {
+            self.event_output(
+                cx,
+                SessionEvent::ProtocolOpen {
+                    id: self.context.id,
+                    proto_id,
+                    version,
+                },
+            );
+        }
+
         self.next_stream += 1;
 
         debug!("session [{}] proto [{}] open", self.context.id, proto_id);
@@ -526,15 +534,18 @@ where
             }
             ProtocolEvent::Close { id, proto_id } => {
                 debug!("session [{}] proto [{}] closed", self.context.id, proto_id);
-                self.sub_streams.remove(&id);
-                self.proto_streams.remove(&proto_id);
-                self.event_output(
-                    cx,
-                    SessionEvent::ProtocolClose {
-                        id: self.context.id,
-                        proto_id,
-                    },
-                );
+                if self.sub_streams.remove(&id).is_some() {
+                    self.proto_streams.remove(&proto_id);
+                    if self.event.contains(&proto_id) {
+                        self.event_output(
+                            cx,
+                            SessionEvent::ProtocolClose {
+                                id: self.context.id,
+                                proto_id,
+                            },
+                        );
+                    }
+                }
             }
             ProtocolEvent::Message { data, proto_id, .. } => {
                 debug!("get proto [{}] data len: {}", proto_id, data.len());
@@ -813,6 +824,26 @@ where
         self.clean(cx);
     }
 
+    fn wait_handle_poll(&mut self, cx: &mut Context) -> Poll<Option<()>> {
+        for (sender, mut handle) in self.wait_handle.split_off(0) {
+            if let Some(sender) = sender {
+                // don't care about it
+                let _ignore = sender.send(());
+            }
+            match handle.poll_unpin(cx) {
+                Poll::Pending => {
+                    self.wait_handle.push((None, handle));
+                }
+                Poll::Ready(_) => (),
+            }
+        }
+        if self.wait_handle.is_empty() {
+            Poll::Ready(None)
+        } else {
+            Poll::Pending
+        }
+    }
+
     /// Clean env
     fn clean(&mut self, cx: &mut Context) {
         self.sub_streams.clear();
@@ -900,15 +931,24 @@ where
                     "Session({:?}) finished, LocalClose||Abnormal",
                     self.context.id
                 );
+                let id = self.context.id;
+                let protos = ::std::mem::take(&mut self.proto_streams);
+                for (proto_id, _) in protos {
+                    // make sure close protocol is early than close session
+                    if self.event.contains(&proto_id) {
+                        self.read_buf
+                            .push_back(SessionEvent::ProtocolClose { id, proto_id });
+                    }
+                }
                 self.close_session(cx);
-                return Poll::Ready(None);
+                return self.wait_handle_poll(cx);
             }
             SessionState::RemoteClose => {
                 // try close all protocol stream, and then close session
                 if self.proto_streams.is_empty() {
                     debug!("Session({:?}) finished, RemoteClose", self.context.id);
                     self.close_session(cx);
-                    return Poll::Ready(None);
+                    return self.wait_handle_poll(cx);
                 } else {
                     self.close_all_proto(cx);
                 }
@@ -930,6 +970,10 @@ pub(crate) struct SessionMeta {
     service_proto_senders: HashMap<ProtocolId, mpsc::Sender<ServiceProtocolEvent>>,
     session_proto_senders: HashMap<ProtocolId, mpsc::Sender<SessionProtocolEvent>>,
     event: HashSet<ProtocolId>,
+    session_proto_handles: Vec<(
+        Option<futures::channel::oneshot::Sender<()>>,
+        tokio::task::JoinHandle<()>,
+    )>,
 }
 
 impl SessionMeta {
@@ -944,6 +988,7 @@ impl SessionMeta {
             service_proto_senders: HashMap::default(),
             session_proto_senders: HashMap::default(),
             event: HashSet::new(),
+            session_proto_handles: Vec::new(),
         }
     }
 
@@ -980,6 +1025,17 @@ impl SessionMeta {
         senders: HashMap<ProtocolId, mpsc::Sender<SessionProtocolEvent>>,
     ) -> Self {
         self.session_proto_senders = senders;
+        self
+    }
+
+    pub fn session_proto_handles(
+        mut self,
+        handles: Vec<(
+            Option<futures::channel::oneshot::Sender<()>>,
+            tokio::task::JoinHandle<()>,
+        )>,
+    ) -> Self {
+        self.session_proto_handles = handles;
         self
     }
 

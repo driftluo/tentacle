@@ -27,7 +27,7 @@ impl ServiceProtocol for PHandle {
     fn init(&mut self, context: &mut ProtocolContext) {
         let proto_id = context.proto_id;
 
-        let _rse = context.set_service_notify(proto_id, Duration::from_secs(1), 1);
+        let _rse = context.set_service_notify(proto_id, Duration::from_millis(100), 1);
 
         for _ in 0..4096 {
             let _res = context.future_task(pending());

@@ -119,7 +119,7 @@ struct PHandle {
 impl ServiceProtocol for PHandle {
     fn init(&mut self, context: &mut ProtocolContext) {
         let proto_id = context.proto_id;
-        let _res = context.set_service_notify(proto_id, Duration::from_secs(1), 3);
+        let _res = context.set_service_notify(proto_id, Duration::from_millis(100), 3);
     }
 
     fn connected(&mut self, context: ProtocolContextMutRef, _version: &str) {
@@ -302,7 +302,7 @@ fn test_dial_with_no_notify(secio: bool) {
             let addr = format!("/ip4/127.0.0.1/tcp/{}", i).parse().unwrap();
             control.dial(addr, TargetProtocol::All).unwrap();
         }
-        std::thread::sleep(Duration::from_secs(3));
+        std::thread::sleep(Duration::from_millis(300));
     }
     assert_eq!(
         check_dial_errors(error_receiver, Duration::from_secs(15), 10),
