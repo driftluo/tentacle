@@ -50,6 +50,8 @@ pub(crate) mod transports;
 /// Some useful functions
 pub mod utils;
 
+mod channel;
+
 pub(crate) mod upnp;
 
 use std::{fmt, ops::AddAssign};
