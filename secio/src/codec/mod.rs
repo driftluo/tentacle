@@ -2,8 +2,7 @@
 
 /// Encryption and decryption stream
 pub mod secure_stream;
-/// Stream handle
-pub mod stream_handle;
+
 
 use crate::Digest;
 

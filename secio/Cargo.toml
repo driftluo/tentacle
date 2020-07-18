@@ -18,6 +18,7 @@ no-default-features = true
 [dependencies]
 bytes = "0.5"
 futures = { version = "0.3.0" }
+futures-util = { version = "0.3.0" }
 tokio = { version = "0.2.0", features = ["time", "io-util", "tcp", "dns"] }
 tokio-util = { version = "0.3.0", features = ["codec"] }
 log = "0.4.1"

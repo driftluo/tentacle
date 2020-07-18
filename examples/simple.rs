@@ -210,7 +210,7 @@ fn client() {
         let mut service = create_client();
         service
             .dial(
-                "/dns4/localhost/tcp/1337".parse().unwrap(),
+                "/ip4/127.0.0.1/tcp/1337".parse().unwrap(),
                 TargetProtocol::All,
             )
             .await
