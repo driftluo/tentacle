@@ -3,7 +3,6 @@
 /// Encryption and decryption stream
 pub mod secure_stream;
 
-
 use crate::Digest;
 
 /// Hash-based Message Authentication Code (HMAC).

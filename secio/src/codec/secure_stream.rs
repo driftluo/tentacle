@@ -125,7 +125,7 @@ where
         // drain n bytes of recv_buf
         self.recv_buf = self.recv_buf.split_off(n);
 
-        return n;
+        n
     }
 
     async fn read_socket(&mut self, buf: &mut [u8]) -> io::Result<usize> {
@@ -155,10 +155,10 @@ where
                     Ok(copied)
                 }
             }
-            Some(Err(err)) => return Err(err.into()),
+            Some(Err(err)) => Err(err),
             None => {
                 debug!("connection shutting down");
-                return Err(io::ErrorKind::BrokenPipe.into());
+                Err(io::ErrorKind::BrokenPipe.into())
             }
         }
     }
@@ -180,7 +180,7 @@ where
         trace!("start sending encrypted data size: {:?}", frame.len());
         match self.socket.send(frame).await {
             Ok(()) => Ok(buf.len()),
-            Err(err) => return Err(err.into()),
+            Err(err) => Err(err),
         }
     }
 }
@@ -307,13 +307,12 @@ mod tests {
         let (addr_sender, addr_receiver) = channel::oneshot::channel::<::std::net::SocketAddr>();
         let mut rt = tokio::runtime::Runtime::new().unwrap();
 
-        let nonce2 = nonce.clone();
         rt.spawn(async move {
             let mut listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
             let listener_addr = listener.local_addr().unwrap();
             let _res = addr_sender.send(listener_addr);
             let (socket, _) = listener.accept().await.unwrap();
-            let nonce2 = nonce2.clone();
+            let nonce2 = nonce.clone();
             let (decode_hmac, encode_hmac) = match cipher {
                 CipherType::ChaCha20Poly1305 | CipherType::Aes128Gcm | CipherType::Aes256Gcm => {
                     (None, None)

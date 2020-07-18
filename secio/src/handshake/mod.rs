@@ -1,12 +1,11 @@
 /// Most of the code for this module comes from `rust-libp2p`, but modified some logic(struct).
 use crate::{
-    crypto::cipher::CipherType, error::SecioError,
-    exchange::KeyAgreement, handshake::procedure::handshake, support, Digest, EphemeralPublicKey,
-    PublicKey, SecioKeyPair,
+    crypto::cipher::CipherType, error::SecioError, exchange::KeyAgreement,
+    handshake::procedure::handshake, support, Digest, EphemeralPublicKey, PublicKey, SecioKeyPair,
 };
 
-use tokio::prelude::{AsyncRead, AsyncWrite};
 use crate::codec::secure_stream::SecureStream;
+use tokio::prelude::{AsyncRead, AsyncWrite};
 
 #[cfg(all(feature = "flatc", feature = "molc"))]
 compile_error!("features `flatc` and `molc` are mutually exclusive");
