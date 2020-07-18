@@ -5,9 +5,7 @@
 use futures::{SinkExt, StreamExt};
 use log::{debug, trace};
 use std::{cmp::Ordering, io};
-use tokio::{
-    prelude::{AsyncRead, AsyncWrite},
-};
+use tokio::prelude::{AsyncRead, AsyncWrite};
 use tokio_util::codec::length_delimited::Builder;
 
 use crate::{
@@ -256,7 +254,9 @@ where
 
     // We send back their nonce to check if the connection works.
     trace!("checking encryption by sending back remote's nonce");
-    secure_stream.write_all(&pub_ephemeral_context.state.remote.nonce).await?;
+    secure_stream
+        .write_all(&pub_ephemeral_context.state.remote.nonce)
+        .await?;
     secure_stream.verify_nonce().await?;
 
     Ok((

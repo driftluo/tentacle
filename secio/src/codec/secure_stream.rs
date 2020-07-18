@@ -1,7 +1,5 @@
 use bytes::{Bytes, BytesMut};
-use futures::{
-    SinkExt, StreamExt,
-};
+use futures::{SinkExt, StreamExt};
 use log::{debug, trace};
 use tokio::prelude::{AsyncRead, AsyncWrite};
 use tokio_util::codec::{length_delimited::LengthDelimitedCodec, Framed};
@@ -13,14 +11,9 @@ use std::{
     task::{Context, Poll},
 };
 
-use crate::{
-    codec::{Hmac},
-    crypto::BoxStreamCipher,
-    error::SecioError,
-};
+use crate::{codec::Hmac, crypto::BoxStreamCipher, error::SecioError};
 use std::future::Future;
-use tokio::io::{AsyncReadExt};
-
+use tokio::io::AsyncReadExt;
 
 /// Encrypted stream
 pub struct SecureStream<T> {
@@ -99,7 +92,11 @@ where
             let mut nonce = self.nonce.clone();
             self.read(&mut nonce).await?;
 
-            trace!("received nonce={}, my_nonce={}", nonce.len(), self.nonce.len());
+            trace!(
+                "received nonce={}, my_nonce={}",
+                nonce.len(),
+                self.nonce.len()
+            );
 
             let n = min(nonce.len(), self.nonce.len());
             if nonce[..n] != self.nonce[..n] {
@@ -128,7 +125,7 @@ where
         // drain n bytes of recv_buf
         self.recv_buf = self.recv_buf.split_off(n);
 
-        return n
+        return n;
     }
 
     async fn read_socket(&mut self, buf: &mut [u8]) -> io::Result<usize> {
@@ -141,7 +138,9 @@ where
         match self.socket.next().await {
             Some(Ok(t)) => {
                 debug!("receive encrypted data size: {:?}", t.len());
-                let decoded = self.decode_buffer(t).map_err::<io::Error, _>(|err|err.into())?;
+                let decoded = self
+                    .decode_buffer(t)
+                    .map_err::<io::Error, _>(|err| err.into())?;
 
                 // when input buffer is big enough
                 let n = decoded.len();
@@ -156,12 +155,10 @@ where
                     Ok(copied)
                 }
             }
-            Some(Err(err)) => {
-                return Err(err.into())
-            }
+            Some(Err(err)) => return Err(err.into()),
             None => {
                 debug!("connection shutting down");
-                return Err(io::ErrorKind::BrokenPipe.into())
+                return Err(io::ErrorKind::BrokenPipe.into());
             }
         }
     }
@@ -178,24 +175,19 @@ where
 
     async fn write_socket(&mut self, buf: &[u8]) -> io::Result<usize> {
         debug!("start sending plain data: {:?}", buf);
-        let l = buf.len();
 
         let frame = self.encode_buffer(buf);
         trace!("start sending encrypted data size: {:?}", frame.len());
         match self.socket.send(frame).await {
-            Ok(()) => {
-                Ok(l)
-            }
-            Err(err) => {
-                return Err(err.into())
-            }
+            Ok(()) => Ok(buf.len()),
+            Err(err) => return Err(err.into()),
         }
     }
 }
 
 impl<T> AsyncRead for SecureStream<T>
-    where
-        T: AsyncRead + AsyncWrite + Unpin,
+where
+    T: AsyncRead + AsyncWrite + Unpin,
 {
     fn poll_read(
         mut self: Pin<&mut Self>,
@@ -207,8 +199,8 @@ impl<T> AsyncRead for SecureStream<T>
 }
 
 impl<T> AsyncWrite for SecureStream<T>
-    where
-        T: AsyncRead + AsyncWrite + Unpin,
+where
+    T: AsyncRead + AsyncWrite + Unpin,
 {
     fn poll_write(
         mut self: Pin<&mut Self>,
@@ -222,20 +214,16 @@ impl<T> AsyncWrite for SecureStream<T>
         poll_future(cx, self.socket.flush())
     }
 
-    fn poll_shutdown(self: Pin<&mut Self>, _cx: &mut Context) -> Poll<io::Result<()>> {
-        Poll::Ready(Ok(()))
+    fn poll_shutdown(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<io::Result<()>> {
+        poll_future(cx, self.socket.close())
     }
 }
 
-
 /// Pins a future and then polls it.
 fn poll_future<T>(cx: &mut Context<'_>, fut: impl Future<Output = T>) -> Poll<T> {
-    futures_util::pin_mut!(fut);
+    futures::pin_mut!(fut);
     fut.poll(cx)
 }
-
-
-
 
 #[cfg(test)]
 mod tests {
@@ -244,7 +232,7 @@ mod tests {
     #[cfg(unix)]
     use crate::Digest;
     use bytes::BytesMut;
-    use futures::{channel};
+    use futures::channel;
     use tokio::{
         io::{AsyncReadExt, AsyncWriteExt},
         net::{TcpListener, TcpStream},
