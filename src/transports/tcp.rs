@@ -42,9 +42,6 @@ async fn connect(
     original: Option<Multiaddr>,
 ) -> Result<(Multiaddr, TcpStream)> {
     let addr = address.await?;
-
-    dbg!(&addr);
-
     match multiaddr_to_socketaddr(&addr) {
         Some(socket_address) => {
             match tokio::time::timeout(timeout, TcpStream::connect(&socket_address)).await {
