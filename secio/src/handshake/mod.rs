@@ -1,10 +1,10 @@
 /// Most of the code for this module comes from `rust-libp2p`, but modified some logic(struct).
 use crate::{
-    codec::stream_handle::StreamHandle, crypto::cipher::CipherType, error::SecioError,
-    exchange::KeyAgreement, handshake::procedure::handshake, support, Digest, EphemeralPublicKey,
-    PublicKey, SecioKeyPair,
+    crypto::cipher::CipherType, error::SecioError, exchange::KeyAgreement,
+    handshake::procedure::handshake, support, Digest, EphemeralPublicKey, PublicKey, SecioKeyPair,
 };
 
+use crate::codec::secure_stream::SecureStream;
 use tokio::prelude::{AsyncRead, AsyncWrite};
 
 #[cfg(all(feature = "flatc", feature = "molc"))]
@@ -95,7 +95,7 @@ impl Config {
     pub async fn handshake<T>(
         self,
         socket: T,
-    ) -> Result<(StreamHandle, PublicKey, EphemeralPublicKey), SecioError>
+    ) -> Result<(SecureStream<T>, PublicKey, EphemeralPublicKey), SecioError>
     where
         T: AsyncRead + AsyncWrite + Send + 'static + Unpin,
     {
