@@ -7,11 +7,12 @@ use std::{
         atomic::{AtomicBool, AtomicUsize, Ordering},
         Arc,
     },
+    task::{Context, Poll},
     time::Duration,
 };
 
 use crate::{
-    channel::{mpsc, mpsc::Priority},
+    channel::{mpsc, mpsc::Priority, SendError},
     error::SendErrorKind,
     multiaddr::Multiaddr,
     protocol_select::ProtocolInfo,
@@ -47,6 +48,13 @@ impl SessionController {
         } else {
             self.event_sender.try_send(event)
         }
+    }
+
+    pub(crate) fn poll_ready(
+        &mut self,
+        cx: &mut Context,
+    ) -> Poll<std::result::Result<(), SendError>> {
+        self.event_sender.poll_ready(cx)
     }
 }
 

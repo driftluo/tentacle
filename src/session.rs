@@ -4,10 +4,7 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::{
     io::{self, ErrorKind},
     pin::Pin,
-    sync::{
-        atomic::{AtomicBool, Ordering},
-        Arc,
-    },
+    sync::{atomic::Ordering, Arc},
     task::{Context, Poll},
     time::{Duration, Instant},
 };
@@ -25,8 +22,7 @@ use crate::{
     service::{
         config::{Meta, SessionConfig},
         future_task::BoxedFutureTask,
-        SessionType, BUF_SHRINK_THRESHOLD, DELAY_TIME, RECEIVED_BUFFER_SIZE, RECEIVED_SIZE,
-        SEND_SIZE,
+        SessionType, BUF_SHRINK_THRESHOLD, RECEIVED_BUFFER_SIZE, RECEIVED_SIZE, SEND_SIZE,
     },
     substream::{ProtocolEvent, SubstreamBuilder},
     transports::MultiIncoming,
@@ -183,9 +179,6 @@ pub(crate) struct Session<T> {
     service_proto_senders: HashMap<ProtocolId, mpsc::Sender<ServiceProtocolEvent>>,
     session_proto_senders: HashMap<ProtocolId, mpsc::Sender<SessionProtocolEvent>>,
 
-    /// Delay notify with abnormally poor machines
-    delay: Arc<AtomicBool>,
-
     last_sent: Instant,
     future_task_sender: mpsc::Sender<BoxedFutureTask>,
     wait_handle: Vec<(
@@ -246,7 +239,6 @@ where
             service_receiver,
             service_proto_senders: meta.service_proto_senders,
             session_proto_senders: meta.session_proto_senders,
-            delay: Arc::new(AtomicBool::new(false)),
             state: SessionState::Normal,
             event: meta.event,
             last_sent: Instant::now(),
@@ -344,15 +336,28 @@ where
     #[inline]
     fn output(&mut self, cx: &mut Context) {
         while let Some(event) = self.read_buf.pop_front() {
-            if let Err(e) = self.service_sender.try_send(event) {
-                if e.is_full() {
-                    self.read_buf.push_front(e.into_inner());
-                    self.set_delay(cx);
-                    return;
-                } else {
+            match self.service_sender.poll_ready(cx) {
+                Poll::Ready(Ok(())) => {
+                    if let Err(e) = self.service_sender.try_send(event) {
+                        if e.is_full() {
+                            self.read_buf.push_front(e.into_inner());
+                        } else {
+                            error!("session send to service error: {}", e);
+                            self.read_buf.clear();
+                            self.state = SessionState::Abnormal;
+                        }
+                        return;
+                    }
+                }
+                Poll::Pending => {
+                    self.read_buf.push_front(event);
+                    break;
+                }
+                Poll::Ready(Err(e)) => {
                     error!("session send to service error: {}", e);
                     self.read_buf.clear();
-                    return;
+                    self.state = SessionState::Abnormal;
+                    break;
                 }
             }
         }
@@ -382,16 +387,30 @@ where
             }
             if let Some(stream_id) = self.proto_streams.get(&proto_id) {
                 if let Some(sender) = self.sub_streams.get_mut(&stream_id) {
-                    if let Err(e) = sender.try_send(event) {
-                        if e.is_full() {
-                            self.push_back(priority, proto_id, e.into_inner());
-                            self.set_delay(cx);
+                    match sender.poll_ready(cx) {
+                        Poll::Ready(Ok(())) => {
+                            let res = match priority {
+                                Priority::High => sender.try_quick_send(event),
+                                Priority::Normal => sender.try_send(event),
+                            };
+                            if let Err(e) = res {
+                                if e.is_full() {
+                                    self.push_back(priority, proto_id, e.into_inner());
+                                    block_substreams.insert(proto_id);
+                                } else {
+                                    debug!("session send to sub stream error: {}", e);
+                                }
+                            } else {
+                                self.last_sent = Instant::now();
+                            }
+                        }
+                        Poll::Pending => {
+                            self.push_back(priority, proto_id, event);
                             block_substreams.insert(proto_id);
-                        } else {
+                        }
+                        Poll::Ready(Err(e)) => {
                             debug!("session send to sub stream error: {}", e);
                         }
-                    } else {
-                        self.last_sent = Instant::now();
                     }
                 };
             }
@@ -756,9 +775,19 @@ where
     fn close_all_proto(&mut self, cx: &mut Context) {
         if self.context.closed.load(Ordering::SeqCst) {
             self.close_session(cx)
+        } else {
+            for (pid, stream_id) in self.proto_streams.iter() {
+                self.write_buf.push_back((
+                    *pid,
+                    ProtocolEvent::Close {
+                        id: *stream_id,
+                        proto_id: *pid,
+                    },
+                ));
+            }
+            self.distribute_to_substream(cx);
+            self.context.closed.store(true, Ordering::SeqCst);
         }
-        self.context.closed.store(true, Ordering::SeqCst);
-        self.set_delay(cx);
     }
 
     /// Close session
@@ -813,29 +842,12 @@ where
 
     #[inline]
     fn flush(&mut self, cx: &mut Context) {
-        self.distribute_to_substream(cx);
-        self.output(cx);
-    }
-
-    #[inline]
-    fn set_delay(&mut self, cx: &mut Context) {
-        // Why use `delay` instead of `notify`?
-        //
-        // In fact, on machines that can use multi-core normally, there is almost no problem with the `notify` behavior,
-        // and even the efficiency will be higher.
-        //
-        // However, if you are on a single-core bully machine, `notify` may have a very amazing starvation behavior.
-        //
-        // Under a single-core machine, `notify` may fall into the loop of infinitely preemptive CPU, causing starvation.
-        if !self.delay.load(Ordering::Acquire) {
-            self.delay.store(true, Ordering::Release);
-            let waker = cx.waker().clone();
-            let delay = self.delay.clone();
-            tokio::spawn(async move {
-                tokio::time::delay_until(tokio::time::Instant::now() + DELAY_TIME).await;
-                waker.wake();
-                delay.store(false, Ordering::Release);
-            });
+        if !self.read_buf.is_empty()
+            || !self.write_buf.is_empty()
+            || !self.high_write_buf.is_empty()
+        {
+            self.distribute_to_substream(cx);
+            self.output(cx);
         }
     }
 }
@@ -868,18 +880,15 @@ where
             return Poll::Ready(None);
         }
 
-        if !self.read_buf.is_empty()
-            || !self.write_buf.is_empty()
-            || !self.high_write_buf.is_empty()
-        {
-            self.flush(cx);
-        }
+        self.flush(cx);
 
         self.poll_inner_socket(cx);
 
         self.recv_substreams(cx);
 
         self.recv_service(cx);
+
+        self.flush(cx);
 
         match self.state {
             SessionState::LocalClose | SessionState::Abnormal => {

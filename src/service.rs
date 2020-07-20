@@ -13,7 +13,6 @@ use std::{
         Arc,
     },
     task::{Context, Poll},
-    time::Duration,
 };
 use tokio::prelude::{AsyncRead, AsyncWrite};
 
@@ -64,7 +63,6 @@ pub(crate) const RECEIVED_BUFFER_SIZE: usize = 2048;
 pub(crate) const RECEIVED_SIZE: usize = 512;
 /// Send to remote, distribute mode
 pub(crate) const SEND_SIZE: usize = 512;
-pub(crate) const DELAY_TIME: Duration = Duration::from_millis(300);
 
 type Result<T> = std::result::Result<T, TransportErrorKind>;
 
@@ -121,8 +119,6 @@ pub struct Service<T> {
     service_task_receiver: priority_mpsc::UnboundedReceiver<ServiceTask>,
 
     pending_tasks: VecDeque<BoxedFutureTask>,
-    /// Delay notify with abnormally poor machines
-    delay: Arc<AtomicBool>,
 
     shutdown: Arc<AtomicBool>,
 
@@ -190,7 +186,6 @@ where
             config,
             service_task_receiver: task_receiver,
             pending_tasks: VecDeque::default(),
-            delay: Arc::new(AtomicBool::new(false)),
             shutdown,
             wait_handle: Vec::new(),
         }
@@ -393,18 +388,30 @@ where
                     }
                 }
 
-                if let Err(e) = session.try_send(priority, event) {
-                    if e.is_full() {
+                match session.poll_ready(cx) {
+                    Poll::Ready(Ok(())) => {
+                        if let Err(e) = session.try_send(priority, event) {
+                            if e.is_full() {
+                                block_sessions.insert(id);
+                                debug!("session [{}] is full", id);
+                                self.push_back(priority, id, e.into_inner());
+                            } else {
+                                debug!(
+                                    "session {} has been shutdown, message can't send, just drop it",
+                                    id
+                                )
+                            }
+                        }
+                    }
+                    Poll::Pending => {
                         block_sessions.insert(id);
                         debug!("session [{}] is full", id);
-                        self.push_back(priority, id, e.into_inner());
-                        self.set_delay(cx);
-                    } else {
-                        debug!(
-                            "session {} has been shutdown, message can't send, just drop it",
-                            id
-                        )
+                        self.push_back(priority, id, event);
                     }
+                    Poll::Ready(Err(_)) => debug!(
+                        "session {} has been shutdown, message can't send, just drop it",
+                        id
+                    ),
                 }
             } else {
                 debug!("Can't find session {} to send data", id);
@@ -465,14 +472,43 @@ where
                 continue;
             }
             if let Some(sender) = self.service_proto_handles.get_mut(&proto_id) {
-                if let Err(e) = sender.try_send(event) {
-                    if e.is_full() {
+                match sender.poll_ready(cx) {
+                    Poll::Ready(Ok(())) => {
+                        if let Err(e) = sender.try_send(event) {
+                            if e.is_full() {
+                                debug!("service proto [{}] handle is full", proto_id);
+                                self.read_service_buf.push_back((
+                                    session_id,
+                                    proto_id,
+                                    e.into_inner(),
+                                ));
+                                self.proto_handle_error(proto_id, None);
+                                block_handles.insert(proto_id);
+                            } else {
+                                debug!(
+                                    "channel shutdown, service proto [{}] message can't send to user",
+                                    proto_id
+                                );
+
+                                error = true;
+                                self.handle.handle_error(
+                                    &mut self.service_context,
+                                    ServiceError::ProtocolHandleError {
+                                        proto_id,
+                                        error: ProtocolHandleErrorKind::AbnormallyClosed(None),
+                                    },
+                                );
+                            }
+                        }
+                    }
+                    Poll::Pending => {
                         debug!("service proto [{}] handle is full", proto_id);
                         self.read_service_buf
-                            .push_back((session_id, proto_id, e.into_inner()));
-                        self.proto_handle_error(cx, proto_id, None);
+                            .push_back((session_id, proto_id, event));
+                        self.proto_handle_error(proto_id, None);
                         block_handles.insert(proto_id);
-                    } else {
+                    }
+                    Poll::Ready(Err(_)) => {
                         debug!(
                             "channel shutdown, service proto [{}] message can't send to user",
                             proto_id
@@ -493,16 +529,49 @@ where
 
         for (session_id, proto_id, event) in self.read_session_buf.split_off(0) {
             if let Some(sender) = self.session_proto_handles.get_mut(&(session_id, proto_id)) {
-                if let Err(e) = sender.try_send(event) {
-                    if e.is_full() {
+                match sender.poll_ready(cx) {
+                    Poll::Ready(Ok(())) => {
+                        if let Err(e) = sender.try_send(event) {
+                            if e.is_full() {
+                                debug!(
+                                    "session [{}] proto [{}] handle is full",
+                                    session_id, proto_id
+                                );
+                                self.read_session_buf.push_back((
+                                    session_id,
+                                    proto_id,
+                                    e.into_inner(),
+                                ));
+                                self.proto_handle_error(proto_id, Some(session_id));
+                            } else {
+                                debug!(
+                                    "channel shutdown, session proto [{}] session [{}] message can't send to user",
+                                    proto_id, session_id
+                                );
+
+                                error = true;
+                                self.handle.handle_error(
+                                    &mut self.service_context,
+                                    ServiceError::ProtocolHandleError {
+                                        proto_id,
+                                        error: ProtocolHandleErrorKind::AbnormallyClosed(Some(
+                                            session_id,
+                                        )),
+                                    },
+                                )
+                            }
+                        }
+                    }
+                    Poll::Pending => {
                         debug!(
                             "session [{}] proto [{}] handle is full",
                             session_id, proto_id
                         );
                         self.read_session_buf
-                            .push_back((session_id, proto_id, e.into_inner()));
-                        self.proto_handle_error(cx, proto_id, Some(session_id));
-                    } else {
+                            .push_back((session_id, proto_id, event));
+                        self.proto_handle_error(proto_id, Some(session_id));
+                    }
+                    Poll::Ready(Err(_)) => {
                         debug!(
                             "channel shutdown, session proto [{}] session [{}] message can't send to user",
                             proto_id, session_id
@@ -537,14 +606,8 @@ where
 
     /// When proto handle channel is full, call here
     #[inline]
-    fn proto_handle_error(
-        &mut self,
-        cx: &mut Context,
-        proto_id: ProtocolId,
-        session_id: Option<SessionId>,
-    ) {
+    fn proto_handle_error(&mut self, proto_id: ProtocolId, session_id: Option<SessionId>) {
         let error = ProtocolHandleErrorKind::Block(session_id);
-        self.set_delay(cx);
         self.handle.handle_error(
             &mut self.service_context,
             ServiceError::ProtocolHandleError { proto_id, error },
@@ -1029,12 +1092,20 @@ where
     #[inline(always)]
     fn send_pending_task(&mut self, cx: &mut Context) {
         while let Some(task) = self.pending_tasks.pop_front() {
-            if let Err(err) = self.future_task_sender.try_send(task) {
-                if err.is_full() {
-                    self.pending_tasks.push_front(err.into_inner());
-                    self.set_delay(cx);
+            match self.future_task_sender.poll_ready(cx) {
+                Poll::Ready(Ok(())) => {
+                    if let Err(err) = self.future_task_sender.try_send(task) {
+                        if err.is_full() {
+                            self.pending_tasks.push_front(err.into_inner());
+                            break;
+                        }
+                    }
+                }
+                Poll::Pending => {
+                    self.pending_tasks.push_front(task);
                     break;
                 }
+                Poll::Ready(Err(_)) => (),
             }
         }
     }
@@ -1466,25 +1537,12 @@ where
         }
     }
 
-    #[inline]
-    fn set_delay(&mut self, cx: &mut Context) {
-        // Why use `delay` instead of `notify`?
-        //
-        // In fact, on machines that can use multi-core normally, there is almost no problem with the `notify` behavior,
-        // and even the efficiency will be higher.
-        //
-        // However, if you are on a single-core bully machine, `notify` may have a very amazing starvation behavior.
-        //
-        // Under a single-core machine, `notify` may fall into the loop of infinitely preemptive CPU, causing starvation.
-        if !self.delay.load(Ordering::Acquire) {
-            self.delay.store(true, Ordering::Release);
-            let waker = cx.waker().clone();
-            let delay = self.delay.clone();
-            tokio::spawn(async move {
-                tokio::time::delay_until(tokio::time::Instant::now() + DELAY_TIME).await;
-                waker.wake();
-                delay.store(false, Ordering::Release);
-            });
+    fn flush_buffer(&mut self, cx: &mut Context) {
+        if !self.write_buf.is_empty() || !self.high_write_buf.is_empty() {
+            self.distribute_to_session(cx);
+        }
+        if !self.read_service_buf.is_empty() || !self.read_session_buf.is_empty() {
+            self.distribute_to_user_level(cx);
         }
     }
 
@@ -1536,12 +1594,7 @@ where
             self.init_proto_handles();
         }
 
-        if !self.write_buf.is_empty() || !self.high_write_buf.is_empty() {
-            self.distribute_to_session(cx);
-        }
-        if !self.read_service_buf.is_empty() || !self.read_session_buf.is_empty() {
-            self.distribute_to_user_level(cx);
-        }
+        self.flush_buffer(cx);
 
         self.try_update_listens(cx);
 
@@ -1552,6 +1605,8 @@ where
 
         // process any task buffer
         self.send_pending_task(cx);
+
+        self.flush_buffer(cx);
 
         // Double check service state
         if self.listens.is_empty()

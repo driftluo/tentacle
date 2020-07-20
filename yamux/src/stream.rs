@@ -11,7 +11,6 @@ use std::{
     collections::VecDeque,
     io,
     pin::Pin,
-    sync::{atomic::AtomicBool, Arc},
     task::{Context, Poll},
 };
 
@@ -43,8 +42,6 @@ pub struct StreamHandle {
     // Receive frame of current stream from parent session
     // (if the sender closed means session closed the stream should close too)
     frame_receiver: Receiver<Frame>,
-
-    delay: Arc<AtomicBool>,
 }
 
 impl StreamHandle {
@@ -69,7 +66,6 @@ impl StreamHandle {
             window_update_frame_buf: VecDeque::default(),
             event_sender,
             frame_receiver,
-            delay: Arc::new(AtomicBool::new(false)),
         }
     }
 
@@ -90,22 +86,22 @@ impl StreamHandle {
         self.send_window
     }
 
-    fn close(&mut self) -> Result<(), Error> {
+    fn close(&mut self, cx: &mut Context) -> Result<(), Error> {
         match self.state {
             StreamState::SynSent | StreamState::SynReceived | StreamState::Established => {
                 self.state = StreamState::LocalClosing;
-                self.send_close()?;
+                self.send_close(cx)?;
             }
             StreamState::RemoteClosing => {
                 self.state = StreamState::Closed;
-                self.send_close()?;
+                self.send_close(cx)?;
                 let event = StreamEvent::StateChanged((self.id, self.state));
-                self.send_event(event)?;
+                self.send_event(cx, event)?;
             }
             StreamState::Reset | StreamState::Closed => {
                 self.state = StreamState::Closed;
                 let event = StreamEvent::StateChanged((self.id, self.state));
-                self.send_event(event)?;
+                self.send_event(cx, event)?;
             }
             _ => {}
         }
@@ -113,15 +109,26 @@ impl StreamHandle {
     }
 
     #[inline]
-    fn send_event(&mut self, event: StreamEvent) -> Result<(), Error> {
+    fn send_event(&mut self, cx: &mut Context, event: StreamEvent) -> Result<(), Error> {
         debug!("[{}] StreamHandle.send_event()", self.id);
         while let Some((flag, delta)) = self.window_update_frame_buf.pop_front() {
             let event = StreamEvent::Frame(Frame::new_window_update(flag, self.id, delta));
-            if let Err(e) = self.event_sender.try_send(event) {
-                if e.is_full() {
+            match self.event_sender.poll_ready(cx) {
+                Poll::Ready(Ok(())) => {
+                    if let Err(e) = self.event_sender.try_send(event) {
+                        if e.is_full() {
+                            self.window_update_frame_buf.push_front((flag, delta));
+                            return Err(Error::WouldBlock);
+                        } else {
+                            return Err(Error::SessionShutdown);
+                        }
+                    }
+                }
+                Poll::Pending => {
                     self.window_update_frame_buf.push_front((flag, delta));
                     return Err(Error::WouldBlock);
-                } else {
+                }
+                Poll::Ready(Err(_)) => {
                     return Err(Error::SessionShutdown);
                 }
             }
@@ -139,13 +146,13 @@ impl StreamHandle {
     }
 
     #[inline]
-    fn send_frame(&mut self, frame: Frame) -> Result<(), Error> {
+    fn send_frame(&mut self, cx: &mut Context, frame: Frame) -> Result<(), Error> {
         let event = StreamEvent::Frame(frame);
-        self.send_event(event)
+        self.send_event(cx, event)
     }
 
     // Send a window update
-    pub(crate) fn send_window_update(&mut self) -> Result<(), Error> {
+    pub(crate) fn send_window_update(&mut self, cx: Option<&mut Context>) -> Result<(), Error> {
         let buf_len = self.read_buf.len() as u32;
         let delta = self.max_recv_window - buf_len - self.recv_window;
 
@@ -157,30 +164,35 @@ impl StreamHandle {
         // Update our window
         self.recv_window += delta;
         let frame = Frame::new_window_update(flags, self.id, delta);
-        match self.send_frame(frame) {
-            Err(ref e) if e == &Error::WouldBlock => {
-                self.window_update_frame_buf.push_back((flags, delta))
+        match cx {
+            Some(cx) => match self.send_frame(cx, frame) {
+                Err(Error::WouldBlock) => self.window_update_frame_buf.push_back((flags, delta)),
+                Err(e) => return Err(e),
+                _ => (),
+            },
+            None => {
+                // init sub stream, this channel is empty
+                let _ignore = self.event_sender.try_send(StreamEvent::Frame(frame));
             }
-            Err(e) => return Err(e),
-            _ => (),
         }
+
         Ok(())
     }
 
-    fn send_data(&mut self, data: &[u8]) -> Result<(), Error> {
+    fn send_data(&mut self, cx: &mut Context, data: &[u8]) -> Result<(), Error> {
         let flags = self.get_flags();
         let frame = Frame::new_data(flags, self.id, Bytes::from(data.to_owned()));
-        self.send_frame(frame)
+        self.send_frame(cx, frame)
     }
 
-    fn send_close(&mut self) -> Result<(), Error> {
+    fn send_close(&mut self, cx: &mut Context) -> Result<(), Error> {
         let mut flags = self.get_flags();
         flags.add(Flag::Fin);
         let frame = Frame::new_window_update(flags, self.id, 0);
-        self.send_frame(frame)
+        self.send_frame(cx, frame)
     }
 
-    fn process_flags(&mut self, flags: Flags) -> Result<(), Error> {
+    fn process_flags(&mut self, cx: &mut Context, flags: Flags) -> Result<(), Error> {
         if flags.contains(Flag::Ack) && self.state == StreamState::SynSent {
             self.state = StreamState::SynReceived;
         }
@@ -206,7 +218,7 @@ impl StreamHandle {
         }
 
         if close_stream {
-            self.close()?;
+            self.close(cx)?;
         }
         Ok(())
     }
@@ -232,7 +244,7 @@ impl StreamHandle {
                 self.handle_window_update(cx, &frame)?;
             }
             Type::Data => {
-                self.handle_data(frame)?;
+                self.handle_data(cx, frame)?;
             }
             _ => {
                 return Err(Error::InvalidMsgType);
@@ -242,7 +254,7 @@ impl StreamHandle {
     }
 
     fn handle_window_update(&mut self, cx: &mut Context, frame: &Frame) -> Result<(), Error> {
-        self.process_flags(frame.flags())?;
+        self.process_flags(cx, frame.flags())?;
         self.send_window = self
             .send_window
             .checked_add(frame.length())
@@ -254,13 +266,13 @@ impl StreamHandle {
             // don't care about result here
             let _ignore = Pin::new(self).poll_write(cx, &b);
         } else {
-            cx.waker().clone().wake();
+            cx.waker().wake_by_ref();
         }
         Ok(())
     }
 
-    fn handle_data(&mut self, frame: Frame) -> Result<(), Error> {
-        self.process_flags(frame.flags())?;
+    fn handle_data(&mut self, cx: &mut Context, frame: Frame) -> Result<(), Error> {
+        self.process_flags(cx, frame.flags())?;
         let length = frame.length();
         if length > self.recv_window {
             return Err(Error::RecvWindowExceeded);
@@ -369,7 +381,7 @@ impl AsyncRead for StreamHandle {
         match self.state {
             StreamState::RemoteClosing | StreamState::Closed | StreamState::Reset => (),
             _ => {
-                if self.send_window_update().is_err() {
+                if self.send_window_update(Some(cx)).is_err() {
                     return Poll::Ready(Err(io::ErrorKind::BrokenPipe.into()));
                 }
             }
@@ -421,7 +433,7 @@ impl AsyncWrite for StreamHandle {
         // Allow n = 0, send an empty frame to remote
         let n = ::std::cmp::min(self.send_window as usize, buf.len());
         let data = &buf[0..n];
-        match self.send_data(data) {
+        match self.send_data(cx, data) {
             Ok(_) => {
                 self.send_window -= n as u32;
                 // Cache unsent data
@@ -429,7 +441,7 @@ impl AsyncWrite for StreamHandle {
 
                 Poll::Ready(Ok(buf.len()))
             }
-            Err(ref e) if e == &Error::WouldBlock => Poll::Pending,
+            Err(Error::WouldBlock) => Poll::Pending,
             _ => Poll::Ready(Err(io::ErrorKind::BrokenPipe.into())),
         }
     }
@@ -451,17 +463,17 @@ impl AsyncWrite for StreamHandle {
             }
         }
         let event = StreamEvent::Flush(self.id);
-        match self.send_event(event) {
-            Err(ref e) if e == &Error::WouldBlock => Poll::Pending,
+        match self.send_event(cx, event) {
+            Err(Error::WouldBlock) => Poll::Pending,
             Err(_) => Poll::Ready(Err(io::ErrorKind::BrokenPipe.into())),
             Ok(()) => Poll::Ready(Ok(())),
         }
     }
 
-    fn poll_shutdown(mut self: Pin<&mut Self>, _cx: &mut Context) -> Poll<io::Result<()>> {
+    fn poll_shutdown(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<io::Result<()>> {
         debug!("[{}] StreamHandle.shutdown()", self.id);
-        match self.close() {
-            Err(ref e) if e == &Error::WouldBlock => Poll::Pending,
+        match self.close(cx) {
+            Err(Error::WouldBlock) => Poll::Pending,
             Err(_) => Poll::Ready(Err(io::ErrorKind::BrokenPipe.into())),
             Ok(()) => Poll::Ready(Ok(())),
         }
