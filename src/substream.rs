@@ -393,114 +393,106 @@ where
         }
     }
 
-    fn recv_event(&mut self, cx: &mut Context) {
-        loop {
-            if self.dead {
-                break;
-            }
+    fn recv_event(&mut self, cx: &mut Context) -> Poll<Option<()>> {
+        if self.dead {
+            return Poll::Ready(None);
+        }
 
-            if self.write_buf.len() > self.config.send_event_size() {
-                break;
-            }
+        if self.write_buf.len() > self.config.send_event_size() {
+            return Poll::Pending;
+        }
 
-            match Pin::new(&mut self.event_receiver).as_mut().poll_next(cx) {
-                Poll::Ready(Some((priority, event))) => {
-                    self.handle_proto_event(cx, event, priority)
-                }
-                Poll::Ready(None) => {
-                    // Must be session close
-                    self.dead = true;
-                    if let Poll::Ready(Err(e)) =
-                        Pin::new(self.sub_stream.get_mut()).poll_shutdown(cx)
-                    {
-                        log::trace!("sub stream poll shutdown err {}", e)
-                    }
-                    return;
-                }
-                Poll::Pending => {
-                    break;
-                }
+        match Pin::new(&mut self.event_receiver).as_mut().poll_next(cx) {
+            Poll::Ready(Some((priority, event))) => {
+                self.handle_proto_event(cx, event, priority);
+                Poll::Ready(Some(()))
             }
+            Poll::Ready(None) => {
+                // Must be session close
+                self.dead = true;
+                if let Poll::Ready(Err(e)) = Pin::new(self.sub_stream.get_mut()).poll_shutdown(cx) {
+                    log::trace!("sub stream poll shutdown err {}", e)
+                }
+                Poll::Ready(None)
+            }
+            Poll::Pending => Poll::Pending,
         }
     }
 
-    fn recv_frame(&mut self, cx: &mut Context) {
-        loop {
-            if self.dead {
-                break;
-            }
+    fn recv_frame(&mut self, cx: &mut Context) -> Poll<Option<()>> {
+        if self.dead {
+            return Poll::Ready(None);
+        }
 
-            if self.read_buf.len() > self.config.recv_event_size() {
-                break;
-            }
+        if self.read_buf.len() > self.config.recv_event_size() {
+            return Poll::Pending;
+        }
 
-            match Pin::new(&mut self.sub_stream).as_mut().poll_next(cx) {
-                Poll::Ready(Some(Ok(data))) => {
-                    debug!(
-                        "protocol [{}] receive data len: {}",
-                        self.proto_id,
-                        data.len()
-                    );
+        match Pin::new(&mut self.sub_stream).as_mut().poll_next(cx) {
+            Poll::Ready(Some(Ok(data))) => {
+                debug!(
+                    "protocol [{}] receive data len: {}",
+                    self.proto_id,
+                    data.len()
+                );
 
-                    let data = match self.before_receive {
-                        Some(ref function) => match function(data) {
-                            Ok(data) => data,
-                            Err(err) => {
-                                self.error_close(cx, err);
-                                return;
-                            }
-                        },
-                        None => data.freeze(),
-                    };
-
-                    if self.service_proto_sender.is_some() {
-                        self.service_proto_buf
-                            .push_back(ServiceProtocolEvent::Received {
-                                id: self.context.id,
-                                data: data.clone(),
-                            })
-                    }
-
-                    if self.session_proto_sender.is_some() {
-                        self.session_proto_buf
-                            .push_back(SessionProtocolEvent::Received { data: data.clone() })
-                    }
-
-                    self.distribute_to_user_level(cx);
-
-                    if self.event {
-                        self.output_event(
-                            cx,
-                            ProtocolEvent::Message {
-                                id: self.id,
-                                proto_id: self.proto_id,
-                                data,
-                            },
-                        )
-                    }
-                }
-                Poll::Ready(None) => {
-                    debug!("protocol [{}] close", self.proto_id);
-                    self.dead = true;
-                    return;
-                }
-                Poll::Pending => {
-                    break;
-                }
-                Poll::Ready(Some(Err(err))) => {
-                    debug!("sub stream codec error: {:?}", err);
-                    match err.kind() {
-                        ErrorKind::BrokenPipe
-                        | ErrorKind::ConnectionAborted
-                        | ErrorKind::ConnectionReset
-                        | ErrorKind::NotConnected
-                        | ErrorKind::UnexpectedEof => self.dead = true,
-                        _ => {
+                let data = match self.before_receive {
+                    Some(ref function) => match function(data) {
+                        Ok(data) => data,
+                        Err(err) => {
                             self.error_close(cx, err);
-                            return;
+                            return Poll::Ready(None);
                         }
+                    },
+                    None => data.freeze(),
+                };
+
+                if self.service_proto_sender.is_some() {
+                    self.service_proto_buf
+                        .push_back(ServiceProtocolEvent::Received {
+                            id: self.context.id,
+                            data: data.clone(),
+                        })
+                }
+
+                if self.session_proto_sender.is_some() {
+                    self.session_proto_buf
+                        .push_back(SessionProtocolEvent::Received { data: data.clone() })
+                }
+
+                self.distribute_to_user_level(cx);
+
+                if self.event {
+                    self.output_event(
+                        cx,
+                        ProtocolEvent::Message {
+                            id: self.id,
+                            proto_id: self.proto_id,
+                            data,
+                        },
+                    )
+                }
+                Poll::Ready(Some(()))
+            }
+            Poll::Ready(None) => {
+                debug!("protocol [{}] close", self.proto_id);
+                self.dead = true;
+                Poll::Ready(None)
+            }
+            Poll::Pending => Poll::Pending,
+            Poll::Ready(Some(Err(err))) => {
+                debug!("sub stream codec error: {:?}", err);
+                match err.kind() {
+                    ErrorKind::BrokenPipe
+                    | ErrorKind::ConnectionAborted
+                    | ErrorKind::ConnectionReset
+                    | ErrorKind::NotConnected
+                    | ErrorKind::UnexpectedEof => self.dead = true,
+                    _ => {
+                        self.error_close(cx, err);
                     }
                 }
+                Poll::Ready(None)
             }
         }
     }
@@ -559,9 +551,9 @@ where
             self.read_buf.len()
         );
 
-        self.recv_frame(cx);
+        let mut is_pending = self.recv_frame(cx).is_pending();
 
-        self.recv_event(cx);
+        is_pending &= self.recv_event(cx).is_pending();
 
         if self.dead || self.context.closed.load(Ordering::SeqCst) {
             debug!(
@@ -575,16 +567,11 @@ where
             return Poll::Ready(None);
         }
 
-        if let Err(err) = self.flush(cx) {
-            debug!(
-                "SubStream({}) finished with flush error: {:?}",
-                self.id, err
-            );
-            self.error_close(cx, err);
-            return Poll::Ready(None);
+        if is_pending {
+            Poll::Pending
+        } else {
+            Poll::Ready(Some(()))
         }
-
-        Poll::Pending
     }
 }
 

@@ -218,8 +218,8 @@ where
         self.current_task.idle();
     }
 
-    fn handle_poll(&mut self, cx: &mut Context) {
-        Pin::new(&mut self.handle).poll(cx, &mut self.handle_context);
+    fn handle_poll(&mut self, cx: &mut Context) -> Poll<()> {
+        Pin::new(&mut self.handle).poll(cx, &mut self.handle_context)
     }
 
     fn set_notify(&mut self, token: u64) {
@@ -285,36 +285,31 @@ where
             return Poll::Ready(None);
         }
 
-        loop {
-            match Pin::new(&mut self.receiver).as_mut().poll_next(cx) {
-                Poll::Ready(Some(event)) => self.handle_event(event),
-                Poll::Ready(None) => {
-                    debug!(
-                        "ServiceProtocolStream({:?}) finished",
-                        self.handle_context.proto_id
-                    );
-                    self.current_task.idle();
-                    return Poll::Ready(None);
-                }
-                Poll::Pending => {
-                    break;
-                }
+        let mut is_pending = false;
+
+        match Pin::new(&mut self.receiver).as_mut().poll_next(cx) {
+            Poll::Ready(Some(event)) => self.handle_event(event),
+            Poll::Ready(None) => {
+                debug!(
+                    "ServiceProtocolStream({:?}) finished",
+                    self.handle_context.proto_id
+                );
+                self.current_task.idle();
+                return Poll::Ready(None);
             }
+            Poll::Pending => is_pending = true,
         }
 
-        loop {
-            match Pin::new(&mut self.notify_receiver).as_mut().poll_next(cx) {
-                Poll::Ready(Some(token)) => {
-                    self.handle_event(ServiceProtocolEvent::Notify { token })
-                }
-                Poll::Ready(None) => unreachable!(),
-                Poll::Pending => {
-                    break;
-                }
+        match Pin::new(&mut self.notify_receiver).as_mut().poll_next(cx) {
+            Poll::Ready(Some(token)) => {
+                self.handle_event(ServiceProtocolEvent::Notify { token });
+                is_pending &= false
             }
+            Poll::Ready(None) => unreachable!(),
+            Poll::Pending => is_pending &= true,
         }
 
-        self.handle_poll(cx);
+        is_pending &= self.handle_poll(cx).is_pending();
 
         if self.shutdown.load(Ordering::SeqCst) {
             debug!(
@@ -325,7 +320,11 @@ where
             return Poll::Ready(None);
         }
 
-        Poll::Pending
+        if is_pending {
+            Poll::Pending
+        } else {
+            Poll::Ready(Some(()))
+        }
     }
 }
 
@@ -463,10 +462,10 @@ where
         self.current_task = false;
     }
 
-    fn handle_poll(&mut self, cx: &mut Context) {
+    fn handle_poll(&mut self, cx: &mut Context) -> Poll<()> {
         Pin::new(&mut self.handle)
             .as_mut()
-            .poll(cx, self.handle_context.as_mut(&self.context));
+            .poll(cx, self.handle_context.as_mut(&self.context))
     }
 
     fn set_notify(&mut self, token: u64) {
@@ -520,33 +519,31 @@ where
     type Item = ();
 
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Option<Self::Item>> {
-        loop {
-            match Pin::new(&mut self.receiver).as_mut().poll_next(cx) {
-                Poll::Ready(Some(event)) => self.handle_event(event),
-                Poll::Ready(None) => {
-                    self.close();
-                    return Poll::Ready(None);
-                }
-                Poll::Pending => {
-                    break;
-                }
+        let mut is_pending = false;
+        match Pin::new(&mut self.receiver).as_mut().poll_next(cx) {
+            Poll::Ready(Some(event)) => self.handle_event(event),
+            Poll::Ready(None) => {
+                self.close();
+                return Poll::Ready(None);
             }
+            Poll::Pending => is_pending = true,
         }
 
-        loop {
-            match Pin::new(&mut self.notify_receiver).as_mut().poll_next(cx) {
-                Poll::Ready(Some(token)) => {
-                    self.handle_event(SessionProtocolEvent::Notify { token })
-                }
-                Poll::Ready(None) => unreachable!(),
-                Poll::Pending => {
-                    break;
-                }
+        match Pin::new(&mut self.notify_receiver).as_mut().poll_next(cx) {
+            Poll::Ready(Some(token)) => {
+                self.handle_event(SessionProtocolEvent::Notify { token });
+                is_pending &= false
             }
+            Poll::Ready(None) => unreachable!(),
+            Poll::Pending => is_pending &= true,
         }
 
-        self.handle_poll(cx);
+        is_pending &= self.handle_poll(cx).is_pending();
 
-        Poll::Pending
+        if is_pending {
+            Poll::Pending
+        } else {
+            Poll::Ready(Some(()))
+        }
     }
 }

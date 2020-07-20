@@ -666,107 +666,102 @@ where
         self.distribute_to_substream(cx);
     }
 
-    fn poll_inner_socket(&mut self, cx: &mut Context) {
-        loop {
-            if !self.state.is_normal() {
-                break;
+    fn poll_inner_socket(&mut self, cx: &mut Context) -> Poll<Option<()>> {
+        if !self.state.is_normal() {
+            return Poll::Ready(None);
+        }
+        match Pin::new(&mut self.socket).as_mut().poll_next(cx) {
+            Poll::Ready(Some(Ok(sub_stream))) => {
+                self.handle_sub_stream(sub_stream);
+                Poll::Ready(Some(()))
             }
-            match Pin::new(&mut self.socket).as_mut().poll_next(cx) {
-                Poll::Ready(Some(Ok(sub_stream))) => self.handle_sub_stream(sub_stream),
-                Poll::Ready(None) => {
-                    self.state = SessionState::RemoteClose;
-                    break;
+            Poll::Ready(None) => {
+                self.state = SessionState::RemoteClose;
+                Poll::Ready(None)
+            }
+            Poll::Pending => Poll::Pending,
+            Poll::Ready(Some(Err(err))) => {
+                debug!("session poll error: {:?}", err);
+                self.write_buf.clear();
+                self.high_write_buf.clear();
+                if !self.keep_buffer {
+                    self.read_buf.clear()
                 }
-                Poll::Pending => {
-                    break;
-                }
-                Poll::Ready(Some(Err(err))) => {
-                    debug!("session poll error: {:?}", err);
-                    self.write_buf.clear();
-                    self.high_write_buf.clear();
-                    if !self.keep_buffer {
-                        self.read_buf.clear()
-                    }
 
-                    match err.kind() {
-                        ErrorKind::BrokenPipe
-                        | ErrorKind::ConnectionAborted
-                        | ErrorKind::ConnectionReset
-                        | ErrorKind::NotConnected
-                        | ErrorKind::UnexpectedEof => self.state = SessionState::RemoteClose,
-                        _ => {
-                            debug!("MuxerError: {:?}", err);
-                            self.event_output(
-                                cx,
-                                SessionEvent::MuxerError {
-                                    id: self.context.id,
-                                    error: err,
-                                },
-                            );
-                            self.state = SessionState::Abnormal;
-                        }
+                match err.kind() {
+                    ErrorKind::BrokenPipe
+                    | ErrorKind::ConnectionAborted
+                    | ErrorKind::ConnectionReset
+                    | ErrorKind::NotConnected
+                    | ErrorKind::UnexpectedEof => self.state = SessionState::RemoteClose,
+                    _ => {
+                        debug!("MuxerError: {:?}", err);
+                        self.event_output(
+                            cx,
+                            SessionEvent::MuxerError {
+                                id: self.context.id,
+                                error: err,
+                            },
+                        );
+                        self.state = SessionState::Abnormal;
                     }
-
-                    break;
                 }
+                Poll::Ready(None)
             }
         }
     }
 
-    fn recv_substreams(&mut self, cx: &mut Context) {
-        loop {
-            if self.read_buf.len() > self.config.recv_event_size() {
-                break;
-            }
+    fn recv_substreams(&mut self, cx: &mut Context) -> Poll<Option<()>> {
+        if self.read_buf.len() > self.config.recv_event_size() {
+            return Poll::Pending;
+        }
 
-            match Pin::new(&mut self.proto_event_receiver)
-                .as_mut()
-                .poll_next(cx)
-            {
-                Poll::Ready(Some(event)) => {
-                    // Local close means user doesn't want any message from this session
-                    // But when remote close, we should try my best to accept all data as much as possible
-                    if self.state.is_local_close() {
-                        continue;
-                    }
-                    self.handle_stream_event(cx, event)
-                }
-                Poll::Ready(None) => {
-                    // Drop by self
-                    self.state = SessionState::LocalClose;
-                    return;
-                }
-                Poll::Pending => {
-                    break;
+        match Pin::new(&mut self.proto_event_receiver)
+            .as_mut()
+            .poll_next(cx)
+        {
+            Poll::Ready(Some(event)) => {
+                // Local close means user doesn't want any message from this session
+                // But when remote close, we should try my best to accept all data as much as possible
+                if !self.state.is_local_close() {
+                    self.handle_stream_event(cx, event);
+                    Poll::Ready(Some(()))
+                } else {
+                    Poll::Ready(None)
                 }
             }
+            Poll::Ready(None) => {
+                // Drop by self
+                self.state = SessionState::LocalClose;
+                Poll::Ready(None)
+            }
+            Poll::Pending => Poll::Pending,
         }
     }
 
-    fn recv_service(&mut self, cx: &mut Context) {
-        loop {
-            if self.high_write_buf.len() > RECEIVED_BUFFER_SIZE
-                && self.write_buf.len() > RECEIVED_BUFFER_SIZE
-            {
-                break;
-            }
+    fn recv_service(&mut self, cx: &mut Context) -> Poll<Option<()>> {
+        if self.high_write_buf.len() > RECEIVED_BUFFER_SIZE
+            && self.write_buf.len() > RECEIVED_BUFFER_SIZE
+        {
+            return Poll::Pending;
+        }
 
-            match Pin::new(&mut self.service_receiver).as_mut().poll_next(cx) {
-                Poll::Ready(Some((priority, event))) => {
-                    if !self.state.is_normal() {
-                        break;
-                    } else {
-                        self.handle_session_event(cx, event, priority)
-                    }
+        match Pin::new(&mut self.service_receiver).as_mut().poll_next(cx) {
+            Poll::Ready(Some((priority, event))) => {
+                if !self.state.is_normal() {
+                    Poll::Ready(None)
+                } else {
+                    self.handle_session_event(cx, event, priority);
+                    Poll::Ready(Some(()))
                 }
-                Poll::Ready(None) => {
-                    // Must drop by service
-                    self.state = SessionState::LocalClose;
-                    self.clean(cx);
-                    break;
-                }
-                Poll::Pending => break,
             }
+            Poll::Ready(None) => {
+                // Must drop by service
+                self.state = SessionState::LocalClose;
+                self.clean(cx);
+                Poll::Ready(None)
+            }
+            Poll::Pending => Poll::Pending,
         }
     }
 
@@ -882,13 +877,11 @@ where
 
         self.flush(cx);
 
-        self.poll_inner_socket(cx);
+        let mut is_pending = self.poll_inner_socket(cx).is_pending();
 
-        self.recv_substreams(cx);
+        is_pending &= self.recv_substreams(cx).is_pending();
 
-        self.recv_service(cx);
-
-        self.flush(cx);
+        is_pending &= self.recv_service(cx).is_pending();
 
         match self.state {
             SessionState::LocalClose | SessionState::Abnormal => {
@@ -921,7 +914,11 @@ where
             SessionState::Normal => (),
         }
 
-        Poll::Pending
+        if is_pending {
+            Poll::Pending
+        } else {
+            Poll::Ready(Some(()))
+        }
     }
 }
 

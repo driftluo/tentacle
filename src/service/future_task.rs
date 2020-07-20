@@ -91,35 +91,31 @@ impl Stream for FutureTaskManager {
     type Item = ();
 
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Option<Self::Item>> {
-        loop {
-            if self.shutdown.load(Ordering::SeqCst) {
-                debug!("future task finished because service shutdown");
-                return Poll::Ready(None);
-            }
-
-            match Pin::new(&mut self.task_receiver).as_mut().poll_next(cx) {
-                Poll::Ready(Some(task)) => self.add_task(task),
-                Poll::Ready(None) => {
-                    debug!("future task receiver finished");
-                    return Poll::Ready(None);
-                }
-                Poll::Pending => {
-                    break;
-                }
-            }
+        if self.shutdown.load(Ordering::SeqCst) {
+            debug!("future task finished because service shutdown");
+            return Poll::Ready(None);
         }
 
-        loop {
-            match Pin::new(&mut self.id_receiver).as_mut().poll_next(cx) {
-                Poll::Ready(Some(id)) => self.remove_task(id),
-                Poll::Ready(None) => {
-                    debug!("future task id receiver finished");
-                    return Poll::Ready(None);
-                }
-                Poll::Pending => {
-                    break;
-                }
+        let mut is_pending = false;
+        match Pin::new(&mut self.task_receiver).as_mut().poll_next(cx) {
+            Poll::Ready(Some(task)) => self.add_task(task),
+            Poll::Ready(None) => {
+                debug!("future task receiver finished");
+                return Poll::Ready(None);
             }
+            Poll::Pending => is_pending = true,
+        }
+
+        match Pin::new(&mut self.id_receiver).as_mut().poll_next(cx) {
+            Poll::Ready(Some(id)) => {
+                self.remove_task(id);
+                is_pending &= false
+            }
+            Poll::Ready(None) => {
+                debug!("future task id receiver finished");
+                return Poll::Ready(None);
+            }
+            Poll::Pending => is_pending &= true,
         }
 
         // double check here
@@ -128,7 +124,11 @@ impl Stream for FutureTaskManager {
             return Poll::Ready(None);
         }
 
-        Poll::Pending
+        if is_pending {
+            Poll::Pending
+        } else {
+            Poll::Ready(Some(()))
+        }
     }
 }
 

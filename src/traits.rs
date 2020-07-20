@@ -1,4 +1,8 @@
-use std::{io, pin::Pin, task::Context};
+use std::{
+    io,
+    pin::Pin,
+    task::{Context, Poll},
+};
 use tokio_util::codec::{Decoder, Encoder};
 
 use crate::{
@@ -70,9 +74,12 @@ pub trait ServiceProtocol {
     fn received(&mut self, _context: ProtocolContextMutRef, _data: bytes::Bytes) {}
     /// Called when the Service receives the notify task
     fn notify(&mut self, _context: &mut ProtocolContext, _token: u64) {}
-    /// Behave like `Stream::poll`, but nothing output
+    /// Behave like `Stream::poll_next`, but nothing output, just know pending or not,
+    /// if ready, it will continue poll immediately
     #[inline]
-    fn poll(self: Pin<&mut Self>, _cx: &mut Context, _context: &mut ProtocolContext) {}
+    fn poll(self: Pin<&mut Self>, _cx: &mut Context, _context: &mut ProtocolContext) -> Poll<()> {
+        Poll::Pending
+    }
 }
 
 /// Session level protocol handle
@@ -85,9 +92,12 @@ pub trait SessionProtocol {
     fn received(&mut self, _context: ProtocolContextMutRef, _data: bytes::Bytes) {}
     /// Called when the session receives the notify task
     fn notify(&mut self, _context: ProtocolContextMutRef, _token: u64) {}
-    /// Behave like `Stream::poll`, but nothing output, shutdown when session close
+    /// Behave like `Stream::poll_next`, but nothing output, just know pending or not,
+    /// if ready, it will continue poll immediately, shutdown when session close
     #[inline]
-    fn poll(self: Pin<&mut Self>, _cx: &mut Context, _context: ProtocolContextMutRef) {}
+    fn poll(self: Pin<&mut Self>, _cx: &mut Context, _context: ProtocolContextMutRef) -> Poll<()> {
+        Poll::Pending
+    }
 }
 
 /// A trait can define codec, just wrapper `Decoder` and `Encoder`
@@ -171,7 +181,7 @@ impl ServiceProtocol for Box<dyn ServiceProtocol + Send + 'static + Unpin> {
     }
 
     #[inline]
-    fn poll(mut self: Pin<&mut Self>, cx: &mut Context, context: &mut ProtocolContext) {
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context, context: &mut ProtocolContext) -> Poll<()> {
         Pin::new(&mut **self).poll(cx, context)
     }
 }
@@ -198,7 +208,7 @@ impl ServiceProtocol for Box<dyn ServiceProtocol + Send + Sync + 'static + Unpin
     }
 
     #[inline]
-    fn poll(mut self: Pin<&mut Self>, cx: &mut Context, context: &mut ProtocolContext) {
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context, context: &mut ProtocolContext) -> Poll<()> {
         Pin::new(&mut **self).poll(cx, context)
     }
 }
@@ -221,7 +231,11 @@ impl SessionProtocol for Box<dyn SessionProtocol + Send + 'static + Unpin> {
     }
 
     #[inline]
-    fn poll(mut self: Pin<&mut Self>, cx: &mut Context, context: ProtocolContextMutRef) {
+    fn poll(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context,
+        context: ProtocolContextMutRef,
+    ) -> Poll<()> {
         Pin::new(&mut **self).as_mut().poll(cx, context)
     }
 }
@@ -244,7 +258,11 @@ impl SessionProtocol for Box<dyn SessionProtocol + Send + Sync + 'static + Unpin
     }
 
     #[inline]
-    fn poll(mut self: Pin<&mut Self>, cx: &mut Context, context: ProtocolContextMutRef) {
+    fn poll(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context,
+        context: ProtocolContextMutRef,
+    ) -> Poll<()> {
         Pin::new(&mut **self).as_mut().poll(cx, context)
     }
 }

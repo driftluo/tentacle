@@ -1105,7 +1105,7 @@ where
                     self.pending_tasks.push_front(task);
                     break;
                 }
-                Poll::Ready(Err(_)) => (),
+                Poll::Ready(Err(_)) => break,
             }
         }
     }
@@ -1493,47 +1493,51 @@ where
     }
 
     #[inline]
-    fn user_task_poll(&mut self, cx: &mut Context) {
-        loop {
-            if self.write_buf.len() > self.config.session_config.send_event_size()
-                && self.high_write_buf.len() > self.config.session_config.send_event_size()
-            {
-                break;
-            }
+    fn user_task_poll(&mut self, cx: &mut Context) -> Poll<Option<()>> {
+        if self.write_buf.len() > self.config.session_config.send_event_size()
+            && self.high_write_buf.len() > self.config.session_config.send_event_size()
+        {
+            return Poll::Pending;
+        }
 
-            if self.service_task_receiver.is_terminated() {
-                break;
-            }
+        if self.service_task_receiver.is_terminated() {
+            return Poll::Ready(None);
+        }
 
-            match Pin::new(&mut self.service_task_receiver)
-                .as_mut()
-                .poll_next(cx)
-            {
-                Poll::Ready(Some((priority, task))) => self.handle_service_task(cx, task, priority),
-                Poll::Ready(None) => break,
-                Poll::Pending => break,
+        match Pin::new(&mut self.service_task_receiver)
+            .as_mut()
+            .poll_next(cx)
+        {
+            Poll::Ready(Some((priority, task))) => {
+                self.handle_service_task(cx, task, priority);
+                Poll::Ready(Some(()))
             }
+            Poll::Ready(None) => Poll::Ready(None),
+            Poll::Pending => Poll::Pending,
         }
     }
 
-    fn session_poll(&mut self, cx: &mut Context) {
-        loop {
-            if self.read_service_buf.len() > self.config.session_config.recv_event_size()
-                || self.read_session_buf.len() > self.config.session_config.recv_event_size()
-            {
-                break;
-            }
+    fn session_poll(&mut self, cx: &mut Context) -> Poll<Option<()>> {
+        if self.read_service_buf.len() > self.config.session_config.recv_event_size()
+            || self.read_session_buf.len() > self.config.session_config.recv_event_size()
+        {
+            return Poll::Pending;
+        }
 
-            match Pin::new(&mut self.session_event_receiver)
-                .as_mut()
-                .poll_next(cx)
-            {
-                Poll::Ready(Some(event)) => self.handle_session_event(cx, event),
-                Poll::Ready(None) => unreachable!(),
-                Poll::Pending => {
-                    break;
-                }
+        if self.session_event_receiver.is_terminated() {
+            return Poll::Ready(None);
+        }
+
+        match Pin::new(&mut self.session_event_receiver)
+            .as_mut()
+            .poll_next(cx)
+        {
+            Poll::Ready(Some(event)) => {
+                self.handle_session_event(cx, event);
+                Poll::Ready(Some(()))
             }
+            Poll::Ready(None) => unreachable!(),
+            Poll::Pending => Poll::Pending,
         }
     }
 
@@ -1598,15 +1602,13 @@ where
 
         self.try_update_listens(cx);
 
-        self.session_poll(cx);
+        let mut is_pending = self.session_poll(cx).is_pending();
 
         // receive user task
-        self.user_task_poll(cx);
+        is_pending &= self.user_task_poll(cx).is_pending();
 
         // process any task buffer
         self.send_pending_task(cx);
-
-        self.flush_buffer(cx);
 
         // Double check service state
         if self.listens.is_empty()
@@ -1632,6 +1634,10 @@ where
             self.read_session_buf.len(),
         );
 
-        Poll::Pending
+        if is_pending {
+            Poll::Pending
+        } else {
+            Poll::Ready(Some(()))
+        }
     }
 }
