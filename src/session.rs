@@ -713,6 +713,10 @@ where
 
     fn recv_substreams(&mut self, cx: &mut Context) -> Poll<Option<()>> {
         if self.read_buf.len() > self.config.recv_event_size() {
+            // The read buffer exceeds the expected range, and no longer receives any event
+            // from the substream, This means that the service process is too slow, and
+            // each time the service processes a event, the session is notified that it can receive
+            // another event.
             return Poll::Pending;
         }
 
@@ -743,6 +747,10 @@ where
         if self.high_write_buf.len() > RECEIVED_BUFFER_SIZE
             && self.write_buf.len() > RECEIVED_BUFFER_SIZE
         {
+            // The write buffer exceeds the expected range, and no longer receives any event
+            // from the service, This means that the substream process is too slow, and
+            // each time the substream processes a event, the session is notified that it can receive
+            // another event.
             return Poll::Pending;
         }
 

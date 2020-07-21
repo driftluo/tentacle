@@ -74,11 +74,16 @@ pub trait ServiceProtocol {
     fn received(&mut self, _context: ProtocolContextMutRef, _data: bytes::Bytes) {}
     /// Called when the Service receives the notify task
     fn notify(&mut self, _context: &mut ProtocolContext, _token: u64) {}
-    /// Behave like `Stream::poll_next`, but nothing output, just know pending or not,
-    /// if ready, it will continue poll immediately
+    /// Behave like `Stream::poll_next`, but nothing output
+    /// if ready with Some, it will continue poll immediately
+    /// if ready with None, it will don't try to call the function again
     #[inline]
-    fn poll(self: Pin<&mut Self>, _cx: &mut Context, _context: &mut ProtocolContext) -> Poll<()> {
-        Poll::Pending
+    fn poll(
+        self: Pin<&mut Self>,
+        _cx: &mut Context,
+        _context: &mut ProtocolContext,
+    ) -> Poll<Option<()>> {
+        Poll::Ready(None)
     }
 }
 
@@ -92,11 +97,16 @@ pub trait SessionProtocol {
     fn received(&mut self, _context: ProtocolContextMutRef, _data: bytes::Bytes) {}
     /// Called when the session receives the notify task
     fn notify(&mut self, _context: ProtocolContextMutRef, _token: u64) {}
-    /// Behave like `Stream::poll_next`, but nothing output, just know pending or not,
-    /// if ready, it will continue poll immediately, shutdown when session close
+    /// Behave like `Stream::poll_next`, but nothing output
+    /// if ready with Some, it will continue poll immediately
+    /// if ready with None, it will don't try to call the function again
     #[inline]
-    fn poll(self: Pin<&mut Self>, _cx: &mut Context, _context: ProtocolContextMutRef) -> Poll<()> {
-        Poll::Pending
+    fn poll(
+        self: Pin<&mut Self>,
+        _cx: &mut Context,
+        _context: ProtocolContextMutRef,
+    ) -> Poll<Option<()>> {
+        Poll::Ready(None)
     }
 }
 
@@ -181,7 +191,11 @@ impl ServiceProtocol for Box<dyn ServiceProtocol + Send + 'static + Unpin> {
     }
 
     #[inline]
-    fn poll(mut self: Pin<&mut Self>, cx: &mut Context, context: &mut ProtocolContext) -> Poll<()> {
+    fn poll(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context,
+        context: &mut ProtocolContext,
+    ) -> Poll<Option<()>> {
         Pin::new(&mut **self).poll(cx, context)
     }
 }
@@ -208,7 +222,11 @@ impl ServiceProtocol for Box<dyn ServiceProtocol + Send + Sync + 'static + Unpin
     }
 
     #[inline]
-    fn poll(mut self: Pin<&mut Self>, cx: &mut Context, context: &mut ProtocolContext) -> Poll<()> {
+    fn poll(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context,
+        context: &mut ProtocolContext,
+    ) -> Poll<Option<()>> {
         Pin::new(&mut **self).poll(cx, context)
     }
 }
@@ -235,7 +253,7 @@ impl SessionProtocol for Box<dyn SessionProtocol + Send + 'static + Unpin> {
         mut self: Pin<&mut Self>,
         cx: &mut Context,
         context: ProtocolContextMutRef,
-    ) -> Poll<()> {
+    ) -> Poll<Option<()>> {
         Pin::new(&mut **self).as_mut().poll(cx, context)
     }
 }
@@ -262,7 +280,7 @@ impl SessionProtocol for Box<dyn SessionProtocol + Send + Sync + 'static + Unpin
         mut self: Pin<&mut Self>,
         cx: &mut Context,
         context: ProtocolContextMutRef,
-    ) -> Poll<()> {
+    ) -> Poll<Option<()>> {
         Pin::new(&mut **self).as_mut().poll(cx, context)
     }
 }

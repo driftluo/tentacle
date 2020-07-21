@@ -96,15 +96,17 @@ impl Stream for FutureTaskManager {
             return Poll::Ready(None);
         }
 
-        let mut is_pending = false;
-        match Pin::new(&mut self.task_receiver).as_mut().poll_next(cx) {
-            Poll::Ready(Some(task)) => self.add_task(task),
+        let mut is_pending = match Pin::new(&mut self.task_receiver).as_mut().poll_next(cx) {
+            Poll::Ready(Some(task)) => {
+                self.add_task(task);
+                false
+            }
             Poll::Ready(None) => {
                 debug!("future task receiver finished");
                 return Poll::Ready(None);
             }
-            Poll::Pending => is_pending = true,
-        }
+            Poll::Pending => true,
+        };
 
         match Pin::new(&mut self.id_receiver).as_mut().poll_next(cx) {
             Poll::Ready(Some(id)) => {

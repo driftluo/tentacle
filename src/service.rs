@@ -1497,6 +1497,10 @@ where
         if self.write_buf.len() > self.config.session_config.send_event_size()
             && self.high_write_buf.len() > self.config.session_config.send_event_size()
         {
+            // The write buffer exceeds the expected range, and no longer receives any event
+            // from the user, This means that the session handle events is too slow, and each time
+            // the sessions processes a event, the service is notified that it can receive
+            // another event.
             return Poll::Pending;
         }
 
@@ -1521,6 +1525,10 @@ where
         if self.read_service_buf.len() > self.config.session_config.recv_event_size()
             || self.read_session_buf.len() > self.config.session_config.recv_event_size()
         {
+            // The read buffer exceeds the expected range, and no longer receives any event
+            // from the sessions, This means that the user's handle processing is too slow, and
+            // each time the user processes a event, the service is notified that it can receive
+            // another event.
             return Poll::Pending;
         }
 

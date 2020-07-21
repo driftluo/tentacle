@@ -100,6 +100,7 @@ pub struct ServiceProtocolStream<T> {
     shutdown: Arc<AtomicBool>,
     future_task_sender: mpsc::Sender<BoxedFutureTask>,
     flag: BlockingFlag,
+    need_poll: bool,
 }
 
 impl<T> ServiceProtocolStream<T>
@@ -128,6 +129,7 @@ where
             panic_report,
             future_task_sender,
             flag,
+            need_poll: true,
         }
     }
 
@@ -218,8 +220,15 @@ where
         self.current_task.idle();
     }
 
-    fn handle_poll(&mut self, cx: &mut Context) -> Poll<()> {
-        Pin::new(&mut self.handle).poll(cx, &mut self.handle_context)
+    fn handle_poll(&mut self, cx: &mut Context) -> bool {
+        match Pin::new(&mut self.handle).poll(cx, &mut self.handle_context) {
+            Poll::Ready(None) => {
+                self.need_poll = false;
+                true
+            }
+            Poll::Ready(Some(())) => false,
+            Poll::Pending => true,
+        }
     }
 
     fn set_notify(&mut self, token: u64) {
@@ -285,10 +294,11 @@ where
             return Poll::Ready(None);
         }
 
-        let mut is_pending = false;
-
-        match Pin::new(&mut self.receiver).as_mut().poll_next(cx) {
-            Poll::Ready(Some(event)) => self.handle_event(event),
+        let mut is_pending = match Pin::new(&mut self.receiver).as_mut().poll_next(cx) {
+            Poll::Ready(Some(event)) => {
+                self.handle_event(event);
+                false
+            }
             Poll::Ready(None) => {
                 debug!(
                     "ServiceProtocolStream({:?}) finished",
@@ -297,8 +307,8 @@ where
                 self.current_task.idle();
                 return Poll::Ready(None);
             }
-            Poll::Pending => is_pending = true,
-        }
+            Poll::Pending => true,
+        };
 
         match Pin::new(&mut self.notify_receiver).as_mut().poll_next(cx) {
             Poll::Ready(Some(token)) => {
@@ -309,7 +319,9 @@ where
             Poll::Pending => is_pending &= true,
         }
 
-        is_pending &= self.handle_poll(cx).is_pending();
+        if self.need_poll {
+            is_pending &= self.handle_poll(cx);
+        }
 
         if self.shutdown.load(Ordering::SeqCst) {
             debug!(
@@ -371,6 +383,7 @@ pub struct SessionProtocolStream<T> {
     shutdown: Arc<AtomicBool>,
     future_task_sender: mpsc::Sender<BoxedFutureTask>,
     flag: BlockingFlag,
+    need_poll: bool,
 }
 
 impl<T> SessionProtocolStream<T>
@@ -400,6 +413,7 @@ where
             shutdown,
             future_task_sender,
             flag,
+            need_poll: true,
         }
     }
 
@@ -462,10 +476,15 @@ where
         self.current_task = false;
     }
 
-    fn handle_poll(&mut self, cx: &mut Context) -> Poll<()> {
-        Pin::new(&mut self.handle)
-            .as_mut()
-            .poll(cx, self.handle_context.as_mut(&self.context))
+    fn handle_poll(&mut self, cx: &mut Context) -> bool {
+        match Pin::new(&mut self.handle).poll(cx, self.handle_context.as_mut(&self.context)) {
+            Poll::Ready(None) => {
+                self.need_poll = false;
+                true
+            }
+            Poll::Ready(Some(())) => false,
+            Poll::Pending => true,
+        }
     }
 
     fn set_notify(&mut self, token: u64) {
@@ -519,15 +538,17 @@ where
     type Item = ();
 
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Option<Self::Item>> {
-        let mut is_pending = false;
-        match Pin::new(&mut self.receiver).as_mut().poll_next(cx) {
-            Poll::Ready(Some(event)) => self.handle_event(event),
+        let mut is_pending = match Pin::new(&mut self.receiver).as_mut().poll_next(cx) {
+            Poll::Ready(Some(event)) => {
+                self.handle_event(event);
+                false
+            }
             Poll::Ready(None) => {
                 self.close();
                 return Poll::Ready(None);
             }
-            Poll::Pending => is_pending = true,
-        }
+            Poll::Pending => true,
+        };
 
         match Pin::new(&mut self.notify_receiver).as_mut().poll_next(cx) {
             Poll::Ready(Some(token)) => {
@@ -538,7 +559,9 @@ where
             Poll::Pending => is_pending &= true,
         }
 
-        is_pending &= self.handle_poll(cx).is_pending();
+        if self.need_poll {
+            is_pending &= self.handle_poll(cx);
+        }
 
         if is_pending {
             Poll::Pending
