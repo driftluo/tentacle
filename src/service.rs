@@ -1654,10 +1654,14 @@ where
             self.state,
             self.sessions.len(),
             self.pending_tasks.len(),
-            self.high_write_buf.len(),
-            self.write_buf.len(),
-            self.read_service_buf.len(),
-            self.read_session_buf.len(),
+            self.high_write_buf.values()
+                .fold(0, |acc, item| acc + item.len()),
+            self.write_buf.values()
+                .fold(0, |acc, item| acc + item.len()),
+            self.read_service_buf.values()
+                .fold(0, |acc, item| acc + item.len()),
+            self.read_session_buf.values()
+                .fold(0, |acc, item| acc + item.len()),
         );
 
         if is_pending {

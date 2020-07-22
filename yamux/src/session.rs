@@ -68,7 +68,7 @@ pub struct Session<T> {
     // The buffer which will send to underlying network
     write_pending_frames: VecDeque<Frame>,
     // The buffer which will distribute to sub streams
-    read_pending_frames: VecDeque<Frame>,
+    read_pending_frames: HashMap<StreamId, VecDeque<Frame>>,
 
     // For receive events from sub streams (for clone to new stream)
     event_sender: Sender<StreamEvent>,
@@ -161,7 +161,7 @@ where
             inflight: HashSet::default(),
             pending_streams: VecDeque::default(),
             write_pending_frames: VecDeque::default(),
-            read_pending_frames: VecDeque::default(),
+            read_pending_frames: HashMap::default(),
             event_sender,
             event_receiver,
             keepalive_receiver,
@@ -365,81 +365,86 @@ where
 
     /// Try send buffer to all sub streams
     fn distribute_to_substream(&mut self, cx: &mut Context) -> Result<(), io::Error> {
-        let mut block_substream = HashSet::new();
+        let mut disconnect_streams = HashSet::new();
 
-        for frame in self.read_pending_frames.split_off(0) {
-            let stream_id = frame.stream_id();
-            // Guarantee the order in which messages are sent
-            if block_substream.contains(&stream_id) {
-                self.read_pending_frames.push_back(frame);
-                continue;
-            }
-            if frame.flags().contains(Flag::Syn) {
-                if self.local_go_away {
-                    let flags = Flags::from(Flag::Rst);
-                    let frame = Frame::new_window_update(flags, stream_id, 0);
-                    self.send_frame(cx, frame)?;
-                    debug!(
-                        "[{:?}] local go away send Reset to remote stream_id={}",
-                        self.ty, stream_id
-                    );
-                    // TODO: should report error?
-                    return Ok(());
-                }
-                debug!("[{:?}] Accept a stream id={}", self.ty, stream_id);
-                let stream = self
-                    .create_stream(Some(stream_id))
-                    .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
-                self.pending_streams.push_back(stream);
-            }
-            let disconnected = {
-                if let Some(frame_sender) = self.streams.get_mut(&stream_id) {
-                    debug!("@> sending frame to stream: {}", stream_id);
-                    match frame_sender.poll_ready(cx) {
-                        Poll::Ready(Ok(())) => match frame_sender.try_send(frame) {
-                            Ok(_) => false,
-                            Err(err) => {
-                                if err.is_full() {
-                                    self.read_pending_frames.push_back(err.into_inner());
-                                    block_substream.insert(stream_id);
-                                    false
-                                } else {
-                                    debug!("send to stream error: {:?}", err);
-                                    true
-                                }
-                            }
-                        },
-                        Poll::Pending => {
-                            self.read_pending_frames.push_back(frame);
-                            block_substream.insert(stream_id);
-                            false
-                        }
-                        Poll::Ready(Err(err)) => {
-                            debug!("send to stream error: {:?}", err);
-                            true
-                        }
+        let mut buf = ::std::mem::replace(&mut self.read_pending_frames, HashMap::new());
+        for (stream_id, frames) in buf.iter_mut() {
+            while let Some(frame) = frames.pop_front() {
+                if frame.flags().contains(Flag::Syn) {
+                    if self.local_go_away {
+                        let flags = Flags::from(Flag::Rst);
+                        let frame = Frame::new_window_update(flags, *stream_id, 0);
+                        self.send_frame(cx, frame)?;
+                        debug!(
+                            "[{:?}] local go away send Reset to remote stream_id={}",
+                            self.ty, stream_id
+                        );
+                        // TODO: should report error?
+                        return Ok(());
                     }
-                } else {
-                    // TODO: stream already closed ?
-                    false
+                    debug!("[{:?}] Accept a stream id={}", self.ty, stream_id);
+                    let stream = self
+                        .create_stream(Some(*stream_id))
+                        .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+                    self.pending_streams.push_back(stream);
                 }
-            };
-            if disconnected {
-                debug!("[{:?}] remove a stream id={}", self.ty, stream_id);
-                self.streams.remove(&stream_id);
+                let (disconnected, next_stream) = {
+                    if let Some(frame_sender) = self.streams.get_mut(&stream_id) {
+                        debug!("@> sending frame to stream: {}", stream_id);
+                        match frame_sender.poll_ready(cx) {
+                            Poll::Ready(Ok(())) => match frame_sender.try_send(frame) {
+                                Ok(_) => (false, false),
+                                Err(err) => {
+                                    if err.is_full() {
+                                        frames.push_front(err.into_inner());
+                                        (false, true)
+                                    } else {
+                                        debug!("send to stream error: {:?}", err);
+                                        (true, true)
+                                    }
+                                }
+                            },
+                            Poll::Pending => {
+                                frames.push_front(frame);
+                                (false, true)
+                            }
+                            Poll::Ready(Err(err)) => {
+                                debug!("send to stream error: {:?}", err);
+                                (true, true)
+                            }
+                        }
+                    } else {
+                        // TODO: stream already closed ?
+                        (false, true)
+                    }
+                };
+                if disconnected {
+                    debug!("[{:?}] remove a stream id={}", self.ty, stream_id);
+                    self.streams.remove(&stream_id);
+                    disconnect_streams.insert(*stream_id);
+                }
+                if next_stream {
+                    break;
+                }
+            }
+            if frames.capacity() > frames.len() + BUF_SHRINK_THRESHOLD {
+                frames.shrink_to_fit();
             }
         }
-
-        if self.read_pending_frames.capacity() > BUF_SHRINK_THRESHOLD {
-            self.read_pending_frames.shrink_to_fit();
+        for id in disconnect_streams {
+            self.read_pending_frames.remove(&id);
         }
+        self.read_pending_frames = buf;
 
         Ok(())
     }
 
     // Send message to stream (Data/WindowUpdate)
     fn handle_stream_message(&mut self, cx: &mut Context, frame: Frame) -> Result<(), io::Error> {
-        self.read_pending_frames.push_back(frame);
+        self.read_pending_frames
+            .entry(frame.stream_id())
+            .or_default()
+            .push_back(frame);
         self.distribute_to_substream(cx)?;
         Ok(())
     }
@@ -516,6 +521,7 @@ where
                 match state {
                     StreamState::Closed => {
                         self.streams.remove(&stream_id);
+                        self.read_pending_frames.remove(&stream_id);
                     }
                     StreamState::Established => {
                         self.inflight.remove(&stream_id);

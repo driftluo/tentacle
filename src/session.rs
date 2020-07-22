@@ -549,6 +549,8 @@ where
                 debug!("session [{}] proto [{}] closed", self.context.id, proto_id);
                 if self.sub_streams.remove(&id).is_some() {
                     self.proto_streams.remove(&proto_id);
+                    self.high_write_buf.remove(&proto_id);
+                    self.write_buf.remove(&proto_id);
                     if self.event.contains(&proto_id) {
                         self.event_output(
                             cx,
@@ -874,8 +876,12 @@ where
             self.sub_streams.len(),
             self.state,
             self.read_buf.len(),
-            self.write_buf.len(),
-            self.high_write_buf.len()
+            self.write_buf
+                .values()
+                .fold(0, |acc, item| acc + item.len()),
+            self.high_write_buf
+                .values()
+                .fold(0, |acc, item| acc + item.len())
         );
 
         // double check here
