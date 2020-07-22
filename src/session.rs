@@ -6,7 +6,7 @@ use std::{
     pin::Pin,
     sync::{atomic::Ordering, Arc},
     task::{Context, Poll},
-    time::{Duration, Instant},
+    time::Duration,
 };
 use tokio::prelude::{AsyncRead, AsyncWrite};
 use tokio_util::codec::{Framed, FramedParts, LengthDelimitedCodec};
@@ -160,9 +160,9 @@ pub(crate) struct Session<T> {
     sub_streams: HashMap<StreamId, priority_mpsc::Sender<ProtocolEvent>>,
     proto_streams: HashMap<ProtocolId, StreamId>,
     /// The buffer will be prioritized for distribute to sub streams
-    high_write_buf: VecDeque<(ProtocolId, ProtocolEvent)>,
+    high_write_buf: HashMap<ProtocolId, VecDeque<ProtocolEvent>>,
     /// The buffer which will distribute to sub streams
-    write_buf: VecDeque<(ProtocolId, ProtocolEvent)>,
+    write_buf: HashMap<ProtocolId, VecDeque<ProtocolEvent>>,
     /// The buffer which will send to service
     read_buf: VecDeque<SessionEvent>,
 
@@ -179,7 +179,6 @@ pub(crate) struct Session<T> {
     service_proto_senders: HashMap<ProtocolId, mpsc::Sender<ServiceProtocolEvent>>,
     session_proto_senders: HashMap<ProtocolId, mpsc::Sender<SessionProtocolEvent>>,
 
-    last_sent: Instant,
     future_task_sender: mpsc::Sender<BoxedFutureTask>,
     wait_handle: Vec<(
         Option<futures::channel::oneshot::Sender<()>>,
@@ -230,8 +229,8 @@ where
             next_stream: 0,
             sub_streams: HashMap::default(),
             proto_streams: HashMap::default(),
-            high_write_buf: VecDeque::default(),
-            write_buf: VecDeque::default(),
+            high_write_buf: HashMap::default(),
+            write_buf: HashMap::default(),
             read_buf: VecDeque::default(),
             proto_event_sender,
             proto_event_receiver,
@@ -241,7 +240,6 @@ where
             session_proto_senders: meta.session_proto_senders,
             state: SessionState::Normal,
             event: meta.event,
-            last_sent: Instant::now(),
             future_task_sender,
             wait_handle: meta.session_proto_handles,
         }
@@ -365,81 +363,81 @@ where
 
     fn push_back(&mut self, priority: Priority, id: ProtocolId, event: ProtocolEvent) {
         if priority.is_high() {
-            self.high_write_buf.push_back((id, event));
+            self.high_write_buf.entry(id).or_default().push_back(event);
         } else {
-            self.write_buf.push_back((id, event));
+            self.write_buf.entry(id).or_default().push_back(event);
         }
     }
 
     #[inline(always)]
-    fn distribute_to_substream_process<D: Iterator<Item = (ProtocolId, ProtocolEvent)>>(
+    fn distribute_to_substream_process(
         &mut self,
         cx: &mut Context,
-        data: D,
+        mut data: HashMap<ProtocolId, VecDeque<ProtocolEvent>>,
         priority: Priority,
         block_substreams: &mut HashSet<ProtocolId>,
-    ) {
-        for (proto_id, event) in data {
-            // Guarantee the order in which messages are sent
+    ) -> HashMap<ProtocolId, VecDeque<ProtocolEvent>> {
+        for (proto_id, events) in data.iter_mut() {
             if block_substreams.contains(&proto_id) {
-                self.push_back(priority, proto_id, event);
                 continue;
             }
             if let Some(stream_id) = self.proto_streams.get(&proto_id) {
                 if let Some(sender) = self.sub_streams.get_mut(&stream_id) {
-                    match sender.poll_ready(cx) {
-                        Poll::Ready(Ok(())) => {
-                            let res = match priority {
-                                Priority::High => sender.try_quick_send(event),
-                                Priority::Normal => sender.try_send(event),
-                            };
-                            if let Err(e) = res {
-                                if e.is_full() {
-                                    self.push_back(priority, proto_id, e.into_inner());
-                                    block_substreams.insert(proto_id);
-                                } else {
-                                    debug!("session send to sub stream error: {}", e);
+                    while let Some(event) = events.pop_front() {
+                        match sender.poll_ready(cx) {
+                            Poll::Ready(Ok(())) => {
+                                let res = match priority {
+                                    Priority::High => sender.try_quick_send(event),
+                                    Priority::Normal => sender.try_send(event),
+                                };
+                                if let Err(e) = res {
+                                    if e.is_full() {
+                                        events.push_front(e.into_inner());
+                                        block_substreams.insert(*proto_id);
+                                    } else {
+                                        debug!("session send to sub stream error: {}", e);
+                                    }
+                                    break;
                                 }
-                            } else {
-                                self.last_sent = Instant::now();
+                            }
+                            Poll::Pending => {
+                                events.push_front(event);
+                                block_substreams.insert(*proto_id);
+                                break;
+                            }
+                            Poll::Ready(Err(e)) => {
+                                debug!("session send to sub stream error: {}", e);
+                                events.clear();
+                                break;
                             }
                         }
-                        Poll::Pending => {
-                            self.push_back(priority, proto_id, event);
-                            block_substreams.insert(proto_id);
-                        }
-                        Poll::Ready(Err(e)) => {
-                            debug!("session send to sub stream error: {}", e);
-                        }
+                    }
+
+                    if events.capacity() > events.len() + BUF_SHRINK_THRESHOLD {
+                        events.shrink_to_fit();
                     }
                 };
             }
         }
+        data
     }
 
     #[inline]
     fn distribute_to_substream(&mut self, cx: &mut Context) {
         let mut block_substreams = HashSet::new();
 
-        let high = self.high_write_buf.split_off(0).into_iter();
-        self.distribute_to_substream_process(cx, high, Priority::High, &mut block_substreams);
+        let high = ::std::mem::replace(&mut self.high_write_buf, HashMap::new());
+        self.high_write_buf =
+            self.distribute_to_substream_process(cx, high, Priority::High, &mut block_substreams);
 
         if self.sub_streams.len() > block_substreams.len() {
-            let normal = self.write_buf.split_off(0).into_iter();
-            self.distribute_to_substream_process(
+            let normal = ::std::mem::replace(&mut self.write_buf, HashMap::new());
+            self.write_buf = self.distribute_to_substream_process(
                 cx,
                 normal,
                 Priority::Normal,
                 &mut block_substreams,
             );
-        }
-
-        if self.write_buf.capacity() > BUF_SHRINK_THRESHOLD {
-            self.write_buf.shrink_to_fit();
-        }
-
-        if self.high_write_buf.capacity() > BUF_SHRINK_THRESHOLD {
-            self.high_write_buf.shrink_to_fit();
         }
     }
 
@@ -611,7 +609,6 @@ where
     }
 
     /// Handling events send by the service
-    #[allow(clippy::map_entry)]
     fn handle_session_event(&mut self, cx: &mut Context, event: SessionEvent, priority: Priority) {
         match event {
             SessionEvent::ProtocolMessage { proto_id, data, .. } => {
@@ -650,13 +647,12 @@ where
             }
             SessionEvent::ProtocolClose { proto_id, .. } => {
                 if let Some(stream_id) = self.proto_streams.get(&proto_id) {
-                    self.write_buf.push_back((
-                        proto_id,
+                    self.high_write_buf.entry(proto_id).or_default().push_back(
                         ProtocolEvent::Close {
                             id: *stream_id,
                             proto_id,
                         },
-                    ));
+                    );
                 } else {
                     debug!("proto [{}] has been closed", proto_id);
                 }
@@ -744,8 +740,15 @@ where
     }
 
     fn recv_service(&mut self, cx: &mut Context) -> Poll<Option<()>> {
-        if self.high_write_buf.len() > RECEIVED_BUFFER_SIZE
-            && self.write_buf.len() > RECEIVED_BUFFER_SIZE
+        if self
+            .high_write_buf
+            .values()
+            .fold(0, |acc, item| acc + item.len())
+            + self
+                .write_buf
+                .values()
+                .fold(0, |acc, item| acc + item.len())
+            > RECEIVED_BUFFER_SIZE
         {
             // The write buffer exceeds the expected range, and no longer receives any event
             // from the service, This means that the substream process is too slow, and
@@ -780,13 +783,13 @@ where
             self.close_session(cx)
         } else {
             for (pid, stream_id) in self.proto_streams.iter() {
-                self.write_buf.push_back((
-                    *pid,
-                    ProtocolEvent::Close {
+                self.high_write_buf
+                    .entry(*pid)
+                    .or_default()
+                    .push_back(ProtocolEvent::Close {
                         id: *stream_id,
                         proto_id: *pid,
-                    },
-                ));
+                    });
             }
             self.distribute_to_substream(cx);
             self.context.closed.store(true, Ordering::SeqCst);
@@ -800,7 +803,7 @@ where
         self.read_buf.push_back(SessionEvent::SessionClose {
             id: self.context.id,
         });
-        let events = self.read_buf.split_off(0);
+        let events = ::std::mem::replace(&mut self.read_buf, VecDeque::new());
         let mut sender = self.service_sender.clone();
 
         tokio::spawn(async move {
@@ -812,6 +815,7 @@ where
         self.clean(cx);
     }
 
+    #[cold]
     fn wait_handle_poll(&mut self, cx: &mut Context) -> Poll<Option<()>> {
         for (sender, mut handle) in self.wait_handle.split_off(0) {
             if let Some(sender) = sender {
@@ -846,8 +850,8 @@ where
     #[inline]
     fn flush(&mut self, cx: &mut Context) {
         if !self.read_buf.is_empty()
-            || !self.write_buf.is_empty()
-            || !self.high_write_buf.is_empty()
+            || !self.write_buf.values().all(VecDeque::is_empty)
+            || !self.high_write_buf.values().all(VecDeque::is_empty)
         {
             self.distribute_to_substream(cx);
             self.output(cx);

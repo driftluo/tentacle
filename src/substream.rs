@@ -204,7 +204,7 @@ where
                 .push_back(ServiceProtocolEvent::Disconnected {
                     id: self.context.id,
                 });
-            let events = self.service_proto_buf.split_off(0);
+            let events = ::std::mem::replace(&mut self.service_proto_buf, VecDeque::new());
             let mut sender = self.service_proto_sender.take().unwrap();
             tokio::spawn(async move {
                 let mut iter = iter(events).map(Ok);
@@ -223,7 +223,7 @@ where
                     .push_back(SessionProtocolEvent::Disconnected);
             }
 
-            let events = self.session_proto_buf.split_off(0);
+            let events = ::std::mem::replace(&mut self.session_proto_buf, VecDeque::new());
             let mut sender = self.session_proto_sender.take().unwrap();
             tokio::spawn(async move {
                 let mut iter = iter(events).map(Ok);
@@ -239,7 +239,7 @@ where
         });
 
         if !self.context.closed.load(Ordering::SeqCst) {
-            let events = self.read_buf.split_off(0);
+            let events = ::std::mem::replace(&mut self.read_buf, VecDeque::new());
             let mut sender = self.event_sender.clone();
 
             tokio::spawn(async move {
