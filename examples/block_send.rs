@@ -1,11 +1,8 @@
 use bytes::Bytes;
 use futures::StreamExt;
-use std::{
-    sync::{
-        atomic::{AtomicUsize, Ordering},
-        Arc,
-    },
-    time::{Duration, Instant},
+use std::sync::{
+    atomic::{AtomicUsize, Ordering},
+    Arc,
 };
 use tentacle::{
     builder::{MetaBuilder, ServiceBuilder},
@@ -43,25 +40,13 @@ impl ServiceProtocol for PHandle {
             let prefix = "abcde".repeat(800);
             // NOTE: 256 is the send channel buffer size
             let length = 1024;
-            let mut first_256 = Duration::default();
-            let mut last_256 = Duration::default();
             for i in 0..length {
-                let now = Instant::now();
                 println!("> [Server] send {}", i);
                 let _ = context.send_message(Bytes::from(format!(
                     "{}-000000000000000000000{}",
                     prefix, i
                 )));
-                if i >= 0 && i < 256 {
-                    first_256 += now.elapsed();
-                } else if i >= length - 256 && i < length {
-                    last_256 += now.elapsed();
-                }
             }
-            let first_256_micros = first_256.as_micros();
-            let last_256_micros = last_256.as_micros();
-
-            assert!(last_256_micros > first_256_micros * 2);
         }
     }
 

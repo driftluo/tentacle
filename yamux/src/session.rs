@@ -197,7 +197,6 @@ where
     // Send all pending frames to remote streams
     fn flush(&mut self, cx: &mut Context) -> Result<(), io::Error> {
         if !self.read_pending_frames.is_empty() || !self.write_pending_frames.is_empty() {
-            self.recv_events(cx)?;
             self.send_all(cx)?;
             self.distribute_to_substream(cx)?;
         }
@@ -484,29 +483,25 @@ where
     }
 
     // Receive frames from low level stream
-    fn recv_frames(&mut self, cx: &mut Context) -> Result<(), io::Error> {
-        loop {
-            if self.is_dead() {
-                return Ok(());
+    fn recv_frames(&mut self, cx: &mut Context) -> Poll<Option<Result<(), io::Error>>> {
+        debug!("[{:?}] poll from framed_stream", self.ty);
+        match Pin::new(&mut self.framed_stream).as_mut().poll_next(cx) {
+            Poll::Ready(Some(Ok(frame))) => {
+                self.handle_frame(cx, frame)?;
+                self.last_read_success = Instant::now();
+                Poll::Ready(Some(Ok(())))
             }
-
-            debug!("[{:?}] poll from framed_stream", self.ty);
-            match Pin::new(&mut self.framed_stream).as_mut().poll_next(cx) {
-                Poll::Ready(Some(Ok(frame))) => {
-                    self.handle_frame(cx, frame)?;
-                    self.last_read_success = Instant::now();
-                }
-                Poll::Ready(None) => {
-                    self.eof = true;
-                }
-                Poll::Pending => {
-                    debug!("[{:?}] poll framed_stream NotReady", self.ty);
-                    return Ok(());
-                }
-                Poll::Ready(Some(Err(err))) => {
-                    debug!("[{:?}] Session recv_frames error: {:?}", self.ty, err);
-                    return Err(err);
-                }
+            Poll::Ready(None) => {
+                self.eof = true;
+                Poll::Ready(None)
+            }
+            Poll::Pending => {
+                debug!("[{:?}] poll framed_stream NotReady", self.ty);
+                Poll::Pending
+            }
+            Poll::Ready(Some(Err(err))) => {
+                debug!("[{:?}] Session recv_frames error: {:?}", self.ty, err);
+                Poll::Ready(Some(Err(err)))
             }
         }
     }
@@ -540,23 +535,18 @@ where
 
     // Receive events from sub streams
     // TODO: should handle error
-    fn recv_events(&mut self, cx: &mut Context) -> Result<(), io::Error> {
-        loop {
-            if self.is_dead() {
-                return Ok(());
+    fn recv_events(&mut self, cx: &mut Context) -> Poll<Option<Result<(), io::Error>>> {
+        match Pin::new(&mut self.event_receiver).as_mut().poll_next(cx) {
+            Poll::Ready(Some(event)) => {
+                self.handle_event(cx, event)?;
+                Poll::Ready(Some(Ok(())))
             }
-
-            match Pin::new(&mut self.event_receiver).as_mut().poll_next(cx) {
-                Poll::Ready(Some(event)) => self.handle_event(cx, event)?,
-                Poll::Ready(None) => {
-                    // Since session hold one event sender,
-                    // the channel can not be disconnected.
-                    unreachable!()
-                }
-                Poll::Pending => {
-                    return Ok(());
-                }
+            Poll::Ready(None) => {
+                // Since session hold one event sender,
+                // the channel can not be disconnected.
+                unreachable!()
             }
+            Poll::Pending => Poll::Pending,
         }
     }
 }
@@ -605,10 +595,17 @@ where
             return Poll::Ready(Some(Err(io::ErrorKind::TimedOut.into())));
         }
 
-        self.recv_frames(cx)?;
-        self.recv_events(cx)?;
+        loop {
+            if self.is_dead() {
+                break;
+            }
 
-        self.flush(cx)?;
+            let mut is_pending = self.recv_frames(cx)?.is_pending();
+            is_pending &= self.recv_events(cx)?.is_pending();
+            if is_pending {
+                break;
+            }
+        }
 
         if self.is_dead() {
             debug!("yamux::Session finished because is_dead, end");
