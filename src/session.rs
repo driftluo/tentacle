@@ -1,5 +1,5 @@
 use futures::{channel::mpsc, prelude::*, stream::iter};
-use log::{debug, error, trace};
+use log::{debug, error, log_enabled, trace};
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::{
     io::{self, ErrorKind},
@@ -868,21 +868,23 @@ where
     type Item = ();
 
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Option<Self::Item>> {
-        debug!(
-            "session [{}], [{:?}], proto count [{}], state: {:?} ,\
+        if log_enabled!(log::Level::Debug) {
+            debug!(
+                "session [{}], [{:?}], proto count [{}], state: {:?} ,\
              read buf: {}, write buf: {}, high_write_buf: {}",
-            self.context.id,
-            self.context.ty,
-            self.sub_streams.len(),
-            self.state,
-            self.read_buf.len(),
-            self.write_buf
-                .values()
-                .fold(0, |acc, item| acc + item.len()),
-            self.high_write_buf
-                .values()
-                .fold(0, |acc, item| acc + item.len())
-        );
+                self.context.id,
+                self.context.ty,
+                self.sub_streams.len(),
+                self.state,
+                self.read_buf.len(),
+                self.write_buf
+                    .values()
+                    .fold(0, |acc, item| acc + item.len()),
+                self.high_write_buf
+                    .values()
+                    .fold(0, |acc, item| acc + item.len())
+            );
+        }
 
         // double check here
         if self.state.is_local_close() {

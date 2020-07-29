@@ -3,7 +3,7 @@ use futures::{
     prelude::*,
     stream::{FusedStream, StreamExt},
 };
-use log::{debug, error, trace};
+use log::{debug, error, log_enabled, trace};
 use std::{
     borrow::Cow,
     collections::{vec_deque::VecDeque, HashMap, HashSet},
@@ -1647,22 +1647,24 @@ where
             return self.wait_handle_poll(cx);
         }
 
-        debug!(
-            "listens count: {}, state: {:?}, sessions count: {}, \
+        if log_enabled!(log::Level::Debug) {
+            debug!(
+                "listens count: {}, state: {:?}, sessions count: {}, \
              pending task: {}, high_write_buf: {}, write_buf: {}, read_service_buf: {}, read_session_buf: {}",
-            self.listens.len(),
-            self.state,
-            self.sessions.len(),
-            self.pending_tasks.len(),
-            self.high_write_buf.values()
-                .fold(0, |acc, item| acc + item.len()),
-            self.write_buf.values()
-                .fold(0, |acc, item| acc + item.len()),
-            self.read_service_buf.values()
-                .fold(0, |acc, item| acc + item.len()),
-            self.read_session_buf.values()
-                .fold(0, |acc, item| acc + item.len()),
-        );
+                self.listens.len(),
+                self.state,
+                self.sessions.len(),
+                self.pending_tasks.len(),
+                self.high_write_buf.values()
+                    .fold(0, |acc, item| acc + item.len()),
+                self.write_buf.values()
+                    .fold(0, |acc, item| acc + item.len()),
+                self.read_service_buf.values()
+                    .fold(0, |acc, item| acc + item.len()),
+                self.read_session_buf.values()
+                    .fold(0, |acc, item| acc + item.len()),
+            );
+        }
 
         if is_pending {
             Poll::Pending

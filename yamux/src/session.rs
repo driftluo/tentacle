@@ -432,7 +432,7 @@ where
             }
         }
         for id in disconnect_streams {
-            self.read_pending_frames.remove(&id);
+            buf.remove(&id);
         }
         self.read_pending_frames = buf;
 
