@@ -1,19 +1,21 @@
 use bytes::{Bytes, BytesMut};
 use futures::{SinkExt, StreamExt};
 use log::{debug, trace};
-use tokio::prelude::{AsyncRead, AsyncWrite};
+use tokio::{
+    io::AsyncReadExt,
+    prelude::{AsyncRead, AsyncWrite},
+};
 use tokio_util::codec::{length_delimited::LengthDelimitedCodec, Framed};
 
 use std::{
     cmp::min,
+    future::Future,
     io,
     pin::Pin,
     task::{Context, Poll},
 };
 
 use crate::{codec::Hmac, crypto::BoxStreamCipher, error::SecioError};
-use std::future::Future;
-use tokio::io::AsyncReadExt;
 
 /// Encrypted stream
 pub struct SecureStream<T> {
