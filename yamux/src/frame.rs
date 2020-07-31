@@ -211,7 +211,7 @@ impl Flags {
 /// When a session is being terminated, the Go Away message should
 /// be sent. The Length should be set to one of the following to
 /// provide an error code:
-#[derive(Copy, Clone, Debug)]
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
 #[repr(u32)]
 pub enum GoAwayCode {
     /// Normal termination

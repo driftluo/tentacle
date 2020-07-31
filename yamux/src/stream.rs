@@ -108,6 +108,12 @@ impl StreamHandle {
         Ok(())
     }
 
+    fn send_go_away(&mut self) {
+        let mut sender = self.event_sender.clone();
+        self.state = StreamState::LocalClosing;
+        tokio::spawn(async move { sender.send(StreamEvent::GoAway).await });
+    }
+
     #[inline]
     fn send_event(&mut self, cx: &mut Context, event: StreamEvent) -> Result<(), Error> {
         debug!("[{}] StreamHandle.send_event()", self.id);
@@ -349,11 +355,18 @@ impl AsyncRead for StreamHandle {
     ) -> Poll<io::Result<usize>> {
         self.check_self_state(cx)?;
 
-        let rv = self.recv_frames(cx);
-        debug!(
-            "[{}] StreamHandle.read() recv_frames() => {:?}, state: {:?}",
-            self.id, rv, self.state
-        );
+        if let Err(e) = self.recv_frames(cx) {
+            match e {
+                // read flag error or read data error
+                Error::UnexpectedFlag | Error::RecvWindowExceeded | Error::InvalidMsgType => {
+                    self.send_go_away();
+                    return Poll::Ready(Err(io::ErrorKind::InvalidData.into()));
+                }
+                _ => (),
+            }
+        }
+
+        debug!("[{}] StreamHandle.read(), state: {:?}", self.id, self.state);
 
         self.check_self_state(cx)?;
 
@@ -405,6 +418,7 @@ impl AsyncWrite for StreamHandle {
                 }
                 // read flag error or read data error
                 Error::UnexpectedFlag | Error::RecvWindowExceeded | Error::InvalidMsgType => {
+                    self.send_go_away();
                     return Poll::Ready(Err(io::ErrorKind::InvalidData.into()));
                 }
                 Error::SubStreamRemoteClosing => (),
@@ -455,6 +469,7 @@ impl AsyncWrite for StreamHandle {
                 }
                 // read flag error or read data error
                 Error::UnexpectedFlag | Error::RecvWindowExceeded | Error::InvalidMsgType => {
+                    self.send_go_away();
                     return Poll::Ready(Err(io::ErrorKind::InvalidData.into()));
                 }
                 Error::SubStreamRemoteClosing => (),
@@ -508,6 +523,8 @@ pub(crate) enum StreamEvent {
     StateChanged((StreamId, StreamState)),
     // Flush stream's frames to remote stream, with a channel for sync
     Flush(StreamId),
+    // Only use on protocol error
+    GoAway,
 }
 
 /// The stream state
