@@ -67,7 +67,7 @@ pub(crate) enum ProtocolEvent {
 /// Each custom protocol in a session corresponds to a sub stream
 /// Can be seen as the route of each protocol
 pub(crate) struct SubStream<U> {
-    sub_stream: Framed<StreamHandle, U>,
+    substream: Framed<StreamHandle, U>,
     id: StreamId,
     proto_id: ProtocolId,
 
@@ -141,7 +141,7 @@ where
         priority: Priority,
     ) -> Result<bool, io::Error> {
         let data_size = frame.len();
-        let mut sink = Pin::new(&mut self.sub_stream);
+        let mut sink = Pin::new(&mut self.substream);
 
         match sink.as_mut().poll_ready(cx)? {
             Poll::Ready(()) => {
@@ -183,7 +183,7 @@ where
     /// Sink `poll_complete` Ready -> no buffer remain, flush all
     /// Sink `poll_complete` NotReady -> there is more work left to do, may wake up next poll
     fn poll_complete(&mut self, cx: &mut Context) -> Result<bool, io::Error> {
-        match Pin::new(&mut self.sub_stream).poll_flush(cx) {
+        match Pin::new(&mut self.substream).poll_flush(cx) {
             Poll::Pending => Ok(true),
             Poll::Ready(res) => {
                 res?;
@@ -195,7 +195,7 @@ where
     /// Close protocol sub stream
     fn close_proto_stream(&mut self, cx: &mut Context) {
         self.event_receiver.close();
-        if let Poll::Ready(Err(e)) = Pin::new(self.sub_stream.get_mut()).poll_shutdown(cx) {
+        if let Poll::Ready(Err(e)) = Pin::new(self.substream.get_mut()).poll_shutdown(cx) {
             log::trace!("sub stream poll shutdown err {}", e)
         }
 
@@ -410,7 +410,7 @@ where
             Poll::Ready(None) => {
                 // Must be session close
                 self.dead = true;
-                if let Poll::Ready(Err(e)) = Pin::new(self.sub_stream.get_mut()).poll_shutdown(cx) {
+                if let Poll::Ready(Err(e)) = Pin::new(self.substream.get_mut()).poll_shutdown(cx) {
                     log::trace!("sub stream poll shutdown err {}", e)
                 }
                 Poll::Ready(None)
@@ -428,7 +428,7 @@ where
             return Poll::Pending;
         }
 
-        match Pin::new(&mut self.sub_stream).as_mut().poll_next(cx) {
+        match Pin::new(&mut self.substream).as_mut().poll_next(cx) {
             Poll::Ready(Some(Ok(data))) => {
                 debug!(
                     "protocol [{}] receive data len: {}",
@@ -575,7 +575,7 @@ where
     }
 }
 
-pub(crate) struct SubstreamBuilder {
+pub(crate) struct SubStreamBuilder {
     id: StreamId,
     proto_id: ProtocolId,
     keep_buffer: bool,
@@ -594,13 +594,13 @@ pub(crate) struct SubstreamBuilder {
     event_receiver: priority_mpsc::Receiver<ProtocolEvent>,
 }
 
-impl SubstreamBuilder {
+impl SubStreamBuilder {
     pub fn new(
         event_sender: mpsc::Sender<ProtocolEvent>,
         event_receiver: priority_mpsc::Receiver<ProtocolEvent>,
         context: Arc<SessionContext>,
     ) -> Self {
-        SubstreamBuilder {
+        SubStreamBuilder {
             service_proto_sender: None,
             session_proto_sender: None,
             before_receive: None,
@@ -661,12 +661,12 @@ impl SubstreamBuilder {
         self
     }
 
-    pub fn build<U>(self, sub_stream: Framed<StreamHandle, U>) -> SubStream<U>
+    pub fn build<U>(self, substream: Framed<StreamHandle, U>) -> SubStream<U>
     where
         U: Codec,
     {
         SubStream {
-            sub_stream,
+            substream,
             id: self.id,
             proto_id: self.proto_id,
             config: self.config,

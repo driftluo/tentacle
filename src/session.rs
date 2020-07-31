@@ -24,7 +24,7 @@ use crate::{
         future_task::BoxedFutureTask,
         SessionType, BUF_SHRINK_THRESHOLD, RECEIVED_BUFFER_SIZE, RECEIVED_SIZE, SEND_SIZE,
     },
-    substream::{ProtocolEvent, SubstreamBuilder},
+    substream::{ProtocolEvent, SubStreamBuilder},
     transports::MultiIncoming,
     yamux::{Session as YamuxSession, StreamHandle},
     ProtocolId, SessionId, StreamId,
@@ -497,7 +497,7 @@ where
         let (session_to_proto_sender, session_to_proto_receiver) =
             priority_mpsc::channel(SEND_SIZE);
 
-        let mut proto_stream = SubstreamBuilder::new(
+        let mut proto_stream = SubStreamBuilder::new(
             self.proto_event_sender.clone(),
             session_to_proto_receiver,
             self.context.clone(),
