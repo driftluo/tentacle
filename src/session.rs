@@ -12,7 +12,7 @@ use tokio::prelude::{AsyncRead, AsyncWrite};
 use tokio_util::codec::{Framed, FramedParts, LengthDelimitedCodec};
 
 use crate::{
-    channel::{mpsc as priority_mpsc, mpsc::Priority},
+    channel::{mpsc as priority_mpsc, mpsc::Priority, QuickSinkExt},
     context::SessionContext,
     error::{HandshakeErrorKind, ProtocolHandleErrorKind, TransportErrorKind},
     multiaddr::Multiaddr,
@@ -1072,7 +1072,9 @@ where
                 let mut sender = self.sender.clone();
 
                 tokio::spawn(async move {
-                    let _ignore = sender.send(SessionEvent::StreamStart { stream }).await;
+                    let _ignore = sender
+                        .quick_send(SessionEvent::StreamStart { stream })
+                        .await;
                 });
 
                 Poll::Ready(Some(()))
@@ -1082,7 +1084,7 @@ where
 
                 tokio::spawn(async move {
                     let _ignore = sender
-                        .send(SessionEvent::ChangeState {
+                        .quick_send(SessionEvent::ChangeState {
                             state: SessionState::RemoteClose,
                             error: None,
                         })
@@ -1115,7 +1117,7 @@ where
                 let mut sender = self.sender.clone();
 
                 tokio::spawn(async move {
-                    let _ignore = sender.send(event).await;
+                    let _ignore = sender.quick_send(event).await;
                 });
 
                 Poll::Ready(None)
