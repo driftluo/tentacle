@@ -29,7 +29,7 @@ pub(crate) enum ProtocolEvent {
         /// Protocol name
         proto_name: String,
         /// Yamux sub stream handle handshake framed
-        sub_stream: Box<Framed<StreamHandle, LengthDelimitedCodec>>,
+        substream: Box<Framed<StreamHandle, LengthDelimitedCodec>>,
         /// Protocol version
         version: String,
     },
@@ -66,7 +66,7 @@ pub(crate) enum ProtocolEvent {
 
 /// Each custom protocol in a session corresponds to a sub stream
 /// Can be seen as the route of each protocol
-pub(crate) struct SubStream<U> {
+pub(crate) struct Substream<U> {
     substream: Framed<StreamHandle, U>,
     id: StreamId,
     proto_id: ProtocolId,
@@ -96,7 +96,7 @@ pub(crate) struct SubStream<U> {
     before_receive: Option<BeforeReceive>,
 }
 
-impl<U> SubStream<U>
+impl<U> Substream<U>
 where
     U: Codec + Unpin,
 {
@@ -519,7 +519,7 @@ where
     }
 }
 
-impl<U> Stream for SubStream<U>
+impl<U> Stream for Substream<U>
 where
     U: Codec + Unpin,
 {
@@ -529,7 +529,7 @@ where
         // double check here
         if self.dead || self.context.closed.load(Ordering::SeqCst) {
             debug!(
-                "SubStream({}) finished, self.dead || self.context.closed.load(Ordering::SeqCst), head",
+                "Substream({}) finished, self.dead || self.context.closed.load(Ordering::SeqCst), head",
                 self.id
             );
             self.close_proto_stream(cx);
@@ -538,7 +538,7 @@ where
 
         if let Err(err) = self.flush(cx) {
             debug!(
-                "SubStream({}) finished with flush error: {:?}",
+                "Substream({}) finished with flush error: {:?}",
                 self.id, err
             );
             self.error_close(cx, err);
@@ -557,7 +557,7 @@ where
 
         if self.dead || self.context.closed.load(Ordering::SeqCst) {
             debug!(
-                "SubStream({}) finished, self.dead || self.context.closed.load(Ordering::SeqCst), tail",
+                "Substream({}) finished, self.dead || self.context.closed.load(Ordering::SeqCst), tail",
                 self.id
             );
             if !self.keep_buffer {
@@ -575,7 +575,7 @@ where
     }
 }
 
-pub(crate) struct SubStreamBuilder {
+pub(crate) struct SubstreamBuilder {
     id: StreamId,
     proto_id: ProtocolId,
     keep_buffer: bool,
@@ -594,13 +594,13 @@ pub(crate) struct SubStreamBuilder {
     event_receiver: priority_mpsc::Receiver<ProtocolEvent>,
 }
 
-impl SubStreamBuilder {
+impl SubstreamBuilder {
     pub fn new(
         event_sender: mpsc::Sender<ProtocolEvent>,
         event_receiver: priority_mpsc::Receiver<ProtocolEvent>,
         context: Arc<SessionContext>,
     ) -> Self {
-        SubStreamBuilder {
+        SubstreamBuilder {
             service_proto_sender: None,
             session_proto_sender: None,
             before_receive: None,
@@ -661,11 +661,11 @@ impl SubStreamBuilder {
         self
     }
 
-    pub fn build<U>(self, substream: Framed<StreamHandle, U>) -> SubStream<U>
+    pub fn build<U>(self, substream: Framed<StreamHandle, U>) -> Substream<U>
     where
         U: Codec,
     {
-        SubStream {
+        Substream {
             substream,
             id: self.id,
             proto_id: self.proto_id,

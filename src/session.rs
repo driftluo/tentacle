@@ -24,7 +24,7 @@ use crate::{
         future_task::BoxedFutureTask,
         SessionType, BUF_SHRINK_THRESHOLD, RECEIVED_BUFFER_SIZE, RECEIVED_SIZE, SEND_SIZE,
     },
-    substream::{ProtocolEvent, SubStreamBuilder},
+    substream::{ProtocolEvent, SubstreamBuilder},
     transports::MultiIncoming,
     yamux::{Control, Session as YamuxSession, StreamHandle},
     ProtocolId, SessionId, StreamId,
@@ -164,7 +164,7 @@ pub(crate) struct Session {
     next_stream: StreamId,
 
     /// Sub streams maps a stream id to a sender of sub stream
-    sub_streams: HashMap<StreamId, priority_mpsc::Sender<ProtocolEvent>>,
+    substreams: HashMap<StreamId, priority_mpsc::Sender<ProtocolEvent>>,
     proto_streams: HashMap<ProtocolId, StreamId>,
     /// The buffer will be prioritized for distribute to sub streams
     high_write_buf: HashMap<ProtocolId, VecDeque<ProtocolEvent>>,
@@ -234,7 +234,7 @@ impl Session {
             context: meta.context,
             keep_buffer: meta.keep_buffer,
             next_stream: 0,
-            sub_streams: HashMap::default(),
+            substreams: HashMap::default(),
             proto_streams: HashMap::default(),
             high_write_buf: HashMap::default(),
             write_buf: HashMap::default(),
@@ -278,7 +278,7 @@ impl Session {
                 Ok(res) => match res {
                     Ok((handle, name, version)) => match version {
                         Some(version) => ProtocolEvent::Open {
-                            sub_stream: Box::new(handle),
+                            substream: Box::new(handle),
                             proto_name: name,
                             version,
                         },
@@ -393,7 +393,7 @@ impl Session {
                 continue;
             }
             if let Some(stream_id) = self.proto_streams.get(&proto_id) {
-                if let Some(sender) = self.sub_streams.get_mut(&stream_id) {
+                if let Some(sender) = self.substreams.get_mut(&stream_id) {
                     while let Some(event) = events.pop_front() {
                         match sender.poll_ready(cx) {
                             Poll::Ready(Ok(())) => {
@@ -441,7 +441,7 @@ impl Session {
         self.high_write_buf =
             self.distribute_to_substream_process(cx, high, Priority::High, &mut block_substreams);
 
-        if self.sub_streams.len() > block_substreams.len() {
+        if self.substreams.len() > block_substreams.len() {
             let normal = ::std::mem::replace(&mut self.write_buf, HashMap::new());
             self.write_buf = self.distribute_to_substream_process(
                 cx,
@@ -453,7 +453,7 @@ impl Session {
     }
 
     /// Handling client-initiated open protocol sub stream requests
-    fn handle_sub_stream(&mut self, sub_stream: StreamHandle) {
+    fn handle_substream(&mut self, substream: StreamHandle) {
         let proto_metas = self
             .protocol_configs_by_name
             .values()
@@ -465,7 +465,7 @@ impl Session {
             })
             .collect();
 
-        let task = server_select(sub_stream, proto_metas);
+        let task = server_select(substream, proto_metas);
         self.select_procedure(task);
     }
 
@@ -474,7 +474,7 @@ impl Session {
         cx: &mut Context,
         name: String,
         version: String,
-        sub_stream: Box<Framed<StreamHandle, LengthDelimitedCodec>>,
+        substream: Box<Framed<StreamHandle, LengthDelimitedCodec>>,
     ) {
         let proto = match self.protocol_configs_by_name.get(&name) {
             Some(proto) => proto,
@@ -499,7 +499,7 @@ impl Session {
             return;
         }
         let before_receive_fn = (proto.before_receive)();
-        let raw_part = sub_stream.into_parts();
+        let raw_part = substream.into_parts();
         let mut part = FramedParts::new(raw_part.io, (proto.codec)());
         // Replace buffered data
         part.read_buf = raw_part.read_buf;
@@ -508,7 +508,7 @@ impl Session {
         let (session_to_proto_sender, session_to_proto_receiver) =
             priority_mpsc::channel(SEND_SIZE);
 
-        let mut proto_stream = SubStreamBuilder::new(
+        let mut proto_stream = SubstreamBuilder::new(
             self.proto_event_sender.clone(),
             session_to_proto_receiver,
             self.context.clone(),
@@ -523,7 +523,7 @@ impl Session {
         .before_receive(before_receive_fn)
         .build(frame);
 
-        self.sub_streams
+        self.substreams
             .insert(self.next_stream, session_to_proto_sender);
         self.proto_streams.insert(proto_id, self.next_stream);
 
@@ -551,14 +551,14 @@ impl Session {
         match event {
             ProtocolEvent::Open {
                 proto_name,
-                sub_stream,
+                substream,
                 version,
             } => {
-                self.open_protocol(cx, proto_name, version, sub_stream);
+                self.open_protocol(cx, proto_name, version, substream);
             }
             ProtocolEvent::Close { id, proto_id } => {
                 debug!("session [{}] proto [{}] closed", self.context.id, proto_id);
-                if self.sub_streams.remove(&id).is_some() {
+                if self.substreams.remove(&id).is_some() {
                     self.proto_streams.remove(&proto_id);
                     self.high_write_buf.remove(&proto_id);
                     self.write_buf.remove(&proto_id);
@@ -608,7 +608,7 @@ impl Session {
                 )
             }
             ProtocolEvent::TimeoutCheck => {
-                if self.sub_streams.is_empty() {
+                if self.substreams.is_empty() {
                     self.event_output(
                         cx,
                         SessionEvent::SessionTimeout {
@@ -637,7 +637,7 @@ impl Session {
                 }
             }
             SessionEvent::SessionClose { .. } => {
-                if self.sub_streams.is_empty() {
+                if self.substreams.is_empty() {
                     // if no proto open, just close session
                     self.close_session();
                 } else {
@@ -670,7 +670,7 @@ impl Session {
                     debug!("proto [{}] has been closed", proto_id);
                 }
             }
-            SessionEvent::StreamStart { stream } => self.handle_sub_stream(stream),
+            SessionEvent::StreamStart { stream } => self.handle_substream(stream),
             SessionEvent::ChangeState { state, error } => {
                 if self.state == SessionState::Normal {
                     self.state = state;
@@ -826,7 +826,7 @@ impl Session {
 
     /// Clean env
     fn clean(&mut self) {
-        self.sub_streams.clear();
+        self.substreams.clear();
         self.service_receiver.close();
         self.proto_event_receiver.close();
 
@@ -858,7 +858,7 @@ impl Stream for Session {
              read buf: {}, write buf: {}, high_write_buf: {}",
                 self.context.id,
                 self.context.ty,
-                self.sub_streams.len(),
+                self.substreams.len(),
                 self.state,
                 self.read_buf.len(),
                 self.write_buf
