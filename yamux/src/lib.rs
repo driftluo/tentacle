@@ -13,12 +13,15 @@ pub mod frame;
 // Session module
 pub mod session;
 // Stream module
+mod control;
 pub mod stream;
 
 // Stream ID type
 pub(crate) type StreamId = u32;
 
-pub use crate::{config::Config, error::Error, session::Session, stream::StreamHandle};
+pub use crate::{
+    config::Config, control::Control, error::Error, session::Session, stream::StreamHandle,
+};
 
 // Latest Protocol Version
 pub(crate) const PROTOCOL_VERSION: u8 = 0;

@@ -22,6 +22,7 @@ use tokio_util::codec::Framed;
 
 use crate::{
     config::Config,
+    control::{Command, Control},
     error::Error,
     frame::{Flag, Flags, Frame, FrameCodec, GoAwayCode, Type},
     stream::{StreamEvent, StreamHandle, StreamState},
@@ -75,6 +76,10 @@ pub struct Session<T> {
     // For receive events from sub streams
     event_receiver: Receiver<StreamEvent>,
 
+    /// use to async open stream/close session
+    control_sender: Sender<Command>,
+    control_receiver: Receiver<Command>,
+
     keepalive_receiver: Option<Receiver<()>>,
     /// Last successful send time
     last_send_success: Instant,
@@ -116,6 +121,7 @@ where
             SessionType::Server => 2,
         };
         let (event_sender, event_receiver) = channel(32);
+        let (control_sender, control_receiver) = channel(32);
         let framed_stream = Framed::new(
             raw_stream,
             FrameCodec::default().max_frame_size(config.max_stream_window_size),
@@ -164,6 +170,8 @@ where
             read_pending_frames: HashMap::default(),
             event_sender,
             event_receiver,
+            control_sender,
+            control_receiver,
             keepalive_receiver,
             last_send_success: Instant::now(),
             last_read_success: Instant::now(),
@@ -238,6 +246,11 @@ where
             self.inflight.insert(stream.id());
             Ok(stream)
         }
+    }
+
+    /// Return a control to async open stream/close session
+    pub fn control(&self) -> Control {
+        Control::new(self.control_sender.clone())
     }
 
     fn keep_alive(&mut self, cx: &mut Context, ping_at: Instant) -> Result<(), io::Error> {
@@ -555,6 +568,29 @@ where
             Poll::Pending => Poll::Pending,
         }
     }
+
+    fn control_poll(&mut self, cx: &mut Context) -> Poll<Option<Result<(), io::Error>>> {
+        match Pin::new(&mut self.control_receiver).as_mut().poll_next(cx) {
+            Poll::Ready(Some(event)) => {
+                match event {
+                    Command::OpenStream(tx) => {
+                        let _ignore = tx.send(self.open_stream());
+                    }
+                    Command::Shutdown(tx) => {
+                        self.shutdown(cx)?;
+                        let _ignore = tx.send(());
+                    }
+                }
+                Poll::Ready(Some(Ok(())))
+            }
+            Poll::Ready(None) => {
+                // Since session hold one event sender,
+                // the channel can not be disconnected.
+                unreachable!()
+            }
+            Poll::Pending => Poll::Pending,
+        }
+    }
 }
 
 impl<T> Stream for Session<T>
@@ -606,7 +642,8 @@ where
                 break;
             }
 
-            let mut is_pending = self.recv_frames(cx)?.is_pending();
+            let mut is_pending = self.control_poll(cx)?.is_pending();
+            is_pending &= self.recv_frames(cx)?.is_pending();
             is_pending &= self.recv_events(cx)?.is_pending();
             if is_pending {
                 break;
