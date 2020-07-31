@@ -855,7 +855,7 @@ where
         let pending_data_size = Arc::new(AtomicUsize::new(0));
         let (service_event_sender, service_event_receiver) = priority_mpsc::channel(SEND_SIZE);
         let session_control = SessionController::new(
-            service_event_sender,
+            service_event_sender.clone(),
             Arc::new(SessionContext::new(
                 self.next_session,
                 address,
@@ -882,26 +882,30 @@ where
             by_id.insert(*key, value.inner.clone());
         });
 
-        let meta = SessionMeta::new(self.config.timeout, session_context.clone())
-            .protocol_by_name(by_name)
-            .protocol_by_id(by_id)
-            .config(self.config.session_config)
-            .keep_buffer(self.config.keep_buffer)
-            .service_proto_senders(self.service_proto_handles.clone())
-            .session_senders(
-                self.session_proto_handles
-                    .iter()
-                    .filter_map(|((session_id, key), value)| {
-                        if *session_id == self.next_session {
-                            Some((*key, value.clone()))
-                        } else {
-                            None
-                        }
-                    })
-                    .collect(),
-            )
-            .session_proto_handles(handles)
-            .event(self.config.event.clone());
+        let meta = SessionMeta::new(
+            self.config.timeout,
+            session_context.clone(),
+            service_event_sender,
+        )
+        .protocol_by_name(by_name)
+        .protocol_by_id(by_id)
+        .config(self.config.session_config)
+        .keep_buffer(self.config.keep_buffer)
+        .service_proto_senders(self.service_proto_handles.clone())
+        .session_senders(
+            self.session_proto_handles
+                .iter()
+                .filter_map(|((session_id, key), value)| {
+                    if *session_id == self.next_session {
+                        Some((*key, value.clone()))
+                    } else {
+                        None
+                    }
+                })
+                .collect(),
+        )
+        .session_proto_handles(handles)
+        .event(self.config.event.clone());
 
         let mut session = Session::new(
             handle,
@@ -1331,6 +1335,7 @@ where
                 // if handle panic, close service
                 self.handle_service_task(cx, ServiceTask::Shutdown(false), Priority::High);
             }
+            _ => (),
         }
     }
 
