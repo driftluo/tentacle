@@ -21,10 +21,10 @@ fn send_recv() {
 fn send_recv_unbound() {
     let (tx, rx) = mpsc::unbounded::<i32>();
     tx.unbounded_send(2).unwrap();
-    tx.quick_unbounded_send(1).unwrap();
+    tx.unbounded_quick_send(1).unwrap();
     tx.unbounded_send(3).unwrap();
     tx.unbounded_send(4).unwrap();
-    tx.quick_unbounded_send(6).unwrap();
+    tx.unbounded_quick_send(6).unwrap();
     tx.unbounded_send(5).unwrap();
 
     drop(tx);
