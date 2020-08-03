@@ -1,5 +1,5 @@
 use bytes::{Bytes, BytesMut};
-use futures::{SinkExt, StreamExt};
+use futures::{Sink, StreamExt};
 use log::{debug, trace};
 use tokio::{
     io::AsyncReadExt,
@@ -9,7 +9,6 @@ use tokio_util::codec::{length_delimited::LengthDelimitedCodec, Framed};
 
 use std::{
     cmp::min,
-    future::Future,
     io,
     pin::Pin,
     task::{Context, Poll},
@@ -130,41 +129,6 @@ where
         n
     }
 
-    async fn read_socket(&mut self, buf: &mut [u8]) -> io::Result<usize> {
-        // when there is something in recv_buffer
-        let copied = self.drain(buf);
-        if copied > 0 {
-            return Ok(copied);
-        }
-
-        match self.socket.next().await {
-            Some(Ok(t)) => {
-                debug!("receive encrypted data size: {:?}", t.len());
-                let decoded = self
-                    .decode_buffer(t)
-                    .map_err::<io::Error, _>(|err| err.into())?;
-
-                // when input buffer is big enough
-                let n = decoded.len();
-                if buf.len() >= n {
-                    buf[..n].copy_from_slice(decoded.as_ref());
-                    Ok(n)
-                } else {
-                    // fill internal recv buffer
-                    self.recv_buf = decoded;
-                    // drain for input buffer
-                    let copied = self.drain(buf);
-                    Ok(copied)
-                }
-            }
-            Some(Err(err)) => Err(err),
-            None => {
-                debug!("connection shutting down");
-                Err(io::ErrorKind::BrokenPipe.into())
-            }
-        }
-    }
-
     #[inline]
     fn encode_buffer(&mut self, buf: &[u8]) -> Bytes {
         let mut out = self.encode_cipher.encrypt(buf).unwrap();
@@ -173,17 +137,6 @@ where
             out.extend_from_slice(signature.as_ref());
         }
         Bytes::from(out)
-    }
-
-    async fn write_socket(&mut self, buf: &[u8]) -> io::Result<usize> {
-        debug!("start sending plain data: {:?}", buf);
-
-        let frame = self.encode_buffer(buf);
-        trace!("start sending encrypted data size: {:?}", frame.len());
-        match self.socket.send(frame).await {
-            Ok(()) => Ok(buf.len()),
-            Err(err) => Err(err),
-        }
     }
 }
 
@@ -196,7 +149,39 @@ where
         cx: &mut Context<'_>,
         buf: &mut [u8],
     ) -> Poll<io::Result<usize>> {
-        poll_future(cx, self.read_socket(buf))
+        // when there is something in recv_buffer
+        let copied = self.drain(buf);
+        if copied > 0 {
+            return Poll::Ready(Ok(copied));
+        }
+
+        match self.socket.poll_next_unpin(cx) {
+            Poll::Ready(Some(Ok(t))) => {
+                debug!("receive encrypted data size: {:?}", t.len());
+                let decoded = self
+                    .decode_buffer(t)
+                    .map_err::<io::Error, _>(|err| err.into())?;
+
+                // when input buffer is big enough
+                let n = decoded.len();
+                if buf.len() >= n {
+                    buf[..n].copy_from_slice(decoded.as_ref());
+                    Poll::Ready(Ok(n))
+                } else {
+                    // fill internal recv buffer
+                    self.recv_buf = decoded;
+                    // drain for input buffer
+                    let copied = self.drain(buf);
+                    Poll::Ready(Ok(copied))
+                }
+            }
+            Poll::Ready(Some(Err(err))) => Poll::Ready(Err(err)),
+            Poll::Ready(None) => {
+                debug!("connection shutting down");
+                Poll::Ready(Err(io::ErrorKind::BrokenPipe.into()))
+            }
+            Poll::Pending => Poll::Pending,
+        }
     }
 }
 
@@ -209,22 +194,29 @@ where
         cx: &mut Context<'_>,
         buf: &[u8],
     ) -> Poll<io::Result<usize>> {
-        poll_future(cx, self.write_socket(buf))
+        debug!("start sending plain data: {:?}", buf);
+
+        let frame = self.encode_buffer(buf);
+        trace!("start sending encrypted data size: {:?}", frame.len());
+        let mut sink = Pin::new(&mut self.socket);
+        match sink.as_mut().poll_ready(cx) {
+            Poll::Ready(Ok(_)) => {
+                sink.as_mut().start_send(frame)?;
+                let _ignore = sink.as_mut().poll_flush(cx)?;
+                Poll::Ready(Ok(buf.len()))
+            }
+            Poll::Pending => Poll::Pending,
+            Poll::Ready(Err(e)) => Poll::Ready(Err(e)),
+        }
     }
 
     fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<io::Result<()>> {
-        poll_future(cx, self.socket.flush())
+        Pin::new(&mut self.socket).as_mut().poll_flush(cx)
     }
 
     fn poll_shutdown(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<io::Result<()>> {
-        poll_future(cx, self.socket.close())
+        Pin::new(&mut self.socket).as_mut().poll_close(cx)
     }
-}
-
-/// Pins a future and then polls it.
-fn poll_future<T>(cx: &mut Context<'_>, fut: impl Future<Output = T>) -> Poll<T> {
-    futures::pin_mut!(fut);
-    fut.poll(cx)
 }
 
 #[cfg(test)]
