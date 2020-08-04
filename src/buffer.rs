@@ -1,9 +1,12 @@
-use crate::{channel::mpsc::Sender as priotity_sender, service::BUF_SHRINK_THRESHOLD};
+use crate::channel::mpsc::Sender as priotity_sender;
 use futures::channel::mpsc::Sender;
 use std::{
     collections::VecDeque,
     task::{Context, Poll},
 };
+
+/// If the buffer capacity is greater than u8 max, shrink it
+const BUF_SHRINK_THRESHOLD: usize = u8::max_value() as usize;
 
 pub enum SendResult {
     Ok,
@@ -158,11 +161,42 @@ impl<T> Buffer<T> {
         self.shrink_to_fit();
         SendResult::Ok
     }
+
+    pub fn take(&mut self) -> (Sender<T>, VecDeque<T>) {
+        (self.sender.clone(), ::std::mem::take(&mut self.buffer))
+    }
+
+    pub fn sender(&self) -> Sender<T> {
+        self.sender.clone()
+    }
+
+    pub fn clear(&mut self) {
+        self.buffer.clear()
+    }
+}
+
+impl<T> Clone for Buffer<T> {
+    fn clone(&self) -> Self {
+        Self {
+            sender: self.sender.clone(),
+            buffer: Default::default(),
+        }
+    }
+}
+
+impl<T> Clone for PriorityBuffer<T> {
+    fn clone(&self) -> Self {
+        Self {
+            sender: self.sender.clone(),
+            high_buffer: Default::default(),
+            normal_buffer: Default::default(),
+        }
+    }
 }
 
 #[cfg(test)]
 mod test {
-    use super::{Buffer, PriorityBuffer, Sender};
+    use super::{Buffer, PriorityBuffer};
     use crate::channel::mpsc::channel as priority_channel;
     use futures::{channel::mpsc::channel, executor::block_on, future::poll_fn, StreamExt};
     use std::{

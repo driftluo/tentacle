@@ -11,6 +11,7 @@ use tokio::prelude::AsyncWrite;
 use tokio_util::codec::{length_delimited::LengthDelimitedCodec, Framed};
 
 use crate::{
+    buffer::{Buffer, SendResult},
     builder::BeforeReceive,
     channel::{mpsc as priority_mpsc, mpsc::Priority},
     context::SessionContext,
@@ -79,20 +80,16 @@ pub(crate) struct Substream<U> {
     high_write_buf: VecDeque<bytes::Bytes>,
     // The buffer which will send to underlying network
     write_buf: VecDeque<bytes::Bytes>,
-    // The buffer which will send to user
-    read_buf: VecDeque<ProtocolEvent>,
-    service_proto_buf: VecDeque<ServiceProtocolEvent>,
-    session_proto_buf: VecDeque<SessionProtocolEvent>,
     dead: bool,
     keep_buffer: bool,
 
     /// Send event to session
-    event_sender: mpsc::Sender<ProtocolEvent>,
+    event_sender: Buffer<ProtocolEvent>,
     /// Receive events from session
     event_receiver: priority_mpsc::Receiver<ProtocolEvent>,
 
-    service_proto_sender: Option<mpsc::Sender<ServiceProtocolEvent>>,
-    session_proto_sender: Option<mpsc::Sender<SessionProtocolEvent>>,
+    service_proto_sender: Option<Buffer<ServiceProtocolEvent>>,
+    session_proto_sender: Option<Buffer<SessionProtocolEvent>>,
     before_receive: Option<BeforeReceive>,
 }
 
@@ -101,17 +98,15 @@ where
     U: Codec + Unpin,
 {
     pub fn proto_open(&mut self, version: String) {
-        if self.service_proto_sender.is_some() {
-            self.service_proto_buf
-                .push_back(ServiceProtocolEvent::Connected {
-                    session: self.context.clone(),
-                    version: version.clone(),
-                })
+        if let Some(ref mut buffer) = self.service_proto_sender {
+            buffer.push(ServiceProtocolEvent::Connected {
+                session: self.context.clone(),
+                version: version.clone(),
+            })
         }
 
-        if self.session_proto_sender.is_some() {
-            self.session_proto_buf
-                .push_back(SessionProtocolEvent::Opened { version })
+        if let Some(ref mut buffer) = self.session_proto_sender {
+            buffer.push(SessionProtocolEvent::Opened { version })
         }
     }
 
@@ -200,12 +195,10 @@ where
         }
 
         if self.service_proto_sender.is_some() {
-            self.service_proto_buf
-                .push_back(ServiceProtocolEvent::Disconnected {
-                    id: self.context.id,
-                });
-            let events = ::std::mem::replace(&mut self.service_proto_buf, VecDeque::new());
-            let mut sender = self.service_proto_sender.take().unwrap();
+            let (mut sender, mut events) = self.service_proto_sender.take().unwrap().take();
+            events.push_back(ServiceProtocolEvent::Disconnected {
+                id: self.context.id,
+            });
             tokio::spawn(async move {
                 let mut iter = iter(events).map(Ok);
                 if let Err(e) = sender.send_all(&mut iter).await {
@@ -215,16 +208,11 @@ where
         }
 
         if self.session_proto_sender.is_some() {
-            self.session_proto_buf
-                .push_back(SessionProtocolEvent::Closed);
-
+            let (mut sender, mut events) = self.session_proto_sender.take().unwrap().take();
+            events.push_back(SessionProtocolEvent::Closed);
             if self.context.closed.load(Ordering::SeqCst) {
-                self.session_proto_buf
-                    .push_back(SessionProtocolEvent::Disconnected);
+                events.push_back(SessionProtocolEvent::Disconnected);
             }
-
-            let events = ::std::mem::replace(&mut self.session_proto_buf, VecDeque::new());
-            let mut sender = self.session_proto_sender.take().unwrap();
             tokio::spawn(async move {
                 let mut iter = iter(events).map(Ok);
                 if let Err(e) = sender.send_all(&mut iter).await {
@@ -233,15 +221,12 @@ where
             });
         }
 
-        self.read_buf.push_back(ProtocolEvent::Close {
-            id: self.id,
-            proto_id: self.proto_id,
-        });
-
         if !self.context.closed.load(Ordering::SeqCst) {
-            let events = ::std::mem::replace(&mut self.read_buf, VecDeque::new());
-            let mut sender = self.event_sender.clone();
-
+            let (mut sender, mut events) = self.event_sender.take();
+            events.push_back(ProtocolEvent::Close {
+                id: self.id,
+                proto_id: self.proto_id,
+            });
             tokio::spawn(async move {
                 let mut iter = iter(events).map(Ok);
                 if let Err(e) = sender.send_all(&mut iter).await {
@@ -257,9 +242,9 @@ where
     fn error_close(&mut self, cx: &mut Context, error: io::Error) {
         self.dead = true;
         if !self.keep_buffer {
-            self.read_buf.clear()
+            self.event_sender.clear()
         }
-        self.read_buf.push_back(ProtocolEvent::Error {
+        self.event_sender.push(ProtocolEvent::Error {
             id: self.id,
             proto_id: self.proto_id,
             error,
@@ -302,55 +287,19 @@ where
     }
 
     fn distribute_to_user_level(&mut self, cx: &mut Context) {
-        if let Some(ref mut sender) = self.service_proto_sender {
-            while let Some(event) = self.service_proto_buf.pop_front() {
-                match sender.poll_ready(cx) {
-                    Poll::Ready(Ok(())) => {
-                        if let Err(e) = sender.try_send(event) {
-                            if e.is_full() {
-                                debug!("service proto [{}] handle is full", self.proto_id);
-                                self.service_proto_buf.push_front(e.into_inner());
-                            } else {
-                                self.dead = true;
-                            }
-                            break;
-                        }
-                    }
-                    Poll::Pending => {
-                        self.service_proto_buf.push_front(event);
-                        break;
-                    }
-                    Poll::Ready(Err(_)) => {
-                        self.dead = true;
-                        break;
-                    }
-                }
+        if let Some(ref mut buffer) = self.service_proto_sender {
+            match buffer.try_send(cx) {
+                SendResult::Disconnect => self.dead = true,
+                SendResult::Pending => debug!("service proto [{}] handle is full", self.proto_id),
+                SendResult::Ok => (),
             }
         }
 
-        if let Some(ref mut sender) = self.session_proto_sender {
-            while let Some(event) = self.session_proto_buf.pop_front() {
-                match sender.poll_ready(cx) {
-                    Poll::Ready(Ok(())) => {
-                        if let Err(e) = sender.try_send(event) {
-                            if e.is_full() {
-                                debug!("service proto [{}] handle is full", self.proto_id);
-                                self.session_proto_buf.push_front(e.into_inner());
-                            } else {
-                                self.dead = true;
-                            }
-                            break;
-                        }
-                    }
-                    Poll::Pending => {
-                        self.session_proto_buf.push_front(event);
-                        break;
-                    }
-                    Poll::Ready(Err(_)) => {
-                        self.dead = true;
-                        break;
-                    }
-                }
+        if let Some(ref mut buffer) = self.session_proto_sender {
+            match buffer.try_send(cx) {
+                SendResult::Disconnect => self.dead = true,
+                SendResult::Pending => debug!("session proto [{}] handle is full", self.proto_id),
+                SendResult::Ok => (),
             }
         }
         if self.dead {
@@ -361,35 +310,15 @@ where
     /// Send event to user
     #[inline]
     fn output_event(&mut self, cx: &mut Context, event: ProtocolEvent) {
-        self.read_buf.push_back(event);
+        self.event_sender.push(event);
         self.output(cx);
     }
 
     #[inline]
     fn output(&mut self, cx: &mut Context) {
-        while let Some(event) = self.read_buf.pop_front() {
-            match self.event_sender.poll_ready(cx) {
-                Poll::Ready(Ok(())) => {
-                    if let Err(e) = self.event_sender.try_send(event) {
-                        if e.is_full() {
-                            self.read_buf.push_front(e.into_inner());
-                        } else {
-                            debug!("proto send to session error: {}, may be kill by remote", e);
-                            self.dead = true;
-                        }
-                        break;
-                    }
-                }
-                Poll::Pending => {
-                    self.read_buf.push_front(event);
-                    break;
-                }
-                Poll::Ready(Err(e)) => {
-                    debug!("proto send to session error: {}, may be kill by remote", e);
-                    self.dead = true;
-                    break;
-                }
-            }
+        if let SendResult::Disconnect = self.event_sender.try_send(cx) {
+            debug!("proto send to session error: disconnect, may be kill by remote");
+            self.dead = true;
         }
     }
 
@@ -424,7 +353,7 @@ where
             return Poll::Ready(None);
         }
 
-        if self.read_buf.len() > self.config.recv_event_size() {
+        if self.event_sender.len() > self.config.recv_event_size() {
             return Poll::Pending;
         }
 
@@ -447,17 +376,15 @@ where
                     None => data.freeze(),
                 };
 
-                if self.service_proto_sender.is_some() {
-                    self.service_proto_buf
-                        .push_back(ServiceProtocolEvent::Received {
-                            id: self.context.id,
-                            data: data.clone(),
-                        })
+                if let Some(ref mut buffer) = self.service_proto_sender {
+                    buffer.push(ServiceProtocolEvent::Received {
+                        id: self.context.id,
+                        data: data.clone(),
+                    })
                 }
 
-                if self.session_proto_sender.is_some() {
-                    self.session_proto_buf
-                        .push_back(SessionProtocolEvent::Received { data: data.clone() })
+                if let Some(ref mut buffer) = self.session_proto_sender {
+                    buffer.push(SessionProtocolEvent::Received { data: data.clone() })
                 }
 
                 self.distribute_to_user_level(cx);
@@ -499,11 +426,21 @@ where
 
     #[inline]
     fn flush(&mut self, cx: &mut Context) -> Result<(), io::Error> {
-        if !self.service_proto_buf.is_empty() || !self.session_proto_buf.is_empty() {
+        if !self
+            .service_proto_sender
+            .as_ref()
+            .map(|buffer| buffer.is_empty())
+            .unwrap_or(true)
+            || !self
+                .session_proto_sender
+                .as_ref()
+                .map(|buffer| buffer.is_empty())
+                .unwrap_or(true)
+        {
             self.distribute_to_user_level(cx);
         }
 
-        if !self.read_buf.is_empty()
+        if !self.event_sender.is_empty()
             || !self.write_buf.is_empty()
             || !self.high_write_buf.is_empty()
         {
@@ -548,7 +485,7 @@ where
         debug!(
             "write buf: {}, read buf: {}",
             self.write_buf.len(),
-            self.read_buf.len()
+            self.event_sender.len()
         );
 
         let mut is_pending = self.recv_frame(cx).is_pending();
@@ -561,7 +498,7 @@ where
                 self.id
             );
             if !self.keep_buffer {
-                self.read_buf.clear()
+                self.event_sender.clear()
             }
             self.close_proto_stream(cx);
             return Poll::Ready(None);
@@ -584,8 +521,8 @@ pub(crate) struct SubstreamBuilder {
 
     context: Arc<SessionContext>,
 
-    service_proto_sender: Option<mpsc::Sender<ServiceProtocolEvent>>,
-    session_proto_sender: Option<mpsc::Sender<SessionProtocolEvent>>,
+    service_proto_sender: Option<Buffer<ServiceProtocolEvent>>,
+    session_proto_sender: Option<Buffer<SessionProtocolEvent>>,
     before_receive: Option<BeforeReceive>,
 
     /// Send event to session
@@ -640,18 +577,12 @@ impl SubstreamBuilder {
         self
     }
 
-    pub fn service_proto_sender(
-        mut self,
-        sender: Option<mpsc::Sender<ServiceProtocolEvent>>,
-    ) -> Self {
+    pub fn service_proto_sender(mut self, sender: Option<Buffer<ServiceProtocolEvent>>) -> Self {
         self.service_proto_sender = sender;
         self
     }
 
-    pub fn session_proto_sender(
-        mut self,
-        sender: Option<mpsc::Sender<SessionProtocolEvent>>,
-    ) -> Self {
+    pub fn session_proto_sender(mut self, sender: Option<Buffer<SessionProtocolEvent>>) -> Self {
         self.session_proto_sender = sender;
         self
     }
@@ -676,13 +607,10 @@ impl SubstreamBuilder {
             high_write_buf: VecDeque::new(),
 
             write_buf: VecDeque::new(),
-            read_buf: VecDeque::new(),
-            service_proto_buf: VecDeque::new(),
-            session_proto_buf: VecDeque::new(),
             dead: false,
             keep_buffer: self.keep_buffer,
 
-            event_sender: self.event_sender,
+            event_sender: Buffer::new(self.event_sender),
             event_receiver: self.event_receiver,
 
             service_proto_sender: self.service_proto_sender,
