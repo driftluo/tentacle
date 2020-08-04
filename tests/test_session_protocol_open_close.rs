@@ -55,7 +55,7 @@ impl SessionProtocol for PHandle {
             // each close add one
             self.count += 1;
             if self.count >= 10 {
-                context.shutdown().unwrap();
+                let _ignore = context.shutdown();
             }
         }
     }

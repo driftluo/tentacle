@@ -4,7 +4,7 @@ use bytes::{Bytes, BytesMut};
 use futures::{
     channel::mpsc::{Receiver, Sender},
     stream::FusedStream,
-    Stream,
+    SinkExt, Stream,
 };
 
 use std::{
@@ -476,6 +476,27 @@ impl AsyncWrite for StreamHandle {
             Err(Error::WouldBlock) => Poll::Pending,
             Err(_) => Poll::Ready(Err(io::ErrorKind::BrokenPipe.into())),
             Ok(()) => Poll::Ready(Ok(())),
+        }
+    }
+}
+
+impl Drop for StreamHandle {
+    fn drop(&mut self) {
+        if !self.event_sender.is_closed()
+            && self.state != StreamState::Closed
+            && self.state != StreamState::LocalClosing
+        {
+            let mut flags = self.get_flags();
+            flags.add(Flag::Rst);
+            let frame = Frame::new_window_update(flags, self.id, 0);
+            let rst_event = StreamEvent::Frame(frame);
+            let event = StreamEvent::StateChanged((self.id, StreamState::Closed));
+            let mut sender = self.event_sender.clone();
+
+            tokio::spawn(async move {
+                let _ignore = sender.send(rst_event).await;
+                let _ignore = sender.send(event).await;
+            });
         }
     }
 }
