@@ -17,6 +17,7 @@ use std::{
 use tokio::prelude::{AsyncRead, AsyncWrite};
 
 use crate::{
+    buffer::SendResult,
     channel::{mpsc as priority_mpsc, mpsc::Priority},
     context::{ServiceContext, SessionContext, SessionController},
     error::{DialerErrorKind, ListenErrorKind, ProtocolHandleErrorKind, TransportErrorKind},
@@ -89,10 +90,7 @@ pub struct Service<T> {
 
     /// Can be upgrade to list service level protocols
     handle: T,
-    /// The buffer will be prioritized for distribution to session
-    high_write_buf: HashMap<SessionId, VecDeque<SessionEvent>>,
-    /// The buffer which will distribute to sessions
-    write_buf: HashMap<SessionId, VecDeque<SessionEvent>>,
+
     /// The buffer which will distribute to service protocol handle
     read_service_buf: HashMap<ProtocolId, VecDeque<ServiceProtocolEvent>>,
     /// The buffer which will distribute to session protocol handle
@@ -171,8 +169,6 @@ where
             dial_protocols: HashMap::default(),
             state: State::new(forever),
             next_session: SessionId::default(),
-            high_write_buf: HashMap::default(),
-            write_buf: HashMap::default(),
             read_service_buf: HashMap::default(),
             read_session_buf: HashMap::default(),
             session_event_sender,
@@ -359,95 +355,15 @@ where
         self.service_context.control()
     }
 
-    #[inline(always)]
-    fn distribute_to_session_process(
-        &mut self,
-        cx: &mut Context,
-        mut data: HashMap<SessionId, VecDeque<SessionEvent>>,
-        priority: Priority,
-        block_sessions: &mut HashSet<SessionId>,
-    ) -> HashMap<SessionId, VecDeque<SessionEvent>> {
-        for (id, events) in data.iter_mut() {
-            // Guarantee the order in which messages are sent
-            if block_sessions.contains(&id) {
-                continue;
-            }
-
-            if let Some(session) = self.sessions.get_mut(&id) {
-                while let Some(event) = events.pop_front() {
-                    if session.inner.closed.load(Ordering::SeqCst) {
-                        if let SessionEvent::ProtocolMessage { .. } = event {
-                            continue;
-                        }
-                    }
-
-                    match session.poll_ready(cx) {
-                        Poll::Ready(Ok(())) => {
-                            if let Err(e) = session.try_send(priority, event) {
-                                if e.is_full() {
-                                    block_sessions.insert(*id);
-                                    debug!("session [{}] is full", id);
-                                    events.push_front(e.into_inner());
-                                } else {
-                                    debug!(
-                                        "session {} has been shutdown, message can't send, just drop it",
-                                        id
-                                    );
-                                    events.clear();
-                                }
-                                break;
-                            }
-                        }
-                        Poll::Pending => {
-                            block_sessions.insert(*id);
-                            debug!("session [{}] is full", id);
-                            events.push_front(event);
-                            break;
-                        }
-                        Poll::Ready(Err(_)) => {
-                            debug!(
-                                "session {} has been shutdown, message can't send, just drop it",
-                                id
-                            );
-                            events.clear();
-                            break;
-                        }
-                    }
-                }
-                if events.capacity() > events.len() + BUF_SHRINK_THRESHOLD {
-                    events.shrink_to_fit();
-                }
-            } else {
-                debug!("Can't find session {} to send data", id);
-            }
-        }
-
-        data
-    }
-
     /// Distribute event to sessions
     #[inline]
     fn distribute_to_session(&mut self, cx: &mut Context) {
         if self.shutdown.load(Ordering::SeqCst) {
             return;
         }
-        let mut block_sessions = HashSet::new();
-        let high = ::std::mem::replace(&mut self.high_write_buf, HashMap::new());
-        self.high_write_buf =
-            self.distribute_to_session_process(cx, high, Priority::High, &mut block_sessions);
 
-        if self.sessions.len() > block_sessions.len() {
-            let normal = ::std::mem::replace(&mut self.write_buf, HashMap::new());
-            self.write_buf = self.distribute_to_session_process(
-                cx,
-                normal,
-                Priority::Normal,
-                &mut block_sessions,
-            );
-        }
-
-        for id in block_sessions {
-            if let Some(control) = self.sessions.get(&id) {
+        for control in self.sessions.values_mut() {
+            if let SendResult::Pending = control.try_send(cx) {
                 self.handle.handle_error(
                     &mut self.service_context,
                     ServiceError::SessionBlocked {
@@ -657,9 +573,9 @@ where
     }
 
     fn push_session_message(
-        ctx: &SessionController,
+        ctx: &mut SessionController,
         proto_id: ProtocolId,
-        buf: &mut HashMap<SessionId, VecDeque<SessionEvent>>,
+        priority: Priority,
         data: Bytes,
     ) {
         ctx.inner.incr_pending_data_size(data.len());
@@ -668,9 +584,7 @@ where
             proto_id,
             data,
         };
-        buf.entry(ctx.inner.id)
-            .or_default()
-            .push_back(message_event);
+        ctx.push(priority, message_event)
     }
 
     fn handle_message(
@@ -685,15 +599,12 @@ where
             Some(function) => function(data),
             None => data,
         };
-        let buf = match priority {
-            Priority::Normal => &mut self.write_buf,
-            Priority::High => &mut self.high_write_buf,
-        };
+
         match target {
             // Send data to the specified protocol for the specified session.
             TargetSession::Single(id) => {
-                if let Some(control) = self.sessions.get(&id) {
-                    Self::push_session_message(control, proto_id, buf, data)
+                if let Some(control) = self.sessions.get_mut(&id) {
+                    Self::push_session_message(control, proto_id, priority, data);
                 }
             }
             // Send data to the specified protocol for the specified sessions.
@@ -705,8 +616,8 @@ where
                         proto_id,
                         data.len()
                     );
-                    if let Some(control) = self.sessions.get(&id) {
-                        Self::push_session_message(control, proto_id, buf, data.clone())
+                    if let Some(control) = self.sessions.get_mut(&id) {
+                        Self::push_session_message(control, proto_id, priority, data.clone())
                     }
                 }
             }
@@ -718,9 +629,9 @@ where
                     proto_id,
                     data.len()
                 );
-                for control in self.sessions.values() {
+                for control in self.sessions.values_mut() {
                     // Partial-borrowed problem on here
-                    Self::push_session_message(control, proto_id, buf, data.clone())
+                    Self::push_session_message(control, proto_id, priority, data.clone())
                 }
             }
         }
@@ -947,22 +858,21 @@ where
     #[inline]
     fn session_close(&mut self, cx: &mut Context, id: SessionId, source: Source) {
         if source == Source::External {
-            if self.sessions.contains_key(&id) {
+            let need_send = self
+                .sessions
+                .get_mut(&id)
+                .map::<(), _>(|con| {
+                    con.push(Priority::High, SessionEvent::SessionClose { id });
+                })
+                .is_some();
+            if need_send {
                 debug!("try close service session [{}] ", id);
-                self.high_write_buf
-                    .entry(id)
-                    .or_default()
-                    .push_back(SessionEvent::SessionClose { id });
                 self.distribute_to_session(cx);
             }
             return;
         }
 
         debug!("close service session [{}]", id);
-
-        // clean write buffer
-        self.write_buf.remove(&id);
-        self.high_write_buf.remove(&id);
 
         // clean session proto handles sender
         self.session_proto_handles.retain(|key, _| id != key.0);
@@ -994,16 +904,22 @@ where
         source: Source,
     ) {
         if source == Source::External {
-            debug!("try open session [{}] proto [{}]", id, proto_id);
-            if self.sessions.contains_key(&id) {
-                self.high_write_buf
-                    .entry(id)
-                    .or_default()
-                    .push_back(SessionEvent::ProtocolOpen {
-                        id,
-                        proto_id,
-                        version,
-                    });
+            let need_send = self
+                .sessions
+                .get_mut(&id)
+                .map::<(), _>(|con| {
+                    con.push(
+                        Priority::High,
+                        SessionEvent::ProtocolOpen {
+                            id,
+                            proto_id,
+                            version,
+                        },
+                    );
+                })
+                .is_some();
+            if need_send {
+                debug!("try open session [{}] proto [{}]", id, proto_id);
                 self.distribute_to_session(cx);
             }
             return;
@@ -1066,15 +982,23 @@ where
         source: Source,
     ) {
         if source == Source::External {
-            debug!("try close session [{}] proto [{}]", session_id, proto_id);
-            self.high_write_buf
-                .entry(session_id)
-                .or_default()
-                .push_back(SessionEvent::ProtocolClose {
-                    id: session_id,
-                    proto_id,
-                });
-            self.distribute_to_session(cx);
+            let need_send = self
+                .sessions
+                .get_mut(&session_id)
+                .map::<(), _>(|con| {
+                    con.push(
+                        Priority::High,
+                        SessionEvent::ProtocolClose {
+                            id: session_id,
+                            proto_id,
+                        },
+                    );
+                })
+                .is_some();
+            if need_send {
+                debug!("try close session [{}] proto [{}]", session_id, proto_id);
+                self.distribute_to_session(cx);
+            }
             return;
         }
 
@@ -1476,7 +1400,6 @@ where
                     self.service_task_receiver.close();
                     self.session_event_receiver.close();
                     // clean buffer
-                    self.write_buf.clear();
                     self.read_session_buf.clear();
                     self.read_service_buf.clear();
                     self.service_proto_handles.clear();
@@ -1498,13 +1421,9 @@ where
     #[inline]
     fn user_task_poll(&mut self, cx: &mut Context) -> Poll<Option<()>> {
         if self
-            .write_buf
+            .sessions
             .values()
-            .fold(0, |acc, item| acc + item.len())
-            + self
-                .high_write_buf
-                .values()
-                .fold(0, |acc, item| acc + item.len())
+            .fold(0, |acc, item| acc + item.buffer.len())
             > self.config.session_config.send_event_size()
         {
             // The write buffer exceeds the expected range, and no longer receives any event
@@ -1568,9 +1487,7 @@ where
     }
 
     fn flush_buffer(&mut self, cx: &mut Context) {
-        if !self.write_buf.values().all(VecDeque::is_empty)
-            || !self.high_write_buf.values().all(VecDeque::is_empty)
-        {
+        if !self.sessions.values().all(|con| con.buffer.is_empty()) {
             self.distribute_to_session(cx);
         }
         if !self.read_service_buf.values().all(VecDeque::is_empty)
@@ -1655,18 +1572,19 @@ where
         if log_enabled!(log::Level::Debug) {
             debug!(
                 "listens count: {}, state: {:?}, sessions count: {}, \
-             pending task: {}, high_write_buf: {}, write_buf: {}, read_service_buf: {}, read_session_buf: {}",
+             pending task: {}, write_buf: {}, read_service_buf: {}, read_session_buf: {}",
                 self.listens.len(),
                 self.state,
                 self.sessions.len(),
                 self.pending_tasks.len(),
-                self.high_write_buf.values()
+                self.sessions
+                    .values()
+                    .fold(0, |acc, item| acc + item.buffer.len()),
+                self.read_service_buf
+                    .values()
                     .fold(0, |acc, item| acc + item.len()),
-                self.write_buf.values()
-                    .fold(0, |acc, item| acc + item.len()),
-                self.read_service_buf.values()
-                    .fold(0, |acc, item| acc + item.len()),
-                self.read_session_buf.values()
+                self.read_session_buf
+                    .values()
                     .fold(0, |acc, item| acc + item.len()),
             );
         }
