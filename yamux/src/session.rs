@@ -62,8 +62,6 @@ pub struct Session<T> {
 
     // streams maps a stream id to a sender of stream,
     streams: HashMap<StreamId, Sender<Frame>>,
-    // inflight has an entry for any outgoing stream that has not yet been established.
-    inflight: HashSet<StreamId>,
     // The StreamHandle not yet been polled
     pending_streams: VecDeque<StreamHandle>,
     // The buffer which will send to underlying network
@@ -164,7 +162,6 @@ where
             pings: BTreeMap::default(),
             ping_id: 0,
             streams: HashMap::default(),
-            inflight: HashSet::default(),
             pending_streams: VecDeque::default(),
             write_pending_frames: VecDeque::default(),
             read_pending_frames: HashMap::default(),
@@ -243,7 +240,6 @@ where
             Err(Error::RemoteGoAway)
         } else {
             let stream = self.create_stream(None)?;
-            self.inflight.insert(stream.id());
             Ok(stream)
         }
     }
@@ -531,16 +527,9 @@ where
                 self.send_frame(cx, frame)?;
             }
             StreamEvent::StateChanged((stream_id, state)) => {
-                match state {
-                    StreamState::Closed => {
-                        self.streams.remove(&stream_id);
-                        self.read_pending_frames.remove(&stream_id);
-                    }
-                    StreamState::Established => {
-                        self.inflight.remove(&stream_id);
-                    }
-                    // For further functions
-                    _ => {}
+                if let StreamState::Closed = state {
+                    self.streams.remove(&stream_id);
+                    self.read_pending_frames.remove(&stream_id);
                 }
             }
             StreamEvent::Flush(stream_id) => {
