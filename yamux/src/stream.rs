@@ -547,3 +547,113 @@ pub enum StreamState {
     /// Stream rejected by remote
     Reset,
 }
+
+#[cfg(test)]
+mod test {
+    use super::{StreamEvent, StreamHandle, StreamState};
+    use crate::{
+        config::INITIAL_STREAM_WINDOW,
+        frame::{Flag, Flags, Frame},
+    };
+    use bytes::Bytes;
+    use futures::{channel::mpsc::channel, SinkExt};
+    use std::io::ErrorKind;
+    use tokio::{io::AsyncWriteExt, stream::StreamExt};
+
+    #[test]
+    fn test_drop() {
+        let mut rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async {
+            let (event_sender, mut event_receiver) = channel(2);
+            let (_frame_sender, frame_receiver) = channel(2);
+            let stream = StreamHandle::new(
+                0,
+                event_sender,
+                frame_receiver,
+                StreamState::Init,
+                INITIAL_STREAM_WINDOW,
+                INITIAL_STREAM_WINDOW,
+            );
+
+            drop(stream);
+            let event = event_receiver.next().await.unwrap();
+            match event {
+                StreamEvent::Frame(frame) => assert!(frame.flags().contains(Flag::Rst)),
+                _ => panic!("must be a frame msg contain RST"),
+            }
+            let event = event_receiver.next().await.unwrap();
+            match event {
+                StreamEvent::StateChanged((_, state)) => assert_eq!(state, StreamState::Closed),
+                _ => panic!("must be state change"),
+            }
+        });
+    }
+
+    #[test]
+    fn test_drop_with_state_reset() {
+        let mut rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async {
+            let (event_sender, mut event_receiver) = channel(2);
+            let (mut frame_sender, frame_receiver) = channel(2);
+            let mut stream = StreamHandle::new(
+                0,
+                event_sender,
+                frame_receiver,
+                StreamState::Init,
+                INITIAL_STREAM_WINDOW,
+                INITIAL_STREAM_WINDOW,
+            );
+
+            let mut flags = Flags::from(Flag::Syn);
+            flags.add(Flag::Rst);
+            let frame = Frame::new_window_update(flags, 0, 0);
+            frame_sender.send(frame).await.unwrap();
+
+            // try poll stream handle, then it will recv RST frame and set self state to reset
+            assert_eq!(
+                stream.write(b"hello").await.unwrap_err().kind(),
+                ErrorKind::BrokenPipe
+            );
+
+            drop(stream);
+            let event = event_receiver.next().await.unwrap();
+            match event {
+                StreamEvent::StateChanged((_, state)) => assert_eq!(state, StreamState::Closed),
+                _ => panic!("must be state change"),
+            }
+        });
+    }
+
+    #[test]
+    fn test_data_large_than_recv_window() {
+        let mut rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async {
+            let (event_sender, mut event_receiver) = channel(2);
+            let (mut frame_sender, frame_receiver) = channel(2);
+            let mut stream = StreamHandle::new(
+                0,
+                event_sender,
+                frame_receiver,
+                StreamState::Init,
+                2,
+                INITIAL_STREAM_WINDOW,
+            );
+
+            let flags = Flags::from(Flag::Syn);
+            let frame = Frame::new_data(flags, 0, Bytes::from("1234"));
+            frame_sender.send(frame).await.unwrap();
+
+            // try poll stream handle, then it will recv data frame and return Err
+            assert_eq!(
+                stream.write(b"hello").await.unwrap_err().kind(),
+                ErrorKind::InvalidData
+            );
+
+            let event = event_receiver.next().await.unwrap();
+            match event {
+                StreamEvent::GoAway => (),
+                _ => panic!("must be go away"),
+            }
+        });
+    }
+}
