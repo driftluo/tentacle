@@ -237,9 +237,9 @@ where
             max_frame_length: self.config.max_frame_length,
             timeout: self.config.timeout,
             listen_addr: listen_address,
-            future_task_sender: self.future_task_sender.sender(),
+            future_task_sender: self.future_task_sender.clone_sender(),
         };
-        let mut sender = self.future_task_sender.sender();
+        let mut sender = self.future_task_sender.clone_sender();
         tokio::spawn(async move {
             let res = sender
                 .send(Box::pin(listener.for_each(|_| future::ready(()))))
@@ -454,7 +454,10 @@ where
                         receiver,
                         (*proto_id, meta.blocking_flag()),
                         self.session_event_sender.clone(),
-                        (self.shutdown.clone(), self.future_task_sender.sender()),
+                        (
+                            self.shutdown.clone(),
+                            self.future_task_sender.clone_sender(),
+                        ),
                     );
                     let (sender, receiver) = futures::channel::oneshot::channel();
                     let handle = tokio::spawn(async move {
@@ -467,21 +470,6 @@ where
             }
         }
         handles
-    }
-
-    fn push_session_message(
-        ctx: &mut SessionController,
-        proto_id: ProtocolId,
-        priority: Priority,
-        data: Bytes,
-    ) {
-        ctx.inner.incr_pending_data_size(data.len());
-        let message_event = SessionEvent::ProtocolMessage {
-            id: ctx.inner.id,
-            proto_id,
-            data,
-        };
-        ctx.push(priority, message_event)
     }
 
     fn handle_message(
@@ -501,7 +489,7 @@ where
             // Send data to the specified protocol for the specified session.
             TargetSession::Single(id) => {
                 if let Some(control) = self.sessions.get_mut(&id) {
-                    Self::push_session_message(control, proto_id, priority, data);
+                    control.push_message(proto_id, priority, data);
                 }
             }
             // Send data to the specified protocol for the specified sessions.
@@ -514,7 +502,7 @@ where
                         data.len()
                     );
                     if let Some(control) = self.sessions.get_mut(&id) {
-                        Self::push_session_message(control, proto_id, priority, data.clone())
+                        control.push_message(proto_id, priority, data.clone())
                     }
                 }
             }
@@ -527,8 +515,7 @@ where
                     data.len()
                 );
                 for control in self.sessions.values_mut() {
-                    // Partial-borrowed problem on here
-                    Self::push_session_message(control, proto_id, priority, data.clone())
+                    control.push_message(proto_id, priority, data.clone())
                 }
             }
         }
@@ -557,7 +544,7 @@ where
         }
         .handshake(socket);
 
-        let mut future_task_sender = self.future_task_sender.sender();
+        let mut future_task_sender = self.future_task_sender.clone_sender();
 
         tokio::spawn(async move {
             if future_task_sender
@@ -720,7 +707,7 @@ where
             self.session_event_sender.clone(),
             service_event_receiver,
             meta,
-            self.future_task_sender.sender(),
+            self.future_task_sender.clone_sender(),
         );
 
         if ty.is_outbound() {
@@ -755,14 +742,8 @@ where
     #[inline]
     fn session_close(&mut self, cx: &mut Context, id: SessionId, source: Source) {
         if source == Source::External {
-            let need_send = self
-                .sessions
-                .get_mut(&id)
-                .map::<(), _>(|con| {
-                    con.push(Priority::High, SessionEvent::SessionClose { id });
-                })
-                .is_some();
-            if need_send {
+            if let Some(control) = self.sessions.get_mut(&id) {
+                control.push(Priority::High, SessionEvent::SessionClose { id });
                 debug!("try close service session [{}] ", id);
                 self.distribute_to_session(cx);
             }
@@ -796,21 +777,15 @@ where
         source: Source,
     ) {
         if source == Source::External {
-            let need_send = self
-                .sessions
-                .get_mut(&id)
-                .map::<(), _>(|con| {
-                    con.push(
-                        Priority::High,
-                        SessionEvent::ProtocolOpen {
-                            id,
-                            proto_id,
-                            version,
-                        },
-                    );
-                })
-                .is_some();
-            if need_send {
+            if let Some(control) = self.sessions.get_mut(&id) {
+                control.push(
+                    Priority::High,
+                    SessionEvent::ProtocolOpen {
+                        id,
+                        proto_id,
+                        version,
+                    },
+                );
                 debug!("try open session [{}] proto [{}]", id, proto_id);
                 self.distribute_to_session(cx);
             }
@@ -874,20 +849,14 @@ where
         source: Source,
     ) {
         if source == Source::External {
-            let need_send = self
-                .sessions
-                .get_mut(&session_id)
-                .map::<(), _>(|con| {
-                    con.push(
-                        Priority::High,
-                        SessionEvent::ProtocolClose {
-                            id: session_id,
-                            proto_id,
-                        },
-                    );
-                })
-                .is_some();
-            if need_send {
+            if let Some(control) = self.sessions.get_mut(&session_id) {
+                control.push(
+                    Priority::High,
+                    SessionEvent::ProtocolClose {
+                        id: session_id,
+                        proto_id,
+                    },
+                );
                 debug!("try close session [{}] proto [{}]", session_id, proto_id);
                 self.distribute_to_session(cx);
             }
@@ -939,7 +908,10 @@ where
                     receiver,
                     (*proto_id, meta.blocking_flag()),
                     self.session_event_sender.clone(),
-                    (self.shutdown.clone(), self.future_task_sender.sender()),
+                    (
+                        self.shutdown.clone(),
+                        self.future_task_sender.clone_sender(),
+                    ),
                 );
                 stream.handle_event(ServiceProtocolEvent::Init);
                 let (sender, receiver) = futures::channel::oneshot::channel();
@@ -1181,22 +1153,14 @@ where
                 token,
             } => {
                 // TODO: if not contains should call handle_error let user know
-                let need_send = self
-                    .service_proto_handles
-                    .get_mut(&proto_id)
-                    .map(|buffer| buffer.push(ServiceProtocolEvent::SetNotify { interval, token }))
-                    .is_some();
-                if need_send {
+                if let Some(buffer) = self.service_proto_handles.get_mut(&proto_id) {
+                    buffer.push(ServiceProtocolEvent::SetNotify { interval, token });
                     self.distribute_to_user_level(cx);
                 }
             }
             ServiceTask::RemoveProtocolNotify { proto_id, token } => {
-                let need_send = self
-                    .service_proto_handles
-                    .get_mut(&proto_id)
-                    .map(|buffer| buffer.push(ServiceProtocolEvent::RemoveNotify { token }))
-                    .is_some();
-                if need_send {
+                if let Some(buffer) = self.service_proto_handles.get_mut(&proto_id) {
+                    buffer.push(ServiceProtocolEvent::RemoveNotify { token });
                     self.distribute_to_user_level(cx);
                 }
             }
@@ -1207,12 +1171,8 @@ where
                 token,
             } => {
                 // TODO: if not contains should call handle_error let user know
-                let need_send = self
-                    .session_proto_handles
-                    .get_mut(&(session_id, proto_id))
-                    .map(|buffer| buffer.push(SessionProtocolEvent::SetNotify { interval, token }))
-                    .is_some();
-                if need_send {
+                if let Some(buffer) = self.session_proto_handles.get_mut(&(session_id, proto_id)) {
+                    buffer.push(SessionProtocolEvent::SetNotify { interval, token });
                     self.distribute_to_user_level(cx);
                 }
             }
@@ -1221,12 +1181,8 @@ where
                 proto_id,
                 token,
             } => {
-                let need_send = self
-                    .session_proto_handles
-                    .get_mut(&(session_id, proto_id))
-                    .map(|buffer| buffer.push(SessionProtocolEvent::RemoveNotify { token }))
-                    .is_some();
-                if need_send {
+                if let Some(buffer) = self.session_proto_handles.get_mut(&(session_id, proto_id)) {
+                    buffer.push(SessionProtocolEvent::RemoveNotify { token });
                     self.distribute_to_user_level(cx)
                 }
             }

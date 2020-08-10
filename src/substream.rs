@@ -194,8 +194,8 @@ where
             log::trace!("sub stream poll shutdown err {}", e)
         }
 
-        if self.service_proto_sender.is_some() {
-            let (mut sender, mut events) = self.service_proto_sender.take().unwrap().take();
+        if let Some(ref mut service_proto_sender) = self.service_proto_sender {
+            let (mut sender, mut events) = service_proto_sender.take();
             events.push_back(ServiceProtocolEvent::Disconnected {
                 id: self.context.id,
             });
@@ -207,8 +207,8 @@ where
             });
         }
 
-        if self.session_proto_sender.is_some() {
-            let (mut sender, mut events) = self.session_proto_sender.take().unwrap().take();
+        if let Some(ref mut session_proto_sender) = self.session_proto_sender {
+            let (mut sender, mut events) = session_proto_sender.take();
             events.push_back(SessionProtocolEvent::Closed);
             if self.context.closed.load(Ordering::SeqCst) {
                 events.push_back(SessionProtocolEvent::Disconnected);

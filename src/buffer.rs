@@ -1,11 +1,11 @@
-use crate::channel::mpsc::Sender as priotity_sender;
+use crate::channel::mpsc::Sender as PrioritySender;
 use futures::channel::mpsc::Sender;
 use std::{
     collections::VecDeque,
     task::{Context, Poll},
 };
 
-/// If the buffer capacity is greater than u8 max, shrink it
+/// If the buffer unused capacity is greater than u8 max, shrink it
 const BUF_SHRINK_THRESHOLD: usize = u8::max_value() as usize;
 
 pub enum SendResult {
@@ -15,13 +15,13 @@ pub enum SendResult {
 }
 
 pub struct PriorityBuffer<T> {
-    sender: priotity_sender<T>,
+    sender: PrioritySender<T>,
     high_buffer: VecDeque<T>,
     normal_buffer: VecDeque<T>,
 }
 
 impl<T> PriorityBuffer<T> {
-    pub fn new(sender: priotity_sender<T>) -> Self {
+    pub fn new(sender: PrioritySender<T>) -> Self {
         PriorityBuffer {
             sender,
             high_buffer: VecDeque::default(),
@@ -63,6 +63,7 @@ impl<T> PriorityBuffer<T> {
                             self.high_buffer.push_front(e.into_inner());
                             return SendResult::Pending;
                         } else {
+                            self.clear();
                             return SendResult::Disconnect;
                         }
                     }
@@ -72,7 +73,7 @@ impl<T> PriorityBuffer<T> {
                     return SendResult::Pending;
                 }
                 Poll::Ready(Err(_)) => {
-                    self.high_buffer.clear();
+                    self.clear();
                     return SendResult::Disconnect;
                 }
             }
@@ -85,6 +86,7 @@ impl<T> PriorityBuffer<T> {
                             self.normal_buffer.push_front(e.into_inner());
                             return SendResult::Pending;
                         } else {
+                            self.clear();
                             return SendResult::Disconnect;
                         }
                     }
@@ -94,13 +96,18 @@ impl<T> PriorityBuffer<T> {
                     return SendResult::Pending;
                 }
                 Poll::Ready(Err(_)) => {
-                    self.normal_buffer.clear();
+                    self.clear();
                     return SendResult::Disconnect;
                 }
             }
         }
         self.shrink_to_fit();
         SendResult::Ok
+    }
+
+    pub fn clear(&mut self) {
+        self.high_buffer.clear();
+        self.normal_buffer.clear();
     }
 }
 
@@ -144,6 +151,7 @@ impl<T> Buffer<T> {
                             self.buffer.push_front(e.into_inner());
                             return SendResult::Pending;
                         } else {
+                            self.clear();
                             return SendResult::Disconnect;
                         }
                     }
@@ -153,7 +161,7 @@ impl<T> Buffer<T> {
                     return SendResult::Pending;
                 }
                 Poll::Ready(Err(_)) => {
-                    self.buffer.clear();
+                    self.clear();
                     return SendResult::Disconnect;
                 }
             }
@@ -166,7 +174,7 @@ impl<T> Buffer<T> {
         (self.sender.clone(), ::std::mem::take(&mut self.buffer))
     }
 
-    pub fn sender(&self) -> Sender<T> {
+    pub fn clone_sender(&self) -> Sender<T> {
         self.sender.clone()
     }
 
@@ -212,8 +220,9 @@ mod test {
         buffer.push_high(1);
         buffer.push_high(2);
         buffer.push_high(3);
-        buffer.push_normal(4);
+        buffer.push_high(4);
         buffer.push_normal(5);
+        buffer.push_normal(6);
 
         let send_1 = |cx: &mut Context<'_>| -> Poll<()> {
             buffer.try_send(cx);
@@ -221,8 +230,8 @@ mod test {
         };
         block_on(poll_fn(send_1));
 
-        assert_eq!(buffer.high_buffer, VecDeque::from(vec![3]));
-        assert_eq!(buffer.normal_buffer, VecDeque::from(vec![4, 5]));
+        assert_eq!(buffer.high_buffer, VecDeque::from(vec![3, 4]));
+        assert_eq!(buffer.normal_buffer, VecDeque::from(vec![5, 6]));
 
         let res: Vec<_> = block_on(async {
             let mut a = Vec::new();
@@ -240,7 +249,25 @@ mod test {
         block_on(poll_fn(send_2));
 
         assert!(buffer.high_buffer.is_empty());
-        assert_eq!(buffer.normal_buffer, VecDeque::from(vec![5]));
+        assert_eq!(buffer.normal_buffer, VecDeque::from(vec![5, 6]));
+
+        let res: Vec<_> = block_on(async {
+            let mut a = Vec::new();
+            a.push(rx.next().await.unwrap().1);
+            a.push(rx.next().await.unwrap().1);
+            a
+        });
+
+        assert_eq!(res, vec![3, 4]);
+
+        let send_3 = |cx: &mut Context<'_>| -> Poll<()> {
+            buffer.try_send(cx);
+            Poll::Ready(())
+        };
+        block_on(poll_fn(send_3));
+
+        assert!(buffer.high_buffer.is_empty());
+        assert!(buffer.normal_buffer.is_empty());
     }
 
     #[test]
