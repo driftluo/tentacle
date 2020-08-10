@@ -1,7 +1,7 @@
 //! The session, can open and manage substreams
 
 use std::{
-    collections::{BTreeMap, HashMap, HashSet, VecDeque},
+    collections::{hash_map::Entry, BTreeMap, HashMap, HashSet, VecDeque},
     io,
     pin::Pin,
     task::{Context, Poll},
@@ -227,9 +227,20 @@ where
     /// GoAway can be used to prevent accepting further
     /// connections. It does not close the underlying conn.
     pub fn send_go_away(&mut self, cx: &mut Context) -> Result<(), io::Error> {
+        self.send_go_away_with_code(cx, GoAwayCode::Normal)
+    }
+
+    fn send_go_away_with_code(
+        &mut self,
+        cx: &mut Context,
+        code: GoAwayCode,
+    ) -> Result<(), io::Error> {
+        // clear all pending write and then send go away to close session
+        self.write_pending_frames.clear();
+        let frame = Frame::new_go_away(code);
+        self.send_frame(cx, frame)?;
         self.local_go_away = true;
-        let frame = Frame::new_go_away(GoAwayCode::Normal);
-        self.send_frame(cx, frame)
+        Ok(())
     }
 
     /// Open a new stream to remote session
@@ -282,7 +293,11 @@ where
             }
         };
         let (frame_sender, frame_receiver) = channel(8);
-        self.streams.entry(stream_id).or_insert(frame_sender);
+
+        match self.streams.entry(stream_id) {
+            Entry::Occupied(_) => return Err(Error::DuplicateStream),
+            Entry::Vacant(entry) => entry.insert(frame_sender),
+        };
         let mut stream = StreamHandle::new(
             stream_id,
             self.event_sender.clone(),
@@ -388,13 +403,16 @@ where
                             "[{:?}] local go away send Reset to remote stream_id={}",
                             self.ty, stream_id
                         );
-                        // TODO: should report error?
                         return Ok(());
                     }
                     debug!("[{:?}] Accept a stream id={}", self.ty, stream_id);
-                    let stream = self
-                        .create_stream(Some(*stream_id))
-                        .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+                    let stream = match self.create_stream(Some(*stream_id)) {
+                        Ok(stream) => stream,
+                        Err(_) => {
+                            self.send_go_away_with_code(cx, GoAwayCode::ProtocolError)?;
+                            return Ok(());
+                        }
+                    };
                     self.pending_streams.push_back(stream);
                 }
                 let (disconnected, next_stream) = {
@@ -537,6 +555,7 @@ where
                 self.flush(cx)?;
                 debug!("[{}] session flushed", stream_id);
             }
+            StreamEvent::GoAway => self.send_go_away_with_code(cx, GoAwayCode::ProtocolError)?,
         }
         Ok(())
     }
