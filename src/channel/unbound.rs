@@ -299,7 +299,7 @@ impl<T> UnboundedSender<T> {
     ///
     /// This method should only be called after `poll_ready` has been used to
     /// verify that the channel is ready to receive a message.
-    pub fn quick_start_send(&mut self, msg: T) -> Result<(), SendError> {
+    pub fn start_quick_send(&mut self, msg: T) -> Result<(), SendError> {
         self.do_send_nb(msg, Priority::High).map_err(|e| e.err)
     }
 
@@ -317,7 +317,7 @@ impl<T> UnboundedSender<T> {
     /// This is an unbounded sender, so this function differs from `Sink::send`
     /// by ensuring the return type reflects that the channel is always ready to
     /// receive messages.
-    pub fn quick_unbounded_send(&self, msg: T) -> Result<(), TrySendError<T>> {
+    pub fn unbounded_quick_send(&self, msg: T) -> Result<(), TrySendError<T>> {
         self.do_send_nb(msg, Priority::High)
     }
 

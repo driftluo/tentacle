@@ -1,4 +1,4 @@
-use crate::channel::mpsc;
+use crate::channel::{mpsc, QuickSinkExt};
 use futures::executor::block_on;
 use futures::future::poll_fn;
 use futures::sink::SinkExt;
@@ -22,9 +22,31 @@ fn sequence() {
     t.join().unwrap();
 }
 
+#[test]
+fn quick_sequence() {
+    let (tx, rx) = mpsc::channel(1);
+
+    let amt = 20;
+    let t = thread::spawn(move || block_on(quick_send_sequence(amt, tx)));
+    let list: Vec<_> = block_on(rx.collect());
+    let mut list = list.into_iter();
+    for i in (1..=amt).rev() {
+        assert_eq!(list.next().map(|item| item.1), Some(i));
+    }
+    assert_eq!(list.next(), None);
+
+    t.join().unwrap();
+}
+
 async fn send_sequence(n: u32, mut sender: mpsc::Sender<u32>) {
     for x in 0..n {
         sender.send(n - x).await.unwrap();
+    }
+}
+
+async fn quick_send_sequence(n: u32, mut sender: mpsc::Sender<u32>) {
+    for x in 0..n {
+        sender.quick_send(n - x).await.unwrap();
     }
 }
 

@@ -16,6 +16,7 @@ pub(crate) mod mpsc {
     pub use super::unbound::{unbounded, UnboundedReceiver, UnboundedSender};
     pub use super::{Priority, SendError, TrySendError};
 }
+pub use sink_impl::QuickSinkExt;
 
 use std::fmt;
 

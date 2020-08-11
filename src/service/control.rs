@@ -74,7 +74,7 @@ impl ServiceControl {
             .unwrap_or_default()
         {
             self.task_sender
-                .quick_unbounded_send(event)
+                .unbounded_quick_send(event)
                 .map_err(|_err| SendErrorKind::BrokenPipe)
         } else {
             self.task_sender.wake();
