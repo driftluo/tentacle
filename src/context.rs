@@ -7,12 +7,13 @@ use std::{
         atomic::{AtomicBool, AtomicUsize, Ordering},
         Arc,
     },
-    task::{Context, Poll},
+    task::Context,
     time::Duration,
 };
 
 use crate::{
-    channel::{mpsc, mpsc::Priority, SendError},
+    buffer::{PriorityBuffer, SendResult},
+    channel::{mpsc, mpsc::Priority},
     error::SendErrorKind,
     multiaddr::Multiaddr,
     protocol_select::ProtocolInfo,
@@ -23,7 +24,7 @@ use crate::{
 };
 
 pub(crate) struct SessionController {
-    event_sender: mpsc::Sender<SessionEvent>,
+    pub(crate) buffer: PriorityBuffer<SessionEvent>,
     pub(crate) inner: Arc<SessionContext>,
 }
 
@@ -33,28 +34,31 @@ impl SessionController {
         inner: Arc<SessionContext>,
     ) -> Self {
         Self {
-            event_sender,
+            buffer: PriorityBuffer::new(event_sender),
             inner,
         }
     }
 
-    pub(crate) fn try_send(
-        &mut self,
-        priority: Priority,
-        event: SessionEvent,
-    ) -> std::result::Result<(), mpsc::TrySendError<SessionEvent>> {
+    pub(crate) fn push(&mut self, priority: Priority, event: SessionEvent) {
         if priority.is_high() {
-            self.event_sender.try_quick_send(event)
+            self.buffer.push_high(event)
         } else {
-            self.event_sender.try_send(event)
+            self.buffer.push_normal(event)
         }
     }
 
-    pub(crate) fn poll_ready(
-        &mut self,
-        cx: &mut Context,
-    ) -> Poll<std::result::Result<(), SendError>> {
-        self.event_sender.poll_ready(cx)
+    pub(crate) fn push_message(&mut self, proto_id: ProtocolId, priority: Priority, data: Bytes) {
+        self.inner.incr_pending_data_size(data.len());
+        let message_event = SessionEvent::ProtocolMessage {
+            id: self.inner.id,
+            proto_id,
+            data,
+        };
+        self.push(priority, message_event)
+    }
+
+    pub(crate) fn try_send(&mut self, cx: &mut Context) -> SendResult {
+        self.buffer.try_send(cx)
     }
 }
 

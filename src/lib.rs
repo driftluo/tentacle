@@ -27,6 +27,8 @@ pub use secio;
 /// Re-pub yamux crate
 pub use yamux;
 
+/// Buffer management in distribution mode
+pub(crate) mod buffer;
 /// Some gadgets that help create a service
 pub mod builder;
 /// Context for Session and Service

@@ -6,7 +6,7 @@ use futures::{
 use log::{debug, error, log_enabled, trace};
 use std::{
     borrow::Cow,
-    collections::{vec_deque::VecDeque, HashMap, HashSet},
+    collections::{HashMap, HashSet},
     pin::Pin,
     sync::{
         atomic::{AtomicBool, AtomicUsize, Ordering},
@@ -17,6 +17,7 @@ use std::{
 use tokio::prelude::{AsyncRead, AsyncWrite};
 
 use crate::{
+    buffer::{Buffer, SendResult},
     channel::{mpsc as priority_mpsc, mpsc::Priority},
     context::{ServiceContext, SessionContext, SessionController},
     error::{DialerErrorKind, ListenErrorKind, ProtocolHandleErrorKind, TransportErrorKind},
@@ -55,8 +56,6 @@ pub use crate::service::{
 };
 use bytes::Bytes;
 
-/// If the buffer capacity is greater than u8 max, shrink it
-pub(crate) const BUF_SHRINK_THRESHOLD: usize = u8::max_value() as usize;
 /// Received from user, aggregate mode
 pub(crate) const RECEIVED_BUFFER_SIZE: usize = 2048;
 /// Use to receive open/close event, no need too large
@@ -89,24 +88,15 @@ pub struct Service<T> {
 
     /// Can be upgrade to list service level protocols
     handle: T,
-    /// The buffer will be prioritized for distribution to session
-    high_write_buf: HashMap<SessionId, VecDeque<SessionEvent>>,
-    /// The buffer which will distribute to sessions
-    write_buf: HashMap<SessionId, VecDeque<SessionEvent>>,
-    /// The buffer which will distribute to service protocol handle
-    read_service_buf: HashMap<ProtocolId, VecDeque<ServiceProtocolEvent>>,
-    /// The buffer which will distribute to session protocol handle
-    read_session_buf: HashMap<(SessionId, ProtocolId), VecDeque<SessionProtocolEvent>>,
 
     // Future task manager
     future_task_manager: Option<FutureTaskManager>,
     // To add a future task
-    // TODO: use this to spawn every task
-    future_task_sender: mpsc::Sender<BoxedFutureTask>,
+    future_task_sender: Buffer<BoxedFutureTask>,
 
-    service_proto_handles: HashMap<ProtocolId, mpsc::Sender<ServiceProtocolEvent>>,
+    service_proto_handles: HashMap<ProtocolId, Buffer<ServiceProtocolEvent>>,
 
-    session_proto_handles: HashMap<(SessionId, ProtocolId), mpsc::Sender<SessionProtocolEvent>>,
+    session_proto_handles: HashMap<(SessionId, ProtocolId), Buffer<SessionProtocolEvent>>,
 
     /// Send events to service, clone to session
     session_event_sender: mpsc::Sender<SessionEvent>,
@@ -117,8 +107,6 @@ pub struct Service<T> {
     service_context: ServiceContext,
     /// External event receiver
     service_task_receiver: priority_mpsc::UnboundedReceiver<ServiceTask>,
-
-    pending_tasks: VecDeque<BoxedFutureTask>,
 
     shutdown: Arc<AtomicBool>,
 
@@ -158,7 +146,7 @@ where
             before_sends: HashMap::default(),
             handle,
             multi_transport: MultiTransport::new(config.timeout),
-            future_task_sender,
+            future_task_sender: Buffer::new(future_task_sender),
             future_task_manager: Some(FutureTaskManager::new(
                 future_task_receiver,
                 shutdown.clone(),
@@ -171,10 +159,6 @@ where
             dial_protocols: HashMap::default(),
             state: State::new(forever),
             next_session: SessionId::default(),
-            high_write_buf: HashMap::default(),
-            write_buf: HashMap::default(),
-            read_service_buf: HashMap::default(),
-            read_session_buf: HashMap::default(),
             session_event_sender,
             session_event_receiver,
             service_context: ServiceContext::new(
@@ -185,7 +169,6 @@ where
             ),
             config,
             service_task_receiver: task_receiver,
-            pending_tasks: VecDeque::default(),
             shutdown,
             wait_handle: Vec::new(),
         }
@@ -254,9 +237,9 @@ where
             max_frame_length: self.config.max_frame_length,
             timeout: self.config.timeout,
             listen_addr: listen_address,
-            future_task_sender: self.future_task_sender.clone(),
+            future_task_sender: self.future_task_sender.clone_sender(),
         };
-        let mut sender = self.future_task_sender.clone();
+        let mut sender = self.future_task_sender.clone_sender();
         tokio::spawn(async move {
             let res = sender
                 .send(Box::pin(listener.for_each(|_| future::ready(()))))
@@ -285,7 +268,7 @@ where
                 error!("Listen address result send back error: {:?}", err);
             }
         };
-        self.pending_tasks.push_back(Box::pin(task));
+        self.future_task_sender.push(Box::pin(task));
         self.state.increase();
         Ok(())
     }
@@ -344,7 +327,7 @@ where
             };
         };
 
-        self.pending_tasks.push_back(Box::pin(task));
+        self.future_task_sender.push(Box::pin(task));
         self.state.increase();
         Ok(())
     }
@@ -359,95 +342,15 @@ where
         self.service_context.control()
     }
 
-    #[inline(always)]
-    fn distribute_to_session_process(
-        &mut self,
-        cx: &mut Context,
-        mut data: HashMap<SessionId, VecDeque<SessionEvent>>,
-        priority: Priority,
-        block_sessions: &mut HashSet<SessionId>,
-    ) -> HashMap<SessionId, VecDeque<SessionEvent>> {
-        for (id, events) in data.iter_mut() {
-            // Guarantee the order in which messages are sent
-            if block_sessions.contains(&id) {
-                continue;
-            }
-
-            if let Some(session) = self.sessions.get_mut(&id) {
-                while let Some(event) = events.pop_front() {
-                    if session.inner.closed.load(Ordering::SeqCst) {
-                        if let SessionEvent::ProtocolMessage { .. } = event {
-                            continue;
-                        }
-                    }
-
-                    match session.poll_ready(cx) {
-                        Poll::Ready(Ok(())) => {
-                            if let Err(e) = session.try_send(priority, event) {
-                                if e.is_full() {
-                                    block_sessions.insert(*id);
-                                    debug!("session [{}] is full", id);
-                                    events.push_front(e.into_inner());
-                                } else {
-                                    debug!(
-                                        "session {} has been shutdown, message can't send, just drop it",
-                                        id
-                                    );
-                                    events.clear();
-                                }
-                                break;
-                            }
-                        }
-                        Poll::Pending => {
-                            block_sessions.insert(*id);
-                            debug!("session [{}] is full", id);
-                            events.push_front(event);
-                            break;
-                        }
-                        Poll::Ready(Err(_)) => {
-                            debug!(
-                                "session {} has been shutdown, message can't send, just drop it",
-                                id
-                            );
-                            events.clear();
-                            break;
-                        }
-                    }
-                }
-                if events.capacity() > events.len() + BUF_SHRINK_THRESHOLD {
-                    events.shrink_to_fit();
-                }
-            } else {
-                debug!("Can't find session {} to send data", id);
-            }
-        }
-
-        data
-    }
-
     /// Distribute event to sessions
     #[inline]
     fn distribute_to_session(&mut self, cx: &mut Context) {
         if self.shutdown.load(Ordering::SeqCst) {
             return;
         }
-        let mut block_sessions = HashSet::new();
-        let high = ::std::mem::replace(&mut self.high_write_buf, HashMap::new());
-        self.high_write_buf =
-            self.distribute_to_session_process(cx, high, Priority::High, &mut block_sessions);
 
-        if self.sessions.len() > block_sessions.len() {
-            let normal = ::std::mem::replace(&mut self.write_buf, HashMap::new());
-            self.write_buf = self.distribute_to_session_process(
-                cx,
-                normal,
-                Priority::Normal,
-                &mut block_sessions,
-            );
-        }
-
-        for id in block_sessions {
-            if let Some(control) = self.sessions.get(&id) {
+        for control in self.sessions.values_mut() {
+            if let SendResult::Pending = control.try_send(cx) {
                 self.handle.handle_error(
                     &mut self.service_context,
                     ServiceError::SessionBlocked {
@@ -466,153 +369,62 @@ where
         }
         let mut error = false;
 
-        let mut buf = ::std::mem::replace(&mut self.read_service_buf, HashMap::new());
-        for (proto_id, events) in buf.iter_mut() {
-            if let Some(sender) = self.service_proto_handles.get_mut(&proto_id) {
-                while let Some(event) = events.pop_front() {
-                    match sender.poll_ready(cx) {
-                        Poll::Ready(Ok(())) => {
-                            if let Err(e) = sender.try_send(event) {
-                                if e.is_full() {
-                                    debug!("service proto [{}] handle is full", proto_id);
-                                    events.push_front(e.into_inner());
-                                    self.proto_handle_error(*proto_id, None);
-                                } else {
-                                    debug!(
-                                        "channel shutdown, service proto [{}] message can't send to user",
-                                        proto_id
-                                    );
-
-                                    error = true;
-                                    self.handle.handle_error(
-                                        &mut self.service_context,
-                                        ServiceError::ProtocolHandleError {
-                                            proto_id: *proto_id,
-                                            error: ProtocolHandleErrorKind::AbnormallyClosed(None),
-                                        },
-                                    );
-                                }
-                                break;
-                            }
-                        }
-                        Poll::Pending => {
-                            debug!("service proto [{}] handle is full", proto_id);
-                            events.push_front(event);
-                            self.proto_handle_error(*proto_id, None);
-                            break;
-                        }
-                        Poll::Ready(Err(_)) => {
-                            debug!(
-                                "channel shutdown, service proto [{}] message can't send to user",
-                                proto_id
-                            );
-
-                            error = true;
-                            self.handle.handle_error(
-                                &mut self.service_context,
-                                ServiceError::ProtocolHandleError {
-                                    proto_id: *proto_id,
-                                    error: ProtocolHandleErrorKind::AbnormallyClosed(None),
-                                },
-                            );
-                            break;
-                        }
-                    }
+        for (proto_id, buffer) in self.service_proto_handles.iter_mut() {
+            match buffer.try_send(cx) {
+                SendResult::Pending => {
+                    let error = ProtocolHandleErrorKind::Block(None);
+                    self.handle.handle_error(
+                        &mut self.service_context,
+                        ServiceError::ProtocolHandleError {
+                            proto_id: *proto_id,
+                            error,
+                        },
+                    );
                 }
-                if events.capacity() > events.len() + BUF_SHRINK_THRESHOLD {
-                    events.shrink_to_fit();
+                SendResult::Ok => (),
+                SendResult::Disconnect => {
+                    error = true;
+                    self.handle.handle_error(
+                        &mut self.service_context,
+                        ServiceError::ProtocolHandleError {
+                            proto_id: *proto_id,
+                            error: ProtocolHandleErrorKind::AbnormallyClosed(None),
+                        },
+                    );
                 }
             }
         }
-        self.read_service_buf = buf;
 
-        let mut buf = ::std::mem::replace(&mut self.read_session_buf, HashMap::new());
-        for ((session_id, proto_id), ref mut events) in buf.iter_mut() {
-            if let Some(sender) = self
-                .session_proto_handles
-                .get_mut(&(*session_id, *proto_id))
-            {
-                while let Some(event) = events.pop_front() {
-                    match sender.poll_ready(cx) {
-                        Poll::Ready(Ok(())) => {
-                            if let Err(e) = sender.try_send(event) {
-                                if e.is_full() {
-                                    debug!(
-                                        "session [{}] proto [{}] handle is full",
-                                        session_id, proto_id
-                                    );
-                                    events.push_front(e.into_inner());
-                                    self.proto_handle_error(*proto_id, Some(*session_id));
-                                } else {
-                                    debug!(
-                                        "channel shutdown, session proto [{}] session [{}] message can't send to user",
-                                        proto_id, session_id
-                                    );
-
-                                    error = true;
-                                    self.handle.handle_error(
-                                        &mut self.service_context,
-                                        ServiceError::ProtocolHandleError {
-                                            proto_id: *proto_id,
-                                            error: ProtocolHandleErrorKind::AbnormallyClosed(Some(
-                                                *session_id,
-                                            )),
-                                        },
-                                    )
-                                }
-                                break;
-                            }
-                        }
-                        Poll::Pending => {
-                            debug!(
-                                "session [{}] proto [{}] handle is full",
-                                session_id, proto_id
-                            );
-                            events.push_front(event);
-                            self.proto_handle_error(*proto_id, Some(*session_id));
-                            break;
-                        }
-                        Poll::Ready(Err(_)) => {
-                            debug!(
-                                "channel shutdown, session proto [{}] session [{}] message can't send to user",
-                                proto_id, session_id
-                            );
-
-                            error = true;
-                            self.handle.handle_error(
-                                &mut self.service_context,
-                                ServiceError::ProtocolHandleError {
-                                    proto_id: *proto_id,
-                                    error: ProtocolHandleErrorKind::AbnormallyClosed(Some(
-                                        *session_id,
-                                    )),
-                                },
-                            );
-                            break;
-                        }
-                    }
+        for ((session_id, proto_id), ref mut buffer) in self.session_proto_handles.iter_mut() {
+            match buffer.try_send(cx) {
+                SendResult::Pending => {
+                    let error = ProtocolHandleErrorKind::Block(Some(*session_id));
+                    self.handle.handle_error(
+                        &mut self.service_context,
+                        ServiceError::ProtocolHandleError {
+                            proto_id: *proto_id,
+                            error,
+                        },
+                    );
                 }
-                if events.capacity() > events.len() + BUF_SHRINK_THRESHOLD {
-                    events.shrink_to_fit();
+                SendResult::Ok => (),
+                SendResult::Disconnect => {
+                    error = true;
+                    self.handle.handle_error(
+                        &mut self.service_context,
+                        ServiceError::ProtocolHandleError {
+                            proto_id: *proto_id,
+                            error: ProtocolHandleErrorKind::AbnormallyClosed(Some(*session_id)),
+                        },
+                    )
                 }
             }
         }
-        self.read_session_buf = buf;
 
         if error {
             // if handle panic, close service
             self.handle_service_task(cx, ServiceTask::Shutdown(false), Priority::High);
         }
-    }
-
-    /// When proto handle channel is full, call here
-    #[inline]
-    fn proto_handle_error(&mut self, proto_id: ProtocolId, session_id: Option<SessionId>) {
-        let error = ProtocolHandleErrorKind::Block(session_id);
-        self.handle.handle_error(
-            &mut self.service_context,
-            ServiceError::ProtocolHandleError { proto_id, error },
-        );
     }
 
     /// Spawn protocol handle
@@ -632,7 +444,8 @@ where
                 if let Some(session_control) = self.sessions.get(&id) {
                     debug!("init session [{}] level proto [{}] handle", id, proto_id);
                     let (sender, receiver) = mpsc::channel(RECEIVED_SIZE);
-                    self.session_proto_handles.insert((id, *proto_id), sender);
+                    self.session_proto_handles
+                        .insert((id, *proto_id), Buffer::new(sender));
 
                     let stream = SessionProtocolStream::new(
                         handle,
@@ -641,7 +454,10 @@ where
                         receiver,
                         (*proto_id, meta.blocking_flag()),
                         self.session_event_sender.clone(),
-                        (self.shutdown.clone(), self.future_task_sender.clone()),
+                        (
+                            self.shutdown.clone(),
+                            self.future_task_sender.clone_sender(),
+                        ),
                     );
                     let (sender, receiver) = futures::channel::oneshot::channel();
                     let handle = tokio::spawn(async move {
@@ -656,23 +472,6 @@ where
         handles
     }
 
-    fn push_session_message(
-        ctx: &SessionController,
-        proto_id: ProtocolId,
-        buf: &mut HashMap<SessionId, VecDeque<SessionEvent>>,
-        data: Bytes,
-    ) {
-        ctx.inner.incr_pending_data_size(data.len());
-        let message_event = SessionEvent::ProtocolMessage {
-            id: ctx.inner.id,
-            proto_id,
-            data,
-        };
-        buf.entry(ctx.inner.id)
-            .or_default()
-            .push_back(message_event);
-    }
-
     fn handle_message(
         &mut self,
         cx: &mut Context,
@@ -685,15 +484,12 @@ where
             Some(function) => function(data),
             None => data,
         };
-        let buf = match priority {
-            Priority::Normal => &mut self.write_buf,
-            Priority::High => &mut self.high_write_buf,
-        };
+
         match target {
             // Send data to the specified protocol for the specified session.
             TargetSession::Single(id) => {
-                if let Some(control) = self.sessions.get(&id) {
-                    Self::push_session_message(control, proto_id, buf, data)
+                if let Some(control) = self.sessions.get_mut(&id) {
+                    control.push_message(proto_id, priority, data);
                 }
             }
             // Send data to the specified protocol for the specified sessions.
@@ -705,8 +501,8 @@ where
                         proto_id,
                         data.len()
                     );
-                    if let Some(control) = self.sessions.get(&id) {
-                        Self::push_session_message(control, proto_id, buf, data.clone())
+                    if let Some(control) = self.sessions.get_mut(&id) {
+                        control.push_message(proto_id, priority, data.clone())
                     }
                 }
             }
@@ -718,9 +514,8 @@ where
                     proto_id,
                     data.len()
                 );
-                for control in self.sessions.values() {
-                    // Partial-borrowed problem on here
-                    Self::push_session_message(control, proto_id, buf, data.clone())
+                for control in self.sessions.values_mut() {
+                    control.push_message(proto_id, priority, data.clone())
                 }
             }
         }
@@ -749,7 +544,7 @@ where
         }
         .handshake(socket);
 
-        let mut future_task_sender = self.future_task_sender.clone();
+        let mut future_task_sender = self.future_task_sender.clone_sender();
 
         tokio::spawn(async move {
             if future_task_sender
@@ -912,7 +707,7 @@ where
             self.session_event_sender.clone(),
             service_event_receiver,
             meta,
-            self.future_task_sender.clone(),
+            self.future_task_sender.clone_sender(),
         );
 
         if ty.is_outbound() {
@@ -947,12 +742,9 @@ where
     #[inline]
     fn session_close(&mut self, cx: &mut Context, id: SessionId, source: Source) {
         if source == Source::External {
-            if self.sessions.contains_key(&id) {
+            if let Some(control) = self.sessions.get_mut(&id) {
+                control.push(Priority::High, SessionEvent::SessionClose { id });
                 debug!("try close service session [{}] ", id);
-                self.high_write_buf
-                    .entry(id)
-                    .or_default()
-                    .push_back(SessionEvent::SessionClose { id });
                 self.distribute_to_session(cx);
             }
             return;
@@ -960,17 +752,8 @@ where
 
         debug!("close service session [{}]", id);
 
-        // clean write buffer
-        self.write_buf.remove(&id);
-        self.high_write_buf.remove(&id);
-
         // clean session proto handles sender
         self.session_proto_handles.retain(|key, _| id != key.0);
-
-        if !self.config.keep_buffer {
-            self.read_session_buf
-                .retain(|&(session_id, _), _| id != session_id);
-        }
 
         if let Some(session_control) = self.sessions.remove(&id) {
             // Service handle processing flow
@@ -994,16 +777,16 @@ where
         source: Source,
     ) {
         if source == Source::External {
-            debug!("try open session [{}] proto [{}]", id, proto_id);
-            if self.sessions.contains_key(&id) {
-                self.high_write_buf
-                    .entry(id)
-                    .or_default()
-                    .push_back(SessionEvent::ProtocolOpen {
+            if let Some(control) = self.sessions.get_mut(&id) {
+                control.push(
+                    Priority::High,
+                    SessionEvent::ProtocolOpen {
                         id,
                         proto_id,
                         version,
-                    });
+                    },
+                );
+                debug!("try open session [{}] proto [{}]", id, proto_id);
                 self.distribute_to_session(cx);
             }
             return;
@@ -1066,15 +849,17 @@ where
         source: Source,
     ) {
         if source == Source::External {
-            debug!("try close session [{}] proto [{}]", session_id, proto_id);
-            self.high_write_buf
-                .entry(session_id)
-                .or_default()
-                .push_back(SessionEvent::ProtocolClose {
-                    id: session_id,
-                    proto_id,
-                });
-            self.distribute_to_session(cx);
+            if let Some(control) = self.sessions.get_mut(&session_id) {
+                control.push(
+                    Priority::High,
+                    SessionEvent::ProtocolClose {
+                        id: session_id,
+                        proto_id,
+                    },
+                );
+                debug!("try close session [{}] proto [{}]", session_id, proto_id);
+                self.distribute_to_session(cx);
+            }
             return;
         }
 
@@ -1097,31 +882,14 @@ where
         self.session_proto_handles.remove(&(session_id, proto_id));
     }
 
-    #[inline(always)]
     fn send_pending_task(&mut self, cx: &mut Context) {
-        while let Some(task) = self.pending_tasks.pop_front() {
-            match self.future_task_sender.poll_ready(cx) {
-                Poll::Ready(Ok(())) => {
-                    if let Err(err) = self.future_task_sender.try_send(task) {
-                        if err.is_full() {
-                            self.pending_tasks.push_front(err.into_inner());
-                            break;
-                        }
-                    }
-                }
-                Poll::Pending => {
-                    self.pending_tasks.push_front(task);
-                    break;
-                }
-                Poll::Ready(Err(_)) => break,
-            }
-        }
+        self.future_task_sender.try_send(cx);
     }
 
     #[inline]
     fn send_future_task(&mut self, cx: &mut Context, task: BoxedFutureTask) {
-        self.pending_tasks.push_back(task);
-        self.send_pending_task(cx);
+        self.future_task_sender.push(task);
+        self.send_pending_task(cx)
     }
 
     fn init_proto_handles(&mut self) {
@@ -1131,7 +899,8 @@ where
             {
                 debug!("init service level [{}] proto handle", proto_id);
                 let (sender, receiver) = mpsc::channel(RECEIVED_SIZE);
-                self.service_proto_handles.insert(*proto_id, sender);
+                self.service_proto_handles
+                    .insert(*proto_id, Buffer::new(sender));
 
                 let mut stream = ServiceProtocolStream::new(
                     handle,
@@ -1139,7 +908,10 @@ where
                     receiver,
                     (*proto_id, meta.blocking_flag()),
                     self.session_event_sender.clone(),
-                    (self.shutdown.clone(), self.future_task_sender.clone()),
+                    (
+                        self.shutdown.clone(),
+                        self.future_task_sender.clone_sender(),
+                    ),
                 );
                 stream.handle_event(ServiceProtocolEvent::Init);
                 let (sender, receiver) = futures::channel::oneshot::channel();
@@ -1168,22 +940,16 @@ where
         let new_listens = self.listens.iter().cloned().collect::<Vec<Multiaddr>>();
         self.service_context.update_listens(new_listens.clone());
 
-        for proto_id in self.service_proto_handles.keys() {
-            self.read_service_buf
-                .entry(*proto_id)
-                .or_default()
-                .push_back(ServiceProtocolEvent::Update {
-                    listen_addrs: new_listens.clone(),
-                });
+        for buffer in self.service_proto_handles.values_mut() {
+            buffer.push(ServiceProtocolEvent::Update {
+                listen_addrs: new_listens.clone(),
+            });
         }
 
-        for (session_id, proto_id) in self.session_proto_handles.keys() {
-            self.read_session_buf
-                .entry((*session_id, *proto_id))
-                .or_default()
-                .push_back(SessionProtocolEvent::Update {
-                    listen_addrs: new_listens.clone(),
-                });
+        for buffer in self.session_proto_handles.values_mut() {
+            buffer.push(SessionProtocolEvent::Update {
+                listen_addrs: new_listens.clone(),
+            });
         }
 
         self.distribute_to_user_level(cx);
@@ -1387,20 +1153,14 @@ where
                 token,
             } => {
                 // TODO: if not contains should call handle_error let user know
-                if self.service_proto_handles.contains_key(&proto_id) {
-                    self.read_service_buf
-                        .entry(proto_id)
-                        .or_default()
-                        .push_back(ServiceProtocolEvent::SetNotify { interval, token });
+                if let Some(buffer) = self.service_proto_handles.get_mut(&proto_id) {
+                    buffer.push(ServiceProtocolEvent::SetNotify { interval, token });
                     self.distribute_to_user_level(cx);
                 }
             }
             ServiceTask::RemoveProtocolNotify { proto_id, token } => {
-                if self.service_proto_handles.contains_key(&proto_id) {
-                    self.read_service_buf
-                        .entry(proto_id)
-                        .or_default()
-                        .push_back(ServiceProtocolEvent::RemoveNotify { token });
+                if let Some(buffer) = self.service_proto_handles.get_mut(&proto_id) {
+                    buffer.push(ServiceProtocolEvent::RemoveNotify { token });
                     self.distribute_to_user_level(cx);
                 }
             }
@@ -1411,14 +1171,8 @@ where
                 token,
             } => {
                 // TODO: if not contains should call handle_error let user know
-                if self
-                    .session_proto_handles
-                    .contains_key(&(session_id, proto_id))
-                {
-                    self.read_session_buf
-                        .entry((session_id, proto_id))
-                        .or_default()
-                        .push_back(SessionProtocolEvent::SetNotify { interval, token });
+                if let Some(buffer) = self.session_proto_handles.get_mut(&(session_id, proto_id)) {
+                    buffer.push(SessionProtocolEvent::SetNotify { interval, token });
                     self.distribute_to_user_level(cx);
                 }
             }
@@ -1427,14 +1181,9 @@ where
                 proto_id,
                 token,
             } => {
-                if self
-                    .session_proto_handles
-                    .contains_key(&(session_id, proto_id))
-                {
-                    self.read_session_buf
-                        .entry((session_id, proto_id))
-                        .or_default()
-                        .push_back(SessionProtocolEvent::RemoveNotify { token });
+                if let Some(buffer) = self.session_proto_handles.get_mut(&(session_id, proto_id)) {
+                    buffer.push(SessionProtocolEvent::RemoveNotify { token });
+                    self.distribute_to_user_level(cx)
                 }
             }
             ServiceTask::ProtocolOpen { session_id, target } => match target {
@@ -1468,7 +1217,7 @@ where
                 if let Some(client) = self.igd_client.as_mut() {
                     client.clear()
                 };
-                self.pending_tasks.clear();
+                self.future_task_sender.clear();
 
                 let sessions = self.sessions.keys().cloned().collect::<Vec<SessionId>>();
 
@@ -1476,9 +1225,6 @@ where
                     self.service_task_receiver.close();
                     self.session_event_receiver.close();
                     // clean buffer
-                    self.write_buf.clear();
-                    self.read_session_buf.clear();
-                    self.read_service_buf.clear();
                     self.service_proto_handles.clear();
                     self.session_proto_handles.clear();
 
@@ -1498,13 +1244,9 @@ where
     #[inline]
     fn user_task_poll(&mut self, cx: &mut Context) -> Poll<Option<()>> {
         if self
-            .write_buf
+            .sessions
             .values()
-            .fold(0, |acc, item| acc + item.len())
-            + self
-                .high_write_buf
-                .values()
-                .fold(0, |acc, item| acc + item.len())
+            .fold(0, |acc, item| acc + item.buffer.len())
             > self.config.session_config.send_event_size()
         {
             // The write buffer exceeds the expected range, and no longer receives any event
@@ -1533,12 +1275,12 @@ where
 
     fn session_poll(&mut self, cx: &mut Context) -> Poll<Option<()>> {
         if self
-            .read_service_buf
+            .service_proto_handles
             .values()
             .fold(0, |acc, item| acc + item.len())
             > self.config.session_config.recv_event_size()
             || self
-                .read_session_buf
+                .session_proto_handles
                 .values()
                 .fold(0, |acc, item| acc + item.len())
                 > self.config.session_config.recv_event_size()
@@ -1568,13 +1310,17 @@ where
     }
 
     fn flush_buffer(&mut self, cx: &mut Context) {
-        if !self.write_buf.values().all(VecDeque::is_empty)
-            || !self.high_write_buf.values().all(VecDeque::is_empty)
-        {
+        if !self.sessions.values().all(|con| con.buffer.is_empty()) {
             self.distribute_to_session(cx);
         }
-        if !self.read_service_buf.values().all(VecDeque::is_empty)
-            || !self.read_session_buf.values().all(VecDeque::is_empty)
+        if !self
+            .service_proto_handles
+            .values()
+            .all(|buffer| buffer.is_empty())
+            || !self
+                .session_proto_handles
+                .values()
+                .all(|buffer| buffer.is_empty())
         {
             self.distribute_to_user_level(cx);
         }
@@ -1613,7 +1359,7 @@ where
         if self.listens.is_empty()
             && self.state.is_shutdown()
             && self.sessions.is_empty()
-            && self.pending_tasks.is_empty()
+            && self.future_task_sender.is_empty()
         {
             debug!("shutdown because all state is empty head");
             self.shutdown.store(true, Ordering::SeqCst);
@@ -1645,7 +1391,7 @@ where
         if self.listens.is_empty()
             && self.state.is_shutdown()
             && self.sessions.is_empty()
-            && self.pending_tasks.is_empty()
+            && self.future_task_sender.is_empty()
         {
             debug!("shutdown because all state is empty tail");
             self.shutdown.store(true, Ordering::SeqCst);
@@ -1655,18 +1401,19 @@ where
         if log_enabled!(log::Level::Debug) {
             debug!(
                 "listens count: {}, state: {:?}, sessions count: {}, \
-             pending task: {}, high_write_buf: {}, write_buf: {}, read_service_buf: {}, read_session_buf: {}",
+             pending task: {}, write_buf: {}, read_service_buf: {}, read_session_buf: {}",
                 self.listens.len(),
                 self.state,
                 self.sessions.len(),
-                self.pending_tasks.len(),
-                self.high_write_buf.values()
+                self.future_task_sender.len(),
+                self.sessions
+                    .values()
+                    .fold(0, |acc, item| acc + item.buffer.len()),
+                self.service_proto_handles
+                    .values()
                     .fold(0, |acc, item| acc + item.len()),
-                self.write_buf.values()
-                    .fold(0, |acc, item| acc + item.len()),
-                self.read_service_buf.values()
-                    .fold(0, |acc, item| acc + item.len()),
-                self.read_session_buf.values()
+                self.session_proto_handles
+                    .values()
                     .fold(0, |acc, item| acc + item.len()),
             );
         }
