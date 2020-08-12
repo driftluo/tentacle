@@ -32,13 +32,17 @@ Detailed introduction: [中文](./docs/introduction_zh.md)/[English](./docs/intr
 
 The API of this project is basically usable. However we still need more tests. PR is welcome.
 
+The codes in the `protocols/` directory are no longer maintained and only used as reference
+
+Feature `flatc` is not recommended and will be removed in the next version.
+
 ## Usage
 
 ### From cargo
 
 ```toml
 [dependencies]
-tentacle = { version = "0.2", features = ["molc"] }
+tentacle = { version = "0.3", features = ["molc"] }
 ```
 
 ### Example

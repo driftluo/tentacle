@@ -1,3 +1,19 @@
+## 0.3.0
+
+### Features
+- Refactor secio to reduce channel overhead(#249, [#23](https://github.com/driftluo/tentacle/pull/23))
+- Split listener from service struct(#238)
+- Implement and replace priority channel(#240, #248)
+- Removal of side-effects of set delay tasks, resulting in significant performance improvements(#241)
+- Rewrite stream poll(#243)
+- Rewrite buffer cache(#244, #251)
+- Remove protocol on service(#239)
+- Add more test
+
+### Bug Fix
+- Fix yamux leak mem(#250)
+- Fix yamux send go away(#247)
+
 ## 0.3.0-alpha.5
 
 ### Features
