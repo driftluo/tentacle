@@ -679,3 +679,167 @@ impl<T> Drop for Session<T> {
         }
     }
 }
+
+#[cfg(test)]
+mod test {
+    use super::Session;
+    use crate::{
+        config::Config,
+        frame::{Flag, Flags, Frame, FrameCodec, GoAwayCode, Type},
+    };
+    use futures::{
+        channel::mpsc::{channel, Receiver, Sender},
+        stream::FusedStream,
+        SinkExt, Stream, StreamExt,
+    };
+    use std::{
+        io,
+        pin::Pin,
+        task::{Context, Poll},
+    };
+    use tokio::{
+        io::AsyncReadExt,
+        prelude::{AsyncRead, AsyncWrite},
+    };
+    use tokio_util::codec::Framed;
+
+    struct MockSocket {
+        sender: Sender<Vec<u8>>,
+        receiver: Receiver<Vec<u8>>,
+        read_buffer: Vec<u8>,
+    }
+
+    impl MockSocket {
+        fn new() -> (Self, Self) {
+            let (tx, rx) = channel(25);
+            let (tx_1, rx_1) = channel(25);
+
+            (
+                MockSocket {
+                    sender: tx,
+                    receiver: rx_1,
+                    read_buffer: Default::default(),
+                },
+                MockSocket {
+                    sender: tx_1,
+                    receiver: rx,
+                    read_buffer: Default::default(),
+                },
+            )
+        }
+    }
+
+    impl AsyncRead for MockSocket {
+        fn poll_read(
+            mut self: Pin<&mut Self>,
+            cx: &mut Context,
+            buf: &mut [u8],
+        ) -> Poll<io::Result<usize>> {
+            loop {
+                if self.receiver.is_terminated() {
+                    break;
+                }
+                match Pin::new(&mut self.receiver).poll_next(cx) {
+                    Poll::Ready(Some(data)) => self.read_buffer.extend(data),
+                    Poll::Ready(None) => {
+                        return Poll::Ready(Err(io::ErrorKind::BrokenPipe.into()));
+                    }
+                    Poll::Pending => break,
+                }
+            }
+
+            let n = ::std::cmp::min(buf.len(), self.read_buffer.len());
+
+            if n == 0 {
+                Poll::Pending
+            } else {
+                buf[..n].copy_from_slice(&self.read_buffer[..n]);
+                self.read_buffer.drain(..n);
+                Poll::Ready(Ok(n))
+            }
+        }
+    }
+
+    impl AsyncWrite for MockSocket {
+        fn poll_write(
+            mut self: Pin<&mut Self>,
+            cx: &mut Context,
+            buf: &[u8],
+        ) -> Poll<io::Result<usize>> {
+            match self.sender.poll_ready(cx) {
+                Poll::Ready(Ok(())) => match self.sender.try_send(buf.to_vec()) {
+                    Ok(_) => Poll::Ready(Ok(buf.len())),
+                    Err(e) => {
+                        if e.is_full() {
+                            Poll::Pending
+                        } else {
+                            Poll::Ready(Err(io::ErrorKind::BrokenPipe.into()))
+                        }
+                    }
+                },
+                Poll::Pending => Poll::Pending,
+                Poll::Ready(Err(_)) => Poll::Ready(Err(io::ErrorKind::BrokenPipe.into())),
+            }
+        }
+
+        fn poll_flush(self: Pin<&mut Self>, _cx: &mut Context) -> Poll<io::Result<()>> {
+            Poll::Ready(Ok(()))
+        }
+
+        fn poll_shutdown(mut self: Pin<&mut Self>, _cx: &mut Context) -> Poll<io::Result<()>> {
+            self.receiver.close();
+            self.sender.close_channel();
+            Poll::Ready(Ok(()))
+        }
+    }
+
+    #[test]
+    fn test_open_exist_stream() {
+        let mut rt = tokio::runtime::Runtime::new().unwrap();
+
+        rt.block_on(async {
+            let (remote, local) = MockSocket::new();
+            let mut config = Config::default();
+            config.enable_keepalive = false;
+
+            let mut session = Session::new_server(local, config);
+
+            tokio::spawn(async move {
+                while let Some(Ok(mut stream)) = session.next().await {
+                    tokio::spawn(async move {
+                        let mut buf = [0; 100];
+                        let _ignore = stream.read(&mut buf).await;
+                    });
+                }
+            });
+
+            let mut client = Framed::new(
+                remote,
+                FrameCodec::default().max_frame_size(config.max_stream_window_size),
+            );
+
+            let next_stream_id = 3;
+            // open stream
+            let frame = Frame::new_window_update(Flags::from(Flag::Syn), next_stream_id, 0);
+            client.send(frame).await.unwrap();
+            // stream window respond
+            assert_eq!(
+                Frame::new_window_update(Flags::from(Flag::Ack), next_stream_id, 0),
+                client.next().await.unwrap().unwrap()
+            );
+
+            // open stream with duplicate stream id
+            let frame = Frame::new_window_update(Flags::from(Flag::Syn), next_stream_id, 0);
+            client.send(frame).await.unwrap();
+
+            // get go away with protocol error
+            let go_away = client.next().await.unwrap().unwrap();
+
+            assert_eq!(go_away.ty(), Type::GoAway);
+            assert_eq!(
+                GoAwayCode::from(go_away.length()),
+                GoAwayCode::ProtocolError
+            )
+        })
+    }
+}

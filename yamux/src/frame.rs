@@ -11,7 +11,7 @@ use crate::{
 };
 
 /// The base message type is frame
-#[derive(Debug)]
+#[derive(Debug, Eq, PartialEq)]
 pub struct Frame {
     header: Header,
     body: Option<Bytes>,
@@ -110,7 +110,7 @@ impl Frame {
 }
 
 /// The frame header
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Header {
     version: u8,
     ty: Type,
