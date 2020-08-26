@@ -1,33 +1,24 @@
-use std::collections::{HashMap, HashSet, VecDeque};
 use std::{
-    pin::Pin,
-    task::{Context, Poll},
+    collections::HashMap,
+    time::{Duration, Instant},
 };
 
-use futures::{
-    channel::mpsc::{channel, Receiver, Sender},
-    prelude::*,
-    stream::FusedStream,
-    Stream,
-};
-use log::{debug, warn};
+use log::{debug, trace, warn};
 use p2p::{
+    bytes::BytesMut,
     context::{ProtocolContext, ProtocolContextMutRef},
-    multiaddr::Multiaddr,
     traits::ServiceProtocol,
-    utils::{is_reachable, multiaddr_to_socketaddr},
     SessionId,
 };
 use rand::seq::SliceRandom;
-use tokio::time::Interval;
 
-use std::time::{Duration, Instant};
-
-const CHECK_INTERVAL: Duration = Duration::from_secs(3);
+pub use addr::{AddressManager, MisbehaveResult, Misbehavior};
+use protocol::{decode, encode, DiscoveryMessage, Node, Nodes};
+use state::{RemoteAddress, SessionState};
 
 mod addr;
 mod protocol;
-mod substream;
+mod state;
 
 #[cfg(feature = "flatc")]
 #[rustfmt::skip]
@@ -44,367 +35,308 @@ mod protocol_generated_verifier;
 #[allow(dead_code)]
 mod protocol_mol;
 
-pub use crate::{
-    addr::{AddrKnown, AddressManager, MisbehaveResult, Misbehavior, RawAddr},
-    protocol::{DiscoveryMessage, Node, Nodes},
-    substream::{Substream, SubstreamKey, SubstreamValue},
-};
-
-use crate::{addr::DEFAULT_MAX_KNOWN, substream::RemoteAddress};
+const CHECK_INTERVAL: Duration = Duration::from_secs(3);
+const ANNOUNCE_THRESHOLD: usize = 10;
+// The maximum number of new addresses to accumulate before announcing.
+const MAX_ADDR_TO_SEND: usize = 1000;
+// The maximum number addresses in on Nodes item
+const MAX_ADDRS: usize = 3;
+// Every 24 hours send announce nodes message
+const ANNOUNCE_INTERVAL: Duration = Duration::from_secs(3600 * 24);
 
 pub struct DiscoveryProtocol<M> {
-    discovery: Option<Discovery<M>>,
-    discovery_handle: DiscoveryHandle,
-    discovery_senders: HashMap<SessionId, Sender<Vec<u8>>>,
+    sessions: HashMap<SessionId, SessionState>,
+    dynamic_query_cycle: Option<Duration>,
+    addr_mgr: M,
+
+    check_interval: Option<Duration>,
 }
 
-impl<M: AddressManager + Unpin> DiscoveryProtocol<M> {
-    pub fn new(discovery: Discovery<M>) -> DiscoveryProtocol<M> {
-        let discovery_handle = discovery.handle();
+impl<M: AddressManager> DiscoveryProtocol<M> {
+    // query_cycle: Information broadcast interval per connection, default 24 hours
+    // check_interval: Global timing check status interval, default 3s
+    pub fn new(
+        addr_mgr: M,
+        query_cycle: Option<Duration>,
+        check_interval: Option<Duration>,
+    ) -> DiscoveryProtocol<M> {
         DiscoveryProtocol {
-            discovery: Some(discovery),
-            discovery_handle,
-            discovery_senders: HashMap::default(),
+            sessions: HashMap::default(),
+            dynamic_query_cycle: query_cycle,
+            check_interval,
+            addr_mgr,
         }
     }
 }
 
-impl<M: AddressManager + Unpin + Send + 'static> ServiceProtocol for DiscoveryProtocol<M> {
+impl<M: AddressManager> ServiceProtocol for DiscoveryProtocol<M> {
     fn init(&mut self, context: &mut ProtocolContext) {
         debug!("protocol [discovery({})]: init", context.proto_id);
-
-        let discovery_task = self
-            .discovery
-            .take()
-            .map(|mut discovery| {
-                debug!("Start discovery future_task");
-                async move {
-                    loop {
-                        if discovery.next().await.is_none() {
-                            warn!("discovery stream shutdown");
-                            break;
-                        }
-                    }
-                }
-                .boxed()
-            })
-            .unwrap();
-        if context.future_task(discovery_task).is_err() {
-            warn!("start discovery fail");
-        };
+        if context
+            .set_service_notify(
+                context.proto_id,
+                self.check_interval.unwrap_or(CHECK_INTERVAL),
+                0,
+            )
+            .is_err()
+        {
+            debug!("set discovery notify fail")
+        }
     }
 
-    fn connected(&mut self, context: ProtocolContextMutRef, _: &str) {
+    fn connected(&mut self, context: ProtocolContextMutRef, _version: &str) {
         let session = context.session;
         debug!(
             "protocol [discovery] open on session [{}], address: [{}], type: [{:?}]",
             session.id, session.address, session.ty
         );
 
-        let (sender, receiver) = channel(8);
-        self.discovery_senders.insert(session.id, sender);
-        let substream = Substream::new(context, receiver);
-        match self.discovery_handle.substream_sender.try_send(substream) {
-            Ok(_) => {
-                debug!("Send substream success");
-            }
-            Err(err) => {
-                // TODO: handle channel is full (wait for poll API?)
-                warn!("Send substream failed : {:?}", err);
-            }
-        }
+        self.sessions.insert(session.id, SessionState::new(context));
     }
 
     fn disconnected(&mut self, context: ProtocolContextMutRef) {
-        self.discovery_senders.remove(&context.session.id);
-        debug!(
-            "protocol [discovery] close on session [{}]",
-            context.session.id
-        );
+        let session = context.session;
+        self.sessions.remove(&session.id);
+        debug!("protocol [discovery] close on session [{}]", session.id);
     }
 
     fn received(&mut self, context: ProtocolContextMutRef, data: bytes::Bytes) {
-        debug!("[received message]: length={}", data.len());
+        let session = context.session;
+        trace!("[received message]: length={}", data.len());
 
-        if let Some(ref mut sender) = self.discovery_senders.get_mut(&context.session.id) {
-            // TODO: handle channel is full (wait for poll API?)
-            if let Err(err) = sender.try_send(data.to_vec()) {
-                if err.is_full() {
-                    warn!("channel is full");
-                } else if err.is_disconnected() {
-                    warn!("channel is disconnected");
-                } else {
-                    warn!("other channel error: {:?}", err);
-                }
-            }
-        }
-    }
-}
+        match decode(&mut BytesMut::from(data.as_ref())) {
+            Some(item) => {
+                match item {
+                    DiscoveryMessage::GetNodes { listen_port, .. } => {
+                        if let Some(state) = self.sessions.get_mut(&session.id) {
+                            if state.received_get_nodes
+                                && self
+                                    .addr_mgr
+                                    .misbehave(session.id, Misbehavior::DuplicateGetNodes)
+                                    .is_disconnect()
+                            {
+                                if context.disconnect(session.id).is_err() {
+                                    debug!("disconnect {:?} send fail", session.id)
+                                }
+                                return;
+                            }
 
-pub struct Discovery<M> {
-    // Default: 5000
-    max_known: usize,
+                            state.received_get_nodes = true;
+                            // must get the item first, otherwise it is possible to load
+                            // the address of peer listen.
+                            let mut items = self.addr_mgr.get_random(2500);
 
-    // Address Manager
-    addr_mgr: M,
+                            // change client random outbound port to client listen port
+                            debug!("listen port: {:?}", listen_port);
+                            if let Some(port) = listen_port {
+                                state.remote_addr.update_port(port);
+                                state.addr_known.insert(state.remote_addr.to_inner());
+                                // add client listen address to manager
+                                if let RemoteAddress::Listen(ref addr) = state.remote_addr {
+                                    self.addr_mgr.add_new_addr(session.id, addr.clone());
+                                }
+                            }
 
-    // The Nodes not yet been yield
-    pending_nodes: VecDeque<(SubstreamKey, SessionId, Nodes)>,
+                            if items.len() > 1000 {
+                                items = items
+                                    .choose_multiple(&mut rand::thread_rng(), 1000)
+                                    .cloned()
+                                    .collect();
+                            }
 
-    // For manage those substreams
-    substreams: HashMap<SubstreamKey, SubstreamValue>,
+                            state.addr_known.extend(items.iter());
 
-    // For add new substream to Discovery
-    substream_sender: Sender<Substream>,
-    // For add new substream to Discovery
-    substream_receiver: Receiver<Substream>,
+                            let items = items
+                                .into_iter()
+                                .map(|addr| Node {
+                                    addresses: vec![addr],
+                                })
+                                .collect::<Vec<_>>();
 
-    dead_keys: HashSet<SubstreamKey>,
+                            let nodes = Nodes {
+                                announce: false,
+                                items,
+                            };
 
-    dynamic_query_cycle: Option<Duration>,
-
-    check_interval: Option<Interval>,
-
-    global_ip_only: bool,
-}
-
-#[derive(Clone)]
-pub struct DiscoveryHandle {
-    pub substream_sender: Sender<Substream>,
-}
-
-impl<M: AddressManager + Unpin> Discovery<M> {
-    /// Query cycle means checking and synchronizing the cycle time of the currently connected node, default is 24 hours
-    pub fn new(addr_mgr: M, query_cycle: Option<Duration>) -> Discovery<M> {
-        let (substream_sender, substream_receiver) = channel(8);
-        Discovery {
-            check_interval: None,
-            max_known: DEFAULT_MAX_KNOWN,
-            addr_mgr,
-            pending_nodes: VecDeque::default(),
-            substreams: HashMap::default(),
-            substream_sender,
-            substream_receiver,
-            dead_keys: HashSet::default(),
-            dynamic_query_cycle: query_cycle,
-            global_ip_only: true,
-        }
-    }
-
-    /// Turning off global ip only mode will allow any ip to be broadcast, default is true
-    pub fn global_ip_only(mut self, global_ip_only: bool) -> Self {
-        self.global_ip_only = global_ip_only;
-        self
-    }
-
-    pub fn addr_mgr(&self) -> &M {
-        &self.addr_mgr
-    }
-
-    pub fn handle(&self) -> DiscoveryHandle {
-        DiscoveryHandle {
-            substream_sender: self.substream_sender.clone(),
-        }
-    }
-
-    fn recv_substreams(&mut self, cx: &mut Context) {
-        loop {
-            if self.substream_receiver.is_terminated() {
-                break;
-            }
-
-            match Pin::new(&mut self.substream_receiver)
-                .as_mut()
-                .poll_next(cx)
-            {
-                Poll::Ready(Some(substream)) => {
-                    let key = substream.key();
-                    debug!("Received a substream: key={:?}", key);
-                    let value = SubstreamValue::new(
-                        key.direction,
-                        substream,
-                        self.max_known,
-                        self.dynamic_query_cycle,
-                    );
-                    self.substreams.insert(key, value);
-                }
-                Poll::Ready(None) => unreachable!(),
-                Poll::Pending => {
-                    debug!("Discovery.substream_receiver Async::NotReady");
-                    break;
-                }
-            }
-        }
-    }
-
-    fn check_interval(&mut self, cx: &mut Context) {
-        if self.check_interval.is_none() {
-            self.check_interval = Some(tokio::time::interval(CHECK_INTERVAL));
-        }
-        let mut interval = self.check_interval.take().unwrap();
-        loop {
-            match Pin::new(&mut interval).as_mut().poll_next(cx) {
-                Poll::Ready(Some(_)) => {}
-                Poll::Ready(None) => {
-                    debug!("Discovery check_interval poll finished");
-                    break;
-                }
-                Poll::Pending => break,
-            }
-        }
-        self.check_interval = Some(interval);
-    }
-
-    fn poll_substreams(&mut self, cx: &mut Context, announce_multiaddrs: &mut Vec<Multiaddr>) {
-        let announce_fn =
-            |announce_multiaddrs: &mut Vec<Multiaddr>, global_ip_only: bool, addr: &Multiaddr| {
-                if !global_ip_only
-                    || multiaddr_to_socketaddr(addr)
-                        .map(|addr| is_reachable(addr.ip()))
-                        .unwrap_or_default()
-                {
-                    announce_multiaddrs.push(addr.clone());
-                }
-            };
-        for (key, value) in self.substreams.iter_mut() {
-            value.check_timer();
-
-            match value.receive_messages(cx, &mut self.addr_mgr) {
-                Ok(Some((session_id, nodes_list))) => {
-                    for nodes in nodes_list {
-                        self.pending_nodes
-                            .push_back((key.clone(), session_id, nodes));
+                            let msg = encode(DiscoveryMessage::Nodes(nodes));
+                            if context.send_message(msg).is_err() {
+                                debug!("{:?} send discovery msg Nodes fail", session.id)
+                            }
+                        }
                     }
-                }
-                Ok(None) => {
-                    // stream close
-                    self.dead_keys.insert(key.clone());
-                }
-                Err(err) => {
-                    debug!("substream {:?} receive messages error: {:?}", key, err);
-                    // remove the substream
-                    self.dead_keys.insert(key.clone());
-                }
-            }
+                    DiscoveryMessage::Nodes(nodes) => {
+                        for item in &nodes.items {
+                            if item.addresses.len() > MAX_ADDRS {
+                                let misbehavior =
+                                    Misbehavior::TooManyAddresses(item.addresses.len());
+                                if self
+                                    .addr_mgr
+                                    .misbehave(session.id, misbehavior)
+                                    .is_disconnect()
+                                {
+                                    if context.disconnect(session.id).is_err() {
+                                        debug!("disconnect {:?} send fail", session.id)
+                                    }
+                                    return;
+                                }
+                            }
+                        }
 
-            match value.send_messages(cx) {
-                Ok(_) => {}
-                Err(err) => {
-                    debug!("substream {:?} send messages error: {:?}", key, err);
-                    // remove the substream
-                    self.dead_keys.insert(key.clone());
-                }
-            }
+                        if let Some(state) = self.sessions.get_mut(&session.id) {
+                            if nodes.announce {
+                                if nodes.items.len() > ANNOUNCE_THRESHOLD {
+                                    warn!("Nodes items more than {}", ANNOUNCE_THRESHOLD);
+                                    let misbehavior = Misbehavior::TooManyItems {
+                                        announce: nodes.announce,
+                                        length: nodes.items.len(),
+                                    };
+                                    if self
+                                        .addr_mgr
+                                        .misbehave(session.id, misbehavior)
+                                        .is_disconnect()
+                                    {
+                                        if context.disconnect(session.id).is_err() {
+                                            debug!("disconnect {:?} send fail", session.id)
+                                        }
+                                        return;
+                                    }
+                                }
 
-            if value.announce {
-                if let RemoteAddress::Listen(ref addr) = value.remote_addr {
-                    announce_fn(announce_multiaddrs, self.global_ip_only, addr)
-                }
-                value.announce = false;
-                value.last_announce = Some(Instant::now());
-            }
-        }
-    }
+                                let addrs = nodes
+                                    .items
+                                    .into_iter()
+                                    .flat_map(|node| node.addresses.into_iter())
+                                    .collect::<Vec<_>>();
 
-    fn remove_dead_stream(&mut self) {
-        let mut dead_addr = Vec::default();
-        for key in self.dead_keys.drain() {
-            if let Some(addr) = self.substreams.remove(&key) {
-                dead_addr.push(RawAddr::from(addr.remote_addr.into_inner()));
-            }
-        }
+                                state.addr_known.extend(addrs.iter());
 
-        if !dead_addr.is_empty() {
-            self.substreams
-                .values_mut()
-                .for_each(|value| value.addr_known.remove(dead_addr.iter()));
-        }
-    }
+                                self.addr_mgr.add_new_addrs(session.id, addrs);
+                                return;
+                            }
 
-    fn send_messages(&mut self, cx: &mut Context) {
-        for (key, value) in self.substreams.iter_mut() {
-            let announce_multiaddrs = value.announce_multiaddrs.split_off(0);
-            if !announce_multiaddrs.is_empty() {
-                let items = announce_multiaddrs
-                    .into_iter()
-                    .map(|addr| Node {
-                        addresses: vec![addr],
-                    })
-                    .collect::<Vec<_>>();
-                let nodes = Nodes {
-                    announce: true,
-                    items,
-                };
-                value
-                    .pending_messages
-                    .push_back(DiscoveryMessage::Nodes(nodes));
-            }
+                            if state.received_nodes {
+                                warn!("already received Nodes(announce=false) message");
+                                if self
+                                    .addr_mgr
+                                    .misbehave(session.id, Misbehavior::DuplicateFirstNodes)
+                                    .is_disconnect()
+                                {
+                                    if context.disconnect(session.id).is_err() {
+                                        debug!("disconnect {:?} send fail", session.id)
+                                    }
+                                    return;
+                                }
+                            }
 
-            match value.send_messages(cx) {
-                Ok(_) => {}
-                Err(err) => {
-                    debug!("substream {:?} send messages error: {:?}", key, err);
-                    // remove the substream
-                    self.dead_keys.insert(key.clone());
-                }
-            }
-        }
-    }
-}
+                            if nodes.items.len() > MAX_ADDR_TO_SEND {
+                                warn!(
+                                    "Too many items (announce=false) length={}",
+                                    nodes.items.len()
+                                );
+                                let misbehavior = Misbehavior::TooManyItems {
+                                    announce: nodes.announce,
+                                    length: nodes.items.len(),
+                                };
 
-impl<M: AddressManager + Unpin> Stream for Discovery<M> {
-    type Item = ();
+                                if self
+                                    .addr_mgr
+                                    .misbehave(session.id, misbehavior)
+                                    .is_disconnect()
+                                {
+                                    if context.disconnect(session.id).is_err() {
+                                        debug!("disconnect {:?} send fail", session.id)
+                                    }
+                                    return;
+                                }
+                            }
 
-    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        debug!("Discovery.poll()");
-        self.recv_substreams(cx);
-        self.check_interval(cx);
+                            let addrs = nodes
+                                .items
+                                .into_iter()
+                                .flat_map(|node| node.addresses.into_iter())
+                                .collect::<Vec<_>>();
 
-        let mut announce_multiaddrs = Vec::new();
+                            state.addr_known.extend(addrs.iter());
+                            state.received_nodes = true;
 
-        self.poll_substreams(cx, &mut announce_multiaddrs);
-
-        self.remove_dead_stream();
-
-        let mut rng = rand::thread_rng();
-        let mut remain_keys = self.substreams.keys().cloned().collect::<Vec<_>>();
-        debug!("announce_multiaddrs: {:?}", announce_multiaddrs);
-        for announce_multiaddr in announce_multiaddrs.into_iter() {
-            let announce_addr = RawAddr::from(announce_multiaddr.clone());
-            remain_keys.shuffle(&mut rng);
-            for i in 0..2 {
-                if let Some(key) = remain_keys.get(i) {
-                    if let Some(value) = self.substreams.get_mut(key) {
-                        debug!(
-                            ">> send {} to: {:?}, contains: {}",
-                            announce_multiaddr,
-                            value.remote_addr,
-                            value.addr_known.contains(&announce_addr)
-                        );
-                        if value.announce_multiaddrs.len() < 10
-                            && !value.addr_known.contains(&announce_addr)
-                        {
-                            value.announce_multiaddrs.push(announce_multiaddr.clone());
-                            value.addr_known.insert(announce_addr);
+                            self.addr_mgr.add_new_addrs(session.id, addrs);
                         }
                     }
                 }
             }
-        }
-
-        self.send_messages(cx);
-
-        match self.pending_nodes.pop_front() {
-            Some((_key, session_id, nodes)) => {
-                let addrs = nodes
-                    .items
-                    .into_iter()
-                    .flat_map(|node| node.addresses.into_iter())
-                    .collect::<Vec<_>>();
-                self.addr_mgr.add_new_addrs(session_id, addrs);
-                Poll::Ready(Some(()))
+            None => {
+                if self
+                    .addr_mgr
+                    .misbehave(session.id, Misbehavior::InvalidData)
+                    .is_disconnect()
+                    && context.disconnect(session.id).is_err()
+                {
+                    debug!("disconnect {:?} send fail", session.id)
+                }
             }
-            None => Poll::Pending,
+        }
+    }
+
+    fn notify(&mut self, context: &mut ProtocolContext, _token: u64) {
+        let now = Instant::now();
+
+        let dynamic_query_cycle = self.dynamic_query_cycle.unwrap_or(ANNOUNCE_INTERVAL);
+        let addr_mgr = &self.addr_mgr;
+
+        // get announce list
+        let announce_list: Vec<_> = self
+            .sessions
+            .iter_mut()
+            .filter_map(|(id, state)| {
+                // send all announce addr to remote
+                state.send_messages(context, *id);
+                // check timer
+                state.check_timer(now, dynamic_query_cycle);
+
+                if state.announce {
+                    state.announce = false;
+                    state.last_announce = Some(now);
+                    if let RemoteAddress::Listen(addr) = &state.remote_addr {
+                        if addr_mgr.is_valid_addr(addr) {
+                            Some(addr.clone())
+                        } else {
+                            None
+                        }
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        if !announce_list.is_empty() {
+            let mut rng = rand::thread_rng();
+            let mut remain_keys = self.sessions.keys().cloned().collect::<Vec<_>>();
+            for announce_multiaddr in announce_list {
+                remain_keys.shuffle(&mut rng);
+                for i in 0..2 {
+                    if let Some(key) = remain_keys.get(i) {
+                        if let Some(value) = self.sessions.get_mut(key) {
+                            trace!(
+                                ">> send {} to: {:?}, contains: {}",
+                                announce_multiaddr,
+                                value.remote_addr,
+                                value.addr_known.contains(&announce_multiaddr)
+                            );
+                            if value.announce_multiaddrs.len() < 10
+                                && !value.addr_known.contains(&announce_multiaddr)
+                            {
+                                value.announce_multiaddrs.push(announce_multiaddr.clone());
+                                value.addr_known.insert(&announce_multiaddr);
+                            }
+                        }
+                    } else {
+                        break;
+                    }
+                }
+            }
         }
     }
 }
