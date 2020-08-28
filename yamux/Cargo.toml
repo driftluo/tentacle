@@ -10,7 +10,7 @@ edition = "2018"
 [dependencies]
 bytes = "0.5.0"
 futures = { version = "0.3.0" }
-tokio = { version = "0.2.0", features = ["time", "io-util", "tcp", "dns"] }
+tokio = { version = "0.2.0", features = ["time", "rt-core"] }
 tokio-util = { version = "0.3.0", features = ["codec"] }
 log = "0.4"
 
@@ -18,3 +18,4 @@ log = "0.4"
 env_logger = "0.6"
 rand = "0.6"
 bytesize = "1"
+tokio = { version = "0.2.0", features = ["time", "dns", "tcp", "io-util"] }
