@@ -18,7 +18,7 @@ no-default-features = true
 [dependencies]
 bytes = "0.5"
 futures = { version = "0.3.0" }
-tokio = { version = "0.2.0", features = ["time", "io-util", "tcp", "dns"] }
+tokio = { version = "0.2.0", features = ["io-util"] }
 tokio-util = { version = "0.3.0", features = ["codec"] }
 log = "0.4.1"
 
@@ -39,6 +39,7 @@ openssl-sys = "0.9"
 [dev-dependencies]
 env_logger = "0.6"
 criterion = "0.3"
+tokio = { version = "0.2.0", features = ["tcp", "rt-core"] }
 
 [features]
 default = []
