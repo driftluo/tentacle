@@ -1,0 +1,448 @@
+use super::{Result, Transport, TransportErrorKind};
+use futures::{
+    channel::mpsc::{channel, Receiver, Sender},
+    future::ok,
+    Sink, SinkExt, Stream, StreamExt, TryFutureExt,
+};
+use log::debug;
+use std::{
+    future::Future,
+    io,
+    pin::Pin,
+    task::{Context, Poll},
+    time::Duration,
+};
+use tokio::{
+    io::{AsyncRead, AsyncWrite},
+    net::{TcpListener, TcpStream},
+};
+use tokio_tungstenite::{
+    accept_async, connect_async,
+    tungstenite::{Error, Message},
+    WebSocketStream,
+};
+
+use crate::{
+    multiaddr::{Multiaddr, Protocol},
+    utils::{dns::DNSResolver, multiaddr_to_socketaddr, socketaddr_to_multiaddr},
+};
+
+/// websocket listen bind
+async fn bind(
+    address: impl Future<Output = Result<Multiaddr>>,
+    timeout: Duration,
+) -> Result<(Multiaddr, WebsocketListener)> {
+    let addr = address.await?;
+    match multiaddr_to_socketaddr(&addr) {
+        Some(socket_address) => {
+            let tcp = TcpListener::bind(&socket_address)
+                .await
+                .map_err(TransportErrorKind::Io)?;
+            let mut listen_addr =
+                socketaddr_to_multiaddr(tcp.local_addr().map_err(TransportErrorKind::Io)?);
+            listen_addr.push(Protocol::Ws);
+
+            Ok((listen_addr, WebsocketListener::new(timeout, tcp)))
+        }
+        None => Err(TransportErrorKind::NotSupported(addr)),
+    }
+}
+
+/// websocket connect
+async fn connect(
+    address: impl Future<Output = Result<Multiaddr>>,
+    timeout: Duration,
+    original: Option<Multiaddr>,
+) -> Result<(Multiaddr, WsStream)> {
+    let addr = address.await?;
+    match multiaddr_to_socketaddr(&addr) {
+        Some(socket_address) => {
+            let url = format!("ws://{}:{}", socket_address.ip(), socket_address.port());
+            match tokio::time::timeout(timeout, connect_async(url)).await {
+                Err(_) => Err(TransportErrorKind::Io(io::ErrorKind::TimedOut.into())),
+                Ok(res) => Ok((original.unwrap_or(addr), {
+                    let (stream, _) = res.map_err(|err| {
+                        if let Error::Io(e) = err {
+                            TransportErrorKind::Io(e)
+                        } else {
+                            TransportErrorKind::Io(io::ErrorKind::ConnectionAborted.into())
+                        }
+                    })?;
+                    WsStream::new(stream)
+                })),
+            }
+        }
+        None => Err(TransportErrorKind::NotSupported(original.unwrap_or(addr))),
+    }
+}
+
+pub struct WsTransport {
+    timeout: Duration,
+}
+
+impl WsTransport {
+    pub fn new(timeout: Duration) -> Self {
+        WsTransport { timeout }
+    }
+}
+
+impl Transport for WsTransport {
+    type ListenFuture = WsListenFuture;
+    type DialFuture = WsDialFuture;
+
+    fn listen(self, address: Multiaddr) -> Result<Self::ListenFuture> {
+        match DNSResolver::new(address.clone()) {
+            Some(dns) => {
+                let task = bind(
+                    dns.map_err(|(multiaddr, io_error)| {
+                        TransportErrorKind::DNSResolverError(multiaddr, io_error)
+                    }),
+                    self.timeout,
+                );
+                Ok(WsListenFuture::new(task))
+            }
+            None => {
+                let task = bind(ok(address), self.timeout);
+                Ok(WsListenFuture::new(task))
+            }
+        }
+    }
+
+    fn dial(self, address: Multiaddr) -> Result<Self::DialFuture> {
+        match DNSResolver::new(address.clone()) {
+            Some(dns) => {
+                // Why do this?
+                // Because here need to save the original address as an index to open the specified protocol.
+                let task = connect(
+                    dns.map_err(|(multiaddr, io_error)| {
+                        TransportErrorKind::DNSResolverError(multiaddr, io_error)
+                    }),
+                    self.timeout,
+                    Some(address),
+                );
+                Ok(WsDialFuture::new(task))
+            }
+            None => {
+                let dial = connect(ok(address), self.timeout, None);
+                Ok(WsDialFuture::new(dial))
+            }
+        }
+    }
+}
+
+type WsListenFutureInner =
+    Pin<Box<dyn Future<Output = Result<(Multiaddr, WebsocketListener)>> + Send>>;
+
+/// websocket listen future
+pub struct WsListenFuture {
+    executed: WsListenFutureInner,
+}
+
+impl WsListenFuture {
+    fn new<T>(executed: T) -> Self
+    where
+        T: Future<Output = Result<(Multiaddr, WebsocketListener)>> + 'static + Send,
+    {
+        WsListenFuture {
+            executed: Box::pin(executed),
+        }
+    }
+}
+
+impl Future for WsListenFuture {
+    type Output = Result<(Multiaddr, WebsocketListener)>;
+
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        self.executed.as_mut().poll(cx)
+    }
+}
+
+type WsDialFutureInner = Pin<Box<dyn Future<Output = Result<(Multiaddr, WsStream)>> + Send>>;
+
+/// websocket dial future
+pub struct WsDialFuture {
+    executed: WsDialFutureInner,
+}
+
+impl WsDialFuture {
+    fn new<T>(executed: T) -> Self
+    where
+        T: Future<Output = Result<(Multiaddr, WsStream)>> + 'static + Send,
+    {
+        WsDialFuture {
+            executed: Box::pin(executed),
+        }
+    }
+}
+
+impl Future for WsDialFuture {
+    type Output = Result<(Multiaddr, WsStream)>;
+
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        self.executed.as_mut().poll(cx)
+    }
+}
+
+#[derive(Debug)]
+pub struct WebsocketListener {
+    inner: TcpListener,
+    timeout: Duration,
+    sender: Sender<(Multiaddr, WsStream)>,
+    pending_stream: Receiver<(Multiaddr, WsStream)>,
+}
+
+impl WebsocketListener {
+    fn new(timeout: Duration, listen: TcpListener) -> Self {
+        let (sender, rx) = channel(24);
+        WebsocketListener {
+            inner: listen,
+            timeout,
+            sender,
+            pending_stream: rx,
+        }
+    }
+
+    fn poll_pending(
+        &mut self,
+        cx: &mut Context,
+    ) -> Poll<Option<std::result::Result<(Multiaddr, WsStream), io::Error>>> {
+        match Pin::new(&mut self.pending_stream).as_mut().poll_next(cx) {
+            Poll::Ready(Some(res)) => Poll::Ready(Some(Ok(res))),
+            Poll::Ready(None) | Poll::Pending => Poll::Pending,
+        }
+    }
+}
+
+impl Stream for WebsocketListener {
+    type Item = std::result::Result<(Multiaddr, WsStream), io::Error>;
+
+    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Option<Self::Item>> {
+        match self.poll_pending(cx) {
+            Poll::Ready(res) => return Poll::Ready(res),
+            Poll::Pending => (),
+        }
+
+        match self.inner.poll_accept(cx)? {
+            Poll::Ready((stream, _)) => match stream.peer_addr() {
+                Ok(remote_address) => {
+                    let timeout = self.timeout;
+                    let mut sender = self.sender.clone();
+                    tokio::spawn(async move {
+                        match tokio::time::timeout(timeout, accept_async(stream)).await {
+                            Err(_) => debug!("accept websocket stream timeout"),
+                            Ok(res) => match res {
+                                Ok(stream) => {
+                                    let mut addr = socketaddr_to_multiaddr(remote_address);
+                                    addr.push(Protocol::Ws);
+                                    if sender.send((addr, WsStream::new(stream))).await.is_err() {
+                                        debug!("receiver closed unexpectedly")
+                                    }
+                                }
+                                Err(err) => {
+                                    debug!("accept websocket stream err: {:?}", err);
+                                }
+                            },
+                        }
+                    });
+                    self.poll_pending(cx)
+                }
+                Err(err) => {
+                    debug!("stream get peer address error: {:?}", err);
+                    Poll::Pending
+                }
+            },
+            Poll::Pending => Poll::Pending,
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct WsStream {
+    inner: WebSocketStream<TcpStream>,
+    recv_buf: Vec<u8>,
+    pending_ping: Option<Vec<u8>>,
+    already_send_close: bool,
+}
+
+impl WsStream {
+    fn new(inner: WebSocketStream<TcpStream>) -> Self {
+        WsStream {
+            inner,
+            recv_buf: Vec::new(),
+            pending_ping: None,
+            already_send_close: false,
+        }
+    }
+
+    fn respond_ping(&mut self, cx: &mut Context) -> io::Result<()> {
+        if self.already_send_close {
+            return Ok(());
+        }
+        match self.pending_ping.take() {
+            Some(data) => {
+                let mut sink = Pin::new(&mut self.inner);
+                match sink.as_mut().poll_ready(cx) {
+                    Poll::Ready(Ok(_)) => {
+                        sink.as_mut()
+                            .start_send(Message::Pong(data))
+                            .map_err::<io::Error, _>(|e| {
+                                debug!("send error: {:?}", e);
+                                Into::into(io::ErrorKind::BrokenPipe)
+                            })?;
+                        let _ignore =
+                            sink.as_mut().poll_flush(cx).map_err::<io::Error, _>(|e| {
+                                debug!("flush error: {:?}", e);
+                                Into::into(io::ErrorKind::BrokenPipe)
+                            })?;
+                        Ok(())
+                    }
+                    Poll::Pending => {
+                        self.pending_ping = Some(data);
+                        Ok(())
+                    }
+                    Poll::Ready(Err(_)) => Err(Into::into(io::ErrorKind::BrokenPipe)),
+                }
+            }
+            None => Ok(()),
+        }
+    }
+
+    #[inline]
+    fn drain(&mut self, buf: &mut [u8]) -> usize {
+        // Return zero if there is no data remaining in the internal buffer.
+        if self.recv_buf.is_empty() {
+            return 0;
+        }
+
+        // calculate number of bytes that we can copy
+        let n = ::std::cmp::min(buf.len(), self.recv_buf.len());
+
+        // Copy data to the output buffer
+        buf[..n].copy_from_slice(self.recv_buf[..n].as_ref());
+
+        // drain n bytes of recv_buf
+        self.recv_buf = self.recv_buf.split_off(n);
+
+        n
+    }
+}
+
+impl AsyncRead for WsStream {
+    fn poll_read(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &mut [u8],
+    ) -> Poll<io::Result<usize>> {
+        self.respond_ping(cx)?;
+
+        // when there is something in recv_buffer
+        let copied = self.drain(buf);
+        if copied > 0 {
+            return Poll::Ready(Ok(copied));
+        }
+
+        match self.inner.poll_next_unpin(cx) {
+            Poll::Ready(Some(Ok(t))) => {
+                let data = match t {
+                    Message::Binary(data) => data,
+                    Message::Close(_) => return Poll::Ready(Err(io::ErrorKind::BrokenPipe.into())),
+                    Message::Ping(data) => {
+                        self.pending_ping = Some(data);
+                        self.respond_ping(cx)?;
+                        Vec::new()
+                    }
+                    Message::Pong(_) => Vec::new(),
+                    Message::Text(_) => Vec::new(),
+                };
+
+                if data.is_empty() {
+                    return Poll::Pending;
+                }
+                // when input buffer is big enough
+                let n = data.len();
+                if buf.len() >= n {
+                    buf[..n].copy_from_slice(data.as_ref());
+                    Poll::Ready(Ok(n))
+                } else {
+                    // fill internal recv buffer
+                    self.recv_buf = data;
+                    // drain for input buffer
+                    let copied = self.drain(buf);
+                    Poll::Ready(Ok(copied))
+                }
+            }
+            Poll::Ready(Some(Err(err))) => {
+                debug!("read from websocket stream error: {:?}", err);
+                Poll::Ready(Err(io::ErrorKind::BrokenPipe.into()))
+            }
+            Poll::Ready(None) => {
+                debug!("connection shutting down");
+                Poll::Ready(Err(io::ErrorKind::BrokenPipe.into()))
+            }
+            Poll::Pending => Poll::Pending,
+        }
+    }
+}
+
+impl AsyncWrite for WsStream {
+    fn poll_write(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &[u8],
+    ) -> Poll<io::Result<usize>> {
+        if self.already_send_close {
+            return Poll::Ready(Err(io::ErrorKind::BrokenPipe.into()));
+        }
+
+        self.respond_ping(cx)?;
+        let mut sink = Pin::new(&mut self.inner);
+        match sink.as_mut().poll_ready(cx) {
+            Poll::Ready(Ok(_)) => {
+                sink.as_mut()
+                    .start_send(Message::Binary(buf.to_vec()))
+                    .map_err::<io::Error, _>(|_| Into::into(io::ErrorKind::BrokenPipe))?;
+                let _ignore = sink
+                    .as_mut()
+                    .poll_flush(cx)
+                    .map_err::<io::Error, _>(|_| Into::into(io::ErrorKind::BrokenPipe))?;
+                Poll::Ready(Ok(buf.len()))
+            }
+            Poll::Pending => Poll::Pending,
+            Poll::Ready(Err(_)) => Poll::Ready(Err(Into::into(io::ErrorKind::BrokenPipe))),
+        }
+    }
+
+    fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        Pin::new(&mut self.inner)
+            .as_mut()
+            .poll_flush(cx)
+            .map_err(|_| io::ErrorKind::BrokenPipe.into())
+    }
+
+    fn poll_shutdown(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        if !self.already_send_close {
+            let mut sink = Pin::new(&mut self.inner);
+            match sink.as_mut().poll_ready(cx) {
+                Poll::Ready(Ok(_)) => {
+                    // send a close message
+                    sink.as_mut()
+                        .start_send(Message::Close(None))
+                        .map_err::<io::Error, _>(|_| Into::into(io::ErrorKind::BrokenPipe))?;
+                    let _ignore = sink
+                        .as_mut()
+                        .poll_flush(cx)
+                        .map_err::<io::Error, _>(|_| Into::into(io::ErrorKind::BrokenPipe))?;
+                    self.already_send_close = true;
+                }
+                Poll::Pending => return Poll::Pending,
+                Poll::Ready(Err(_)) => {
+                    return Poll::Ready(Err(Into::into(io::ErrorKind::BrokenPipe)))
+                }
+            }
+        }
+        Pin::new(&mut self.inner)
+            .as_mut()
+            .poll_close(cx)
+            .map_err(|_| io::ErrorKind::BrokenPipe.into())
+    }
+}

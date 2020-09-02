@@ -1,6 +1,10 @@
-use crate::{error::TransportErrorKind, multiaddr::Multiaddr, utils::socketaddr_to_multiaddr};
+use crate::{
+    error::TransportErrorKind,
+    multiaddr::{Multiaddr, Protocol},
+    utils::socketaddr_to_multiaddr,
+};
 
-use futures::{prelude::Stream, FutureExt};
+use futures::{prelude::Stream, FutureExt, StreamExt};
 use log::debug;
 use std::{
     fmt,
@@ -15,9 +19,13 @@ use tokio::{
     prelude::{AsyncRead, AsyncWrite},
 };
 
-use self::tcp::{TcpDialFuture, TcpListenFuture, TcpTransport};
+use self::{
+    tcp::{TcpDialFuture, TcpListenFuture, TcpTransport},
+    ws::{WebsocketListener, WsDialFuture, WsListenFuture, WsStream, WsTransport},
+};
 
 mod tcp;
+mod ws;
 
 type Result<T> = std::result::Result<T, TransportErrorKind>;
 
@@ -48,22 +56,39 @@ impl Transport for MultiTransport {
     type DialFuture = MultiDialFuture;
 
     fn listen(self, address: Multiaddr) -> Result<Self::ListenFuture> {
-        match TcpTransport::new(self.timeout).listen(address) {
-            Ok(future) => Ok(MultiListenFuture::Tcp(future)),
-            Err(e) => Err(e),
+        match find_type(&address) {
+            TransportType::Tcp => match TcpTransport::new(self.timeout).listen(address) {
+                Ok(future) => Ok(MultiListenFuture::Tcp(future)),
+                Err(e) => Err(e),
+            },
+            TransportType::Ws => match WsTransport::new(self.timeout).listen(address) {
+                Ok(future) => Ok(MultiListenFuture::Ws(future)),
+                Err(e) => Err(e),
+            },
+            TransportType::Wss => Err(TransportErrorKind::NotSupported(address)),
+            TransportType::TLS => Err(TransportErrorKind::NotSupported(address)),
         }
     }
 
     fn dial(self, address: Multiaddr) -> Result<Self::DialFuture> {
-        match TcpTransport::new(self.timeout).dial(address) {
-            Ok(res) => Ok(MultiDialFuture::Tcp(res)),
-            Err(e) => Err(e),
+        match find_type(&address) {
+            TransportType::Tcp => match TcpTransport::new(self.timeout).dial(address) {
+                Ok(res) => Ok(MultiDialFuture::Tcp(res)),
+                Err(e) => Err(e),
+            },
+            TransportType::Ws => match WsTransport::new(self.timeout).dial(address) {
+                Ok(future) => Ok(MultiDialFuture::Ws(future)),
+                Err(e) => Err(e),
+            },
+            TransportType::Wss => Err(TransportErrorKind::NotSupported(address)),
+            TransportType::TLS => Err(TransportErrorKind::NotSupported(address)),
         }
     }
 }
 
 pub enum MultiListenFuture {
     Tcp(TcpListenFuture),
+    Ws(WsListenFuture),
 }
 
 impl Future for MultiListenFuture {
@@ -75,12 +100,17 @@ impl Future for MultiListenFuture {
                 Pin::new(&mut inner.map(|res| res.map(|res| (res.0, MultiIncoming::Tcp(res.1)))))
                     .poll(cx)
             }
+            MultiListenFuture::Ws(inner) => {
+                Pin::new(&mut inner.map(|res| res.map(|res| (res.0, MultiIncoming::Ws(res.1)))))
+                    .poll(cx)
+            }
         }
     }
 }
 
 pub enum MultiDialFuture {
     Tcp(TcpDialFuture),
+    Ws(WsDialFuture),
 }
 
 impl Future for MultiDialFuture {
@@ -92,18 +122,24 @@ impl Future for MultiDialFuture {
                 Pin::new(&mut inner.map(|res| res.map(|res| (res.0, MultiStream::Tcp(res.1)))))
                     .poll(cx)
             }
+            MultiDialFuture::Ws(inner) => Pin::new(
+                &mut inner.map(|res| res.map(|res| (res.0, MultiStream::Ws(Box::new(res.1))))),
+            )
+            .poll(cx),
         }
     }
 }
 
 pub enum MultiStream {
     Tcp(TcpStream),
+    Ws(Box<WsStream>),
 }
 
 impl fmt::Debug for MultiStream {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             MultiStream::Tcp(_) => write!(f, "Tcp stream"),
+            MultiStream::Ws(_) => write!(f, "Websocket stream"),
         }
     }
 }
@@ -116,6 +152,7 @@ impl AsyncRead for MultiStream {
     ) -> Poll<io::Result<usize>> {
         match self.get_mut() {
             MultiStream::Tcp(inner) => Pin::new(inner).poll_read(cx, buf),
+            MultiStream::Ws(inner) => Pin::new(inner).poll_read(cx, buf),
         }
     }
 }
@@ -124,12 +161,14 @@ impl AsyncWrite for MultiStream {
     fn poll_write(self: Pin<&mut Self>, cx: &mut Context, buf: &[u8]) -> Poll<io::Result<usize>> {
         match self.get_mut() {
             MultiStream::Tcp(inner) => Pin::new(inner).poll_write(cx, buf),
+            MultiStream::Ws(inner) => Pin::new(inner).poll_write(cx, buf),
         }
     }
 
     fn poll_flush(self: Pin<&mut Self>, cx: &mut Context) -> Poll<io::Result<()>> {
         match self.get_mut() {
             MultiStream::Tcp(inner) => Pin::new(inner).poll_flush(cx),
+            MultiStream::Ws(inner) => Pin::new(inner).poll_flush(cx),
         }
     }
 
@@ -137,6 +176,7 @@ impl AsyncWrite for MultiStream {
     fn poll_shutdown(self: Pin<&mut Self>, cx: &mut Context) -> Poll<io::Result<()>> {
         match self.get_mut() {
             MultiStream::Tcp(inner) => Pin::new(inner).poll_shutdown(cx),
+            MultiStream::Ws(inner) => Pin::new(inner).poll_shutdown(cx),
         }
     }
 }
@@ -144,6 +184,7 @@ impl AsyncWrite for MultiStream {
 #[derive(Debug)]
 pub enum MultiIncoming {
     Tcp(TcpListener),
+    Ws(WebsocketListener),
 }
 
 impl Stream for MultiIncoming {
@@ -167,6 +208,64 @@ impl Stream for MultiIncoming {
                 },
                 Poll::Pending => Poll::Pending,
             },
+            MultiIncoming::Ws(inner) => match inner.poll_next_unpin(cx)? {
+                Poll::Ready(Some((addr, stream))) => {
+                    Poll::Ready(Some(Ok((addr, MultiStream::Ws(Box::new(stream))))))
+                }
+                Poll::Ready(None) => Poll::Ready(None),
+                Poll::Pending => Poll::Pending,
+            },
         }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum TransportType {
+    Ws,
+    Wss,
+    Tcp,
+    TLS,
+}
+
+pub fn find_type(addr: &Multiaddr) -> TransportType {
+    let mut iter = addr.iter();
+
+    iter.find_map(|proto| {
+        if let Protocol::Ws = proto {
+            Some(TransportType::Ws)
+        } else if let Protocol::Wss = proto {
+            Some(TransportType::Wss)
+        } else if let Protocol::TLS(_) = proto {
+            Some(TransportType::TLS)
+        } else {
+            None
+        }
+    })
+    .unwrap_or(TransportType::Tcp)
+}
+
+#[cfg(test)]
+mod test {
+    use super::{find_type, Protocol, TransportType};
+    use std::borrow::Cow;
+
+    #[test]
+    fn test_find_type() {
+        let mut a = "/ip4/127.0.0.1/tcp/1337/ws".parse().unwrap();
+
+        assert_eq!(find_type(&a), TransportType::Ws);
+
+        a.pop();
+        a.push(Protocol::Wss);
+
+        assert_eq!(find_type(&a), TransportType::Wss);
+
+        a.pop();
+
+        assert_eq!(find_type(&a), TransportType::Tcp);
+
+        a.push(Protocol::TLS(Cow::Owned("/".to_string())));
+
+        assert_eq!(find_type(&a), TransportType::TLS);
     }
 }

@@ -65,7 +65,7 @@ pub(crate) const SEND_SIZE: usize = 512;
 
 type Result<T> = std::result::Result<T, TransportErrorKind>;
 
-/// An abstraction of p2p service, currently only supports TCP protocol
+/// An abstraction of p2p service, currently only supports TCP/websocket protocol
 pub struct Service<T> {
     protocol_configs: HashMap<ProtocolId, ProtocolMeta>,
 
