@@ -305,12 +305,14 @@ impl StreamHandle {
             }
 
             if self.frame_receiver.is_terminated() {
+                self.state = StreamState::RemoteClosing;
                 return Err(Error::SessionShutdown);
             }
 
             match Pin::new(&mut self.frame_receiver).as_mut().poll_next(cx) {
                 Poll::Ready(Some(frame)) => self.handle_frame(cx, frame)?,
                 Poll::Ready(None) => {
+                    self.state = StreamState::RemoteClosing;
                     return Err(Error::SessionShutdown);
                 }
                 Poll::Pending => break,

@@ -355,10 +355,7 @@ where
     fn poll_complete(&mut self, cx: &mut Context) -> Result<bool, io::Error> {
         match Pin::new(&mut self.framed_stream).poll_flush(cx) {
             Poll::Pending => Ok(true),
-            Poll::Ready(res) => {
-                res?;
-                Ok(false)
-            }
+            Poll::Ready(res) => res.map(|_| false),
         }
     }
 
@@ -840,6 +837,52 @@ mod test {
                 GoAwayCode::from(go_away.length()),
                 GoAwayCode::ProtocolError
             )
+        })
+    }
+
+    #[test]
+    fn test_close_session_on_stream_opened() {
+        let mut rt = tokio::runtime::Runtime::new().unwrap();
+
+        rt.block_on(async {
+            let (remote, local) = MockSocket::new();
+            let config = Config::default();
+
+            let mut session = Session::new_server(local, config);
+
+            tokio::spawn(async move {
+                while let Some(Ok(mut stream)) = session.next().await {
+                    tokio::spawn(async move {
+                        let mut buf = [0; 100];
+                        let _ignore = stream.read(&mut buf).await;
+                    });
+                }
+            });
+
+            let mut client = Session::new_server(remote, config);
+
+            let mut control = client.control();
+
+            let mut stream = client.open_stream().unwrap();
+
+            tokio::spawn(async move {
+                loop {
+                    match client.next().await {
+                        Some(Ok(_)) => (),
+                        Some(Err(_)) => {
+                            break;
+                        }
+                        None => {
+                            break;
+                        }
+                    }
+                }
+            });
+            tokio::spawn(async move {
+                control.close().await;
+            });
+            let mut buf = [0; 100];
+            let _ignore = stream.read(&mut buf).await;
         })
     }
 }
