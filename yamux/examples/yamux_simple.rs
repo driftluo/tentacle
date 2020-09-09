@@ -59,8 +59,15 @@ fn run_client() {
         tokio::spawn(async move {
             loop {
                 match session.next().await {
-                    Some(_) => (),
-                    None => break,
+                    Some(Ok(_)) => (),
+                    Some(Err(e)) => {
+                        info!("{}", e);
+                        break;
+                    }
+                    None => {
+                        info!("closed");
+                        break;
+                    }
                 }
             }
         });
