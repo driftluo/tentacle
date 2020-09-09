@@ -16,8 +16,8 @@ const IP6: u32 = 0x29;
 const P2P: u32 = 0x01a5;
 const TCP: u32 = 0x06;
 const TLS: u32 = 0x01c0;
-const WS: u32 = 477;
-const WSS: u32 = 478;
+const WS: u32 = 0x01dd;
+const WSS: u32 = 0x01de;
 
 const SHA256_CODE: u16 = 0x12;
 const SHA256_SIZE: u8 = 32;

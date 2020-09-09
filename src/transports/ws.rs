@@ -217,9 +217,8 @@ impl Stream for WebsocketListener {
     type Item = std::result::Result<(Multiaddr, WsStream), io::Error>;
 
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Option<Self::Item>> {
-        match self.poll_pending(cx) {
-            Poll::Ready(res) => return Poll::Ready(res),
-            Poll::Pending => (),
+        if let Poll::Ready(res) = self.poll_pending(cx) {
+            return Poll::Ready(res);
         }
 
         match self.inner.poll_accept(cx)? {

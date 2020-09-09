@@ -4,7 +4,7 @@ use crate::{
     utils::socketaddr_to_multiaddr,
 };
 
-use futures::{prelude::Stream, FutureExt, StreamExt};
+use futures::{prelude::Stream, FutureExt};
 use log::debug;
 use std::{
     fmt,
@@ -19,12 +19,14 @@ use tokio::{
     prelude::{AsyncRead, AsyncWrite},
 };
 
-use self::{
-    tcp::{TcpDialFuture, TcpListenFuture, TcpTransport},
-    ws::{WebsocketListener, WsDialFuture, WsListenFuture, WsStream, WsTransport},
-};
+use self::tcp::{TcpDialFuture, TcpListenFuture, TcpTransport};
+#[cfg(feature = "ws")]
+use self::ws::{WebsocketListener, WsDialFuture, WsListenFuture, WsStream, WsTransport};
+#[cfg(feature = "ws")]
+use futures::StreamExt;
 
 mod tcp;
+#[cfg(feature = "ws")]
 mod ws;
 
 type Result<T> = std::result::Result<T, TransportErrorKind>;
@@ -61,10 +63,13 @@ impl Transport for MultiTransport {
                 Ok(future) => Ok(MultiListenFuture::Tcp(future)),
                 Err(e) => Err(e),
             },
+            #[cfg(feature = "ws")]
             TransportType::Ws => match WsTransport::new(self.timeout).listen(address) {
                 Ok(future) => Ok(MultiListenFuture::Ws(future)),
                 Err(e) => Err(e),
             },
+            #[cfg(not(feature = "ws"))]
+            TransportType::Ws => Err(TransportErrorKind::NotSupported(address)),
             TransportType::Wss => Err(TransportErrorKind::NotSupported(address)),
             TransportType::TLS => Err(TransportErrorKind::NotSupported(address)),
         }
@@ -76,10 +81,13 @@ impl Transport for MultiTransport {
                 Ok(res) => Ok(MultiDialFuture::Tcp(res)),
                 Err(e) => Err(e),
             },
+            #[cfg(feature = "ws")]
             TransportType::Ws => match WsTransport::new(self.timeout).dial(address) {
                 Ok(future) => Ok(MultiDialFuture::Ws(future)),
                 Err(e) => Err(e),
             },
+            #[cfg(not(feature = "ws"))]
+            TransportType::Ws => Err(TransportErrorKind::NotSupported(address)),
             TransportType::Wss => Err(TransportErrorKind::NotSupported(address)),
             TransportType::TLS => Err(TransportErrorKind::NotSupported(address)),
         }
@@ -88,6 +96,7 @@ impl Transport for MultiTransport {
 
 pub enum MultiListenFuture {
     Tcp(TcpListenFuture),
+    #[cfg(feature = "ws")]
     Ws(WsListenFuture),
 }
 
@@ -100,6 +109,7 @@ impl Future for MultiListenFuture {
                 Pin::new(&mut inner.map(|res| res.map(|res| (res.0, MultiIncoming::Tcp(res.1)))))
                     .poll(cx)
             }
+            #[cfg(feature = "ws")]
             MultiListenFuture::Ws(inner) => {
                 Pin::new(&mut inner.map(|res| res.map(|res| (res.0, MultiIncoming::Ws(res.1)))))
                     .poll(cx)
@@ -110,6 +120,7 @@ impl Future for MultiListenFuture {
 
 pub enum MultiDialFuture {
     Tcp(TcpDialFuture),
+    #[cfg(feature = "ws")]
     Ws(WsDialFuture),
 }
 
@@ -122,6 +133,7 @@ impl Future for MultiDialFuture {
                 Pin::new(&mut inner.map(|res| res.map(|res| (res.0, MultiStream::Tcp(res.1)))))
                     .poll(cx)
             }
+            #[cfg(feature = "ws")]
             MultiDialFuture::Ws(inner) => Pin::new(
                 &mut inner.map(|res| res.map(|res| (res.0, MultiStream::Ws(Box::new(res.1))))),
             )
@@ -132,6 +144,7 @@ impl Future for MultiDialFuture {
 
 pub enum MultiStream {
     Tcp(TcpStream),
+    #[cfg(feature = "ws")]
     Ws(Box<WsStream>),
 }
 
@@ -139,6 +152,7 @@ impl fmt::Debug for MultiStream {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             MultiStream::Tcp(_) => write!(f, "Tcp stream"),
+            #[cfg(feature = "ws")]
             MultiStream::Ws(_) => write!(f, "Websocket stream"),
         }
     }
@@ -152,6 +166,7 @@ impl AsyncRead for MultiStream {
     ) -> Poll<io::Result<usize>> {
         match self.get_mut() {
             MultiStream::Tcp(inner) => Pin::new(inner).poll_read(cx, buf),
+            #[cfg(feature = "ws")]
             MultiStream::Ws(inner) => Pin::new(inner).poll_read(cx, buf),
         }
     }
@@ -161,6 +176,7 @@ impl AsyncWrite for MultiStream {
     fn poll_write(self: Pin<&mut Self>, cx: &mut Context, buf: &[u8]) -> Poll<io::Result<usize>> {
         match self.get_mut() {
             MultiStream::Tcp(inner) => Pin::new(inner).poll_write(cx, buf),
+            #[cfg(feature = "ws")]
             MultiStream::Ws(inner) => Pin::new(inner).poll_write(cx, buf),
         }
     }
@@ -168,6 +184,7 @@ impl AsyncWrite for MultiStream {
     fn poll_flush(self: Pin<&mut Self>, cx: &mut Context) -> Poll<io::Result<()>> {
         match self.get_mut() {
             MultiStream::Tcp(inner) => Pin::new(inner).poll_flush(cx),
+            #[cfg(feature = "ws")]
             MultiStream::Ws(inner) => Pin::new(inner).poll_flush(cx),
         }
     }
@@ -176,6 +193,7 @@ impl AsyncWrite for MultiStream {
     fn poll_shutdown(self: Pin<&mut Self>, cx: &mut Context) -> Poll<io::Result<()>> {
         match self.get_mut() {
             MultiStream::Tcp(inner) => Pin::new(inner).poll_shutdown(cx),
+            #[cfg(feature = "ws")]
             MultiStream::Ws(inner) => Pin::new(inner).poll_shutdown(cx),
         }
     }
@@ -184,6 +202,7 @@ impl AsyncWrite for MultiStream {
 #[derive(Debug)]
 pub enum MultiIncoming {
     Tcp(TcpListener),
+    #[cfg(feature = "ws")]
     Ws(WebsocketListener),
 }
 
@@ -208,6 +227,7 @@ impl Stream for MultiIncoming {
                 },
                 Poll::Pending => Poll::Pending,
             },
+            #[cfg(feature = "ws")]
             MultiIncoming::Ws(inner) => match inner.poll_next_unpin(cx)? {
                 Poll::Ready(Some((addr, stream))) => {
                     Poll::Ready(Some(Ok((addr, MultiStream::Ws(Box::new(stream))))))
