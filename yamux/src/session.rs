@@ -840,6 +840,12 @@ mod test {
         })
     }
 
+    // issue: https://github.com/nervosnetwork/tentacle/issues/259
+    // The reason for the problem is that when the session is closed,
+    // all stream states are not set to `RemoteClosed`
+    //
+    // This test can simulate a stuck state. If it is not set,
+    // the test will remain stuck and cannot be finished.
     #[test]
     fn test_close_session_on_stream_opened() {
         let mut rt = tokio::runtime::Runtime::new().unwrap();
@@ -859,7 +865,7 @@ mod test {
                 }
             });
 
-            let mut client = Session::new_server(remote, config);
+            let mut client = Session::new_client(remote, config);
 
             let mut control = client.control();
 
