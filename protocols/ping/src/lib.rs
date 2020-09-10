@@ -32,7 +32,7 @@ use p2p::{
 use std::{
     collections::HashMap,
     str,
-    time::{Duration, SystemTime, UNIX_EPOCH},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
 const SEND_PING_TOKEN: u64 = 0;
@@ -54,6 +54,7 @@ pub struct PingHandler<T> {
     timeout: Duration,
     connected_session_ids: HashMap<SessionId, PingStatus>,
     callback: T,
+    unix_epoch: Instant,
 }
 
 impl<T> PingHandler<T>
@@ -61,19 +62,25 @@ where
     T: Callback,
 {
     pub fn new(interval: Duration, timeout: Duration, callback: T) -> PingHandler<T> {
+        let now = Instant::now();
         PingHandler {
             interval,
             timeout,
             connected_session_ids: Default::default(),
             callback,
+            unix_epoch: now
+                .checked_sub(
+                    SystemTime::now()
+                        .duration_since(UNIX_EPOCH)
+                        .expect("Convert system time fail"),
+                )
+                .unwrap_or(now),
         }
     }
 }
 
-fn nonce(t: &SystemTime) -> u32 {
-    t.duration_since(UNIX_EPOCH)
-        .map(|dur| dur.as_secs())
-        .unwrap_or_default() as u32
+fn nonce(t: &Instant, unix_epoch: Instant) -> u32 {
+    t.duration_since(unix_epoch).as_secs() as u32
 }
 
 /// PingStatus of a peer
@@ -82,18 +89,19 @@ struct PingStatus {
     /// Are we currently pinging this peer?
     processing: bool,
     /// The time we last send ping to this peer.
-    last_ping: SystemTime,
+    last_ping: Instant,
+    nonce: u32,
 }
 
 impl PingStatus {
     /// A meaningless value, peer must send a pong has same nonce to respond a ping.
     fn nonce(&self) -> u32 {
-        nonce(&self.last_ping)
+        self.nonce
     }
 
     /// Time duration since we last send ping.
     fn elapsed(&self) -> Duration {
-        self.last_ping.elapsed().unwrap_or(Duration::from_secs(0))
+        self.last_ping.elapsed()
     }
 }
 
@@ -125,8 +133,9 @@ where
                 self.connected_session_ids
                     .entry(session.id)
                     .or_insert_with(|| PingStatus {
-                        last_ping: SystemTime::now(),
+                        last_ping: Instant::now(),
                         processing: false,
+                        nonce: 0,
                     });
                 debug!(
                     "proto id [{}] open on session [{}], address: [{}], type: [{:?}], version: {}",
@@ -193,7 +202,9 @@ where
     fn notify(&mut self, context: &mut ProtocolContext, token: u64) {
         match token {
             SEND_PING_TOKEN => {
-                let now = SystemTime::now();
+                let mut now = None;
+                let mut send_nonce = 0;
+                let unix_epoch = self.unix_epoch;
                 let peers: Vec<SessionId> = self
                     .connected_session_ids
                     .iter_mut()
@@ -201,15 +212,30 @@ where
                         if ps.processing {
                             None
                         } else {
-                            ps.processing = true;
-                            ps.last_ping = now;
+                            match now {
+                                Some(t) => {
+                                    ps.last_ping = t;
+                                    if send_nonce == 0 {
+                                        send_nonce = nonce(&t, unix_epoch);
+                                    }
+                                }
+                                None => {
+                                    let t = Instant::now();
+                                    now = Some(t);
+                                    ps.last_ping = t;
+                                    if send_nonce == 0 {
+                                        send_nonce = nonce(&t, unix_epoch);
+                                    }
+                                }
+                            }
+                            ps.nonce = send_nonce;
                             Some(*session_id)
                         }
                     })
                     .collect();
                 if !peers.is_empty() {
                     debug!("start ping peers: {:?}", peers);
-                    let ping_msg = PingMessage::build_ping(nonce(&now));
+                    let ping_msg = PingMessage::build_ping(send_nonce);
                     let proto_id = context.proto_id;
                     if context
                         .filter_broadcast(TargetSession::Multi(peers), proto_id, ping_msg)
@@ -221,13 +247,11 @@ where
             }
             CHECK_TIMEOUT_TOKEN => {
                 let timeout = self.timeout;
-                for id in self.connected_session_ids.iter().filter_map(|(id, ps)| {
-                    if ps.processing && ps.elapsed() >= timeout {
-                        Some(id)
-                    } else {
-                        None
-                    }
-                }) {
+                for (id, _ps) in self
+                    .connected_session_ids
+                    .iter()
+                    .filter(|(_id, ps)| ps.processing && ps.elapsed() >= timeout)
+                {
                     debug!("ping timeout, {:?}", id);
                     self.callback.timeout(context, *id);
                 }
