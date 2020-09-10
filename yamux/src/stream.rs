@@ -4,6 +4,7 @@ use bytes::{Bytes, BytesMut};
 use futures::{
     channel::mpsc::{Receiver, Sender},
     stream::FusedStream,
+    task::AtomicWaker,
     SinkExt, Stream,
 };
 
@@ -42,6 +43,9 @@ pub struct StreamHandle {
     // Receive frame of current stream from parent session
     // (if the sender closed means session closed the stream should close too)
     frame_receiver: Receiver<Frame>,
+
+    // when the cache is sent, a writable notification is issued
+    writeable_wake: AtomicWaker,
 }
 
 impl StreamHandle {
@@ -66,6 +70,7 @@ impl StreamHandle {
             window_update_frame_buf: VecDeque::default(),
             event_sender,
             frame_receiver,
+            writeable_wake: AtomicWaker::new(),
         }
     }
 
@@ -272,7 +277,7 @@ impl StreamHandle {
             // don't care about result here
             let _ignore = Pin::new(self).poll_write(cx, &b);
         } else {
-            cx.waker().wake_by_ref();
+            self.writeable_wake.wake();
         }
         Ok(())
     }
@@ -444,6 +449,9 @@ impl AsyncWrite for StreamHandle {
         );
 
         if self.send_window == 0 {
+            // register writer context waker
+            // when write buf become empty, it can wake the upper layer to write the message again
+            self.writeable_wake.register(cx.waker());
             return Poll::Pending;
         }
         // Allow n = 0, send an empty frame to remote
