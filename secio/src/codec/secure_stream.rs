@@ -121,10 +121,7 @@ where
         let n = ::std::cmp::min(buf.len(), self.recv_buf.len());
 
         // Copy data to the output buffer
-        buf[..n].copy_from_slice(self.recv_buf[..n].as_ref());
-
-        // drain n bytes of recv_buf
-        self.recv_buf = self.recv_buf.split_off(n);
+        buf[..n].copy_from_slice(self.recv_buf.drain(..n).as_slice());
 
         n
     }

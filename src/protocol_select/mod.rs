@@ -250,33 +250,33 @@ mod tests {
         message.name = "test".to_owned();
         message.support_versions = vec!["1.0.0".to_string(), "1.1.1".to_string()];
 
-        let byte = message.clone().encode();
-        assert_eq!(message, ProtocolInfo::decode(&byte).unwrap())
+        let byte = message.clone();
+        assert_eq!(message, ProtocolInfo::decode(&byte.encode()).unwrap())
     }
 
     #[test]
     fn test_select_version() {
-        let a = vec![
+        let test_a = vec![
             "1.0.0".to_string(),
             "1.1.1".to_string(),
             "2.0.0".to_string(),
         ];
-        let b = vec![
+        let test_b = vec![
             "1.0.0".to_string(),
             "2.0.0".to_string(),
             "3.0.0".to_string(),
         ];
-        let c = vec![];
-        let d = vec!["5.0.0".to_string()];
-        let e = vec!["1.0.0".to_string()];
+        let test_c = vec![];
+        let test_d = vec!["5.0.0".to_string()];
+        let test_e = vec!["1.0.0".to_string()];
 
-        assert_eq!(select_version(&b, &a), Some("2.0.0".to_string()));
-        assert_eq!(select_version(&b, &e), Some("1.0.0".to_string()));
-        assert!(select_version(&b, &c).is_none());
-        assert!(select_version(&b, &d).is_none());
-        assert!(select_version(&d, &a).is_none());
-        assert!(select_version(&d, &e).is_none());
-        assert!(select_version(&e, &d).is_none());
+        assert_eq!(select_version(&test_b, &test_a), Some("2.0.0".to_string()));
+        assert_eq!(select_version(&test_b, &test_e), Some("1.0.0".to_string()));
+        assert!(select_version(&test_b, &test_c).is_none());
+        assert!(select_version(&test_b, &test_d).is_none());
+        assert!(select_version(&test_d, &test_a).is_none());
+        assert!(select_version(&test_d, &test_e).is_none());
+        assert!(select_version(&test_e, &test_d).is_none());
     }
 
     fn select_protocol(server: Vec<String>, client: Vec<String>, result: Option<String>) {

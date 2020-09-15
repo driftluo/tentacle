@@ -89,7 +89,8 @@ impl HandshakeContext<()> {
         // Send our proposition with our nonce, public key and supported protocols.
         let mut proposition = Propose::new();
         proposition.rand = nonce.to_vec();
-        proposition.pubkey = public_key.clone().encode();
+        let encode_key = public_key.clone();
+        proposition.pubkey = encode_key.encode();
 
         proposition.exchange = self
             .config
