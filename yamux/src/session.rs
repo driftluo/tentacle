@@ -79,10 +79,6 @@ pub struct Session<T> {
     control_receiver: Receiver<Command>,
 
     keepalive_receiver: Option<Receiver<()>>,
-    /// Last successful send time
-    last_send_success: Instant,
-    /// Last successful read time
-    last_read_success: Instant,
     /// keep alive stop signal
     stop_signal_tx: Option<oneshot::Sender<()>>,
 }
@@ -170,8 +166,6 @@ where
             control_sender,
             control_receiver,
             keepalive_receiver,
-            last_send_success: Instant::now(),
-            last_read_success: Instant::now(),
             stop_signal_tx,
         }
     }
@@ -326,16 +320,10 @@ where
             match sink.as_mut().poll_ready(cx)? {
                 Poll::Ready(()) => {
                     sink.as_mut().start_send(frame)?;
-                    self.last_send_success = Instant::now();
                 }
                 Poll::Pending => {
                     debug!("[{:?}] framed_stream NotReady, frame: {:?}", self.ty, frame);
                     self.write_pending_frames.push_front(frame);
-                    // No message has been sent for 30 seconds,
-                    // we believe the connection is no longer valid
-                    if self.last_send_success.elapsed() > TIMEOUT {
-                        return Err(io::ErrorKind::TimedOut.into());
-                    }
 
                     if self.poll_complete(cx)? {
                         return Ok(true);
@@ -517,7 +505,6 @@ where
         match Pin::new(&mut self.framed_stream).as_mut().poll_next(cx) {
             Poll::Ready(Some(Ok(frame))) => {
                 self.handle_frame(cx, frame)?;
-                self.last_read_success = Instant::now();
                 Poll::Ready(Some(Ok(())))
             }
             Poll::Ready(None) => {
@@ -631,15 +618,6 @@ where
                 }
                 Poll::Pending => break,
             }
-        }
-
-        // Interval broken or Stream error on here, just break this pipe
-        if self.last_read_success.elapsed()
-            > self.config.keepalive_interval + Duration::from_secs(15)
-        {
-            debug!("yamux timeout");
-            self.shutdown(cx)?;
-            return Poll::Ready(Some(Err(io::ErrorKind::TimedOut.into())));
         }
 
         loop {
