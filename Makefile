@@ -20,11 +20,11 @@ fmt:
 	cargo fmt --all -- --check
 
 clippy:
-	RUSTFLAGS='-F warnings' cargo clippy --all --tests --features molc -- -D clippy::let_underscore_must_use
+	RUSTFLAGS='-F warnings' cargo clippy --all --tests --features molc,ws -- -D clippy::let_underscore_must_use
 	RUSTFLAGS='-F warnings' cargo clippy --all --tests --features flatc -- -D clippy::let_underscore_must_use
 
 test:
-	RUSTFLAGS='-F warnings' RUST_BACKTRACE=full cargo test --all --features molc
+	RUSTFLAGS='-F warnings' RUST_BACKTRACE=full cargo test --all --features molc,ws
 	RUSTFLAGS='-F warnings' RUST_BACKTRACE=full cargo test --all --features flatc
 
 examples:

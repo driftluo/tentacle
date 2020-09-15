@@ -26,6 +26,7 @@ tokio-util = { version = "0.3.0", features = ["codec"] }
 log = "0.4"
 bytes = "0.5.0"
 thiserror = "1.0"
+tokio-tungstenite = { version = "0.11", optional = true }
 
 flatbuffers = { version = "0.6.0", optional = true }
 flatbuffers-verifier = { version = "0.2.0", optional = true }
@@ -57,6 +58,7 @@ default = []
 flatc = [ "flatbuffers", "flatbuffers-verifier", "secio/flatc" ]
 # use molecule to handshake
 molc = [ "molecule", "secio/molc" ]
+ws = ["tokio-tungstenite"]
 
 [workspace]
 members = [

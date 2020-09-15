@@ -16,6 +16,8 @@ const IP6: u32 = 0x29;
 const P2P: u32 = 0x01a5;
 const TCP: u32 = 0x06;
 const TLS: u32 = 0x01c0;
+const WS: u32 = 0x01dd;
+const WSS: u32 = 0x01de;
 
 const SHA256_CODE: u16 = 0x12;
 const SHA256_SIZE: u8 = 32;
@@ -30,6 +32,8 @@ pub enum Protocol<'a> {
     P2P(Cow<'a, [u8]>),
     TCP(u16),
     TLS(Cow<'a, str>),
+    Ws,
+    Wss,
 }
 
 impl<'a> Protocol<'a> {
@@ -74,6 +78,8 @@ impl<'a> Protocol<'a> {
                 let s = iter.next().ok_or(Error::InvalidProtocolString)?;
                 Ok(Protocol::TCP(s.parse()?))
             }
+            "ws" => Ok(Protocol::Ws),
+            "wss" => Ok(Protocol::Wss),
             _ => Err(Error::UnknownProtocolString),
         }
     }
@@ -139,6 +145,8 @@ impl<'a> Protocol<'a> {
                 let num = rdr.get_u16();
                 Ok((Protocol::TCP(num), rest))
             }
+            WS => Ok((Protocol::Ws, input)),
+            WSS => Ok((Protocol::Wss, input)),
             _ => Err(Error::UnknownProtocolId(id)),
         }
     }
@@ -186,6 +194,8 @@ impl<'a> Protocol<'a> {
                 w.put(encode::usize(b.len(), &mut encode::usize_buffer()));
                 w.put(&b[..])
             }
+            Protocol::Ws => w.put(encode::u32(WS, &mut buf)),
+            Protocol::Wss => w.put(encode::u32(WSS, &mut buf)),
         }
     }
 
@@ -199,6 +209,8 @@ impl<'a> Protocol<'a> {
             Protocol::TCP(port) => Protocol::TCP(port),
             Protocol::TLS(s) => Protocol::TLS(Cow::Owned(s.into_owned())),
             Protocol::P2P(s) => Protocol::P2P(Cow::Owned(s.into_owned())),
+            Protocol::Ws => Protocol::Ws,
+            Protocol::Wss => Protocol::Wss,
         }
     }
 }
@@ -214,6 +226,8 @@ impl<'a> fmt::Display for Protocol<'a> {
             P2P(c) => write!(f, "/p2p/{}", bs58::encode(c).into_string()),
             TCP(port) => write!(f, "/tcp/{}", port),
             TLS(s) => write!(f, "/tls/{}", s),
+            Ws => write!(f, "/ws"),
+            Wss => write!(f, "/wss"),
         }
     }
 }
