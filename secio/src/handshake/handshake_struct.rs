@@ -312,9 +312,9 @@ mod tests {
     #[test]
     fn decode_encode_pubkey() {
         let raw = SecioKeyPair::secp256k1_generated().public_key();
-        let byte = raw.clone().encode();
+        let byte = raw.clone();
 
-        assert_eq!(raw, PublicKey::decode(&byte).unwrap())
+        assert_eq!(raw, PublicKey::decode(&byte.encode()).unwrap())
     }
 
     #[test]
@@ -324,9 +324,9 @@ mod tests {
         raw.rand = nonce.to_vec();
         raw.pubkey = Bytes::from(vec![25u8; 256]);
 
-        let byte = raw.clone().encode();
+        let byte = raw.clone();
 
-        assert_eq!(raw, Propose::decode(&byte).unwrap())
+        assert_eq!(raw, Propose::decode(&byte.encode()).unwrap())
     }
 
     #[test]
@@ -335,9 +335,9 @@ mod tests {
         raw.signature = vec![1u8; 256];
         raw.epubkey = vec![9u8; 256];
 
-        let byte = raw.clone().encode();
+        let byte = raw.clone();
 
-        assert_eq!(raw, Exchange::decode(&byte).unwrap())
+        assert_eq!(raw, Exchange::decode(&byte.encode()).unwrap())
     }
 
     #[test]
