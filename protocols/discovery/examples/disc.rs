@@ -17,9 +17,7 @@ use p2p::{
     ProtocolId, SessionId,
 };
 
-use tentacle_discovery::{
-    AddressManager, Discovery, DiscoveryProtocol, MisbehaveResult, Misbehavior,
-};
+use tentacle_discovery::{AddressManager, DiscoveryProtocol, MisbehaveResult, Misbehavior};
 
 fn main() {
     env_logger::init();
@@ -77,9 +75,11 @@ fn create_meta(id: ProtocolId, start: u16) -> ProtocolMeta {
     MetaBuilder::default()
         .id(id)
         .service_handle(move || {
-            let discovery =
-                Discovery::new(addr_mgr, Some(Duration::from_secs(7))).global_ip_only(false);
-            ProtocolHandle::Callback(Box::new(DiscoveryProtocol::new(discovery)))
+            ProtocolHandle::Callback(Box::new(DiscoveryProtocol::new(
+                addr_mgr,
+                Some(Duration::from_secs(7)),
+                None,
+            )))
         })
         .build()
 }
@@ -102,6 +102,9 @@ pub struct SimpleAddressManager {
 }
 
 impl AddressManager for SimpleAddressManager {
+    fn is_valid_addr(&self, _addr: &Multiaddr) -> bool {
+        true
+    }
     fn add_new_addr(&mut self, session_id: SessionId, addr: Multiaddr) {
         log::info!("{:?}", addr);
         let (_, addrs) = self

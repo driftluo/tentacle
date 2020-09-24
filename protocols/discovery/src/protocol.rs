@@ -3,7 +3,7 @@ compile_error!("features `flatc` and `molc` are mutually exclusive");
 #[cfg(all(not(feature = "flatc"), not(feature = "molc")))]
 compile_error!("Please choose a serialization format via feature. Possible choices: flatc, molc");
 
-use std::{convert::TryFrom, io};
+use std::convert::TryFrom;
 
 use bytes::{Bytes, BytesMut};
 use log::debug;
@@ -22,47 +22,28 @@ use crate::protocol_mol;
 #[cfg(feature = "molc")]
 use molecule::prelude::{Builder, Entity, Reader};
 
-pub(crate) struct DiscoveryCodec {
-    inner: LengthDelimitedCodec,
+pub(crate) fn encode(data: DiscoveryMessage) -> Bytes {
+    // Length Delimited Codec is not a mandatory requirement.
+    // For historical reasons, this must exist as compatibility
+    let mut codec = LengthDelimitedCodec::new();
+    let mut bytes = BytesMut::new();
+    codec
+        .encode(data.encode(), &mut bytes)
+        .expect("encode must be success");
+    bytes.freeze()
 }
 
-impl Default for DiscoveryCodec {
-    fn default() -> DiscoveryCodec {
-        DiscoveryCodec {
-            inner: LengthDelimitedCodec::new(),
+pub(crate) fn decode(data: &mut BytesMut) -> Option<DiscoveryMessage> {
+    // Length Delimited Codec is not a mandatory requirement.
+    // For historical reasons, this must exist as compatibility
+    let mut codec = LengthDelimitedCodec::new();
+    match codec.decode(data) {
+        Ok(Some(frame)) => DiscoveryMessage::decode(&frame),
+        Ok(None) => None,
+        Err(err) => {
+            debug!("decode error: {:?}", err);
+            None
         }
-    }
-}
-
-impl Decoder for DiscoveryCodec {
-    type Item = DiscoveryMessage;
-    type Error = io::Error;
-
-    fn decode(&mut self, src: &mut BytesMut) -> Result<Option<Self::Item>, Self::Error> {
-        match self.inner.decode(src) {
-            Ok(Some(frame)) => {
-                // TODO: more error information
-                DiscoveryMessage::decode(&frame).map(Some).ok_or_else(|| {
-                    debug!("deserialize error");
-                    io::ErrorKind::InvalidData.into()
-                })
-            }
-            Ok(None) => Ok(None),
-            // TODO: more error information
-            Err(err) => {
-                debug!("decode error: {:?}", err);
-                Err(io::ErrorKind::InvalidData.into())
-            }
-        }
-    }
-}
-
-impl Encoder for DiscoveryCodec {
-    type Item = DiscoveryMessage;
-    type Error = io::Error;
-
-    fn encode(&mut self, item: Self::Item, dst: &mut BytesMut) -> Result<(), Self::Error> {
-        self.inner.encode(item.encode(), dst)
     }
 }
 
