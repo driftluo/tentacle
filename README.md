@@ -1,7 +1,7 @@
 # Tentacle
 
 [![Build Status](https://api.travis-ci.org/nervosnetwork/tentacle.svg?branch=master)](https://travis-ci.org/nervosnetwork/tentacle)
-![image](https://img.shields.io/badge/rustc-1.42-blue.svg)
+![image](https://img.shields.io/badge/rustc-1.46-blue.svg)
 
 ## Overview
 
@@ -19,10 +19,8 @@ This is a minimal implementation for a multiplexed p2p network based on `yamux` 
 
 2. Code implementation
 
-All data is passed through the futures channel, `yamux` splits the actual tcp stream into multiple substreams,
+All data is passed through the futures channel, `yamux` splits the actual tcp/websocket stream into multiple substreams,
 and the service layer wraps the yamux substream into a protocol stream.
-
-At the same time, support for other protocol(such as websocket) is also planned, but will delay a lot.
 
 Detailed introduction: [中文](./docs/introduction_zh.md)/[English](./docs/introduction_en.md)
 

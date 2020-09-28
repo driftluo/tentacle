@@ -1,3 +1,15 @@
+## 0.3.1
+
+### Features
+- Add a feature to support websocket(#257)
+- Upgrade the minimum supported Rust version to 1.46.0(#263)
+- Slightly improved performance by reducing system calls(#261)
+- Add more examples and optimize protocol examples
+
+### Bug Fix
+- Fix yamux stream stuck after the underlying connection is closed(#260)
+- Fix yamux writeable waker to make the notification flow clearer(#262)
+
 ## 0.3.0
 
 ### Features
