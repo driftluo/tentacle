@@ -50,7 +50,7 @@ mod helper;
 
 pub use crate::service::{
     config::{BlockingFlag, ProtocolHandle, ProtocolMeta, TargetProtocol, TargetSession},
-    control::ServiceControl,
+    control::{ServiceAsyncControl, ServiceControl},
     event::{ProtocolEvent, ServiceError, ServiceEvent},
     helper::SessionType,
 };
