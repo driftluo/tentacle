@@ -291,7 +291,7 @@ impl<T> UnboundedSender<T> {
     ///
     /// This method should only be called after `poll_ready` has been used to
     /// verify that the channel is ready to receive a message.
-    pub fn start_send(&mut self, msg: T) -> Result<(), SendError> {
+    pub fn start_send(&self, msg: T) -> Result<(), SendError> {
         self.do_send_nb(msg, Priority::Normal).map_err(|e| e.err)
     }
 
@@ -299,7 +299,7 @@ impl<T> UnboundedSender<T> {
     ///
     /// This method should only be called after `poll_ready` has been used to
     /// verify that the channel is ready to receive a message.
-    pub fn start_quick_send(&mut self, msg: T) -> Result<(), SendError> {
+    pub fn start_quick_send(&self, msg: T) -> Result<(), SendError> {
         self.do_send_nb(msg, Priority::High).map_err(|e| e.err)
     }
 

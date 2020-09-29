@@ -4,7 +4,7 @@ use futures::stream::StreamExt;
 
 #[test]
 fn send_recv() {
-    let (mut tx, rx) = mpsc::channel::<i32>(16);
+    let (tx, rx) = mpsc::channel::<i32>(16);
     tx.try_send(2).unwrap();
     tx.try_quick_send(1).unwrap();
     tx.try_send(3).unwrap();
