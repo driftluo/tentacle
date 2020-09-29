@@ -11,7 +11,7 @@ use crate::{
     error::SendErrorKind,
     multiaddr::Multiaddr,
     protocol_select::ProtocolInfo,
-    service::{ServiceTask, TargetProtocol, TargetSession, RECEIVED_BUFFER_SIZE},
+    service::{ServiceTask, TargetProtocol, TargetSession},
     ProtocolId, SessionId,
 };
 use bytes::Bytes;
@@ -22,7 +22,7 @@ type Result = std::result::Result<(), SendErrorKind>;
 /// Service control, used to send commands externally at runtime
 #[derive(Clone)]
 pub struct ServiceControl {
-    pub(crate) task_sender: mpsc::UnboundedSender<ServiceTask>,
+    pub(crate) task_sender: mpsc::Sender<ServiceTask>,
     pub(crate) proto_infos: Arc<HashMap<ProtocolId, ProtocolInfo>>,
     closed: Arc<AtomicBool>,
 }
@@ -30,7 +30,7 @@ pub struct ServiceControl {
 impl ServiceControl {
     /// New
     pub(crate) fn new(
-        task_sender: mpsc::UnboundedSender<ServiceTask>,
+        task_sender: mpsc::Sender<ServiceTask>,
         proto_infos: HashMap<ProtocolId, ProtocolInfo>,
         closed: Arc<AtomicBool>,
     ) -> Self {
@@ -46,19 +46,13 @@ impl ServiceControl {
         if self.closed.load(Ordering::SeqCst) {
             return Err(SendErrorKind::BrokenPipe);
         }
-        if self
-            .task_sender
-            .len()
-            .map(|len| len < RECEIVED_BUFFER_SIZE)
-            .unwrap_or_default()
-        {
-            self.task_sender
-                .unbounded_send(event)
-                .map_err(|_err| SendErrorKind::BrokenPipe)
-        } else {
-            self.task_sender.wake();
-            Err(SendErrorKind::WouldBlock)
-        }
+        self.task_sender.try_send(event).map_err(|err| {
+            if err.is_full() {
+                SendErrorKind::WouldBlock
+            } else {
+                SendErrorKind::BrokenPipe
+            }
+        })
     }
 
     /// Send raw event on quick channel
@@ -67,19 +61,13 @@ impl ServiceControl {
         if self.closed.load(Ordering::SeqCst) {
             return Err(SendErrorKind::BrokenPipe);
         }
-        if self
-            .task_sender
-            .len()
-            .map(|len| len < RECEIVED_BUFFER_SIZE)
-            .unwrap_or_default()
-        {
-            self.task_sender
-                .unbounded_quick_send(event)
-                .map_err(|_err| SendErrorKind::BrokenPipe)
-        } else {
-            self.task_sender.wake();
-            Err(SendErrorKind::WouldBlock)
-        }
+        self.task_sender.try_quick_send(event).map_err(|err| {
+            if err.is_full() {
+                SendErrorKind::WouldBlock
+            } else {
+                SendErrorKind::BrokenPipe
+            }
+        })
     }
 
     /// Get service protocol message, Map(ID, Name), but can't modify

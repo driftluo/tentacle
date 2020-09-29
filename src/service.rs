@@ -106,7 +106,7 @@ pub struct Service<T> {
     /// External event is passed in from this
     service_context: ServiceContext,
     /// External event receiver
-    service_task_receiver: priority_mpsc::UnboundedReceiver<ServiceTask>,
+    service_task_receiver: priority_mpsc::Receiver<ServiceTask>,
 
     shutdown: Arc<AtomicBool>,
 
@@ -129,7 +129,7 @@ where
         config: ServiceConfig,
     ) -> Self {
         let (session_event_sender, session_event_receiver) = mpsc::channel(RECEIVED_SIZE);
-        let (task_sender, task_receiver) = priority_mpsc::unbounded();
+        let (task_sender, task_receiver) = priority_mpsc::channel(RECEIVED_BUFFER_SIZE);
         let proto_infos = protocol_configs
             .values()
             .map(|meta| {
