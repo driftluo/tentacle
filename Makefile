@@ -30,6 +30,10 @@ test:
 fuzz:
 	cargo +nightly fuzz run secio_crypto_decrypt_cipher -- -max_total_time=60
 
+build:
+	RUSTFLAGS='-F warnings' cargo build --all --features molc,ws
+	RUSTFLAGS='-F warnings' cargo build --all --features flatc
+
 examples:
 	cargo build --examples --all --features molc
 	cargo build --examples --all --features flatc
@@ -69,4 +73,4 @@ clean-mol:
 	rm -f $(MOL_RUST_FILES)
 
 
-.PHONY: fmt clippy test fuzz examples ci gen-fb clean-fb check-cfbc-version check-moleculec-version gen-mol clean-mol
+.PHONY: fmt clippy test fuzz build examples ci gen-fb clean-fb check-cfbc-version check-moleculec-version gen-mol clean-mol
