@@ -1,6 +1,7 @@
 language: rust
 rust:
   - stable
+  - nightly
 before_script:
   - rustup component add rustfmt
   - rustup component add clippy
@@ -38,3 +39,7 @@ jobs:
       script:
         - cd bench
         - cargo run --release --features flatc
+    - stage: Test
+      name: Fuzz
+      script:
+        - make fuzz
