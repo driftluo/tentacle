@@ -21,3 +21,7 @@ members = ["."]
 [[bin]]
 name = "secio_crypto_decrypt_cipher"
 path = "fuzz_targets/secio/crypto/decrypt_cipher.rs"
+
+[[bin]]
+name = "secio_crypto_encrypt_cipher"
+path = "fuzz_targets/secio/crypto/encrypt_cipher.rs"
