@@ -7,11 +7,11 @@ use std::{
 };
 
 use crate::{
-    channel::mpsc,
+    channel::{mpsc, QuickSinkExt},
     error::SendErrorKind,
     multiaddr::Multiaddr,
     protocol_select::ProtocolInfo,
-    service::{ServiceTask, TargetProtocol, TargetSession, RECEIVED_BUFFER_SIZE},
+    service::{event::ServiceTask, TargetProtocol, TargetSession},
     ProtocolId, SessionId,
 };
 use bytes::Bytes;
@@ -22,7 +22,7 @@ type Result = std::result::Result<(), SendErrorKind>;
 /// Service control, used to send commands externally at runtime
 #[derive(Clone)]
 pub struct ServiceControl {
-    pub(crate) task_sender: mpsc::UnboundedSender<ServiceTask>,
+    pub(crate) task_sender: mpsc::Sender<ServiceTask>,
     pub(crate) proto_infos: Arc<HashMap<ProtocolId, ProtocolInfo>>,
     closed: Arc<AtomicBool>,
 }
@@ -30,7 +30,7 @@ pub struct ServiceControl {
 impl ServiceControl {
     /// New
     pub(crate) fn new(
-        task_sender: mpsc::UnboundedSender<ServiceTask>,
+        task_sender: mpsc::Sender<ServiceTask>,
         proto_infos: HashMap<ProtocolId, ProtocolInfo>,
         closed: Arc<AtomicBool>,
     ) -> Self {
@@ -46,19 +46,13 @@ impl ServiceControl {
         if self.closed.load(Ordering::SeqCst) {
             return Err(SendErrorKind::BrokenPipe);
         }
-        if self
-            .task_sender
-            .len()
-            .map(|len| len < RECEIVED_BUFFER_SIZE)
-            .unwrap_or_default()
-        {
-            self.task_sender
-                .unbounded_send(event)
-                .map_err(|_err| SendErrorKind::BrokenPipe)
-        } else {
-            self.task_sender.wake();
-            Err(SendErrorKind::WouldBlock)
-        }
+        self.task_sender.try_send(event).map_err(|err| {
+            if err.is_full() {
+                SendErrorKind::WouldBlock
+            } else {
+                SendErrorKind::BrokenPipe
+            }
+        })
     }
 
     /// Send raw event on quick channel
@@ -67,19 +61,13 @@ impl ServiceControl {
         if self.closed.load(Ordering::SeqCst) {
             return Err(SendErrorKind::BrokenPipe);
         }
-        if self
-            .task_sender
-            .len()
-            .map(|len| len < RECEIVED_BUFFER_SIZE)
-            .unwrap_or_default()
-        {
-            self.task_sender
-                .unbounded_quick_send(event)
-                .map_err(|_err| SendErrorKind::BrokenPipe)
-        } else {
-            self.task_sender.wake();
-            Err(SendErrorKind::WouldBlock)
-        }
+        self.task_sender.try_quick_send(event).map_err(|err| {
+            if err.is_full() {
+                SendErrorKind::WouldBlock
+            } else {
+                SendErrorKind::BrokenPipe
+            }
+        })
     }
 
     /// Get service protocol message, Map(ID, Name), but can't modify
@@ -262,5 +250,257 @@ impl ServiceControl {
     /// Shutdown service, don't care anything, may cause partial message loss
     pub fn shutdown(&self) -> Result {
         self.quick_send(ServiceTask::Shutdown(true))
+    }
+}
+
+impl From<ServiceControl> for ServiceAsyncControl {
+    fn from(control: ServiceControl) -> Self {
+        ServiceAsyncControl {
+            task_sender: control.task_sender,
+            proto_infos: control.proto_infos,
+            closed: control.closed,
+        }
+    }
+}
+
+impl From<ServiceAsyncControl> for ServiceControl {
+    fn from(control: ServiceAsyncControl) -> Self {
+        ServiceControl {
+            task_sender: control.task_sender,
+            proto_infos: control.proto_infos,
+            closed: control.closed,
+        }
+    }
+}
+
+/// Service control, used to send commands externally at runtime, All interfaces are async methods
+#[derive(Clone)]
+pub struct ServiceAsyncControl {
+    task_sender: mpsc::Sender<ServiceTask>,
+    proto_infos: Arc<HashMap<ProtocolId, ProtocolInfo>>,
+    closed: Arc<AtomicBool>,
+}
+
+impl ServiceAsyncControl {
+    /// Send raw event
+    async fn send(&mut self, event: ServiceTask) -> Result {
+        if self.closed.load(Ordering::SeqCst) {
+            return Err(SendErrorKind::BrokenPipe);
+        }
+        self.task_sender.send(event).await.map_err(|_err| {
+            // await only return err when channel close
+            SendErrorKind::BrokenPipe
+        })
+    }
+
+    /// Send raw event on quick channel
+    #[inline]
+    async fn quick_send(&mut self, event: ServiceTask) -> Result {
+        if self.closed.load(Ordering::SeqCst) {
+            return Err(SendErrorKind::BrokenPipe);
+        }
+        self.task_sender.quick_send(event).await.map_err(|_err| {
+            // await only return err when channel close
+            SendErrorKind::BrokenPipe
+        })
+    }
+
+    /// Get service protocol message, Map(ID, Name), but can't modify
+    #[inline]
+    pub fn protocols(&self) -> &Arc<HashMap<ProtocolId, ProtocolInfo>> {
+        &self.proto_infos
+    }
+
+    /// Create a new listener
+    #[inline]
+    pub async fn listen(&mut self, address: Multiaddr) -> Result {
+        self.quick_send(ServiceTask::Listen { address }).await
+    }
+
+    /// Initiate a connection request to address
+    #[inline]
+    pub async fn dial(&mut self, address: Multiaddr, target: TargetProtocol) -> Result {
+        self.quick_send(ServiceTask::Dial { address, target }).await
+    }
+
+    /// Disconnect a connection
+    #[inline]
+    pub async fn disconnect(&mut self, session_id: SessionId) -> Result {
+        self.quick_send(ServiceTask::Disconnect { session_id })
+            .await
+    }
+
+    /// Send message
+    #[inline]
+    pub async fn send_message_to(
+        &mut self,
+        session_id: SessionId,
+        proto_id: ProtocolId,
+        data: Bytes,
+    ) -> Result {
+        self.filter_broadcast(TargetSession::Single(session_id), proto_id, data)
+            .await
+    }
+
+    /// Send message on quick channel
+    #[inline]
+    pub async fn quick_send_message_to(
+        &mut self,
+        session_id: SessionId,
+        proto_id: ProtocolId,
+        data: Bytes,
+    ) -> Result {
+        self.quick_filter_broadcast(TargetSession::Single(session_id), proto_id, data)
+            .await
+    }
+
+    /// Send data to the specified protocol for the specified sessions.
+    #[inline]
+    pub async fn filter_broadcast(
+        &mut self,
+        target: TargetSession,
+        proto_id: ProtocolId,
+        data: Bytes,
+    ) -> Result {
+        self.send(ServiceTask::ProtocolMessage {
+            target,
+            proto_id,
+            data,
+        })
+        .await
+    }
+
+    /// Send data to the specified protocol for the specified sessions on quick channel.
+    #[inline]
+    pub async fn quick_filter_broadcast(
+        &mut self,
+        target: TargetSession,
+        proto_id: ProtocolId,
+        data: Bytes,
+    ) -> Result {
+        self.quick_send(ServiceTask::ProtocolMessage {
+            target,
+            proto_id,
+            data,
+        })
+        .await
+    }
+
+    /// Send a future task
+    #[inline]
+    pub async fn future_task<T>(&mut self, task: T) -> Result
+    where
+        T: Future<Output = ()> + 'static + Send,
+    {
+        self.send(ServiceTask::FutureTask {
+            task: Box::pin(task),
+        })
+        .await
+    }
+
+    /// Try open a protocol
+    ///
+    /// If the protocol has been open, do nothing
+    #[inline]
+    pub async fn open_protocol(&mut self, session_id: SessionId, proto_id: ProtocolId) -> Result {
+        self.quick_send(ServiceTask::ProtocolOpen {
+            session_id,
+            target: proto_id.into(),
+        })
+        .await
+    }
+
+    /// Try open protocol
+    ///
+    /// If the protocol has been open, do nothing
+    #[inline]
+    pub async fn open_protocols(
+        &mut self,
+        session_id: SessionId,
+        target: TargetProtocol,
+    ) -> Result {
+        self.quick_send(ServiceTask::ProtocolOpen { session_id, target })
+            .await
+    }
+
+    /// Try close a protocol
+    ///
+    /// If the protocol has been closed, do nothing
+    #[inline]
+    pub async fn close_protocol(&mut self, session_id: SessionId, proto_id: ProtocolId) -> Result {
+        self.quick_send(ServiceTask::ProtocolClose {
+            session_id,
+            proto_id,
+        })
+        .await
+    }
+
+    /// Set a service notify token
+    pub async fn set_service_notify(
+        &mut self,
+        proto_id: ProtocolId,
+        interval: Duration,
+        token: u64,
+    ) -> Result {
+        self.send(ServiceTask::SetProtocolNotify {
+            proto_id,
+            interval,
+            token,
+        })
+        .await
+    }
+
+    /// remove a service notify token
+    pub async fn remove_service_notify(&mut self, proto_id: ProtocolId, token: u64) -> Result {
+        self.send(ServiceTask::RemoveProtocolNotify { proto_id, token })
+            .await
+    }
+
+    /// Set a session notify token
+    pub async fn set_session_notify(
+        &mut self,
+        session_id: SessionId,
+        proto_id: ProtocolId,
+        interval: Duration,
+        token: u64,
+    ) -> Result {
+        self.send(ServiceTask::SetProtocolSessionNotify {
+            session_id,
+            proto_id,
+            interval,
+            token,
+        })
+        .await
+    }
+
+    /// Remove a session notify token
+    pub async fn remove_session_notify(
+        &mut self,
+        session_id: SessionId,
+        proto_id: ProtocolId,
+        token: u64,
+    ) -> Result {
+        self.send(ServiceTask::RemoveProtocolSessionNotify {
+            session_id,
+            proto_id,
+            token,
+        })
+        .await
+    }
+
+    /// Close service
+    ///
+    /// Order:
+    /// 1. close all listens
+    /// 2. try close all session's protocol stream
+    /// 3. try close all session
+    /// 4. close service
+    pub async fn close(&mut self) -> Result {
+        self.quick_send(ServiceTask::Shutdown(false)).await
+    }
+
+    /// Shutdown service, don't care anything, may cause partial message loss
+    pub async fn shutdown(&mut self) -> Result {
+        self.quick_send(ServiceTask::Shutdown(true)).await
     }
 }

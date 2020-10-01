@@ -263,13 +263,6 @@ impl<T> UnboundedSender<T> {
         })
     }
 
-    /// Try signal to the receiver
-    pub fn wake(&self) {
-        if let Some(inner) = &self.0 {
-            inner.inner.recv_task.wake()
-        }
-    }
-
     // Do the send without parking current task.
     fn do_send_nb(&self, msg: T, priority: Priority) -> Result<(), TrySendError<T>> {
         if let Some(inner) = &self.0 {
@@ -291,7 +284,7 @@ impl<T> UnboundedSender<T> {
     ///
     /// This method should only be called after `poll_ready` has been used to
     /// verify that the channel is ready to receive a message.
-    pub fn start_send(&mut self, msg: T) -> Result<(), SendError> {
+    pub fn start_send(&self, msg: T) -> Result<(), SendError> {
         self.do_send_nb(msg, Priority::Normal).map_err(|e| e.err)
     }
 
@@ -299,7 +292,7 @@ impl<T> UnboundedSender<T> {
     ///
     /// This method should only be called after `poll_ready` has been used to
     /// verify that the channel is ready to receive a message.
-    pub fn start_quick_send(&mut self, msg: T) -> Result<(), SendError> {
+    pub fn start_quick_send(&self, msg: T) -> Result<(), SendError> {
         self.do_send_nb(msg, Priority::High).map_err(|e| e.err)
     }
 

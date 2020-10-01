@@ -133,7 +133,7 @@ pub struct ServiceContext {
 impl ServiceContext {
     /// New
     pub(crate) fn new(
-        task_sender: mpsc::UnboundedSender<ServiceTask>,
+        task_sender: mpsc::Sender<ServiceTask>,
         proto_infos: HashMap<ProtocolId, ProtocolInfo>,
         key_pair: Option<SecioKeyPair>,
         closed: Arc<AtomicBool>,
