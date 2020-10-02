@@ -28,8 +28,9 @@ test:
 	RUSTFLAGS='-F warnings' RUST_BACKTRACE=full cargo test --all --features flatc
 
 fuzz:
-	cargo +nightly fuzz run secio_crypto_decrypt_cipher --release -- -max_total_time=60
-	cargo +nightly fuzz run secio_crypto_encrypt_cipher --release -- -max_total_time=60
+	cargo +nightly fuzz run secio_crypto_decrypt_cipher -- -max_total_time=60
+	cargo +nightly fuzz run secio_crypto_encrypt_cipher -- -max_total_time=60
+	cargo +nightly fuzz run yamux_frame_codec           -- -max_total_time=60
 
 build:
 	RUSTFLAGS='-F warnings' cargo build --all --features molc,ws

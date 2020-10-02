@@ -234,12 +234,13 @@ impl From<u32> for GoAwayCode {
 }
 
 /// The frame decoder/encoder
-pub(crate) struct FrameCodec {
+pub struct FrameCodec {
     unused_data_header: Option<Header>,
     max_frame_size: u32,
 }
 
 impl FrameCodec {
+    /// Set max frame size
     pub fn max_frame_size(mut self, size: u32) -> Self {
         self.max_frame_size = size;
         self
