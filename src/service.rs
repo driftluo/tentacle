@@ -145,7 +145,12 @@ where
             protocol_configs,
             before_sends: HashMap::default(),
             handle,
-            multi_transport: MultiTransport::new(config.timeout),
+            multi_transport: {
+                let transport = MultiTransport::new(config.timeout).tcp_bind(config.tcp_bind_addr);
+                #[cfg(feature = "ws")]
+                let transport = transport.ws_bind(config.ws_bind_addr);
+                transport
+            },
             future_task_sender: Buffer::new(future_task_sender),
             future_task_manager: Some(FutureTaskManager::new(
                 future_task_receiver,

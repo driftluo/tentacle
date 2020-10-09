@@ -2,7 +2,7 @@ use super::Result;
 use futures::{future::ok, TryFutureExt};
 use std::{
     future::Future,
-    io,
+    net::SocketAddr,
     pin::Pin,
     task::{Context, Poll},
     time::Duration,
@@ -12,22 +12,21 @@ use tokio::net::{TcpListener, TcpStream};
 use crate::{
     error::TransportErrorKind,
     multiaddr::Multiaddr,
-    transports::Transport,
+    transports::{tcp_dail, tcp_listen, Transport},
     utils::{dns::DNSResolver, multiaddr_to_socketaddr, socketaddr_to_multiaddr},
 };
 
 /// Tcp listen bind
 async fn bind(
     address: impl Future<Output = Result<Multiaddr>>,
+    reuse: bool,
 ) -> Result<(Multiaddr, TcpListener)> {
     let addr = address.await?;
     match multiaddr_to_socketaddr(&addr) {
         Some(socket_address) => {
-            let tcp = TcpListener::bind(&socket_address)
-                .await
-                .map_err(TransportErrorKind::Io)?;
-            let listen_addr =
-                socketaddr_to_multiaddr(tcp.local_addr().map_err(TransportErrorKind::Io)?);
+            let (local_addr, tcp) = tcp_listen(socket_address, reuse).await?;
+
+            let listen_addr = socketaddr_to_multiaddr(local_addr);
 
             Ok((listen_addr, tcp))
         }
@@ -40,17 +39,13 @@ async fn connect(
     address: impl Future<Output = Result<Multiaddr>>,
     timeout: Duration,
     original: Option<Multiaddr>,
+    bind_addr: Option<SocketAddr>,
 ) -> Result<(Multiaddr, TcpStream)> {
     let addr = address.await?;
     match multiaddr_to_socketaddr(&addr) {
         Some(socket_address) => {
-            match tokio::time::timeout(timeout, TcpStream::connect(&socket_address)).await {
-                Err(_) => Err(TransportErrorKind::Io(io::ErrorKind::TimedOut.into())),
-                Ok(res) => Ok((
-                    original.unwrap_or(addr),
-                    res.map_err(TransportErrorKind::Io)?,
-                )),
-            }
+            let stream = tcp_dail(socket_address, bind_addr, timeout).await?;
+            Ok((original.unwrap_or(addr), stream))
         }
         None => Err(TransportErrorKind::NotSupported(original.unwrap_or(addr))),
     }
@@ -60,11 +55,12 @@ async fn connect(
 #[derive(Default)]
 pub struct TcpTransport {
     timeout: Duration,
+    bind_addr: Option<SocketAddr>,
 }
 
 impl TcpTransport {
-    pub fn new(timeout: Duration) -> Self {
-        TcpTransport { timeout }
+    pub fn new(timeout: Duration, bind_addr: Option<SocketAddr>) -> Self {
+        TcpTransport { timeout, bind_addr }
     }
 }
 
@@ -75,13 +71,16 @@ impl Transport for TcpTransport {
     fn listen(self, address: Multiaddr) -> Result<Self::ListenFuture> {
         match DNSResolver::new(address.clone()) {
             Some(dns) => {
-                let task = bind(dns.map_err(|(multiaddr, io_error)| {
-                    TransportErrorKind::DNSResolverError(multiaddr, io_error)
-                }));
+                let task = bind(
+                    dns.map_err(|(multiaddr, io_error)| {
+                        TransportErrorKind::DNSResolverError(multiaddr, io_error)
+                    }),
+                    self.bind_addr.is_some(),
+                );
                 Ok(TcpListenFuture::new(task))
             }
             None => {
-                let task = bind(ok(address));
+                let task = bind(ok(address), self.bind_addr.is_some());
                 Ok(TcpListenFuture::new(task))
             }
         }
@@ -98,11 +97,12 @@ impl Transport for TcpTransport {
                     }),
                     self.timeout,
                     Some(address),
+                    self.bind_addr,
                 );
                 Ok(TcpDialFuture::new(task))
             }
             None => {
-                let dial = connect(ok(address), self.timeout, None);
+                let dial = connect(ok(address), self.timeout, None, self.bind_addr);
                 Ok(TcpDialFuture::new(dial))
             }
         }

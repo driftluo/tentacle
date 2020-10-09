@@ -4,9 +4,7 @@ use crate::{
     yamux::config::Config as YamuxConfig,
     ProtocolId, SessionId,
 };
-use std::collections::HashSet;
-use std::sync::Arc;
-use std::time::Duration;
+use std::{collections::HashSet, net::SocketAddr, sync::Arc, time::Duration};
 
 /// Default max buffer size
 const MAX_BUF_SIZE: usize = 24 * 1024 * 1024;
@@ -20,6 +18,9 @@ pub(crate) struct ServiceConfig {
     pub keep_buffer: bool,
     pub upnp: bool,
     pub max_connection_number: usize,
+    pub tcp_bind_addr: Option<SocketAddr>,
+    #[cfg(feature = "ws")]
+    pub ws_bind_addr: Option<SocketAddr>,
 }
 
 impl Default for ServiceConfig {
@@ -32,6 +33,9 @@ impl Default for ServiceConfig {
             keep_buffer: false,
             upnp: false,
             max_connection_number: 65535,
+            tcp_bind_addr: None,
+            #[cfg(feature = "ws")]
+            ws_bind_addr: None,
         }
     }
 }
