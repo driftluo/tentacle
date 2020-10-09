@@ -318,9 +318,9 @@ async fn tcp_listen(addr: SocketAddr, reuse: bool) -> Result<(SocketAddr, TcpLis
     Ok((tcp.local_addr()?, tcp))
 }
 
-/// ws/tcp common dail realization
+/// ws/tcp common dial realization
 #[inline(always)]
-async fn tcp_dail(
+async fn tcp_dial(
     addr: SocketAddr,
     bind_addr: Option<SocketAddr>,
     timeout: Duration,

@@ -12,7 +12,7 @@ use tokio::net::{TcpListener, TcpStream};
 use crate::{
     error::TransportErrorKind,
     multiaddr::Multiaddr,
-    transports::{tcp_dail, tcp_listen, Transport},
+    transports::{tcp_dial, tcp_listen, Transport},
     utils::{dns::DNSResolver, multiaddr_to_socketaddr, socketaddr_to_multiaddr},
 };
 
@@ -44,7 +44,7 @@ async fn connect(
     let addr = address.await?;
     match multiaddr_to_socketaddr(&addr) {
         Some(socket_address) => {
-            let stream = tcp_dail(socket_address, bind_addr, timeout).await?;
+            let stream = tcp_dial(socket_address, bind_addr, timeout).await?;
             Ok((original.unwrap_or(addr), stream))
         }
         None => Err(TransportErrorKind::NotSupported(original.unwrap_or(addr))),

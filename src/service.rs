@@ -146,6 +146,7 @@ where
             before_sends: HashMap::default(),
             handle,
             multi_transport: {
+                #[allow(clippy::let_and_return)]
                 let transport = MultiTransport::new(config.timeout).tcp_bind(config.tcp_bind_addr);
                 #[cfg(feature = "ws")]
                 let transport = transport.ws_bind(config.ws_bind_addr);
@@ -1193,10 +1194,20 @@ where
             }
             ServiceTask::ProtocolOpen { session_id, target } => match target {
                 TargetProtocol::All => {
-                    let ids = self.protocol_configs.keys().copied().collect::<Vec<_>>();
-                    ids.into_iter().for_each(|id| {
-                        self.protocol_open(cx, session_id, id, String::default(), Source::External)
-                    });
+                    // Borrowed check attack
+                    #[allow(clippy::needless_collect)]
+                    {
+                        let ids = self.protocol_configs.keys().copied().collect::<Vec<_>>();
+                        ids.into_iter().for_each(|id| {
+                            self.protocol_open(
+                                cx,
+                                session_id,
+                                id,
+                                String::default(),
+                                Source::External,
+                            )
+                        });
+                    }
                 }
                 TargetProtocol::Single(id) => {
                     self.protocol_open(cx, session_id, id, String::default(), Source::External)

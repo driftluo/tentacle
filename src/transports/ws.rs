@@ -25,7 +25,7 @@ use tokio_tungstenite::{
 use crate::{
     error::TransportErrorKind,
     multiaddr::{Multiaddr, Protocol},
-    transports::{tcp_dail, tcp_listen, Result, Transport},
+    transports::{tcp_dial, tcp_listen, Result, Transport},
     utils::{dns::DNSResolver, multiaddr_to_socketaddr, socketaddr_to_multiaddr},
 };
 
@@ -59,7 +59,7 @@ async fn connect(
     match multiaddr_to_socketaddr(&addr) {
         Some(socket_address) => {
             let url = format!("ws://{}:{}", socket_address.ip(), socket_address.port());
-            let tcp = tcp_dail(socket_address, bind_addr, timeout).await?;
+            let tcp = tcp_dial(socket_address, bind_addr, timeout).await?;
 
             match tokio::time::timeout(timeout, client_async_with_config(url, tcp, None)).await {
                 Err(_) => Err(TransportErrorKind::Io(io::ErrorKind::TimedOut.into())),
