@@ -1,40 +1,39 @@
+dist: bionic
 language: rust
 rust:
   - stable
 before_script:
   - rustup component add rustfmt
   - rustup component add clippy
-script:
-  - RUSTFLAGS='-F warnings' cargo build --all
-  - cargo build --examples --all
 stages:
+  - Build
   - Check
   - Test
 jobs:
   include:
+    - stage: Build
+      script:
+        - make build
+        - make examples
     - stage: Check
       name: Format
       script:
-        - cargo fmt --all -- --check
+        - make fmt
     - stage: Check
       name: Clippy
       script:
         - make clippy
     - stage: Test
-      name: Unitest(molc)
+      name: Unitest
       script:
-        - RUSTFLAGS='-F warnings' RUST_BACKTRACE=full cargo test --all --features molc
+        - make test
     - stage: Test
-      name: Bench(molc)
+      name: Bench
       script:
-        - cd bench
-        - cargo run --release --features molc
+        - make bench_p2p
     - stage: Test
-      name: Unitest(flatc)
+      name: Fuzz
       script:
-        - RUSTFLAGS='-F warnings' RUST_BACKTRACE=full cargo test --all --features flatc
-    - stage: Test
-      name: Bench(flatc)
-      script:
-        - cd bench
-        - cargo run --release --features flatc
+        - rustup install nightly
+        - cargo +nightly install cargo-fuzz
+        - make fuzz

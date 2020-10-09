@@ -1,0 +1,34 @@
+
+[package]
+name = "tentacle-fuzz"
+version = "0.0.1"
+license = "MIT"
+authors = ["Nervos Core Dev <dev@nervos.org>"]
+edition = "2018"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.3"
+tentacle-secio = { path = "../secio", features = ["molc"] }
+tokio-yamux = { path = "../yamux" }
+rand = "0.7"
+bytes = "0.5.0"
+tokio-util = { version = "0.3.0", features = ["codec"] }
+
+# Prevent this from interfering with workspaces
+[workspace]
+members = ["."]
+
+[[bin]]
+name = "secio_crypto_decrypt_cipher"
+path = "fuzz_targets/secio/crypto/decrypt_cipher.rs"
+
+[[bin]]
+name = "secio_crypto_encrypt_cipher"
+path = "fuzz_targets/secio/crypto/encrypt_cipher.rs"
+
+[[bin]]
+name = "yamux_frame_codec"
+path = "fuzz_targets/yamux/frame_codec.rs"
