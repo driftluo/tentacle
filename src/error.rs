@@ -8,7 +8,7 @@ use thiserror::Error;
 pub enum TransportErrorKind {
     /// IO error
     #[error("transport io error: `{0:?}`")]
-    Io(IOError),
+    Io(#[from] IOError),
     /// Protocol not support
     #[error("multiaddr `{0:?}` is not supported")]
     NotSupported(Multiaddr),

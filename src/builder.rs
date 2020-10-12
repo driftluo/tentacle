@@ -10,6 +10,7 @@ use crate::{
         ProtocolHandle, ProtocolMeta, Service,
     },
     traits::{Codec, ServiceHandle, ServiceProtocol, SessionProtocol},
+    utils::multiaddr_to_socketaddr,
     yamux::Config,
     ProtocolId,
 };
@@ -116,7 +117,6 @@ impl ServiceBuilder {
     /// Whether to allow tentative registration upnp, default is disable(false)
     ///
     /// upnp: https://en.wikipedia.org/wiki/Universal_Plug_and_Play
-    /// TCP Hole Punching: http://bford.info/pub/net/p2pnat/
     ///
     /// Upnp is a simple solution to nat penetration, which requires routing support for registration mapping.
     ///
@@ -136,6 +136,25 @@ impl ServiceBuilder {
     /// Default is 65535
     pub fn max_connection_number(mut self, number: usize) -> Self {
         self.config.max_connection_number = number;
+        self
+    }
+
+    /// Bind all the outbound connections to the local listening address.
+    ///
+    /// In this way, any actively connected outbound connection is potentially connectable. Through this setting,
+    /// the device after NAT can have the opportunity to be connected to the public network.
+    ///
+    /// TCP Hole Punching: http://bford.info/pub/net/p2pnat/
+    /// STUN: https://tools.ietf.org/html/rfc5389
+    pub fn tcp_bind(mut self, addr: multiaddr::Multiaddr) -> Self {
+        self.config.tcp_bind_addr = multiaddr_to_socketaddr(&addr);
+        self
+    }
+
+    /// The same as tcp bind, but use on ws transport
+    #[cfg(feature = "ws")]
+    pub fn ws_bind(mut self, addr: multiaddr::Multiaddr) -> Self {
+        self.config.ws_bind_addr = multiaddr_to_socketaddr(&addr);
         self
     }
 

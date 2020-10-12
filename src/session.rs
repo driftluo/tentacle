@@ -921,18 +921,12 @@ pub(crate) enum SessionState {
 impl SessionState {
     #[inline]
     fn is_local_close(self) -> bool {
-        match self {
-            SessionState::LocalClose => true,
-            _ => false,
-        }
+        matches!(self, SessionState::LocalClose)
     }
 
     #[inline]
     fn is_normal(self) -> bool {
-        match self {
-            SessionState::Normal => true,
-            _ => false,
-        }
+        matches!(self, SessionState::Normal)
     }
 }
 

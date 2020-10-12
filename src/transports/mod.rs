@@ -6,10 +6,12 @@ use crate::{
 
 use futures::{prelude::Stream, FutureExt};
 use log::debug;
+use socket2::{Domain, Protocol as SocketProtocol, Socket, Type};
 use std::{
     fmt,
     future::Future,
     io,
+    net::SocketAddr,
     pin::Pin,
     task::{Context, Poll},
     time::Duration,
@@ -45,11 +47,30 @@ pub trait Transport {
 #[derive(Clone, Copy)]
 pub struct MultiTransport {
     timeout: Duration,
+    tcp_bind: Option<SocketAddr>,
+    #[cfg(feature = "ws")]
+    ws_bind: Option<SocketAddr>,
 }
 
 impl MultiTransport {
     pub fn new(timeout: Duration) -> Self {
-        MultiTransport { timeout }
+        MultiTransport {
+            timeout,
+            tcp_bind: None,
+            #[cfg(feature = "ws")]
+            ws_bind: None,
+        }
+    }
+
+    pub fn tcp_bind(mut self, bind_addr: Option<SocketAddr>) -> Self {
+        self.tcp_bind = bind_addr;
+        self
+    }
+
+    #[cfg(feature = "ws")]
+    pub fn ws_bind(mut self, bind_addr: Option<SocketAddr>) -> Self {
+        self.ws_bind = bind_addr;
+        self
     }
 }
 
@@ -59,12 +80,15 @@ impl Transport for MultiTransport {
 
     fn listen(self, address: Multiaddr) -> Result<Self::ListenFuture> {
         match find_type(&address) {
-            TransportType::Tcp => match TcpTransport::new(self.timeout).listen(address) {
-                Ok(future) => Ok(MultiListenFuture::Tcp(future)),
-                Err(e) => Err(e),
-            },
+            TransportType::Tcp => {
+                match TcpTransport::new(self.timeout, self.tcp_bind).listen(address) {
+                    Ok(future) => Ok(MultiListenFuture::Tcp(future)),
+                    Err(e) => Err(e),
+                }
+            }
             #[cfg(feature = "ws")]
-            TransportType::Ws => match WsTransport::new(self.timeout).listen(address) {
+            TransportType::Ws => match WsTransport::new(self.timeout, self.ws_bind).listen(address)
+            {
                 Ok(future) => Ok(MultiListenFuture::Ws(future)),
                 Err(e) => Err(e),
             },
@@ -77,12 +101,14 @@ impl Transport for MultiTransport {
 
     fn dial(self, address: Multiaddr) -> Result<Self::DialFuture> {
         match find_type(&address) {
-            TransportType::Tcp => match TcpTransport::new(self.timeout).dial(address) {
-                Ok(res) => Ok(MultiDialFuture::Tcp(res)),
-                Err(e) => Err(e),
-            },
+            TransportType::Tcp => {
+                match TcpTransport::new(self.timeout, self.tcp_bind).dial(address) {
+                    Ok(res) => Ok(MultiDialFuture::Tcp(res)),
+                    Err(e) => Err(e),
+                }
+            }
             #[cfg(feature = "ws")]
-            TransportType::Ws => match WsTransport::new(self.timeout).dial(address) {
+            TransportType::Ws => match WsTransport::new(self.timeout, self.ws_bind).dial(address) {
                 Ok(future) => Ok(MultiDialFuture::Ws(future)),
                 Err(e) => Err(e),
             },
@@ -262,6 +288,62 @@ pub fn find_type(addr: &Multiaddr) -> TransportType {
         }
     })
     .unwrap_or(TransportType::Tcp)
+}
+
+/// ws/tcp common listen realization
+#[inline(always)]
+async fn tcp_listen(addr: SocketAddr, reuse: bool) -> Result<(SocketAddr, TcpListener)> {
+    let tcp = if reuse {
+        let domain = match addr {
+            SocketAddr::V4(_) => Domain::ipv4(),
+            SocketAddr::V6(_) => Domain::ipv6(),
+        };
+        let socket = Socket::new(domain, Type::stream(), Some(SocketProtocol::tcp()))?;
+
+        // reuse addr and reuse port's situation on each platform
+        // https://stackoverflow.com/questions/14388706/how-do-so-reuseaddr-and-so-reuseport-differ
+        #[cfg(unix)]
+        socket.set_reuse_port(true)?;
+
+        socket.set_reuse_address(true)?;
+        socket.bind(&addr.into())?;
+        socket.listen(1024)?;
+        TcpListener::from_std(socket.into_tcp_listener()).unwrap()
+    } else {
+        TcpListener::bind(&addr)
+            .await
+            .map_err(TransportErrorKind::Io)?
+    };
+
+    Ok((tcp.local_addr()?, tcp))
+}
+
+/// ws/tcp common dial realization
+#[inline(always)]
+async fn tcp_dial(
+    addr: SocketAddr,
+    bind_addr: Option<SocketAddr>,
+    timeout: Duration,
+) -> Result<TcpStream> {
+    let domain = match addr {
+        SocketAddr::V4(_) => Domain::ipv4(),
+        SocketAddr::V6(_) => Domain::ipv6(),
+    };
+    let socket = Socket::new(domain, Type::stream(), Some(SocketProtocol::tcp()))?;
+
+    if let Some(addr) = bind_addr {
+        #[cfg(unix)]
+        socket.set_reuse_port(true)?;
+        socket.set_reuse_address(true)?;
+        socket.bind(&addr.into())?;
+    }
+
+    let std_tcp = socket.into_tcp_stream();
+
+    match tokio::time::timeout(timeout, TcpStream::connect_std(std_tcp, &addr)).await {
+        Err(_) => Err(TransportErrorKind::Io(io::ErrorKind::TimedOut.into())),
+        Ok(res) => Ok(res?),
+    }
 }
 
 #[cfg(test)]
