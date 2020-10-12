@@ -9,15 +9,14 @@ use std::{
 };
 
 use futures::{
-    channel::{
-        mpsc::{channel, Receiver, Sender},
-        oneshot,
-    },
-    future::select,
-    FutureExt, Sink, SinkExt, Stream,
+    channel::mpsc::{channel, Receiver, Sender},
+    Sink, Stream,
 };
 use log::debug;
-use tokio::prelude::{AsyncRead, AsyncWrite};
+use tokio::{
+    prelude::{AsyncRead, AsyncWrite},
+    time::Interval,
+};
 use tokio_util::codec::Framed;
 
 use crate::{
@@ -78,9 +77,7 @@ pub struct Session<T> {
     control_sender: Sender<Command>,
     control_receiver: Receiver<Command>,
 
-    keepalive_receiver: Option<Receiver<()>>,
-    /// keep alive stop signal
-    stop_signal_tx: Option<oneshot::Sender<()>>,
+    keepalive: Option<Interval>,
 }
 
 /// Session type, client or server
@@ -120,31 +117,10 @@ where
             raw_stream,
             FrameCodec::default().max_frame_size(config.max_stream_window_size),
         );
-        let (keepalive_receiver, stop_signal_tx) = if config.enable_keepalive {
-            let (mut interval_sender, interval_receiver) = channel(2);
-            let (stop_signal_tx, stop_signal_rx) = oneshot::channel::<()>();
-            let interval = async move {
-                let mut interval = tokio::time::interval(config.keepalive_interval);
-                loop {
-                    interval.tick().await;
-                    match interval_sender.send(()).await {
-                        Ok(_) => (),
-                        Err(e) => {
-                            if !e.is_full() {
-                                break;
-                            }
-                        }
-                    }
-                }
-            }
-            .boxed();
-
-            tokio::spawn(async move {
-                select(stop_signal_rx, interval).await;
-            });
-            (Some(interval_receiver), Some(stop_signal_tx))
+        let keepalive = if config.enable_keepalive {
+            Some(tokio::time::interval(config.keepalive_interval))
         } else {
-            (None, None)
+            None
         };
 
         Session {
@@ -165,8 +141,7 @@ where
             event_receiver,
             control_sender,
             control_receiver,
-            keepalive_receiver,
-            stop_signal_tx,
+            keepalive,
         }
     }
 
@@ -607,13 +582,13 @@ where
             self.read_pending_frames.len()
         );
 
-        while let Some(ref mut receiver) = self.keepalive_receiver {
-            match Pin::new(receiver).as_mut().poll_next(cx) {
+        while let Some(ref mut interval) = self.keepalive {
+            match Pin::new(interval).as_mut().poll_next(cx) {
                 Poll::Ready(Some(_)) => {
                     self.keep_alive(cx, Instant::now())?;
                 }
                 Poll::Ready(None) => {
-                    debug!("poll keepalive_receiver finished");
+                    debug!("poll keepalive interval finished");
                     break;
                 }
                 Poll::Pending => break,
@@ -642,16 +617,6 @@ where
         }
 
         Poll::Pending
-    }
-}
-
-impl<T> Drop for Session<T> {
-    fn drop(&mut self) {
-        if let Some(send) = self.stop_signal_tx.take() {
-            if send.send(()).is_err() {
-                log::trace!("session drop send to timer err")
-            }
-        }
     }
 }
 
