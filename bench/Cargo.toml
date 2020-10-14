@@ -12,7 +12,7 @@ name = "main"
 path = "./src/main.rs"
 
 [dependencies]
-p2p = { path = "..", package = "tentacle" }
+p2p = { path = "../tentacle", package = "tentacle" }
 rand = "0.6.1"
 futures = { version = "0.3.0" }
 tokio = { version = "0.2.0", features = ["time", "io-util", "tcp", "dns", "rt-threaded", "blocking"] }

@@ -112,7 +112,7 @@ pub struct Service<T> {
 
     wait_handle: Vec<(
         Option<futures::channel::oneshot::Sender<()>>,
-        tokio::task::JoinHandle<()>,
+        crate::runtime::JoinHandle<()>,
     )>,
 }
 
@@ -246,7 +246,7 @@ where
             future_task_sender: self.future_task_sender.clone_sender(),
         };
         let mut sender = self.future_task_sender.clone_sender();
-        tokio::spawn(async move {
+        crate::runtime::spawn(async move {
             let res = sender
                 .send(Box::pin(listener.for_each(|_| future::ready(()))))
                 .await;
@@ -440,7 +440,7 @@ where
         id: SessionId,
     ) -> Vec<(
         Option<futures::channel::oneshot::Sender<()>>,
-        tokio::task::JoinHandle<()>,
+        crate::runtime::JoinHandle<()>,
     )> {
         let mut handles = Vec::new();
         for (proto_id, meta) in self.protocol_configs.iter_mut() {
@@ -466,7 +466,7 @@ where
                         ),
                     );
                     let (sender, receiver) = futures::channel::oneshot::channel();
-                    let handle = tokio::spawn(async move {
+                    let handle = crate::runtime::spawn(async move {
                         future::select(stream.for_each(|_| future::ready(())), receiver).await;
                     });
                     handles.push((Some(sender), handle));
@@ -552,7 +552,7 @@ where
 
         let mut future_task_sender = self.future_task_sender.clone_sender();
 
-        tokio::spawn(async move {
+        crate::runtime::spawn(async move {
             if future_task_sender
                 .send(Box::pin(handshake_task))
                 .await
@@ -736,7 +736,7 @@ where
             }
         }
 
-        tokio::spawn(session.for_each(|_| future::ready(())));
+        crate::runtime::spawn(session.for_each(|_| future::ready(())));
 
         self.handle.handle_event(
             &mut self.service_context,
@@ -921,7 +921,7 @@ where
                 );
                 stream.handle_event(ServiceProtocolEvent::Init);
                 let (sender, receiver) = futures::channel::oneshot::channel();
-                let handle = tokio::spawn(async move {
+                let handle = crate::runtime::spawn(async move {
                     future::select(stream.for_each(|_| future::ready(())), receiver).await;
                 });
                 self.wait_handle.push((Some(sender), handle));
@@ -1384,7 +1384,7 @@ where
 
         if let Some(stream) = self.future_task_manager.take() {
             let (sender, receiver) = futures::channel::oneshot::channel();
-            let handle = tokio::spawn(async move {
+            let handle = crate::runtime::spawn(async move {
                 future::select(stream.for_each(|_| future::ready(())), receiver).await;
             });
             self.wait_handle.push((Some(sender), handle));

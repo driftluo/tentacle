@@ -27,7 +27,7 @@ where
     F: FnOnce() -> R,
 {
     if flag {
-        tokio::task::block_in_place(f)
+        crate::runtime::block_in_place(f)
     } else {
         f()
     }
@@ -237,13 +237,13 @@ where
             // NOTE: A Interval/Delay will block tokio runtime from gracefully shutdown.
             //       So we spawn it in FutureTaskManager
             let task = async move {
-                tokio::time::delay_until(tokio::time::Instant::now() + interval).await;
+                crate::runtime::delay_for(interval).await;
                 if sender.send(token).await.is_err() {
                     trace!("service notify token {} send err", token)
                 }
             };
             let mut future_task_sender = self.future_task_sender.clone();
-            tokio::spawn(async move {
+            crate::runtime::spawn(async move {
                 if future_task_sender.send(Box::pin(task)).await.is_err() {
                     trace!("service notify task send err")
                 }
@@ -268,7 +268,7 @@ impl<T> Drop for ServiceProtocolStream<T> {
                     },
                 };
                 let mut panic_sender = self.panic_report.clone();
-                tokio::spawn(async move {
+                crate::runtime::spawn(async move {
                     if panic_sender.send(event).await.is_err() {
                         trace!("service panic message send err")
                     }
@@ -493,13 +493,13 @@ where
             // NOTE: A Interval/Delay will block tokio runtime from gracefully shutdown.
             //       So we spawn it in FutureTaskManager
             let task = async move {
-                tokio::time::delay_until(tokio::time::Instant::now() + interval).await;
+                crate::runtime::delay_for(interval).await;
                 if sender.send(token).await.is_err() {
                     trace!("session notify token {} send err", token)
                 }
             };
             let mut future_task_sender = self.future_task_sender.clone();
-            tokio::spawn(async move {
+            crate::runtime::spawn(async move {
                 if future_task_sender.send(Box::pin(task)).await.is_err() {
                     trace!("session notify task send err")
                 }
@@ -522,7 +522,7 @@ impl<T> Drop for SessionProtocolStream<T> {
                 proto_id: self.handle_context.proto_id,
             };
             let mut panic_sender = self.panic_report.clone();
-            tokio::spawn(async move {
+            crate::runtime::spawn(async move {
                 if panic_sender.send(event).await.is_err() {
                     trace!("session panic message send err")
                 }

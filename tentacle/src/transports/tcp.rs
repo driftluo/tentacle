@@ -7,11 +7,11 @@ use std::{
     task::{Context, Poll},
     time::Duration,
 };
-use tokio::net::{TcpListener, TcpStream};
 
 use crate::{
     error::TransportErrorKind,
     multiaddr::Multiaddr,
+    runtime::{TcpListener, TcpStream},
     transports::{tcp_dial, tcp_listen, Transport},
     utils::{dns::DNSResolver, multiaddr_to_socketaddr, socketaddr_to_multiaddr},
 };

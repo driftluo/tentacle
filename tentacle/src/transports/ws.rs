@@ -12,10 +12,7 @@ use std::{
     task::{Context, Poll},
     time::Duration,
 };
-use tokio::{
-    io::{AsyncRead, AsyncWrite},
-    net::{TcpListener, TcpStream},
-};
+use tokio::io::{AsyncRead, AsyncWrite};
 use tokio_tungstenite::{
     accept_async, client_async_with_config,
     tungstenite::{Error, Message},
@@ -25,6 +22,7 @@ use tokio_tungstenite::{
 use crate::{
     error::TransportErrorKind,
     multiaddr::{Multiaddr, Protocol},
+    runtime::{TcpListener, TcpStream},
     transports::{tcp_dial, tcp_listen, Result, Transport},
     utils::{dns::DNSResolver, multiaddr_to_socketaddr, socketaddr_to_multiaddr},
 };
@@ -61,7 +59,7 @@ async fn connect(
             let url = format!("ws://{}:{}", socket_address.ip(), socket_address.port());
             let tcp = tcp_dial(socket_address, bind_addr, timeout).await?;
 
-            match tokio::time::timeout(timeout, client_async_with_config(url, tcp, None)).await {
+            match crate::runtime::timeout(timeout, client_async_with_config(url, tcp, None)).await {
                 Err(_) => Err(TransportErrorKind::Io(io::ErrorKind::TimedOut.into())),
                 Ok(res) => Ok((original.unwrap_or(addr), {
                     let (stream, _) = res.map_err(|err| {
@@ -232,8 +230,8 @@ impl Stream for WebsocketListener {
                 Ok(remote_address) => {
                     let timeout = self.timeout;
                     let mut sender = self.sender.clone();
-                    tokio::spawn(async move {
-                        match tokio::time::timeout(timeout, accept_async(stream)).await {
+                    crate::runtime::spawn(async move {
+                        match crate::runtime::timeout(timeout, accept_async(stream)).await {
                             Err(_) => debug!("accept websocket stream timeout"),
                             Ok(res) => match res {
                                 Ok(stream) => {

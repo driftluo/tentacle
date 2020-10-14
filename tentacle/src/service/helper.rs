@@ -89,7 +89,7 @@ impl HandshakeContext {
     {
         match self.key_pair {
             Some(key_pair) => {
-                let result = tokio::time::timeout(
+                let result = crate::runtime::timeout(
                     self.timeout,
                     Config::new(key_pair)
                         .max_frame_length(self.max_frame_length)
@@ -177,7 +177,7 @@ impl Listener {
                 error!("Listen address result send back error: {:?}", err);
             }
         };
-        tokio::spawn(async move {
+        crate::runtime::spawn(async move {
             if future_sender.send(Box::pin(report_task)).await.is_err() {
                 trace!("Listen address result send to future manager error");
             }
@@ -201,7 +201,7 @@ impl Listener {
 
         let mut future_task_sender = self.future_task_sender.clone();
 
-        tokio::spawn(async move {
+        crate::runtime::spawn(async move {
             if future_task_sender
                 .send(Box::pin(handshake_task))
                 .await

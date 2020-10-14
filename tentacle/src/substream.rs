@@ -199,7 +199,7 @@ where
             events.push_back(ServiceProtocolEvent::Disconnected {
                 id: self.context.id,
             });
-            tokio::spawn(async move {
+            crate::runtime::spawn(async move {
                 let mut iter = iter(events).map(Ok);
                 if let Err(e) = sender.send_all(&mut iter).await {
                     debug!("stream close event send to proto handle error: {:?}", e)
@@ -213,7 +213,7 @@ where
             if self.context.closed.load(Ordering::SeqCst) {
                 events.push_back(SessionProtocolEvent::Disconnected);
             }
-            tokio::spawn(async move {
+            crate::runtime::spawn(async move {
                 let mut iter = iter(events).map(Ok);
                 if let Err(e) = sender.send_all(&mut iter).await {
                     debug!("stream close event send to proto handle error: {:?}", e)
@@ -227,7 +227,7 @@ where
                 id: self.id,
                 proto_id: self.proto_id,
             });
-            tokio::spawn(async move {
+            crate::runtime::spawn(async move {
                 let mut iter = iter(events).map(Ok);
                 if let Err(e) = sender.send_all(&mut iter).await {
                     debug!("stream close event send to session error: {:?}", e)
