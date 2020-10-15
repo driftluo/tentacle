@@ -13,10 +13,7 @@ use futures::{
     Sink, Stream,
 };
 use log::debug;
-use tokio::{
-    prelude::{AsyncRead, AsyncWrite},
-    time::Interval,
-};
+use tokio::prelude::{AsyncRead, AsyncWrite};
 use tokio_util::codec::Framed;
 
 use crate::{
@@ -27,6 +24,8 @@ use crate::{
     stream::{StreamEvent, StreamHandle, StreamState},
     StreamId,
 };
+
+use timer::{interval, Interval};
 
 const BUF_SHRINK_THRESHOLD: usize = u8::max_value() as usize;
 const TIMEOUT: Duration = Duration::from_secs(30);
@@ -40,11 +39,11 @@ pub struct Session<T> {
     eof: bool,
 
     // remoteGoAway indicates the remote side does
-    // not want futher connections. Must be first for alignment.
+    // not want further connections. Must be first for alignment.
     remote_go_away: bool,
 
     // localGoAway indicates that we should stop
-    // accepting futher connections. Must be first for alignment.
+    // accepting further connections. Must be first for alignment.
     local_go_away: bool,
 
     // nextStreamID is the next stream we should
@@ -118,7 +117,7 @@ where
             FrameCodec::default().max_frame_size(config.max_stream_window_size),
         );
         let keepalive = if config.enable_keepalive {
-            Some(tokio::time::interval(config.keepalive_interval))
+            Some(interval(config.keepalive_interval))
         } else {
             None
         };
@@ -617,6 +616,59 @@ where
         }
 
         Poll::Pending
+    }
+}
+
+mod timer {
+    #[cfg(feature = "generic-timer")]
+    pub use generic_time::{interval, Interval};
+    #[cfg(feature = "tokio-timer")]
+    pub use tokio::time::{interval, Interval};
+
+    #[cfg(feature = "generic-timer")]
+    mod generic_time {
+        use futures::{Future, Stream};
+        use futures_timer::Delay;
+        use std::{
+            pin::Pin,
+            task::{Context, Poll},
+            time::Duration,
+        };
+
+        pub struct Interval {
+            delay: Delay,
+            period: Duration,
+        }
+
+        impl Interval {
+            fn new(period: Duration) -> Self {
+                Self {
+                    delay: Delay::new(period),
+                    period,
+                }
+            }
+        }
+
+        impl Stream for Interval {
+            type Item = ();
+
+            fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<()>> {
+                match Pin::new(&mut self.delay).poll(cx) {
+                    Poll::Ready(_) => {
+                        let dur = self.period;
+                        self.delay.reset(dur);
+                        Poll::Ready(Some(()))
+                    }
+                    Poll::Pending => Poll::Pending,
+                }
+            }
+        }
+
+        pub fn interval(period: Duration) -> Interval {
+            assert!(period > Duration::new(0, 0), "`period` must be non-zero.");
+
+            Interval::new(period)
+        }
     }
 }
 

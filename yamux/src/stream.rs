@@ -5,7 +5,7 @@ use futures::{
     channel::mpsc::{Receiver, Sender},
     stream::FusedStream,
     task::AtomicWaker,
-    SinkExt, Stream,
+    Stream,
 };
 
 use std::{
@@ -114,9 +114,8 @@ impl StreamHandle {
     }
 
     fn send_go_away(&mut self) {
-        let mut sender = self.event_sender.clone();
         self.state = StreamState::LocalClosing;
-        tokio::spawn(async move { sender.send(StreamEvent::GoAway).await });
+        let _ignore = self.event_sender.try_send(StreamEvent::GoAway);
     }
 
     #[inline]
@@ -516,12 +515,10 @@ impl Drop for StreamHandle {
             let frame = Frame::new_window_update(flags, self.id, 0);
             let rst_event = StreamEvent::Frame(frame);
             let event = StreamEvent::StateChanged((self.id, StreamState::Closed));
-            let mut sender = self.event_sender.clone();
-
-            tokio::spawn(async move {
-                let _ignore = sender.send(rst_event).await;
-                let _ignore = sender.send(event).await;
-            });
+            // It is indeed possible that it cannot be sent here, but ignore it for now
+            // we should wait a `async drop` api to do this instead of any runtime
+            let _ignore = self.event_sender.try_send(rst_event);
+            let _ignore = self.event_sender.try_send(event);
         }
     }
 }
