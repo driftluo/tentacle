@@ -11,18 +11,15 @@ pub(crate) struct OpenSSLCrypt {
     cipher_type: CipherType,
     key: Bytes,
     iv: BytesMut,
-    aead: bool,
 }
 
 impl OpenSSLCrypt {
-    pub fn new(cipher_type: CipherType, key: &[u8], iv: &[u8]) -> Self {
-        let (cipher, aead) = match cipher_type {
-            CipherType::Aes128Ctr => (symm::Cipher::aes_128_ctr(), false),
-            CipherType::Aes256Ctr => (symm::Cipher::aes_256_ctr(), false),
-            CipherType::Aes128Gcm => (symm::Cipher::aes_128_gcm(), true),
-            CipherType::Aes256Gcm => (symm::Cipher::aes_256_gcm(), true),
+    pub fn new(cipher_type: CipherType, key: &[u8]) -> Self {
+        let cipher = match cipher_type {
+            CipherType::Aes128Gcm => symm::Cipher::aes_128_gcm(),
+            CipherType::Aes256Gcm => symm::Cipher::aes_256_gcm(),
             #[cfg(any(ossl110))]
-            CipherType::ChaCha20Poly1305 => (symm::Cipher::chacha20_poly1305(), true),
+            CipherType::ChaCha20Poly1305 => symm::Cipher::chacha20_poly1305(),
             #[cfg(not(ossl110))]
             _ => panic!(
                 "Cipher type {:?} does not supported by OpenSSLCrypt yet",
@@ -30,25 +27,19 @@ impl OpenSSLCrypt {
             ),
         };
 
-        // aead use self-increase iv, ctr use fixed iv
-        let iv = if aead {
-            let nonce_size = cipher_type.iv_size();
-            let mut nonce = BytesMut::with_capacity(nonce_size);
-            unsafe {
-                nonce.set_len(nonce_size);
-                ::std::ptr::write_bytes(nonce.as_mut_ptr(), 0, nonce_size);
-            }
-            nonce
-        } else {
-            BytesMut::from(iv)
-        };
+        // aead use self-increase iv
+        let nonce_size = cipher_type.iv_size();
+        let mut nonce = BytesMut::with_capacity(nonce_size);
+        unsafe {
+            nonce.set_len(nonce_size);
+            ::std::ptr::write_bytes(nonce.as_mut_ptr(), 0, nonce_size);
+        }
 
         OpenSSLCrypt {
             cipher,
             cipher_type,
             key: Bytes::from(key.to_owned()),
-            iv,
-            aead,
+            iv: nonce,
         }
     }
 
@@ -59,20 +50,16 @@ impl OpenSSLCrypt {
     /// +----------------------------------------+-----------------------+
     /// ```
     pub fn encrypt(&mut self, input: &[u8]) -> Result<Vec<u8>, SecioError> {
-        if self.aead {
-            nonce_advance(self.iv.as_mut());
-            let tag_size = self.cipher_type.tag_size();
-            let mut tag = Vec::with_capacity(tag_size);
-            unsafe {
-                tag.set_len(tag_size);
-            }
-            let mut output =
-                symm::encrypt_aead(self.cipher, &self.key, Some(&self.iv), &[], input, &mut tag)?;
-            output.append(&mut tag);
-            Ok(output)
-        } else {
-            symm::encrypt(self.cipher, &self.key, Some(&self.iv), input).map_err(Into::into)
+        nonce_advance(self.iv.as_mut());
+        let tag_size = self.cipher_type.tag_size();
+        let mut tag = Vec::with_capacity(tag_size);
+        unsafe {
+            tag.set_len(tag_size);
         }
+        let mut output =
+            symm::encrypt_aead(self.cipher, &self.key, Some(&self.iv), &[], input, &mut tag)?;
+        output.append(&mut tag);
+        Ok(output)
     }
 
     /// Decrypt `input` to `output` with `tag`. `output.len()` should equals to `input.len() - tag.len()`.
@@ -82,24 +69,20 @@ impl OpenSSLCrypt {
     /// +----------------------------------------+-----------------------+
     /// ```
     pub fn decrypt(&mut self, input: &[u8]) -> Result<Vec<u8>, SecioError> {
-        if self.aead {
-            nonce_advance(self.iv.as_mut());
-            let crypt_data_len = input
-                .len()
-                .checked_sub(self.cipher_type.tag_size())
-                .ok_or(SecioError::FrameTooShort)?;
-            openssl::symm::decrypt_aead(
-                self.cipher,
-                &self.key,
-                Some(&self.iv),
-                &[],
-                &input[..crypt_data_len],
-                &input[crypt_data_len..],
-            )
-            .map_err(Into::into)
-        } else {
-            symm::decrypt(self.cipher, &self.key, Some(&self.iv), input).map_err(Into::into)
-        }
+        nonce_advance(self.iv.as_mut());
+        let crypt_data_len = input
+            .len()
+            .checked_sub(self.cipher_type.tag_size())
+            .ok_or(SecioError::FrameTooShort)?;
+        openssl::symm::decrypt_aead(
+            self.cipher,
+            &self.key,
+            Some(&self.iv),
+            &[],
+            &input[..crypt_data_len],
+            &input[crypt_data_len..],
+        )
+        .map_err(Into::into)
     }
 }
 
@@ -121,12 +104,9 @@ mod test {
         let key = (0..mode.key_size())
             .map(|_| rand::random::<u8>())
             .collect::<Vec<_>>();
-        let iv = (0..mode.iv_size())
-            .map(|_| rand::random::<u8>())
-            .collect::<Vec<_>>();
 
-        let mut encryptor = OpenSSLCrypt::new(mode, &key[0..], &iv[0..]);
-        let mut decryptor = OpenSSLCrypt::new(mode, &key[0..], &iv[0..]);
+        let mut encryptor = OpenSSLCrypt::new(mode, &key[0..]);
+        let mut decryptor = OpenSSLCrypt::new(mode, &key[0..]);
 
         // first time
         let message = b"HELLO WORLD";
@@ -143,16 +123,6 @@ mod test {
         let decrypted_msg = decryptor.decrypt(&encrypted_msg[..]).unwrap();
 
         assert_eq!(message, &decrypted_msg[..]);
-    }
-
-    #[test]
-    fn test_aes_128_ctr() {
-        test_openssl(CipherType::Aes128Ctr)
-    }
-
-    #[test]
-    fn test_aes_256_ctr() {
-        test_openssl(CipherType::Aes256Ctr)
     }
 
     #[test]

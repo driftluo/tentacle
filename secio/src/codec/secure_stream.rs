@@ -14,15 +14,13 @@ use std::{
     task::{Context, Poll},
 };
 
-use crate::{codec::Hmac, crypto::BoxStreamCipher, error::SecioError};
+use crate::{crypto::BoxStreamCipher, error::SecioError};
 
 /// Encrypted stream
 pub struct SecureStream<T> {
     socket: Framed<T, LengthDelimitedCodec>,
     decode_cipher: BoxStreamCipher,
-    decode_hmac: Option<Hmac>,
     encode_cipher: BoxStreamCipher,
-    encode_hmac: Option<Hmac>,
     /// denotes a sequence of bytes which are expected to be
     /// found at the beginning of the stream and are checked for equality
     nonce: Vec<u8>,
@@ -44,17 +42,13 @@ where
     pub(crate) fn new(
         socket: Framed<T, LengthDelimitedCodec>,
         decode_cipher: BoxStreamCipher,
-        decode_hmac: Option<Hmac>,
         encode_cipher: BoxStreamCipher,
-        encode_hmac: Option<Hmac>,
         nonce: Vec<u8>,
     ) -> Self {
         SecureStream {
             socket,
             decode_cipher,
-            decode_hmac,
             encode_cipher,
-            encode_hmac,
             nonce,
             recv_buf: Vec::default(),
         }
@@ -62,30 +56,8 @@ where
 
     /// Decoding data
     #[inline]
-    fn decode_buffer(&mut self, mut frame: BytesMut) -> Result<Vec<u8>, SecioError> {
-        if let Some(ref mut hmac) = self.decode_hmac {
-            if frame.len() < hmac.num_bytes() {
-                debug!("frame too short when decoding secio frame");
-                return Err(SecioError::FrameTooShort);
-            }
-
-            let content_length = frame.len() - hmac.num_bytes();
-            {
-                let (crypted_data, expected_hash) = frame.split_at(content_length);
-                debug_assert_eq!(expected_hash.len(), hmac.num_bytes());
-
-                if !hmac.verify(crypted_data, expected_hash) {
-                    debug!("hmac mismatch when decoding secio frame");
-                    return Err(SecioError::HmacNotMatching);
-                }
-            }
-
-            frame.truncate(content_length);
-        }
-
-        let out = self.decode_cipher.decrypt(&frame)?;
-
-        Ok(out)
+    fn decode_buffer(&mut self, frame: BytesMut) -> Result<Vec<u8>, SecioError> {
+        Ok(self.decode_cipher.decrypt(&frame)?)
     }
 
     pub(crate) async fn verify_nonce(&mut self) -> Result<(), SecioError> {
@@ -128,11 +100,7 @@ where
 
     #[inline]
     fn encode_buffer(&mut self, buf: &[u8]) -> Bytes {
-        let mut out = self.encode_cipher.encrypt(buf).unwrap();
-        if let Some(ref mut hmac) = self.encode_hmac {
-            let signature = hmac.sign(&out[..]);
-            out.extend_from_slice(signature.as_ref());
-        }
+        let out = self.encode_cipher.encrypt(buf).unwrap();
         Bytes::from(out)
     }
 }
@@ -218,10 +186,8 @@ where
 
 #[cfg(test)]
 mod tests {
-    use super::{Hmac, SecureStream};
+    use super::SecureStream;
     use crate::crypto::{cipher::CipherType, new_stream, CryptoMode};
-    #[cfg(unix)]
-    use crate::Digest;
     use bytes::BytesMut;
     use futures::channel;
     use tokio::{
@@ -234,46 +200,13 @@ mod tests {
         let cipher_key = (0..cipher.key_size())
             .map(|_| rand::random::<u8>())
             .collect::<Vec<_>>();
-        let _hmac_key: [u8; 32] = rand::random();
-        let iv = (0..cipher.iv_size())
-            .map(|_| rand::random::<u8>())
-            .collect::<Vec<_>>();
 
         let data = b"hello world";
 
-        let mut encode_cipher = new_stream(cipher, &cipher_key, &iv, CryptoMode::Encrypt);
-        let mut decode_cipher = new_stream(cipher, &cipher_key, &iv, CryptoMode::Decrypt);
+        let mut encode_cipher = new_stream(cipher, &cipher_key, CryptoMode::Encrypt);
+        let mut decode_cipher = new_stream(cipher, &cipher_key, CryptoMode::Decrypt);
 
-        let (mut decode_hmac, mut encode_hmac): (Option<Hmac>, Option<Hmac>) = match cipher {
-            CipherType::ChaCha20Poly1305 | CipherType::Aes128Gcm | CipherType::Aes256Gcm => {
-                (None, None)
-            }
-            #[cfg(unix)]
-            _ => {
-                let encode_hmac = Hmac::from_key(Digest::Sha256, &_hmac_key);
-                let decode_hmac = encode_hmac.clone();
-                (Some(decode_hmac), Some(encode_hmac))
-            }
-        };
-
-        let mut encode_data = encode_cipher.encrypt(&data[..]).unwrap();
-        if encode_hmac.is_some() {
-            let signature = encode_hmac.as_mut().unwrap().sign(&encode_data[..]);
-            encode_data.extend_from_slice(signature.as_ref());
-        }
-
-        if decode_hmac.is_some() {
-            let content_length = encode_data.len() - decode_hmac.as_mut().unwrap().num_bytes();
-
-            let (crypted_data, expected_hash) = encode_data.split_at(content_length);
-
-            assert!(decode_hmac
-                .as_mut()
-                .unwrap()
-                .verify(crypted_data, expected_hash));
-
-            encode_data.truncate(content_length);
-        }
+        let encode_data = encode_cipher.encrypt(&data[..]).unwrap();
 
         let decode_data = decode_cipher.decrypt(&encode_data).unwrap();
 
@@ -283,10 +216,6 @@ mod tests {
     fn secure_codec_encode_then_decode(cipher: CipherType) {
         let cipher_key: [u8; 32] = rand::random();
         let cipher_key_clone = cipher_key;
-        let iv = (0..cipher.iv_size())
-            .map(|_| rand::random::<u8>())
-            .collect::<Vec<_>>();
-        let iv_clone = iv.clone();
         let key_size = cipher.key_size();
         let hmac_key: [u8; 16] = rand::random();
         let _hmac_key_clone = hmac_key;
@@ -304,32 +233,11 @@ mod tests {
             let _res = addr_sender.send(listener_addr);
             let (socket, _) = listener.accept().await.unwrap();
             let nonce2 = nonce.clone();
-            let (decode_hmac, encode_hmac) = match cipher {
-                CipherType::ChaCha20Poly1305 | CipherType::Aes128Gcm | CipherType::Aes256Gcm => {
-                    (None, None)
-                }
-                #[cfg(unix)]
-                _ => (
-                    Some(Hmac::from_key(Digest::Sha256, &_hmac_key_clone)),
-                    Some(Hmac::from_key(Digest::Sha256, &_hmac_key_clone)),
-                ),
-            };
+
             let mut handle = SecureStream::new(
                 Framed::new(socket, LengthDelimitedCodec::new()),
-                new_stream(
-                    cipher,
-                    &cipher_key_clone[..key_size],
-                    &iv_clone,
-                    CryptoMode::Decrypt,
-                ),
-                decode_hmac,
-                new_stream(
-                    cipher,
-                    &cipher_key_clone[..key_size],
-                    &iv_clone,
-                    CryptoMode::Encrypt,
-                ),
-                encode_hmac,
+                new_stream(cipher, &cipher_key_clone[..key_size], CryptoMode::Decrypt),
+                new_stream(cipher, &cipher_key_clone[..key_size], CryptoMode::Encrypt),
                 nonce2,
             );
 
@@ -341,32 +249,10 @@ mod tests {
         rt.spawn(async move {
             let listener_addr = addr_receiver.await.unwrap();
             let stream = TcpStream::connect(&listener_addr).await.unwrap();
-            let (decode_hmac, encode_hmac) = match cipher {
-                CipherType::ChaCha20Poly1305 | CipherType::Aes128Gcm | CipherType::Aes256Gcm => {
-                    (None, None)
-                }
-                #[cfg(unix)]
-                _ => (
-                    Some(Hmac::from_key(Digest::Sha256, &_hmac_key_clone)),
-                    Some(Hmac::from_key(Digest::Sha256, &_hmac_key_clone)),
-                ),
-            };
             let mut handle = SecureStream::new(
                 Framed::new(stream, LengthDelimitedCodec::new()),
-                new_stream(
-                    cipher,
-                    &cipher_key_clone[..key_size],
-                    &iv,
-                    CryptoMode::Decrypt,
-                ),
-                decode_hmac,
-                new_stream(
-                    cipher,
-                    &cipher_key_clone[..key_size],
-                    &iv,
-                    CryptoMode::Encrypt,
-                ),
-                encode_hmac,
+                new_stream(cipher, &cipher_key_clone[..key_size], CryptoMode::Decrypt),
+                new_stream(cipher, &cipher_key_clone[..key_size], CryptoMode::Encrypt),
                 Vec::new(),
             );
 
@@ -377,18 +263,6 @@ mod tests {
             let received = receiver.await.unwrap();
             assert_eq!(received.to_vec(), data);
         });
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn test_encode_decode_aes128ctr() {
-        test_decode_encode(CipherType::Aes128Ctr);
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn test_encode_decode_aes256ctr() {
-        test_decode_encode(CipherType::Aes256Ctr);
     }
 
     #[test]
@@ -404,18 +278,6 @@ mod tests {
     #[test]
     fn test_encode_decode_chacha20poly1305() {
         test_decode_encode(CipherType::ChaCha20Poly1305);
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn secure_codec_encode_then_decode_aes128ctr() {
-        secure_codec_encode_then_decode(CipherType::Aes128Ctr);
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn secure_codec_encode_then_decode_aes256ctr() {
-        secure_codec_encode_then_decode(CipherType::Aes256Ctr);
     }
 
     #[test]

@@ -7,19 +7,10 @@ fn new_decrypt_cipher(cipher_type: CipherType) -> BoxStreamCipher {
     let key = (0..cipher_type.key_size())
         .map(|_| rand::random::<u8>())
         .collect::<Vec<_>>();
-    let iv = (0..cipher_type.iv_size())
-        .map(|_| rand::random::<u8>())
-        .collect::<Vec<_>>();
-    new_stream(cipher_type, &key, &iv, CryptoMode::Decrypt)
+    new_stream(cipher_type, &key, CryptoMode::Decrypt)
 }
 
 fuzz_target!(|data: &[u8]| {
-    let mut cipher = new_decrypt_cipher(CipherType::Aes128Ctr);
-    let _ = cipher.decrypt(data);
-
-    let mut cipher = new_decrypt_cipher(CipherType::Aes256Ctr);
-    let _ = cipher.decrypt(data);
-
     let mut cipher = new_decrypt_cipher(CipherType::Aes128Gcm);
     let _ = cipher.decrypt(data);
 

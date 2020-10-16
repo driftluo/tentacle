@@ -46,11 +46,6 @@ impl RingAeadCipher {
             CipherType::Aes128Gcm => &AES_128_GCM,
             CipherType::Aes256Gcm => &AES_256_GCM,
             CipherType::ChaCha20Poly1305 => &CHACHA20_POLY1305,
-            #[cfg(unix)]
-            _ => panic!(
-                "Cipher type {:?} does not supported by RingAead yet",
-                cipher_type
-            ),
         };
 
         let cipher = match mode {
