@@ -10,6 +10,7 @@ use std::{
 };
 use tokio::prelude::{AsyncRead, AsyncWrite};
 use tokio_util::codec::{Framed, FramedParts, LengthDelimitedCodec};
+use yamux::{Control, Session as YamuxSession, StreamHandle};
 
 use crate::{
     buffer::{Buffer, PriorityBuffer, SendResult},
@@ -27,7 +28,6 @@ use crate::{
     },
     substream::{ProtocolEvent, SubstreamBuilder},
     transports::MultiIncoming,
-    yamux::{Control, Session as YamuxSession, StreamHandle},
     ProtocolId, SessionId, StreamId,
 };
 
@@ -184,7 +184,7 @@ pub(crate) struct Session {
     future_task_sender: mpsc::Sender<BoxedFutureTask>,
     wait_handle: Vec<(
         Option<futures::channel::oneshot::Sender<()>>,
-        tokio::task::JoinHandle<()>,
+        crate::runtime::JoinHandle<()>,
     )>,
 }
 
@@ -206,8 +206,8 @@ impl Session {
         //       So we spawn it in FutureTaskManager
         let mut future_task_sender_ = future_task_sender.clone();
         let timeout = meta.timeout;
-        tokio::spawn(async move {
-            tokio::time::delay_until(tokio::time::Instant::now() + timeout).await;
+        crate::runtime::spawn(async move {
+            crate::runtime::delay_for(timeout).await;
             let task = Box::pin(async move {
                 if interval.send(ProtocolEvent::TimeoutCheck).await.is_err() {
                     trace!("timeout check send err")
@@ -218,7 +218,9 @@ impl Session {
             }
         });
         // background inner socket
-        tokio::spawn(InnerSocket::new(socket, meta.event_sender).for_each(|_| future::ready(())));
+        crate::runtime::spawn(
+            InnerSocket::new(socket, meta.event_sender).for_each(|_| future::ready(())),
+        );
 
         Session {
             control,
@@ -266,7 +268,7 @@ impl Session {
         // NOTE: A Interval/Delay will block tokio runtime from gracefully shutdown.
         //       So we spawn it in FutureTaskManager
         let task = Box::pin(async move {
-            let event = match tokio::time::timeout(timeout, procedure).await {
+            let event = match crate::runtime::timeout(timeout, procedure).await {
                 Ok(res) => match res {
                     Ok((handle, name, version)) => match version {
                         Some(version) => ProtocolEvent::Open {
@@ -297,7 +299,7 @@ impl Session {
         }) as BoxedFutureTask;
 
         let mut future_task_sender = self.future_task_sender.clone();
-        tokio::spawn(async move {
+        crate::runtime::spawn(async move {
             if future_task_sender.send(task).await.is_err() {
                 trace!("select procedure send err")
             }
@@ -443,7 +445,7 @@ impl Session {
         self.next_stream += 1;
 
         debug!("session [{}] proto [{}] open", self.context.id, proto_id);
-        tokio::spawn(proto_stream.for_each(|_| future::ready(())));
+        crate::runtime::spawn(proto_stream.for_each(|_| future::ready(())));
     }
 
     /// Handling events uploaded by the protocol stream
@@ -688,7 +690,7 @@ impl Session {
             id: self.context.id,
         });
 
-        tokio::spawn(async move {
+        crate::runtime::spawn(async move {
             let mut iter = iter(events).map(Ok);
             if let Err(e) = sender.send_all(&mut iter).await {
                 debug!("session close event send to service error: {:?}", e)
@@ -725,7 +727,7 @@ impl Session {
         self.proto_event_receiver.close();
 
         let mut control = self.control.clone();
-        tokio::spawn(async move {
+        crate::runtime::spawn(async move {
             control.close().await;
         });
     }
@@ -827,7 +829,7 @@ pub(crate) struct SessionMeta {
     event_sender: priority_mpsc::Sender<SessionEvent>,
     session_proto_handles: Vec<(
         Option<futures::channel::oneshot::Sender<()>>,
-        tokio::task::JoinHandle<()>,
+        crate::runtime::JoinHandle<()>,
     )>,
 }
 
@@ -892,7 +894,7 @@ impl SessionMeta {
         mut self,
         handles: Vec<(
             Option<futures::channel::oneshot::Sender<()>>,
-            tokio::task::JoinHandle<()>,
+            crate::runtime::JoinHandle<()>,
         )>,
     ) -> Self {
         self.session_proto_handles = handles;
@@ -955,7 +957,7 @@ where
             Poll::Ready(Some(Ok(stream))) => {
                 let mut sender = self.sender.clone();
 
-                tokio::spawn(async move {
+                crate::runtime::spawn(async move {
                     let _ignore = sender
                         .quick_send(SessionEvent::StreamStart { stream })
                         .await;
@@ -966,7 +968,7 @@ where
             Poll::Ready(None) => {
                 let mut sender = self.sender.clone();
 
-                tokio::spawn(async move {
+                crate::runtime::spawn(async move {
                     let _ignore = sender
                         .quick_send(SessionEvent::ChangeState {
                             state: SessionState::RemoteClose,
@@ -1000,7 +1002,7 @@ where
                 };
                 let mut sender = self.sender.clone();
 
-                tokio::spawn(async move {
+                crate::runtime::spawn(async move {
                     let _ignore = sender.quick_send(event).await;
                 });
 

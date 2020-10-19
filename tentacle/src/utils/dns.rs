@@ -23,7 +23,7 @@ pub struct DNSResolver {
     peer_id: Option<PeerId>,
     port: u16,
     domain: String,
-    join_handle: Option<tokio::task::JoinHandle<::std::io::Result<IntoIter<SocketAddr>>>>,
+    join_handle: Option<crate::runtime::JoinHandle<::std::io::Result<IntoIter<SocketAddr>>>>,
 }
 
 impl DNSResolver {
@@ -102,13 +102,14 @@ impl Future for DNSResolver {
             let domain = self.domain.clone();
             let port = self.port;
 
-            self.join_handle = Some(tokio::task::spawn_blocking(move || {
+            self.join_handle = Some(crate::runtime::spawn_blocking(move || {
                 (&domain[..], port).to_socket_addrs()
             }));
         }
 
         let mut handle = self.join_handle.take().unwrap();
 
+        #[cfg(feature = "tokio-runtime")]
         match handle.poll_unpin(cx) {
             Poll::Pending => {
                 self.join_handle = Some(handle);
@@ -118,6 +119,18 @@ impl Future for DNSResolver {
                 Ok(Ok(iter)) => self.new_addr(iter),
                 Err(e) => Poll::Ready(Err((self.source_address.clone(), e.into()))),
                 Ok(Err(e)) => Poll::Ready(Err((self.source_address.clone(), e))),
+            },
+        }
+
+        #[cfg(feature = "async-runtime")]
+        match handle.poll_unpin(cx) {
+            Poll::Pending => {
+                self.join_handle = Some(handle);
+                Poll::Pending
+            }
+            Poll::Ready(res) => match res {
+                Ok(iter) => self.new_addr(iter),
+                Err(e) => Poll::Ready(Err((self.source_address.clone(), e.into()))),
             },
         }
     }

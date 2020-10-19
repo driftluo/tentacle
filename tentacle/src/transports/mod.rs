@@ -1,6 +1,7 @@
 use crate::{
     error::TransportErrorKind,
     multiaddr::{Multiaddr, Protocol},
+    runtime::{TcpListener, TcpStream},
     utils::socketaddr_to_multiaddr,
 };
 
@@ -16,10 +17,7 @@ use std::{
     task::{Context, Poll},
     time::Duration,
 };
-use tokio::{
-    net::{TcpListener, TcpStream},
-    prelude::{AsyncRead, AsyncWrite},
-};
+use tokio::prelude::{AsyncRead, AsyncWrite};
 
 use self::tcp::{TcpDialFuture, TcpListenFuture, TcpTransport};
 #[cfg(feature = "ws")]
@@ -308,7 +306,7 @@ async fn tcp_listen(addr: SocketAddr, reuse: bool) -> Result<(SocketAddr, TcpLis
         socket.set_reuse_address(true)?;
         socket.bind(&addr.into())?;
         socket.listen(1024)?;
-        TcpListener::from_std(socket.into_tcp_listener()).unwrap()
+        crate::runtime::from_std(socket.into_tcp_listener()).unwrap()
     } else {
         TcpListener::bind(&addr)
             .await
@@ -338,9 +336,7 @@ async fn tcp_dial(
         socket.bind(&addr.into())?;
     }
 
-    let std_tcp = socket.into_tcp_stream();
-
-    match tokio::time::timeout(timeout, TcpStream::connect_std(std_tcp, &addr)).await {
+    match crate::runtime::timeout(timeout, crate::runtime::connect_std(socket, &addr)).await {
         Err(_) => Err(TransportErrorKind::Io(io::ErrorKind::TimedOut.into())),
         Ok(res) => Ok(res?),
     }

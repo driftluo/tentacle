@@ -15,17 +15,18 @@ FLATC_RUST_FILES := $(patsubst %.fbs,%_generated.rs,${FBS_FILES})
 FLATBUFFERS_VERIFIER_FILES := $(patsubst %.fbs,%_generated_verifier.rs,${FBS_FILES})
 MOL_RUST_FILES := $(patsubst %.mol,%_mol.rs,${MOL_FILES})
 
+Change_Work_Path := cd tentacle
 
 fmt:
 	cargo fmt --all -- --check
 
 clippy:
-	RUSTFLAGS='-F warnings' cargo clippy --all --tests --features molc,ws -- -D clippy::let_underscore_must_use
-	RUSTFLAGS='-F warnings' cargo clippy --all --tests --features flatc -- -D clippy::let_underscore_must_use
+	$(Change_Work_Path) && RUSTFLAGS='-F warnings' cargo clippy --all --tests --features molc,ws -- -D clippy::let_underscore_must_use
+	$(Change_Work_Path) && RUSTFLAGS='-F warnings' cargo clippy --all --tests --features flatc -- -D clippy::let_underscore_must_use
 
 test:
-	RUSTFLAGS='-F warnings' RUST_BACKTRACE=full cargo test --all --features molc,ws
-	RUSTFLAGS='-F warnings' RUST_BACKTRACE=full cargo test --all --features flatc
+	$(Change_Work_Path) && RUSTFLAGS='-F warnings' RUST_BACKTRACE=full cargo test --all --features molc,ws
+	$(Change_Work_Path) && RUSTFLAGS='-F warnings' RUST_BACKTRACE=full cargo test --all --features flatc
 
 fuzz:
 	cargo +nightly fuzz run secio_crypto_decrypt_cipher -- -max_total_time=60
@@ -33,18 +34,27 @@ fuzz:
 	cargo +nightly fuzz run yamux_frame_codec           -- -max_total_time=60
 
 build:
-	RUSTFLAGS='-F warnings' cargo build --all --features molc,ws
-	RUSTFLAGS='-F warnings' cargo build --all --features flatc
+	$(Change_Work_Path) && RUSTFLAGS='-F warnings' cargo build --all --features molc,ws
+	$(Change_Work_Path) && RUSTFLAGS='-F warnings' cargo build --all --features flatc
 
 examples:
-	cargo build --examples --all --features molc
-	cargo build --examples --all --features flatc
+	$(Change_Work_Path) && cargo build --examples --all --features molc
+	$(Change_Work_Path) && cargo build --examples --all --features flatc
+
+features-check:
+	# remove yamux default features
+	sed -i 's/"tokio-timer"//g' yamux/Cargo.toml
+	$(Change_Work_Path) && cargo build --features molc
+	$(Change_Work_Path) && cargo build --features molc,tokio-runtime,generic-timer --no-default-features
+	$(Change_Work_Path) && cargo build --features molc,async-runtime,generic-timer --no-default-features
+	$(Change_Work_Path) && cargo build --features molc,async-runtime,async-timer --no-default-features
+	git checkout .
 
 bench_p2p:
 	cd bench && cargo run --release --features molc
 	cd bench && cargo run --release --features flatc
 
-ci: fmt clippy test examples bench_p2p
+ci: fmt clippy test examples bench_p2p features-check
 	git diff --exit-code Cargo.lock
 
 check-cfbc-version:

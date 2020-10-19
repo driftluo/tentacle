@@ -60,7 +60,7 @@ impl FutureTaskManager {
 
         let task_id = self.next_id;
         let mut id_sender = self.id_sender.clone();
-        tokio::spawn(async move {
+        crate::runtime::spawn(async move {
             future::select(task, receiver).await;
             trace!("future task({}) finished", task_id);
             if id_sender.send(task_id).await.is_err() {
@@ -138,10 +138,10 @@ impl Stream for FutureTaskManager {
 mod test {
     use super::{Arc, AtomicBool, BoxedFutureTask, FutureTaskManager, Ordering};
 
+    use crate::runtime::delay_for;
     use futures::{channel::mpsc::channel, stream::pending, SinkExt, StreamExt};
     use std::sync::atomic::AtomicUsize;
     use std::{thread, time};
-    use tokio::time::delay_for;
 
     #[test]
     fn test_manager_drop() {
