@@ -1,3 +1,12 @@
+## 0.3.2
+
+### Features
+- Change channel api to immutable(#265)
+- Enable reuse port, use to NAT penetration(#266)
+- Make yamux independent of the specific runtime(#267,#268)
+- Make tentacle run on async std(#269)
+- Add fuzz test(#211)
+
 ## 0.3.1
 
 ### Features
