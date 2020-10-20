@@ -91,6 +91,7 @@ impl From<openssl::error::ErrorStack> for SecioError {
     }
 }
 
+#[cfg(not(target_os = "unknown"))]
 impl From<ring::error::Unspecified> for SecioError {
     fn from(_err: ring::error::Unspecified) -> SecioError {
         SecioError::RingCryptoError

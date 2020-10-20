@@ -2,7 +2,7 @@
 ///
 /// Delete part of the structure
 use crate::error::SecioError;
-use crate::exchange::KeyAgreement;
+use crate::hd_compat::KeyAgreement;
 use crate::{crypto::cipher::CipherType, Digest};
 
 use std::cmp::Ordering;
@@ -19,8 +19,14 @@ const CHACHA20_POLY1305: &str = "CHACHA20_POLY1305";
 const SHA_256: &str = "SHA256";
 const SHA_512: &str = "SHA512";
 
+#[cfg(not(target_os = "unknown"))]
 pub(crate) const DEFAULT_AGREEMENTS_PROPOSITION: &str = "P-256,P-384,X25519";
+#[cfg(target_arch = "wasm32")]
+pub(crate) const DEFAULT_AGREEMENTS_PROPOSITION: &str = "X25519";
+#[cfg(not(target_os = "unknown"))]
 pub(crate) const DEFAULT_CIPHERS_PROPOSITION: &str = "AES-128-GCM,AES-256-GCM,CHACHA20_POLY1305";
+#[cfg(target_arch = "wasm32")]
+pub(crate) const DEFAULT_CIPHERS_PROPOSITION: &str = "CHACHA20_POLY1305";
 pub(crate) const DEFAULT_DIGESTS_PROPOSITION: &str = "SHA256,SHA512";
 
 /// Return a proposition string from the given sequence of `KeyAgreement` values.

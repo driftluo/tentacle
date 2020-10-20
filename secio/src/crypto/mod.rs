@@ -4,8 +4,11 @@ use crate::error::SecioError;
 pub mod cipher;
 #[cfg(unix)]
 mod openssl_impl;
+#[cfg(not(target_os = "unknown"))]
 #[cfg(any(not(ossl110), test, not(unix)))]
 mod ring_impl;
+#[cfg(any(target_arch = "wasm32", test))]
+mod wasm_compat;
 
 /// Variant cipher which contains all possible stream ciphers
 #[doc(hidden)]
@@ -51,9 +54,17 @@ pub fn new_stream(t: cipher::CipherType, key: &[u8], mode: CryptoMode) -> BoxStr
 
 /// Generate a specific Cipher with key and initialize vector
 #[doc(hidden)]
+#[cfg(not(target_os = "unknown"))]
 #[cfg(not(unix))]
 pub fn new_stream(t: cipher::CipherType, key: &[u8], mode: CryptoMode) -> BoxStreamCipher {
     Box::new(ring_impl::RingAeadCipher::new(t, key, mode))
+}
+
+/// Generate a specific Cipher with key and initialize vector
+#[doc(hidden)]
+#[cfg(target_arch = "wasm32")]
+pub fn new_stream(t: cipher::CipherType, key: &[u8], _mode: CryptoMode) -> BoxStreamCipher {
+    Box::new(wasm_compat::WasmCrypt::new(t, key))
 }
 
 /// [0, 0, 0, 0]
@@ -77,7 +88,8 @@ fn nonce_advance(nonce: &mut [u8]) {
 #[cfg(all(test, unix))]
 mod test {
     use super::{
-        cipher::CipherType, openssl_impl::OpenSSLCrypt, ring_impl::RingAeadCipher, CryptoMode,
+        cipher::CipherType, openssl_impl::OpenSSLCrypt, ring_impl::RingAeadCipher,
+        wasm_compat::WasmCrypt, CryptoMode,
     };
 
     fn test_openssl_encrypt_ring_decrypt(cipher: CipherType) {
@@ -130,6 +142,56 @@ mod test {
         assert_eq!(message, &decrypted_msg[..]);
     }
 
+    fn test_ring_encrypt_wasm_decrypt(cipher: CipherType) {
+        let key = (0..cipher.key_size())
+            .map(|_| rand::random::<u8>())
+            .collect::<Vec<_>>();
+
+        let mut ring_encrypt = RingAeadCipher::new(cipher, &key, CryptoMode::Encrypt);
+        let mut wasm_decrypt = WasmCrypt::new(cipher, &key);
+
+        // first time
+        let message = b"HELLO WORLD";
+
+        let encrypted_msg = ring_encrypt.encrypt(message).unwrap();
+        let decrypted_msg = wasm_decrypt.decrypt(&encrypted_msg).unwrap();
+
+        assert_eq!(message, &decrypted_msg[..]);
+
+        // second time
+        let message = b"hello, world";
+
+        let encrypted_msg = ring_encrypt.encrypt(message).unwrap();
+        let decrypted_msg = wasm_decrypt.decrypt(&encrypted_msg).unwrap();
+
+        assert_eq!(message, &decrypted_msg[..]);
+    }
+
+    fn test_wasm_encrypt_openssl_decrypt(cipher: CipherType) {
+        let key = (0..cipher.key_size())
+            .map(|_| rand::random::<u8>())
+            .collect::<Vec<_>>();
+
+        let mut wasm_encrypt = WasmCrypt::new(cipher, &key);
+        let mut openssl_decrypt = OpenSSLCrypt::new(cipher, &key);
+
+        // first time
+        let message = b"HELLO WORLD";
+
+        let encrypted_msg = wasm_encrypt.encrypt(message).unwrap();
+        let decrypted_msg = openssl_decrypt.decrypt(&encrypted_msg).unwrap();
+
+        assert_eq!(message, &decrypted_msg[..]);
+
+        // second time
+        let message = b"hello, world";
+
+        let encrypted_msg = wasm_encrypt.encrypt(message).unwrap();
+        let decrypted_msg = openssl_decrypt.decrypt(&encrypted_msg).unwrap();
+
+        assert_eq!(message, &decrypted_msg[..]);
+    }
+
     #[test]
     fn test_aes_128_gcm() {
         test_ring_encrypt_openssl_decrypt(CipherType::Aes128Gcm);
@@ -146,6 +208,8 @@ mod test {
     #[test]
     fn test_chacha20_poly1305() {
         test_ring_encrypt_openssl_decrypt(CipherType::ChaCha20Poly1305);
-        test_openssl_encrypt_ring_decrypt(CipherType::ChaCha20Poly1305)
+        test_openssl_encrypt_ring_decrypt(CipherType::ChaCha20Poly1305);
+        test_ring_encrypt_wasm_decrypt(CipherType::ChaCha20Poly1305);
+        test_wasm_encrypt_openssl_decrypt(CipherType::ChaCha20Poly1305)
     }
 }

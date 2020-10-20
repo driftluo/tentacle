@@ -230,8 +230,8 @@ impl PublicKey {
     where
         K: AsRef<[u8]>,
     {
-        secp256k1::key::PublicKey::from_slice(key.as_ref())
-            .map(|key| PublicKey::Secp256k1(key.serialize().to_vec()))
+        crate::secp256k1_compat::pubkey_from_slice(key.as_ref())
+            .map(|key| PublicKey::Secp256k1(crate::secp256k1_compat::serialize_pubkey(&key)))
             .map_err(|_| crate::error::SecioError::SecretGenerationFailed)
     }
 
@@ -348,7 +348,7 @@ mod tests {
 
         let other = PublicKey::secp256k1_raw_key(inner).unwrap();
         assert_eq!(raw, other);
-        let uncompressed = secp256k1::key::PublicKey::from_slice(inner)
+        let uncompressed = crate::secp256k1_compat::pubkey_from_slice(inner)
             .map(|key| key.serialize_uncompressed().to_vec())
             .unwrap();
 

@@ -1,5 +1,3 @@
-use ring::aead;
-
 /// Possible encryption ciphers.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum CipherType {
@@ -13,31 +11,31 @@ pub enum CipherType {
 
 impl CipherType {
     /// Returns the size of in bytes of the key expected by the cipher.
-    pub fn key_size(self) -> usize {
+    pub const fn key_size(self) -> usize {
         match self {
-            CipherType::Aes128Gcm => aead::AES_128_GCM.key_len(),
-            CipherType::Aes256Gcm => aead::AES_256_GCM.key_len(),
-            CipherType::ChaCha20Poly1305 => aead::CHACHA20_POLY1305.key_len(),
+            CipherType::Aes128Gcm => 16,
+            CipherType::Aes256Gcm => 32,
+            CipherType::ChaCha20Poly1305 => 2 * 16,
         }
     }
 
     /// Returns the size of in bytes of the IV expected by the cipher.
     #[inline]
-    pub fn iv_size(self) -> usize {
+    pub const fn iv_size(self) -> usize {
         match self {
-            CipherType::Aes128Gcm => aead::AES_128_GCM.nonce_len(),
-            CipherType::Aes256Gcm => aead::AES_256_GCM.nonce_len(),
-            CipherType::ChaCha20Poly1305 => aead::CHACHA20_POLY1305.nonce_len(),
+            CipherType::Aes128Gcm => 96 / 8,
+            CipherType::Aes256Gcm => 96 / 8,
+            CipherType::ChaCha20Poly1305 => 96 / 8,
         }
     }
 
     /// Returns the size of in bytes of the tag expected by the cipher.
     #[inline]
-    pub fn tag_size(self) -> usize {
+    pub const fn tag_size(self) -> usize {
         match self {
-            CipherType::Aes128Gcm => aead::AES_128_GCM.tag_len(),
-            CipherType::Aes256Gcm => aead::AES_256_GCM.tag_len(),
-            CipherType::ChaCha20Poly1305 => aead::CHACHA20_POLY1305.tag_len(),
+            CipherType::Aes128Gcm => 16,
+            CipherType::Aes256Gcm => 16,
+            CipherType::ChaCha20Poly1305 => 16,
         }
     }
 }
