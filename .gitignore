@@ -1,5 +1,11 @@
 /target
+**/target
 **/*.rs.bk
 .idea/
 .vscode/
 Cargo.lock
+**/Cargo.lock
+**/bin/
+**/pkg/
+**/**/www/node_modules/
+**/**/www/package-lock.json

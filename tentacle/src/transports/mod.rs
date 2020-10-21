@@ -5,14 +5,14 @@ use crate::{
 
 #[cfg(target_arch = "wasm32")]
 mod browser;
-#[cfg(not(target_os = "unknown"))]
+#[cfg(not(target_arch = "wasm32"))]
 mod tcp;
 #[cfg(all(feature = "ws", not(target_os = "unknown")))]
 mod ws;
 
 #[cfg(target_arch = "wasm32")]
 pub use on_browser::*;
-#[cfg(not(target_os = "unknown"))]
+#[cfg(not(target_arch = "wasm32"))]
 pub use os::*;
 
 type Result<T> = std::result::Result<T, TransportErrorKind>;
@@ -53,7 +53,7 @@ pub fn find_type(addr: &Multiaddr) -> TransportType {
     .unwrap_or(TransportType::Tcp)
 }
 
-#[cfg(not(target_os = "unknown"))]
+#[cfg(not(target_arch = "wasm32"))]
 mod os {
     use super::*;
 

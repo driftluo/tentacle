@@ -32,7 +32,7 @@ pub struct SecioKeyPair {
 
 impl SecioKeyPair {
     /// Generates a new random sec256k1 key pair.
-    #[cfg(not(target_os = "unknown"))]
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn secp256k1_generated() -> SecioKeyPair {
         loop {
             if let Ok(private) = crate::secp256k1_compat::secret_key_from_slice(&rand::random::<

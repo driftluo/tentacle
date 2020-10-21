@@ -59,7 +59,7 @@ pub mod utils;
 mod channel;
 mod runtime;
 
-#[cfg(not(target_os = "unknown"))]
+#[cfg(not(target_arch = "wasm32"))]
 pub(crate) mod upnp;
 
 use std::{fmt, ops::AddAssign};

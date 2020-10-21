@@ -81,7 +81,7 @@ impl HandshakeContext<()> {
 
     // Setup local proposition.
     pub fn with_local(self) -> HandshakeContext<Local> {
-        #[cfg(not(target_os = "unknown"))]
+        #[cfg(not(target_arch = "wasm32"))]
         let nonce: [u8; 16] = rand::random();
         #[cfg(target_arch = "wasm32")]
         let mut nonce = [0; 16];
