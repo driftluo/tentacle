@@ -6,7 +6,10 @@ use std::{
     time::Duration,
 };
 
+// #[cfg(not(target_os = "unknown"))]
 pub use futures_timer::Delay;
+// #[cfg(target_arch = "wasm32")]
+// pub use wasm_timer::Delay;
 
 pub struct Interval {
     delay: Delay,
