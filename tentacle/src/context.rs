@@ -146,6 +146,7 @@ impl ServiceContext {
     }
 
     /// Create a new listener
+    #[cfg(not(target_os = "unknown"))]
     #[inline]
     pub fn listen(&self, address: Multiaddr) -> Result {
         self.inner.listen(address)
@@ -260,6 +261,7 @@ impl ServiceContext {
     }
 
     /// Get service listen address list
+    #[cfg(not(target_os = "unknown"))]
     #[inline]
     pub fn listens(&self) -> &[Multiaddr] {
         self.listens.as_ref()

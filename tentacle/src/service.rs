@@ -16,6 +16,8 @@ use std::{
 };
 use tokio::prelude::{AsyncRead, AsyncWrite};
 
+#[cfg(not(target_os = "unknown"))]
+use crate::service::helper::Listener;
 use crate::{
     buffer::{Buffer, SendResult},
     channel::{mpsc as priority_mpsc, mpsc::Priority},
@@ -31,12 +33,11 @@ use crate::{
         config::{ServiceConfig, State},
         event::ServiceTask,
         future_task::{BoxedFutureTask, FutureTaskManager},
-        helper::{HandshakeContext, Listener, Source},
+        helper::{HandshakeContext, Source},
     },
     session::{Session, SessionEvent, SessionMeta},
     traits::ServiceHandle,
     transports::{MultiIncoming, MultiTransport, Transport},
-    upnp::IGDClient,
     utils::extract_peer_id,
     yamux::Config as YamuxConfig,
     ProtocolId, SessionId,
@@ -75,7 +76,8 @@ pub struct Service<T> {
 
     listens: HashSet<Multiaddr>,
 
-    igd_client: Option<IGDClient>,
+    #[cfg(not(target_os = "unknown"))]
+    igd_client: Option<crate::upnp::IGDClient>,
 
     dial_protocols: HashMap<Multiaddr, TargetProtocol>,
     config: ServiceConfig,
@@ -139,7 +141,12 @@ where
             .collect();
         let (future_task_sender, future_task_receiver) = mpsc::channel(SEND_SIZE);
         let shutdown = Arc::new(AtomicBool::new(false));
-        let igd_client = if config.upnp { IGDClient::new() } else { None };
+        #[cfg(not(target_os = "unknown"))]
+        let igd_client = if config.upnp {
+            crate::upnp::IGDClient::new()
+        } else {
+            None
+        };
 
         Service {
             protocol_configs,
@@ -161,6 +168,7 @@ where
             service_proto_handles: HashMap::default(),
             session_proto_handles: HashMap::default(),
             listens: HashSet::new(),
+            #[cfg(not(target_os = "unknown"))]
             igd_client,
             dial_protocols: HashMap::default(),
             state: State::new(forever),
@@ -209,6 +217,7 @@ where
     ///
     /// Return really listen multiaddr, but if use `/dns4/localhost/tcp/80`,
     /// it will return original value, and create a future task to DNS resolver later.
+    #[cfg(not(target_os = "unknown"))]
     pub async fn listen(&mut self, address: Multiaddr) -> Result<Multiaddr> {
         let listen_future = self.multi_transport.listen(address.clone())?;
 
@@ -235,6 +244,7 @@ where
         }
     }
 
+    #[cfg(not(target_os = "unknown"))]
     fn spawn_listener(&mut self, incoming: MultiIncoming, listen_address: Multiaddr) {
         let listener = Listener {
             inner: incoming,
@@ -257,6 +267,7 @@ where
     }
 
     /// Use by inner
+    #[cfg(not(target_os = "unknown"))]
     fn listen_inner(&mut self, address: Multiaddr) -> Result<()> {
         let listen_future = self.multi_transport.listen(address.clone())?;
 
@@ -935,6 +946,7 @@ where
     }
 
     /// When listen update, call here
+    #[cfg(not(target_os = "unknown"))]
     #[inline]
     fn try_update_listens(&mut self, cx: &mut Context) {
         if let Some(client) = self.igd_client.as_mut() {
@@ -1038,6 +1050,7 @@ where
                     },
                 )
             }
+            #[cfg(not(target_os = "unknown"))]
             SessionEvent::ListenError { address, error } => {
                 self.handle.handle_error(
                     &mut self.service_context,
@@ -1081,6 +1094,7 @@ where
                     )
                 }
             }
+            #[cfg(not(target_os = "unknown"))]
             SessionEvent::ListenStart {
                 listen_address,
                 incoming,
@@ -1094,6 +1108,7 @@ where
                 self.listens.insert(listen_address.clone());
                 self.state.decrease();
                 self.try_update_listens(cx);
+                #[cfg(not(target_os = "unknown"))]
                 if let Some(client) = self.igd_client.as_mut() {
                     client.register(&listen_address)
                 }
@@ -1134,7 +1149,9 @@ where
                     }
                 }
             }
-            ServiceTask::Listen { address } => {
+            ServiceTask::Listen { address } =>
+            {
+                #[cfg(not(target_os = "unknown"))]
                 if !self.listens.contains(&address) {
                     if let Err(e) = self.listen_inner(address.clone()) {
                         self.handle.handle_error(
@@ -1230,6 +1247,7 @@ where
                     )
                 }
                 // clear upnp register
+                #[cfg(not(target_os = "unknown"))]
                 if let Some(client) = self.igd_client.as_mut() {
                     client.clear()
                 };
@@ -1393,6 +1411,7 @@ where
 
         self.flush_buffer(cx);
 
+        #[cfg(not(target_os = "unknown"))]
         self.try_update_listens(cx);
 
         let mut is_pending = self.session_poll(cx).is_pending();

@@ -151,6 +151,7 @@ impl HandshakeContext {
     }
 }
 
+#[cfg(not(target_os = "unknown"))]
 pub struct Listener {
     pub(crate) inner: MultiIncoming,
     pub(crate) key_pair: Option<secio::SecioKeyPair>,
@@ -161,6 +162,7 @@ pub struct Listener {
     pub(crate) future_task_sender: mpsc::Sender<BoxedFutureTask>,
 }
 
+#[cfg(not(target_os = "unknown"))]
 impl Listener {
     fn close(&self, io_err: io::Error) {
         let mut event_sender = self.event_sender.clone();
@@ -213,6 +215,7 @@ impl Listener {
     }
 }
 
+#[cfg(not(target_os = "unknown"))]
 impl Stream for Listener {
     type Item = ();
 

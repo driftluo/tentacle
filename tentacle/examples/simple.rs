@@ -192,7 +192,11 @@ fn server() {
     rt.block_on(async {
         let mut service = create_server();
         service
-            .listen("/ip4/127.0.0.1/tcp/1337".parse().unwrap())
+            .listen("/ip4/127.0.0.1/tcp/1337/ws".parse().unwrap())
+            .await
+            .unwrap();
+        service
+            .listen("/ip4/127.0.0.1/tcp/1338".parse().unwrap())
             .await
             .unwrap();
         loop {
@@ -210,7 +214,7 @@ fn client() {
         let mut service = create_client();
         service
             .dial(
-                "/dns4/localhost/tcp/1337".parse().unwrap(),
+                "/ip4/127.0.0.1/tcp/1338".parse().unwrap(),
                 TargetProtocol::All,
             )
             .await

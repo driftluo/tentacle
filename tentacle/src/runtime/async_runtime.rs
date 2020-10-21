@@ -1,9 +1,6 @@
 #[cfg(not(target_arch = "wasm32"))]
 pub use async_std::task::{spawn, spawn_blocking, JoinHandle};
 
-#[cfg(target_arch = "wasm32")]
-pub use async_std::task::{spawn_local as spawn, spawn_local as spawn_blocking, JoinHandle};
-
 pub fn block_in_place<F, R>(f: F) -> R
 where
     F: FnOnce() -> R,

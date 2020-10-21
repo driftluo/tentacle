@@ -6,7 +6,10 @@ use std::{
     time::Duration,
 };
 
+// #[cfg(not(target_os = "unknown"))]
 pub use futures_timer::Delay;
+// #[cfg(target_arch = "wasm32")]
+// pub use wasm_timer::Delay;
 
 pub struct Interval {
     delay: Delay,
@@ -88,7 +91,7 @@ where
 
         unsafe {
             match self.as_mut().map_unchecked_mut(|s| &mut s.delay).poll(cx) {
-                Poll::Ready(()) => Poll::Ready(Err(Elapsed(()))),
+                Poll::Ready(_) => Poll::Ready(Err(Elapsed(()))),
                 Poll::Pending => Poll::Pending,
             }
         }
