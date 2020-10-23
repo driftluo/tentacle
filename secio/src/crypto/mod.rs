@@ -4,7 +4,7 @@ use crate::error::SecioError;
 pub mod cipher;
 #[cfg(unix)]
 mod openssl_impl;
-#[cfg(not(target_os = "unknown"))]
+#[cfg(not(target_arch = "wasm32"))]
 #[cfg(any(not(ossl110), test, not(unix)))]
 mod ring_impl;
 #[cfg(any(target_arch = "wasm32", test))]
@@ -54,7 +54,7 @@ pub fn new_stream(t: cipher::CipherType, key: &[u8], mode: CryptoMode) -> BoxStr
 
 /// Generate a specific Cipher with key and initialize vector
 #[doc(hidden)]
-#[cfg(not(target_os = "unknown"))]
+#[cfg(not(target_arch = "wasm32"))]
 #[cfg(not(unix))]
 pub fn new_stream(t: cipher::CipherType, key: &[u8], mode: CryptoMode) -> BoxStreamCipher {
     Box::new(ring_impl::RingAeadCipher::new(t, key, mode))

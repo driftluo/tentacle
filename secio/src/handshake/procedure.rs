@@ -75,7 +75,7 @@ where
 
     // Generate an ephemeral key for the negotiation.
     let (tmp_priv_key, tmp_pub_key) =
-        crate::hd_compat::generate_agreement(remote_context.state.chosen_exchange)?;
+        crate::dh_compat::generate_agreement(remote_context.state.chosen_exchange)?;
 
     // Send the ephemeral pub key to the remote in an `Exchange` struct. The `Exchange` also
     // contains a signature of the two propositions encoded with our static public key.
@@ -181,7 +181,7 @@ where
     // derive from it a cipher key, an iv, and a hmac key, and build the encoder/decoder.
 
     let (pub_ephemeral_context, local_priv_key) = ephemeral_context.take_private_key();
-    let key_material = crate::hd_compat::agree(
+    let key_material = crate::dh_compat::agree(
         pub_ephemeral_context.state.remote.chosen_exchange,
         local_priv_key,
         &remote_exchanges.epubkey,

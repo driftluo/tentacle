@@ -1,9 +1,9 @@
-#[cfg(not(target_os = "unknown"))]
+#[cfg(not(target_arch = "wasm32"))]
 mod native;
 #[cfg(any(target_arch = "wasm32", test))]
 mod wasm_compat;
 
-#[cfg(not(target_os = "unknown"))]
+#[cfg(not(target_arch = "wasm32"))]
 pub use native::*;
 
 #[cfg(target_arch = "wasm32")]

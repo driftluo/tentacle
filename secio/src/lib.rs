@@ -8,11 +8,11 @@ pub use crate::{handshake::handshake_struct::PublicKey, peer_id::PeerId};
 pub mod codec;
 /// Symmetric ciphers algorithms
 pub mod crypto;
+mod dh_compat;
 /// Error type
 pub mod error;
 /// Implementation of the handshake process
 pub mod handshake;
-mod hd_compat;
 /// Peer id
 pub mod peer_id;
 /// Compatible with two library interfaces

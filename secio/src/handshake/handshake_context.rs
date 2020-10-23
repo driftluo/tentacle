@@ -3,12 +3,12 @@
 /// It does not use protobuf bytes when determining the order of the order. But the original public key bytes
 use crate::{
     crypto::cipher::CipherType,
+    dh_compat::KeyAgreement,
     error::SecioError,
     handshake::{
         handshake_struct::{Propose, PublicKey},
         Config,
     },
-    hd_compat::KeyAgreement,
     support, Digest,
 };
 
@@ -64,7 +64,7 @@ pub struct Remote {
 pub struct Ephemeral {
     pub(crate) remote: Remote,
     // Ephemeral keypair generated for the handshake:
-    pub(crate) local_tmp_priv_key: crate::hd_compat::EphemeralPrivateKey,
+    pub(crate) local_tmp_priv_key: crate::dh_compat::EphemeralPrivateKey,
     pub(crate) local_tmp_pub_key: Vec<u8>,
 }
 
@@ -250,7 +250,7 @@ impl HandshakeContext<Local> {
 impl HandshakeContext<Remote> {
     pub fn with_ephemeral(
         self,
-        sk: crate::hd_compat::EphemeralPrivateKey,
+        sk: crate::dh_compat::EphemeralPrivateKey,
         pk: Vec<u8>,
     ) -> HandshakeContext<Ephemeral> {
         HandshakeContext {
@@ -269,7 +269,7 @@ impl HandshakeContext<Ephemeral> {
         self,
     ) -> (
         HandshakeContext<PubEphemeral>,
-        crate::hd_compat::EphemeralPrivateKey,
+        crate::dh_compat::EphemeralPrivateKey,
     ) {
         let context = HandshakeContext {
             config: self.config,

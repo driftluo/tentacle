@@ -8,7 +8,7 @@ use sha2::{Sha256, Sha512};
 #[derive(Debug, Clone)]
 pub enum Hmac {
     /// sha256
-    Sha256(hmac::Hmac<Sha256>),
+    Sha256(Box<hmac::Hmac<Sha256>>),
     /// sha512
     Sha512(Box<hmac::Hmac<Sha512>>),
 }
@@ -26,9 +26,9 @@ impl Hmac {
     /// Builds a `Hmac` from an algorithm and key.
     pub fn from_key(algorithm: Digest, key: &[u8]) -> Self {
         match algorithm {
-            Digest::Sha256 => Hmac::Sha256(
+            Digest::Sha256 => Hmac::Sha256(Box::new(
                 hmac::Hmac::new_varkey(key).expect("Hmac::new_varkey accepts any key length"),
-            ),
+            )),
             Digest::Sha512 => Hmac::Sha512(Box::new(
                 hmac::Hmac::new_varkey(key).expect("Hmac::new_varkey accepts any key length"),
             )),
@@ -77,7 +77,7 @@ impl Hmac {
 }
 
 pub enum Context {
-    Sha256(hmac::Hmac<Sha256>),
+    Sha256(Box<hmac::Hmac<Sha256>>),
     Sha512(Box<hmac::Hmac<Sha512>>),
 }
 
