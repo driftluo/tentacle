@@ -39,7 +39,7 @@ openssl-sys = "0.9"
 [dev-dependencies]
 env_logger = "0.6"
 criterion = "0.3"
-tokio = { version = "0.2.0", features = ["tcp", "rt-core"] }
+tokio = { version = "0.2.0", features = ["tcp", "rt-core", "dns"] }
 
 [features]
 default = []

@@ -11,6 +11,7 @@ use crate::error::SecioError;
 pub enum KeyAgreement {
     EcdhP256,
     EcdhP384,
+    X25519,
 }
 
 impl Into<&'static agreement::Algorithm> for KeyAgreement {
@@ -19,6 +20,7 @@ impl Into<&'static agreement::Algorithm> for KeyAgreement {
         match self {
             KeyAgreement::EcdhP256 => &agreement::ECDH_P256,
             KeyAgreement::EcdhP384 => &agreement::ECDH_P384,
+            KeyAgreement::X25519 => &agreement::X25519,
         }
     }
 }

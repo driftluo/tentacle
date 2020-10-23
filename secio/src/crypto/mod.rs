@@ -33,30 +33,18 @@ pub enum CryptoMode {
 /// Generate a specific Cipher with key and initialize vector
 #[doc(hidden)]
 #[cfg(all(ossl110, unix))]
-pub fn new_stream(
-    t: cipher::CipherType,
-    key: &[u8],
-    iv: &[u8],
-    _mode: CryptoMode,
-) -> BoxStreamCipher {
-    Box::new(openssl_impl::OpenSSLCrypt::new(t, key, iv))
+pub fn new_stream(t: cipher::CipherType, key: &[u8], _mode: CryptoMode) -> BoxStreamCipher {
+    Box::new(openssl_impl::OpenSSLCrypt::new(t, key))
 }
 
 /// Generate a specific Cipher with key and initialize vector
 #[doc(hidden)]
 #[cfg(all(not(ossl110), unix))]
-pub fn new_stream(
-    t: cipher::CipherType,
-    key: &[u8],
-    iv: &[u8],
-    mode: CryptoMode,
-) -> BoxStreamCipher {
+pub fn new_stream(t: cipher::CipherType, key: &[u8], mode: CryptoMode) -> BoxStreamCipher {
     use cipher::CipherType::*;
 
     match t {
-        Aes128Ctr | Aes256Ctr | Aes128Gcm | Aes256Gcm => {
-            Box::new(openssl_impl::OpenSSLCrypt::new(t, key, iv))
-        }
+        Aes128Gcm | Aes256Gcm => Box::new(openssl_impl::OpenSSLCrypt::new(t, key)),
         ChaCha20Poly1305 => Box::new(ring_impl::RingAeadCipher::new(t, key, mode)),
     }
 }
@@ -64,12 +52,7 @@ pub fn new_stream(
 /// Generate a specific Cipher with key and initialize vector
 #[doc(hidden)]
 #[cfg(not(unix))]
-pub fn new_stream(
-    t: cipher::CipherType,
-    key: &[u8],
-    _iv: &[u8],
-    mode: CryptoMode,
-) -> BoxStreamCipher {
+pub fn new_stream(t: cipher::CipherType, key: &[u8], mode: CryptoMode) -> BoxStreamCipher {
     Box::new(ring_impl::RingAeadCipher::new(t, key, mode))
 }
 
@@ -101,11 +84,8 @@ mod test {
         let key = (0..cipher.key_size())
             .map(|_| rand::random::<u8>())
             .collect::<Vec<_>>();
-        let iv = (0..cipher.iv_size())
-            .map(|_| rand::random::<u8>())
-            .collect::<Vec<_>>();
 
-        let mut openssl_encrypt = OpenSSLCrypt::new(cipher, &key, &iv);
+        let mut openssl_encrypt = OpenSSLCrypt::new(cipher, &key);
         let mut ring_decrypt = RingAeadCipher::new(cipher, &key, CryptoMode::Decrypt);
 
         // first time
@@ -129,12 +109,9 @@ mod test {
         let key = (0..cipher.key_size())
             .map(|_| rand::random::<u8>())
             .collect::<Vec<_>>();
-        let iv = (0..cipher.iv_size())
-            .map(|_| rand::random::<u8>())
-            .collect::<Vec<_>>();
 
         let mut ring_encrypt = RingAeadCipher::new(cipher, &key, CryptoMode::Encrypt);
-        let mut openssl_decrypt = OpenSSLCrypt::new(cipher, &key, &iv);
+        let mut openssl_decrypt = OpenSSLCrypt::new(cipher, &key);
 
         // first time
         let message = b"HELLO WORLD";

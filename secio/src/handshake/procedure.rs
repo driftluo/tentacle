@@ -18,7 +18,7 @@ use crate::{
         handshake_context::HandshakeContext,
         handshake_struct::{Exchange, PublicKey},
     },
-    Digest, EphemeralPublicKey, KeyPairInner,
+    EphemeralPublicKey, KeyPairInner,
 };
 use bytes::{Buf, BytesMut};
 use tokio::io::AsyncWriteExt;
@@ -225,18 +225,16 @@ where
         remote_infos
     );
 
-    let (encode_cipher, encode_hmac) = generate_stream_cipher_and_hmac(
+    let encode_cipher = generate_stream_cipher_and_hmac(
         chosen_cipher,
-        pub_ephemeral_context.state.remote.chosen_hash,
         CryptoMode::Encrypt,
         local_infos,
         cipher_key_size,
         iv_size,
     );
 
-    let (decode_cipher, decode_hmac) = generate_stream_cipher_and_hmac(
+    let decode_cipher = generate_stream_cipher_and_hmac(
         chosen_cipher,
-        pub_ephemeral_context.state.remote.chosen_hash,
         CryptoMode::Decrypt,
         remote_infos,
         cipher_key_size,
@@ -246,9 +244,7 @@ where
     let mut secure_stream = SecureStream::new(
         socket,
         decode_cipher,
-        decode_hmac,
         encode_cipher,
-        encode_hmac,
         pub_ephemeral_context.state.remote.local.nonce.to_vec(),
     );
 
@@ -296,21 +292,14 @@ fn stretch_key(hmac: Hmac, result: &mut [u8]) {
 
 fn generate_stream_cipher_and_hmac(
     t: CipherType,
-    _digest: Digest,
     mode: CryptoMode,
     info: &[u8],
     key_size: usize,
     iv_size: usize,
-) -> (BoxStreamCipher, Option<Hmac>) {
-    let (iv, rest) = info.split_at(iv_size);
+) -> BoxStreamCipher {
+    let (_iv, rest) = info.split_at(iv_size);
     let (cipher_key, _mac_key) = rest.split_at(key_size);
-    let hmac = match t {
-        CipherType::ChaCha20Poly1305 | CipherType::Aes128Gcm | CipherType::Aes256Gcm => None,
-        #[cfg(unix)]
-        _ => Some(Hmac::from_key(_digest, _mac_key)),
-    };
-    let cipher = new_stream(t, cipher_key, iv, mode);
-    (cipher, hmac)
+    new_stream(t, cipher_key, mode)
 }
 
 #[cfg(test)]
