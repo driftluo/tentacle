@@ -5,6 +5,7 @@ rust:
 before_script:
   - rustup component add rustfmt
   - rustup component add clippy
+  - rustup target add wasm32-unknown-unknown
 stages:
   - Build
   - Check
@@ -27,6 +28,10 @@ jobs:
       name: Unitest
       script:
         - make test
+    - stage: Test
+      name: Features check
+      script:
+        - make features-check
     - stage: Test
       name: Bench
       script:

@@ -192,7 +192,7 @@ fn server() {
     rt.block_on(async {
         let mut service = create_server();
         service
-            .listen("/ip4/127.0.0.1/tcp/1337/ws".parse().unwrap())
+            .listen("/ip4/127.0.0.1/tcp/1337".parse().unwrap())
             .await
             .unwrap();
         service
