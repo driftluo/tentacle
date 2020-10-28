@@ -12,7 +12,6 @@ use crate::{
     codec::{secure_stream::SecureStream, Hmac},
     crypto::{cipher::CipherType, new_stream, BoxStreamCipher, CryptoMode},
     error::SecioError,
-    exchange,
     handshake::Config,
     handshake::{
         handshake_context::HandshakeContext,
@@ -76,7 +75,7 @@ where
 
     // Generate an ephemeral key for the negotiation.
     let (tmp_priv_key, tmp_pub_key) =
-        exchange::generate_agreement(remote_context.state.chosen_exchange)?;
+        crate::dh_compat::generate_agreement(remote_context.state.chosen_exchange)?;
 
     // Send the ephemeral pub key to the remote in an `Exchange` struct. The `Exchange` also
     // contains a signature of the two propositions encoded with our static public key.
@@ -98,8 +97,8 @@ where
 
         exchanges.epubkey = tmp_pub_key;
 
-        let data_to_sign = ring::digest::digest(&ring::digest::SHA256, &data_to_sign);
-        let message = match secp256k1::Message::from_slice(data_to_sign.as_ref()) {
+        let data_to_sign = crate::sha256_compat::sha256(&data_to_sign);
+        let message = match crate::secp256k1_compat::message_from_slice(data_to_sign.as_ref()) {
             Ok(msg) => msg,
             Err(_) => {
                 debug!("message has wrong format");
@@ -107,14 +106,13 @@ where
             }
         };
 
-        let secp256k1_key = secp256k1::Secp256k1::signing_only();
         let signature = match ephemeral_context.config.key.inner {
             KeyPairInner::Secp256k1 { ref private } => {
-                secp256k1_key.sign(&message, private).serialize_der()
+                crate::secp256k1_compat::sign(&message, private)
             }
         };
 
-        exchanges.signature = signature.to_vec();
+        exchanges.signature = crate::secp256k1_compat::signature_to_vec(signature);
         exchanges
     };
     let local_exchanges = exchanges.encode();
@@ -152,9 +150,9 @@ where
     data_to_verify.extend_from_slice(&ephemeral_context.state.remote.local.proposition_bytes);
     data_to_verify.extend_from_slice(&remote_exchanges.epubkey);
 
-    let data_to_verify = ring::digest::digest(&ring::digest::SHA256, &data_to_verify);
+    let data_to_verify = crate::sha256_compat::sha256(&data_to_verify);
 
-    let message = match secp256k1::Message::from_slice(data_to_verify.as_ref()) {
+    let message = match crate::secp256k1_compat::message_from_slice(data_to_verify.as_ref()) {
         Ok(msg) => msg,
         Err(_) => {
             debug!("remote's message has wrong format");
@@ -162,19 +160,15 @@ where
         }
     };
 
-    let secp256k1 = secp256k1::Secp256k1::verification_only();
-    let signature = secp256k1::Signature::from_der(&remote_exchanges.signature);
+    let signature = crate::secp256k1_compat::signature_from_der(&remote_exchanges.signature);
     let remote_public_key = match ephemeral_context.state.remote.public_key {
-        PublicKey::Secp256k1(ref key) => secp256k1::key::PublicKey::from_slice(key),
+        PublicKey::Secp256k1(ref key) => crate::secp256k1_compat::pubkey_from_slice(key),
     };
 
     if let (Ok(signature), Ok(remote_public_key)) = (signature, remote_public_key) {
-        match secp256k1.verify(&message, &signature, &remote_public_key) {
-            Ok(()) => (),
-            Err(_) => {
-                debug!("failed to verify the remote's signature");
-                return Err(SecioError::SignatureVerificationFailed);
-            }
+        if !crate::secp256k1_compat::verify(&message, &signature, &remote_public_key) {
+            debug!("failed to verify the remote's signature");
+            return Err(SecioError::SignatureVerificationFailed);
         }
     } else {
         debug!("remote's secp256k1 signature has wrong format");
@@ -187,7 +181,7 @@ where
     // derive from it a cipher key, an iv, and a hmac key, and build the encoder/decoder.
 
     let (pub_ephemeral_context, local_priv_key) = ephemeral_context.take_private_key();
-    let key_material = exchange::agree(
+    let key_material = crate::dh_compat::agree(
         pub_ephemeral_context.state.remote.chosen_exchange,
         local_priv_key,
         &remote_exchanges.epubkey,
@@ -278,9 +272,9 @@ fn stretch_key(hmac: Hmac, result: &mut [u8]) {
         context.update(SEED);
         let b = context.sign();
 
-        let todo = ::std::cmp::min(b.as_ref().len(), result.len() - j);
+        let todo = ::std::cmp::min(AsRef::<[u8]>::as_ref(&b).len(), result.len() - j);
 
-        result[j..j + todo].copy_from_slice(&b.as_ref()[..todo]);
+        result[j..j + todo].copy_from_slice(&AsRef::<[u8]>::as_ref(&b)[..todo]);
 
         j += todo;
 

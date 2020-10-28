@@ -2,22 +2,22 @@
 
 #![deny(missing_docs)]
 
-use secp256k1::key::SecretKey;
-
 pub use crate::{handshake::handshake_struct::PublicKey, peer_id::PeerId};
 
 /// Encrypted and decrypted codec implementation, and stream handle
 pub mod codec;
 /// Symmetric ciphers algorithms
 pub mod crypto;
+mod dh_compat;
 /// Error type
 pub mod error;
-/// Exchange information during the handshake
-mod exchange;
 /// Implementation of the handshake process
 pub mod handshake;
 /// Peer id
 pub mod peer_id;
+/// Compatible with two library interfaces
+mod secp256k1_compat;
+mod sha256_compat;
 /// Supported algorithms
 mod support;
 
@@ -34,8 +34,8 @@ impl SecioKeyPair {
     /// Generates a new random sec256k1 key pair.
     pub fn secp256k1_generated() -> SecioKeyPair {
         loop {
-            if let Ok(private) = SecretKey::from_slice(&rand::random::<
-                [u8; secp256k1::constants::SECRET_KEY_SIZE],
+            if let Ok(private) = crate::secp256k1_compat::secret_key_from_slice(&rand::random::<
+                [u8; crate::secp256k1_compat::SECRET_KEY_SIZE],
             >()) {
                 return SecioKeyPair {
                     inner: KeyPairInner::Secp256k1 { private },
@@ -49,7 +49,7 @@ impl SecioKeyPair {
     where
         K: AsRef<[u8]>,
     {
-        let private = secp256k1::key::SecretKey::from_slice(key.as_ref())
+        let private = crate::secp256k1_compat::secret_key_from_slice(key.as_ref())
             .map_err(|_| error::SecioError::SecretGenerationFailed)?;
 
         Ok(SecioKeyPair {
@@ -61,9 +61,8 @@ impl SecioKeyPair {
     pub fn public_key(&self) -> PublicKey {
         match self.inner {
             KeyPairInner::Secp256k1 { ref private } => {
-                let secp = secp256k1::Secp256k1::signing_only();
-                let pubkey = secp256k1::key::PublicKey::from_secret_key(&secp, private);
-                PublicKey::Secp256k1(pubkey.serialize().to_vec())
+                let pubkey = crate::secp256k1_compat::from_secret_key(private);
+                PublicKey::Secp256k1(crate::secp256k1_compat::serialize_pubkey(&pubkey))
             }
         }
     }
@@ -76,7 +75,9 @@ impl SecioKeyPair {
 
 #[derive(Clone, Debug)]
 enum KeyPairInner {
-    Secp256k1 { private: SecretKey },
+    Secp256k1 {
+        private: crate::secp256k1_compat::SecretKey,
+    },
 }
 
 /// Possible digest algorithms.

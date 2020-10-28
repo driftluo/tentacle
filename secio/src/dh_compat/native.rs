@@ -4,15 +4,9 @@ use log::debug;
 use ring::agreement;
 use ring::rand as ring_rand;
 
+use super::KeyAgreement;
 use crate::error::SecioError;
-
-/// Possible key agreement algorithms.
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
-pub enum KeyAgreement {
-    EcdhP256,
-    EcdhP384,
-    X25519,
-}
+pub use ring::agreement::EphemeralPrivateKey;
 
 impl Into<&'static agreement::Algorithm> for KeyAgreement {
     #[inline]

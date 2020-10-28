@@ -3,8 +3,8 @@
 /// It does not use protobuf bytes when determining the order of the order. But the original public key bytes
 use crate::{
     crypto::cipher::CipherType,
+    dh_compat::KeyAgreement,
     error::SecioError,
-    exchange::KeyAgreement,
     handshake::{
         handshake_struct::{Propose, PublicKey},
         Config,
@@ -14,7 +14,6 @@ use crate::{
 
 use bytes::{Bytes, BytesMut};
 use log::{debug, trace};
-use ring::agreement;
 
 use std::cmp::Ordering;
 
@@ -65,7 +64,7 @@ pub struct Remote {
 pub struct Ephemeral {
     pub(crate) remote: Remote,
     // Ephemeral keypair generated for the handshake:
-    pub(crate) local_tmp_priv_key: agreement::EphemeralPrivateKey,
+    pub(crate) local_tmp_priv_key: crate::dh_compat::EphemeralPrivateKey,
     pub(crate) local_tmp_pub_key: Vec<u8>,
 }
 
@@ -159,20 +158,20 @@ impl HandshakeContext<Local> {
         // based on which hash is larger.
         let hashes_ordering = {
             let oh1 = {
-                let mut ctx = ring::digest::Context::new(&ring::digest::SHA256);
+                let mut ctx = crate::sha256_compat::Context::new();
                 ctx.update(public_key.inner_ref());
                 ctx.update(&self.state.nonce);
                 ctx.finish()
             };
 
             let oh2 = {
-                let mut ctx = ring::digest::Context::new(&ring::digest::SHA256);
+                let mut ctx = crate::sha256_compat::Context::new();
                 ctx.update(&self.state.public_key);
                 ctx.update(&nonce);
                 ctx.finish()
             };
 
-            oh1.as_ref().cmp(&oh2.as_ref())
+            AsRef::<[u8]>::as_ref(&oh1).cmp(&AsRef::<[u8]>::as_ref(&oh2))
         };
 
         let chosen_exchange = {
@@ -251,7 +250,7 @@ impl HandshakeContext<Local> {
 impl HandshakeContext<Remote> {
     pub fn with_ephemeral(
         self,
-        sk: agreement::EphemeralPrivateKey,
+        sk: crate::dh_compat::EphemeralPrivateKey,
         pk: Vec<u8>,
     ) -> HandshakeContext<Ephemeral> {
         HandshakeContext {
@@ -270,7 +269,7 @@ impl HandshakeContext<Ephemeral> {
         self,
     ) -> (
         HandshakeContext<PubEphemeral>,
-        agreement::EphemeralPrivateKey,
+        crate::dh_compat::EphemeralPrivateKey,
     ) {
         let context = HandshakeContext {
             config: self.config,

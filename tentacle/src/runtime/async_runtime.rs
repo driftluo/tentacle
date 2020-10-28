@@ -1,4 +1,4 @@
-#[cfg(not(target_os = "unknown"))]
+#[cfg(not(target_arch = "wasm32"))]
 pub use async_std::task::{spawn, spawn_blocking, JoinHandle};
 
 #[cfg(target_arch = "wasm32")]
@@ -11,10 +11,10 @@ where
     f()
 }
 
-#[cfg(not(target_os = "unknown"))]
+#[cfg(not(target_arch = "wasm32"))]
 pub use os::*;
 
-#[cfg(not(target_os = "unknown"))]
+#[cfg(not(target_arch = "wasm32"))]
 mod os {
     use async_io::Async;
     use async_std::net::{TcpListener as AsyncListener, TcpStream as AsyncStream, ToSocketAddrs};

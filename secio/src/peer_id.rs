@@ -67,7 +67,7 @@ impl PeerId {
         inner[..code.len()].copy_from_slice(code);
         inner[code.len()] = SHA256_SIZE;
 
-        let mut ctx = ring::digest::Context::new(&ring::digest::SHA256);
+        let mut ctx = crate::sha256_compat::Context::new();
         ctx.update(seed);
         inner[header_len..].copy_from_slice(ctx.finish().as_ref());
         PeerId { inner }
