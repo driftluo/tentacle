@@ -32,25 +32,10 @@ pub struct SecioKeyPair {
 
 impl SecioKeyPair {
     /// Generates a new random sec256k1 key pair.
-    #[cfg(not(target_arch = "wasm32"))]
-    pub fn secp256k1_generated() -> SecioKeyPair {
-        loop {
-            if let Ok(private) = crate::secp256k1_compat::secret_key_from_slice(&rand::random::<
-                [u8; crate::secp256k1_compat::SECRET_KEY_SIZE],
-            >()) {
-                return SecioKeyPair {
-                    inner: KeyPairInner::Secp256k1 { private },
-                };
-            }
-        }
-    }
-
-    /// Generates a new random sec256k1 key pair.
-    #[cfg(target_arch = "wasm32")]
     pub fn secp256k1_generated() -> SecioKeyPair {
         loop {
             let mut key = [0; crate::secp256k1_compat::SECRET_KEY_SIZE];
-            getrandom::getrandom(&mut key).unwrap();
+            crate::rand_compat::get_random(&mut key);
             if let Ok(private) = crate::secp256k1_compat::secret_key_from_slice(&key) {
                 return SecioKeyPair {
                     inner: KeyPairInner::Secp256k1 { private },
@@ -111,6 +96,21 @@ impl Digest {
         match self {
             Digest::Sha256 => 256 / 8,
             Digest::Sha512 => 512 / 8,
+        }
+    }
+}
+
+mod rand_compat {
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn get_random(output: &mut [u8]) {
+        use rand::RngCore;
+        rand::thread_rng().fill_bytes(output)
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    pub fn get_random(output: &mut [u8]) {
+        if let Err(e) = getrandom::getrandom(output) {
+            panic!("Error: {}", e);
         }
     }
 }

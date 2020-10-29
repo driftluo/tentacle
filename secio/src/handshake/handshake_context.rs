@@ -81,12 +81,8 @@ impl HandshakeContext<()> {
 
     // Setup local proposition.
     pub fn with_local(self) -> HandshakeContext<Local> {
-        #[cfg(not(target_arch = "wasm32"))]
-        let nonce: [u8; 16] = rand::random();
-        #[cfg(target_arch = "wasm32")]
         let mut nonce = [0; 16];
-        #[cfg(target_arch = "wasm32")]
-        getrandom::getrandom(&mut nonce).unwrap();
+        crate::rand_compat::get_random(&mut nonce);
 
         let public_key = self.config.key.public_key();
 
@@ -189,7 +185,7 @@ impl HandshakeContext<Local> {
             let theirs = &propose.exchange;
             match support::select_agreement(hashes_ordering, ours, theirs) {
                 Ok(a) => {
-                    debug!("hd algorithm: {:?}", a);
+                    debug!("dh algorithm: {:?}", a);
                     a
                 }
                 Err(err) => {
