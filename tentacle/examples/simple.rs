@@ -195,6 +195,10 @@ fn server() {
             .listen("/ip4/127.0.0.1/tcp/1337".parse().unwrap())
             .await
             .unwrap();
+        service
+            .listen("/ip4/127.0.0.1/tcp/1338/ws".parse().unwrap())
+            .await
+            .unwrap();
         loop {
             if service.next().await.is_none() {
                 break;
@@ -210,7 +214,7 @@ fn client() {
         let mut service = create_client();
         service
             .dial(
-                "/dns4/localhost/tcp/1337".parse().unwrap(),
+                "/ip4/127.0.0.1/tcp/1337".parse().unwrap(),
                 TargetProtocol::All,
             )
             .await

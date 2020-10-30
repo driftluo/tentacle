@@ -55,7 +55,7 @@ $ git clone https://github.com/nervosnetwork/tentacle.git
 
 Listen on 127.0.0.1:1337
 ```bash
-$ RUST_LOG=simple=info,tentacle=debug cargo run --example simple --features molc -- server
+$ RUST_LOG=simple=info,tentacle=debug cargo run --example simple --features molc,ws -- server
 ```
 
 3. On another terminal:

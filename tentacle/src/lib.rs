@@ -17,6 +17,10 @@
 //!
 
 #![deny(missing_docs)]
+#![cfg_attr(
+    target_arch = "wasm32",
+    allow(dead_code, unused_variables, unused_imports)
+)]
 
 /// Re-pub bytes crate
 pub use bytes;
@@ -55,6 +59,7 @@ pub mod utils;
 mod channel;
 mod runtime;
 
+#[cfg(not(target_arch = "wasm32"))]
 pub(crate) mod upnp;
 
 use std::{fmt, ops::AddAssign};

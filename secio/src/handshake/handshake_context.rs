@@ -81,7 +81,8 @@ impl HandshakeContext<()> {
 
     // Setup local proposition.
     pub fn with_local(self) -> HandshakeContext<Local> {
-        let nonce: [u8; 16] = rand::random();
+        let mut nonce = [0; 16];
+        crate::rand_compat::get_random(&mut nonce);
 
         let public_key = self.config.key.public_key();
 
@@ -183,7 +184,10 @@ impl HandshakeContext<Local> {
                 .unwrap_or(support::DEFAULT_AGREEMENTS_PROPOSITION);
             let theirs = &propose.exchange;
             match support::select_agreement(hashes_ordering, ours, theirs) {
-                Ok(a) => a,
+                Ok(a) => {
+                    debug!("dh algorithm: {:?}", a);
+                    a
+                }
                 Err(err) => {
                     debug!("failed to select an exchange protocol");
                     return Err(err);

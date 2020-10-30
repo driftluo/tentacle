@@ -1,12 +1,16 @@
 //! The session, can open and manage substreams
 
+#[cfg(not(target_arch = "wasm32"))]
+use std::time::Instant;
 use std::{
     collections::{hash_map::Entry, BTreeMap, HashMap, HashSet, VecDeque},
     io,
     pin::Pin,
     task::{Context, Poll},
-    time::{Duration, Instant},
+    time::Duration,
 };
+#[cfg(target_arch = "wasm32")]
+use timer::Instant;
 
 use futures::{
     channel::mpsc::{channel, Receiver, Sender},
@@ -29,6 +33,13 @@ use timer::{interval, Interval};
 
 const BUF_SHRINK_THRESHOLD: usize = u8::max_value() as usize;
 const TIMEOUT: Duration = Duration::from_secs(30);
+
+/// wasm doesn't support time get, must use browser timer instead
+/// But we can simulate it with `futures-timer`.
+/// So, I implemented a global time dependent on `futures-timer`,
+/// Because in the browser environment, it is always single-threaded, so feel free to be unsafe
+#[cfg(target_arch = "wasm32")]
+static mut TIME: Instant = Instant::from_f64(0.0);
 
 /// The session
 pub struct Session<T> {
@@ -625,6 +636,9 @@ mod timer {
     #[cfg(feature = "tokio-timer")]
     pub use tokio::time::{interval, Interval};
 
+    #[cfg(target_arch = "wasm32")]
+    pub use wasm_mock::Instant;
+
     #[cfg(feature = "generic-timer")]
     mod generic_time {
         use futures::{Future, Stream};
@@ -657,6 +671,10 @@ mod timer {
                     Poll::Ready(_) => {
                         let dur = self.period;
                         self.delay.reset(dur);
+                        #[cfg(target_arch = "wasm32")]
+                        unsafe {
+                            super::super::TIME += dur;
+                        }
                         Poll::Ready(Some(()))
                     }
                     Poll::Pending => Poll::Pending,
@@ -668,6 +686,98 @@ mod timer {
             assert!(period > Duration::new(0, 0), "`period` must be non-zero.");
 
             Interval::new(period)
+        }
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    #[allow(dead_code)]
+    mod wasm_mock {
+        use std::cmp::{Eq, Ord, Ordering, PartialEq, PartialOrd};
+        use std::ops::{Add, AddAssign, Sub};
+        use std::time::Duration;
+
+        #[derive(Debug, Copy, Clone)]
+        pub struct Instant {
+            /// mock
+            inner: f64,
+        }
+
+        impl PartialEq for Instant {
+            fn eq(&self, other: &Instant) -> bool {
+                // Note that this will most likely only compare equal if we clone an `Instant`,
+                // but that's ok.
+                self.inner == other.inner
+            }
+        }
+
+        impl Eq for Instant {}
+
+        impl PartialOrd for Instant {
+            fn partial_cmp(&self, other: &Instant) -> Option<Ordering> {
+                self.inner.partial_cmp(&other.inner)
+            }
+        }
+
+        impl Ord for Instant {
+            fn cmp(&self, other: &Self) -> Ordering {
+                self.inner.partial_cmp(&other.inner).unwrap()
+            }
+        }
+
+        impl Instant {
+            pub const fn from_f64(val: f64) -> Self {
+                Instant { inner: val }
+            }
+
+            pub fn now() -> Instant {
+                unsafe { super::super::TIME }
+            }
+
+            pub fn duration_since(&self, earlier: Instant) -> Duration {
+                *self - earlier
+            }
+
+            pub fn elapsed(&self) -> Duration {
+                Instant::now() - *self
+            }
+        }
+
+        impl Add<Duration> for Instant {
+            type Output = Instant;
+
+            fn add(self, other: Duration) -> Instant {
+                let new_val = self.inner + other.as_millis() as f64;
+                Instant {
+                    inner: new_val as f64,
+                }
+            }
+        }
+
+        impl Sub<Duration> for Instant {
+            type Output = Instant;
+
+            fn sub(self, other: Duration) -> Instant {
+                let new_val = self.inner - other.as_millis() as f64;
+                Instant {
+                    inner: new_val as f64,
+                }
+            }
+        }
+
+        impl Sub<Instant> for Instant {
+            type Output = Duration;
+
+            fn sub(self, other: Instant) -> Duration {
+                let ms = self.inner - other.inner;
+                assert!(ms >= 0.0);
+                Duration::from_millis(ms as u64)
+            }
+        }
+
+        impl AddAssign<Duration> for Instant {
+            fn add_assign(&mut self, rhs: Duration) {
+                *self = *self + rhs;
+            }
         }
     }
 }
