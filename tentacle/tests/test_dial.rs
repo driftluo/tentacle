@@ -304,9 +304,16 @@ fn test_dial_with_no_notify(secio: bool) {
         }
         std::thread::sleep(Duration::from_millis(300));
     }
+    #[cfg(unix)]
     assert_eq!(
         check_dial_errors(error_receiver, Duration::from_secs(15), 10),
         10
+    );
+    // The default timeout mechanism is different
+    #[cfg(windows)]
+    assert_eq!(
+        check_dial_errors(error_receiver, Duration::from_secs(15), 5),
+        5
     );
 }
 

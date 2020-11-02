@@ -1,0 +1,76 @@
+name: Github Action
+
+on:
+  pull_request:  # trigger on pull requests
+  push:
+    branches:
+      - master    # trigger on push to master
+
+jobs:
+  test:
+    name: Test
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        build: [ linux, macos, windows ]
+        include:
+          - build: linux
+            os: ubuntu-latest
+            rust: 1.46.0
+          - build: macos
+            os: macos-latest
+            rust: 1.46.0
+          - build: windows
+            os: windows-latest
+            rust: 1.46.0
+    steps:
+      - uses: actions/checkout@v2
+      - name: Build
+        run: |
+          make build
+          make examples
+          make bench_p2p
+      - name: Run tests
+        timeout-minutes: 40
+        run: make test
+
+  rustfmt:
+    name: Rustfmt
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v2
+      - name: Format check
+        run: |
+          rustup component add rustfmt
+          make fmt
+
+  clippy_check:
+    name: Clippy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v2
+      - name: Clippy check
+        run: |
+          rustup component add clippy
+          make clippy
+
+  features_check:
+    name: Features check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v2
+      - name: Features check
+        run: |
+          rustup target add wasm32-unknown-unknown
+          make features-check
+
+  fuzz_test:
+    name: Fuzz
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v2
+      - name: Fuzz test
+        run: |
+          rustup install nightly
+          cargo +nightly install cargo-fuzz
+          make fuzz

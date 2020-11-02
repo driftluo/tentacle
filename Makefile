@@ -48,6 +48,7 @@ features-check:
 	$(Change_Work_Path) && cargo build --features molc,tokio-runtime,generic-timer --no-default-features
 	$(Change_Work_Path) && cargo build --features molc,async-runtime,generic-timer --no-default-features
 	$(Change_Work_Path) && cargo build --features molc,async-runtime,async-timer --no-default-features
+	# required wasm32-unknown-unknown target
 	$(Change_Work_Path) && cargo build --features molc,wasm-timer --no-default-features --target=wasm32-unknown-unknown
 	git checkout .
 
