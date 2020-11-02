@@ -7,7 +7,7 @@ use crate::{
 mod browser;
 #[cfg(not(target_arch = "wasm32"))]
 mod tcp;
-#[cfg(all(feature = "ws", not(target_os = "unknown")))]
+#[cfg(all(feature = "ws", not(target_arch = "wasm32")))]
 mod ws;
 
 #[cfg(target_arch = "wasm32")]
