@@ -66,7 +66,7 @@ $ RUST_LOG=simple=info,tentacle=debug cargo run --example simple --features molc
 
 4. Now you can see some data interaction information on the terminal.
 
-You can see more detailed example in these two repos: [ckb](https://github.com/nervosnetwork/ckb)/[cita](https://github.com/cryptape/cita).
+You can see more detailed example in these three repos: [ckb](https://github.com/nervosnetwork/ckb)/ [cita](https://github.com/cryptape/cita)/ [muta](https://github.com/nervosnetwork/muta).
 
 ### Run on browser and test
 
@@ -86,6 +86,12 @@ all wasm code generate from [book](https://rustwasm.github.io/docs/book/game-of-
 3. Use a browser to visit http://localhost:8080/
 
 4. Now you can see the connection on the server workbench or on browser's console
+
+## Other Languages
+
+Implementations in other languages
+
+- [Go](https://github.com/driftluo/tentacle-go)
 
 ## Why?
 

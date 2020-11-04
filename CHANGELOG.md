@@ -1,3 +1,13 @@
+## 0.3.3
+
+### Features
+- Run on Browser(#273 #274)
+- Setup Github Action(#276)
+- Secio remove aes-ctr, add x25519 support(#271)
+
+### Bug Fix
+- Fix windows compatible(#275)
+
 ## 0.3.2
 
 ### Features
