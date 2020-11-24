@@ -74,7 +74,7 @@ tokio-timer = ["yamux/tokio-timer", "tokio/time", "tokio-runtime"]
 tokio-runtime = ["tokio/io-util", "tokio/tcp", "tokio/dns", "tokio/rt-threaded", "tokio/blocking"]
 
 async-timer = ["async-runtime"]
-async-runtime = ["async-std", "async-io", "yamux/generic-timer", "tokio-util/compat"]
+async-runtime = ["async-std", "async-io", "yamux/generic-timer"]
 
 generic-timer = ["futures-timer", "yamux/generic-timer"]
 wasm-timer = ["futures-timer", "yamux/wasm", "futures-timer/wasm-bindgen"]

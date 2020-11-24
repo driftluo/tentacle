@@ -9,7 +9,7 @@ use crate::{
         config::{BlockingFlag, Meta, ServiceConfig},
         ProtocolHandle, ProtocolMeta, Service,
     },
-    traits::{Codec, ServiceHandle, ServiceProtocol, SessionProtocol},
+    traits::{Codec, ProtocolSpawn, ServiceHandle, ServiceProtocol, SessionProtocol},
     utils::multiaddr_to_socketaddr,
     yamux::Config,
     ProtocolId,
@@ -197,6 +197,7 @@ pub struct MetaBuilder {
     before_send: Option<Box<dyn Fn(bytes::Bytes) -> bytes::Bytes + Send + 'static>>,
     before_receive: BeforeReceiveFn,
     flag: BlockingFlag,
+    spawn: Option<Box<dyn ProtocolSpawn + Send + Sync + 'static>>,
 }
 
 impl MetaBuilder {
@@ -270,6 +271,14 @@ impl MetaBuilder {
         self
     }
 
+    /// Define the spawn process of the protocol read part
+    ///
+    /// Mutually exclusive with protocol handle
+    pub fn protocol_spawn<T: ProtocolSpawn + Send + Sync + 'static>(mut self, spawn: T) -> Self {
+        self.spawn = Some(Box::new(spawn));
+        self
+    }
+
     /// Protocol version selection rule, default is [select_version](../protocol_select/fn.select_version.html)
     pub fn select_version<T>(mut self, f: T) -> Self
     where
@@ -304,7 +313,11 @@ impl MetaBuilder {
     }
 
     /// Combine the configuration of this builder to create a ProtocolMeta
-    pub fn build(self) -> ProtocolMeta {
+    pub fn build(mut self) -> ProtocolMeta {
+        if self.spawn.is_some() {
+            assert!(self.service_handle.is_neither());
+            assert!((self.session_handle)().is_neither());
+        }
         let meta = Meta {
             id: self.id,
             name: self.name,
@@ -312,6 +325,7 @@ impl MetaBuilder {
             codec: self.codec,
             select_version: self.select_version,
             before_receive: self.before_receive,
+            spawn: self.spawn,
         };
         ProtocolMeta {
             inner: Arc::new(meta),
@@ -336,6 +350,7 @@ impl Default for MetaBuilder {
             before_send: None,
             before_receive: Box::new(|| None),
             flag: BlockingFlag::default(),
+            spawn: None,
         }
     }
 }

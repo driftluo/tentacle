@@ -698,6 +698,7 @@ where
             self.config.timeout,
             session_context.clone(),
             service_event_sender,
+            self.service_context.control().clone(),
         )
         .protocol_by_name(by_name)
         .protocol_by_id(by_id)

@@ -21,6 +21,8 @@
     target_arch = "wasm32",
     allow(dead_code, unused_variables, unused_imports)
 )]
+// delete until break change
+#![allow(deprecated)]
 
 /// Re-pub bytes crate
 pub use bytes;
@@ -63,6 +65,8 @@ mod runtime;
 pub(crate) mod upnp;
 
 use std::{fmt, ops::AddAssign};
+
+pub use substream::SubstreamReadPart;
 
 /// Index of sub/protocol stream
 type StreamId = usize;

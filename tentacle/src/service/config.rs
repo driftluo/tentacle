@@ -1,6 +1,6 @@
 use crate::{
     builder::{BeforeReceiveFn, CodecFn, NameFn, SelectVersionFn, SessionHandleFn},
-    traits::{Codec, ServiceProtocol, SessionProtocol},
+    traits::{Codec, ProtocolSpawn, ServiceProtocol, SessionProtocol},
     yamux::config::Config as YamuxConfig,
     ProtocolId, SessionId,
 };
@@ -202,6 +202,7 @@ pub(crate) struct Meta {
     pub(crate) codec: CodecFn,
     pub(crate) select_version: SelectVersionFn,
     pub(crate) before_receive: BeforeReceiveFn,
+    pub(crate) spawn: Option<Box<dyn ProtocolSpawn + Send + Sync + 'static>>,
 }
 
 /// Protocol handle Contains four modes, each of which has a corresponding behavior,
