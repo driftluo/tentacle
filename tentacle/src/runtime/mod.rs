@@ -39,9 +39,11 @@ mod generic_split {
     pub type ReadHalf<T> = CompatStream2<R<CompatStream<T>>>;
     pub type WriteHalf<T> = CompatStream2<W<CompatStream<T>>>;
 
+    /// Splits a single value implementing `AsyncRead + AsyncWrite` into separate
+    /// `AsyncRead` and `AsyncWrite` handles.
     pub fn split<T: AsyncRead + AsyncWrite + Unpin>(io: T) -> (ReadHalf<T>, WriteHalf<T>) {
-        let (read, write) = CompatStream(io).split();
-        (CompatStream2(read), CompatStream2(write))
+        let (read, write) = CompatStream::new(io).split();
+        (CompatStream2::new(read), CompatStream2::new(write))
     }
 }
 
@@ -214,11 +216,45 @@ where
 }
 
 impl<T> CompatStream2<T> {
+    /// New wrapped stream
+    pub fn new(stream: T) -> Self {
+        CompatStream2(stream)
+    }
+
+    /// Get a reference to the Future, Stream, AsyncRead, or AsyncWrite object contained within.
     pub fn get_ref(&self) -> &T {
         &self.0
     }
 
+    /// Get a mutable reference to the Future, Stream, AsyncRead, or AsyncWrite object contained within.
     pub fn get_mut(&mut self) -> &mut T {
         &mut self.0
+    }
+
+    /// Returns the wrapped item.
+    pub fn into_inner(self) -> T {
+        self.0
+    }
+}
+
+impl<T> CompatStream<T> {
+    /// New wrapped stream
+    pub fn new(stream: T) -> Self {
+        CompatStream(stream)
+    }
+
+    /// Get a reference to the Future, Stream, AsyncRead, or AsyncWrite object contained within.
+    pub fn get_ref(&self) -> &T {
+        &self.0
+    }
+
+    /// Get a mutable reference to the Future, Stream, AsyncRead, or AsyncWrite object contained within.
+    pub fn get_mut(&mut self) -> &mut T {
+        &mut self.0
+    }
+
+    /// Returns the wrapped item.
+    pub fn into_inner(self) -> T {
+        self.0
     }
 }

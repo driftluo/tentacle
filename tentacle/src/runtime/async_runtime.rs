@@ -83,7 +83,7 @@ mod os {
         ) -> Poll<io::Result<(TcpStream, SocketAddr)>> {
             match self.recv.poll_next_unpin(cx) {
                 Poll::Ready(Some(res)) => {
-                    Poll::Ready(res.map(|x| (TcpStream(CompatStream2(x.0)), x.1)))
+                    Poll::Ready(res.map(|x| (TcpStream(CompatStream2::new(x.0)), x.1)))
                 }
                 Poll::Pending => Poll::Pending,
                 Poll::Ready(None) => Poll::Ready(Err(io::ErrorKind::BrokenPipe.into())),
@@ -171,7 +171,7 @@ mod os {
         match stream.get_ref().take_error()? {
             None => {
                 let tcp = stream.into_inner().unwrap();
-                Ok(TcpStream(CompatStream2(AsyncStream::from(tcp))))
+                Ok(TcpStream(CompatStream2::new(AsyncStream::from(tcp))))
             }
             Some(err) => Err(err),
         }
