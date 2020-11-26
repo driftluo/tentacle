@@ -1,54 +1,8 @@
-#![allow(dead_code, unused_imports)]
-
 use super::KeyAgreement;
 use crate::error::SecioError;
-use core::slice;
-use rand::{CryptoRng, Error, RngCore};
-use std::io;
+use rand::rngs::OsRng;
 pub use x25519_dalek::EphemeralSecret as EphemeralPrivateKey;
 use x25519_dalek::PublicKey;
-
-/// wasm doesn't support rand, use `getrandom` instead
-#[cfg(test)]
-use rand::rngs::OsRng;
-
-#[cfg(not(test))]
-struct OsRng;
-
-#[cfg(not(test))]
-impl CryptoRng for OsRng {}
-
-#[cfg(not(test))]
-impl RngCore for OsRng {
-    fn next_u32(&mut self) -> u32 {
-        let mut int = 0;
-        unsafe {
-            let ptr = &mut int as *mut u32 as *mut u8;
-            let slice = slice::from_raw_parts_mut(ptr, 4);
-            self.fill_bytes(slice);
-        }
-        int
-    }
-    fn next_u64(&mut self) -> u64 {
-        let mut int = 0;
-        unsafe {
-            let ptr = &mut int as *mut u64 as *mut u8;
-            let slice = slice::from_raw_parts_mut(ptr, 8);
-            self.fill_bytes(slice);
-        }
-        int
-    }
-    fn fill_bytes(&mut self, dest: &mut [u8]) {
-        if let Err(e) = self.try_fill_bytes(dest) {
-            panic!("Error: {}", e);
-        }
-    }
-    fn try_fill_bytes(&mut self, dest: &mut [u8]) -> Result<(), Error> {
-        getrandom::getrandom(dest)
-            .map_err(|e| Error::new(io::Error::new(io::ErrorKind::Other, e.to_string())))?;
-        Ok(())
-    }
-}
 
 /// Generates a new key pair as part of the exchange.
 ///

@@ -14,6 +14,7 @@ use crate::{
 
 use bytes::{Bytes, BytesMut};
 use log::{debug, trace};
+use rand::RngCore;
 
 use std::cmp::Ordering;
 
@@ -82,7 +83,7 @@ impl HandshakeContext<()> {
     // Setup local proposition.
     pub fn with_local(self) -> HandshakeContext<Local> {
         let mut nonce = [0; 16];
-        crate::rand_compat::get_random(&mut nonce);
+        rand::thread_rng().fill_bytes(&mut nonce);
 
         let public_key = self.config.key.public_key();
 
