@@ -17,5 +17,6 @@ extern "C" {
 #[wasm_bindgen]
 pub fn greet() {
     utils::set_panic_hook();
+    wasm_logger::init(wasm_logger::Config::new(log::Level::Info));
     simple::client();
 }

@@ -1,4 +1,5 @@
-use futures::{prelude::*};
+use futures::prelude::*;
+use log::{error, info};
 use std::{str, time::Duration};
 use tentacle::{
     builder::{MetaBuilder, ServiceBuilder},
@@ -6,7 +7,8 @@ use tentacle::{
     context::{ProtocolContext, ProtocolContextMutRef, ServiceContext},
     secio::SecioKeyPair,
     service::{
-        ProtocolHandle, ProtocolMeta, Service, ServiceError, ServiceEvent, TargetProtocol, TargetSession
+        ProtocolHandle, ProtocolMeta, Service, ServiceError, ServiceEvent, TargetProtocol,
+        TargetSession,
     },
     traits::{ServiceHandle, ServiceProtocol},
     ProtocolId, SessionId,
@@ -43,12 +45,9 @@ impl ServiceProtocol for PHandle {
     fn connected(&mut self, context: ProtocolContextMutRef, version: &str) {
         let session = context.session;
         self.connected_session_ids.push(session.id);
-        web_sys::console::log_1(
-            &format!(
-                "proto id [{}] open on session [{}], address: [{}], type: [{:?}], version: {}",
-                context.proto_id, session.id, session.address, session.ty, version
-            )
-            .into(),
+        info!(
+            "proto id [{}] open on session [{}], address: [{}], type: [{:?}], version: {}",
+            context.proto_id, session.id, session.address, session.ty, version
         );
     }
 
@@ -61,39 +60,34 @@ impl ServiceProtocol for PHandle {
             .collect();
         self.connected_session_ids = new_list;
 
-        web_sys::console::log_1(
-            &format!(
-                "proto id [{}] close on session [{}]",
-                context.proto_id, context.session.id
-            )
-            .into(),
+        info!(
+            "proto id [{}] close on session [{}]",
+            context.proto_id, context.session.id
         );
     }
 
     fn received(&mut self, context: ProtocolContextMutRef, data: bytes::Bytes) {
         self.count += 1;
-        web_sys::console::log_1(
-            &format!(
-                "received from [{}]: proto [{}] data {:?}, message count: {}",
-                context.session.id,
-                context.proto_id,
-                str::from_utf8(data.as_ref()).unwrap(),
-                self.count
-            )
-            .into(),
+        info!(
+            "received from [{}]: proto [{}] data {:?}, message count: {}",
+            context.session.id,
+            context.proto_id,
+            str::from_utf8(data.as_ref()).unwrap(),
+            self.count
         );
     }
 
     fn notify(&mut self, context: &mut ProtocolContext, token: u64) {
-        web_sys::console::log_1(
-            &format!(
-                "proto [{}] received notify token: {}",
-                context.proto_id, token
-            )
-            .into(),
+        info!(
+            "proto [{}] received notify token: {}",
+            context.proto_id, token
         );
 
-        let _ = context.filter_broadcast(TargetSession::All, 1.into(), Bytes::from("I am a interval message"));
+        let _ = context.filter_broadcast(
+            TargetSession::All,
+            1.into(),
+            Bytes::from("I am a interval message"),
+        );
     }
 }
 
@@ -101,10 +95,10 @@ struct SHandle;
 
 impl ServiceHandle for SHandle {
     fn handle_error(&mut self, _context: &mut ServiceContext, error: ServiceError) {
-        web_sys::console::log_1(&format!("service error: {:?}", error).into());
+        error!("service error: {:?}", error);
     }
     fn handle_event(&mut self, _context: &mut ServiceContext, event: ServiceEvent) {
-        web_sys::console::log_1(&format!("service event: {:?}", event).into());
+        info!("service event: {:?}", event);
     }
 }
 
