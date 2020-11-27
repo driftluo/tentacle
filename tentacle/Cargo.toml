@@ -3,7 +3,7 @@ name = "tentacle"
 version = "0.3.3"
 license = "MIT"
 description = "Minimal implementation for a multiplexed p2p network framework."
-authors = ["piaoliu <441594700@qq.com>", "Nervos Core Dev <dev@nervos.org>"]
+authors = ["piaoliu <driftluo@foxmail.com>", "Nervos Core Dev <dev@nervos.org>"]
 repository = "https://github.com/nervosnetwork/tentacle"
 readme = "README.md"
 keywords = ["network", "peer-to-peer"]
@@ -11,7 +11,7 @@ categories = ["network-programming", "asynchronous"]
 edition = "2018"
 
 [package.metadata.docs.rs]
-features = [ "molc" ]
+features = [ "molc", "tokio-runtime", "tokio-timer", "upnp", "ws", "unstable" ]
 all-features = false
 no-default-features = true
 
@@ -36,7 +36,7 @@ multiaddr = { path = "../multiaddr", package = "tentacle-multiaddr", version = "
 molecule = { version = "0.6.0", optional = true }
 
 # upnp
-igd = "0.9"
+igd = { version = "0.11", optional = true }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 js-sys = "0.3"
@@ -67,7 +67,9 @@ flatc = [ "flatbuffers", "flatbuffers-verifier", "secio/flatc" ]
 # use molecule to handshake
 molc = [ "molecule", "secio/molc" ]
 ws = ["tokio-tungstenite"]
+upnp = ["igd"]
 unstable = []
+
 # Related to runtime
 
 tokio-timer = ["yamux/tokio-timer", "tokio/time", "tokio-runtime"]

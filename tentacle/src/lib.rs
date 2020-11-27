@@ -59,9 +59,10 @@ pub(crate) mod transports;
 pub mod utils;
 
 mod channel;
-mod runtime;
+#[doc(hidden)]
+pub mod runtime;
 
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(all(not(target_arch = "wasm32"), feature = "upnp"))]
 pub(crate) mod upnp;
 
 use std::{fmt, ops::AddAssign};

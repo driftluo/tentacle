@@ -76,7 +76,7 @@ pub struct Service<T> {
 
     listens: HashSet<Multiaddr>,
 
-    #[cfg(not(target_arch = "wasm32"))]
+    #[cfg(all(not(target_arch = "wasm32"), feature = "upnp"))]
     igd_client: Option<crate::upnp::IGDClient>,
 
     dial_protocols: HashMap<Multiaddr, TargetProtocol>,
@@ -141,7 +141,7 @@ where
             .collect();
         let (future_task_sender, future_task_receiver) = mpsc::channel(SEND_SIZE);
         let shutdown = Arc::new(AtomicBool::new(false));
-        #[cfg(not(target_arch = "wasm32"))]
+        #[cfg(all(not(target_arch = "wasm32"), feature = "upnp"))]
         let igd_client = if config.upnp {
             crate::upnp::IGDClient::new()
         } else {
@@ -168,7 +168,7 @@ where
             service_proto_handles: HashMap::default(),
             session_proto_handles: HashMap::default(),
             listens: HashSet::new(),
-            #[cfg(not(target_arch = "wasm32"))]
+            #[cfg(all(not(target_arch = "wasm32"), feature = "upnp"))]
             igd_client,
             dial_protocols: HashMap::default(),
             state: State::new(forever),
@@ -231,6 +231,7 @@ where
                         address: listen_address.clone(),
                     },
                 );
+                #[cfg(feature = "upnp")]
                 if let Some(client) = self.igd_client.as_mut() {
                     client.register(&listen_address)
                 }
@@ -950,6 +951,7 @@ where
     #[cfg(not(target_arch = "wasm32"))]
     #[inline]
     fn try_update_listens(&mut self, cx: &mut Context) {
+        #[cfg(feature = "upnp")]
         if let Some(client) = self.igd_client.as_mut() {
             client.process_only_leases_support()
         }
@@ -1061,6 +1063,7 @@ where
                     },
                 );
                 if self.listens.remove(&address) {
+                    #[cfg(feature = "upnp")]
                     if let Some(ref mut client) = self.igd_client {
                         client.remove(&address);
                     }
@@ -1109,7 +1112,7 @@ where
                 self.listens.insert(listen_address.clone());
                 self.state.decrease();
                 self.try_update_listens(cx);
-                #[cfg(not(target_arch = "wasm32"))]
+                #[cfg(feature = "upnp")]
                 if let Some(client) = self.igd_client.as_mut() {
                     client.register(&listen_address)
                 }
@@ -1248,7 +1251,7 @@ where
                     )
                 }
                 // clear upnp register
-                #[cfg(not(target_arch = "wasm32"))]
+                #[cfg(all(not(target_arch = "wasm32"), feature = "upnp"))]
                 if let Some(client) = self.igd_client.as_mut() {
                     client.clear()
                 };

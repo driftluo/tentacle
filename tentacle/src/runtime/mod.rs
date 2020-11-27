@@ -1,4 +1,13 @@
-#![allow(dead_code)]
+//! runtime compatible
+//!
+//! In order to make Tentacle multi-runtime universal, this module encapsulates some common methods needed by Tentacle.
+//!
+//! At the same time, these packages can also be used by users, but please note that this module is doc hidden,
+//! that is, its biggest purpose is to make tentacle universal on multiple platforms, not for users to use,
+//! so there may be some strangeness Trick break, this is unavoidable
+//!
+//! this module contains async timer, compat async read/write between futures and tokio, spawn on any runtime
+//!
 
 #[cfg(all(not(target_arch = "wasm32"), feature = "async-runtime"))]
 mod async_runtime;

@@ -140,12 +140,12 @@ mod os {
         net::{SocketAddr, TcpListener as StdListen},
     };
 
-    pub fn from_std(listen: StdListen) -> io::Result<TcpListener> {
+    pub(crate) fn from_std(listen: StdListen) -> io::Result<TcpListener> {
         let addr = listen.local_addr()?;
         Ok(TcpListener::new(AsyncListener::from(listen), addr))
     }
 
-    pub async fn connect_std(std_tcp: Socket, addr: &SocketAddr) -> io::Result<TcpStream> {
+    pub(crate) async fn connect_std(std_tcp: Socket, addr: &SocketAddr) -> io::Result<TcpStream> {
         // Begin async connect and ignore the inevitable "in progress" error.
         std_tcp.set_nonblocking(true)?;
         std_tcp.connect(&(*addr).into()).or_else(|err| {
