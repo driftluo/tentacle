@@ -1,6 +1,7 @@
 //! Aes Encrypted communication and handshake process implementation
 
 #![deny(missing_docs)]
+use rand::RngCore;
 
 pub use crate::{handshake::handshake_struct::PublicKey, peer_id::PeerId};
 
@@ -35,7 +36,7 @@ impl SecioKeyPair {
     pub fn secp256k1_generated() -> SecioKeyPair {
         loop {
             let mut key = [0; crate::secp256k1_compat::SECRET_KEY_SIZE];
-            crate::rand_compat::get_random(&mut key);
+            rand::thread_rng().fill_bytes(&mut key);
             if let Ok(private) = crate::secp256k1_compat::secret_key_from_slice(&key) {
                 return SecioKeyPair {
                     inner: KeyPairInner::Secp256k1 { private },
@@ -96,21 +97,6 @@ impl Digest {
         match self {
             Digest::Sha256 => 256 / 8,
             Digest::Sha512 => 512 / 8,
-        }
-    }
-}
-
-mod rand_compat {
-    #[cfg(not(target_arch = "wasm32"))]
-    pub fn get_random(output: &mut [u8]) {
-        use rand::RngCore;
-        rand::thread_rng().fill_bytes(output)
-    }
-
-    #[cfg(target_arch = "wasm32")]
-    pub fn get_random(output: &mut [u8]) {
-        if let Err(e) = getrandom::getrandom(output) {
-            panic!("Error: {}", e);
         }
     }
 }
