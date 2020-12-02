@@ -1,55 +1,41 @@
-#[cfg(not(target_arch = "wasm32"))]
-mod native;
-#[cfg(any(target_arch = "wasm32", test))]
-mod wasm_compat;
+pub use secp256k1::{constants::SECRET_KEY_SIZE, Message, PublicKey, SecretKey, Signature};
 
-#[cfg(not(target_arch = "wasm32"))]
-pub use native::*;
+pub fn from_secret_key(secret: &SecretKey) -> PublicKey {
+    let secp = secp256k1::Secp256k1::signing_only();
+    secp256k1::key::PublicKey::from_secret_key(&secp, secret)
+}
 
-#[cfg(target_arch = "wasm32")]
-pub use wasm_compat::*;
+// compressed serialize, len = 33
+pub fn serialize_pubkey(pubkey: &PublicKey) -> Vec<u8> {
+    pubkey.serialize().to_vec()
+}
 
-#[cfg(test)]
-mod test {
-    use super::*;
-    use rand::Rng;
+pub fn signature_to_vec(signature: Signature) -> Vec<u8> {
+    signature.serialize_der().to_vec()
+}
 
-    #[test]
-    fn test_pk_to_sk() {
-        let mut data = [0; 64];
-        rand::thread_rng().fill(&mut data[..]);
-        let (pk_native, pk_wasm) = loop {
-            let rand_p = rand::random::<[u8; SECRET_KEY_SIZE]>();
-            if let (Ok(p1), Ok(p2)) = (
-                secret_key_from_slice(&rand_p),
-                wasm_compat::secret_key_from_slice(&rand_p),
-            ) {
-                break (p1, p2);
-            }
-        };
+pub fn sign(message: &Message, secret: &SecretKey) -> Signature {
+    let secp256k1_key = secp256k1::Secp256k1::signing_only();
+    secp256k1_key.sign(message, secret)
+}
 
-        let sk_native = from_secret_key(&pk_native);
-        let sk_wasm = wasm_compat::from_secret_key(&pk_wasm);
+pub fn verify(message: &Message, signature: &Signature, pubkey: &PublicKey) -> bool {
+    let secp256k1 = secp256k1::Secp256k1::verification_only();
+    secp256k1.verify(message, signature, pubkey).is_ok()
+}
 
-        assert_eq!(
-            serialize_pubkey(&sk_native),
-            wasm_compat::serialize_pubkey(&sk_wasm)
-        );
+pub fn secret_key_from_slice(key: &[u8]) -> Result<SecretKey, secp256k1::Error> {
+    SecretKey::from_slice(key)
+}
 
-        let raw_msg = crate::sha256_compat::sha256(&data);
-        let msg_native = message_from_slice(raw_msg.as_ref()).unwrap();
-        let signature_native = sign(&msg_native, &pk_native);
+pub fn pubkey_from_slice(key: &[u8]) -> Result<PublicKey, secp256k1::Error> {
+    PublicKey::from_slice(key)
+}
 
-        assert!(verify(&msg_native, &signature_native, &sk_native));
+pub fn message_from_slice(msg: &[u8]) -> Result<Message, secp256k1::Error> {
+    Message::from_slice(msg)
+}
 
-        let msg_wasm = wasm_compat::message_from_slice(raw_msg.as_ref()).unwrap();
-        let signature_wasm = wasm_compat::sign(&msg_wasm, &pk_wasm);
-
-        assert!(wasm_compat::verify(&msg_wasm, &signature_wasm, &sk_wasm));
-
-        assert_eq!(
-            signature_to_vec(signature_native),
-            wasm_compat::signature_to_vec(signature_wasm)
-        )
-    }
+pub fn signature_from_der(data: &[u8]) -> Result<Signature, secp256k1::Error> {
+    Signature::from_der(data)
 }

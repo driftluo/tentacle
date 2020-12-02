@@ -16,7 +16,7 @@ pub mod error;
 pub mod handshake;
 /// Peer id
 pub mod peer_id;
-/// Compatible with two library interfaces
+/// A little encapsulation of secp256k1
 mod secp256k1_compat;
 mod sha256_compat;
 /// Supported algorithms
