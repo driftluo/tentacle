@@ -635,7 +635,8 @@ impl Session {
         if self
             .substreams
             .values()
-            .fold(0, |acc, item| acc + item.len())
+            .map(PriorityBuffer::len)
+            .sum::<usize>()
             > RECEIVED_BUFFER_SIZE
         {
             // The write buffer exceeds the expected range, and no longer receives any event
@@ -758,7 +759,8 @@ impl Stream for Session {
                 self.service_sender.len(),
                 self.substreams
                     .values()
-                    .fold(0, |acc, item| acc + item.len()),
+                    .map(PriorityBuffer::len)
+                    .sum::<usize>(),
             );
         }
 
