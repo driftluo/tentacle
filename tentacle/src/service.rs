@@ -1280,7 +1280,8 @@ where
         if self
             .sessions
             .values()
-            .fold(0, |acc, item| acc + item.buffer.len())
+            .map(|item| item.buffer.len())
+            .sum::<usize>()
             > self.config.session_config.send_event_size()
         {
             // The write buffer exceeds the expected range, and no longer receives any event
@@ -1311,12 +1312,14 @@ where
         if self
             .service_proto_handles
             .values()
-            .fold(0, |acc, item| acc + item.len())
+            .map(Buffer::len)
+            .sum::<usize>()
             > self.config.session_config.recv_event_size()
             || self
                 .session_proto_handles
                 .values()
-                .fold(0, |acc, item| acc + item.len())
+                .map(Buffer::len)
+                .sum::<usize>()
                 > self.config.session_config.recv_event_size()
         {
             // The read buffer exceeds the expected range, and no longer receives any event
@@ -1443,13 +1446,16 @@ where
                 self.future_task_sender.len(),
                 self.sessions
                     .values()
-                    .fold(0, |acc, item| acc + item.buffer.len()),
+                    .map(|item| item.buffer.len())
+                    .sum::<usize>(),
                 self.service_proto_handles
                     .values()
-                    .fold(0, |acc, item| acc + item.len()),
+                    .map(Buffer::len)
+                    .sum::<usize>(),
                 self.session_proto_handles
                     .values()
-                    .fold(0, |acc, item| acc + item.len()),
+                    .map(Buffer::len)
+                    .sum::<usize>(),
             );
         }
 

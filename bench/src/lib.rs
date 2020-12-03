@@ -61,10 +61,7 @@ impl Bench {
 
     fn output(&mut self, name: &str) {
         self.executed_time_list.sort();
-        let total = self
-            .executed_time_list
-            .iter()
-            .fold(Duration::default(), |start, &x| start + x);
+        let total = self.executed_time_list.iter().sum::<Duration>();
         println!(
             "task name: {}\ncycles: {}\ntotal cost: {:?}\naverage: {:?}\nmedian: {:?}\nmax: {:?}\nmin: {:?}\n",
             name,
