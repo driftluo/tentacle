@@ -29,10 +29,6 @@ jobs:
       script:
         - make test
     - stage: Test
-      name: Features check
-      script:
-        - make features-check
-    - stage: Test
       name: Bench
       script:
         - make bench_p2p
