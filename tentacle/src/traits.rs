@@ -116,11 +116,13 @@ pub trait SessionProtocol {
 /// When the negotiation is completed and the agreement is opened, will call the implementation,
 /// allow users to implement the read processing of the protocol by themselves
 ///
-/// Implementing this trait means that streaming reading will become possible, and at the same time,
-/// async methods that cannot be used due to Rust's temporary lack of support on async trait will also become possible
+/// Implementing this trait means that streaming reading directly from the underlying substream
+/// will become possible, and at the same time, async methods that cannot be used due to Rust's
+/// temporary lack of support on async trait will also become possible
 ///
 /// This trait implementation and the callback implementation are mutually exclusive, and will be
 /// checked during construction, if both exist, it will panic
+#[cfg_attr(not(feature = "unstable"), doc(hidden))]
 pub trait ProtocolSpawn {
     /// Call on protocol opened
     fn spawn(

@@ -607,7 +607,7 @@ where
         let target = self
             .dial_protocols
             .remove(&address)
-            .unwrap_or_else(|| TargetProtocol::All);
+            .unwrap_or(TargetProtocol::All);
         if let Some(ref key) = remote_pubkey {
             // If the public key exists, the connection has been established
             // and then the useless connection needs to be closed.

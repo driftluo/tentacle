@@ -1,3 +1,6 @@
+#![cfg(feature = "unstable")]
+
+/// Implement simple.rs example using `ProtocolSpawn`.
 use bytes::Bytes;
 use env_logger;
 use futures::StreamExt;

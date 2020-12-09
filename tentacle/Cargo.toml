@@ -67,7 +67,7 @@ flatc = [ "flatbuffers", "flatbuffers-verifier", "secio/flatc" ]
 # use molecule to handshake
 molc = [ "molecule", "secio/molc" ]
 ws = ["tokio-tungstenite"]
-
+unstable = []
 # Related to runtime
 
 tokio-timer = ["yamux/tokio-timer", "tokio/time", "tokio-runtime"]

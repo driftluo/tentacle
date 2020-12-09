@@ -155,13 +155,13 @@ where
     /// Send data to the lower `yamux` sub stream
     fn send_data(&mut self, cx: &mut Context) -> Result<(), io::Error> {
         while let Some(frame) = self.high_write_buf.pop_front() {
-            if self.send_inner(cx, frame, Priority::High)? && self.poll_complete(cx)? {
+            if self.send_inner(cx, frame, Priority::High)? {
                 return Ok(());
             }
         }
 
         while let Some(frame) = self.write_buf.pop_front() {
-            if self.send_inner(cx, frame, Priority::Normal)? && self.poll_complete(cx)? {
+            if self.send_inner(cx, frame, Priority::Normal)? {
                 return Ok(());
             }
         }
@@ -699,13 +699,13 @@ where
     /// Send data to the lower `yamux` sub stream
     fn send_data(&mut self, cx: &mut Context) -> Result<(), io::Error> {
         while let Some(frame) = self.high_write_buf.pop_front() {
-            if self.send_inner(cx, frame, Priority::High)? && self.poll_complete(cx)? {
+            if self.send_inner(cx, frame, Priority::High)? {
                 return Ok(());
             }
         }
 
         while let Some(frame) = self.write_buf.pop_front() {
-            if self.send_inner(cx, frame, Priority::Normal)? && self.poll_complete(cx)? {
+            if self.send_inner(cx, frame, Priority::Normal)? {
                 return Ok(());
             }
         }

@@ -274,6 +274,7 @@ impl MetaBuilder {
     /// Define the spawn process of the protocol read part
     ///
     /// Mutually exclusive with protocol handle
+    #[cfg(feature = "unstable")]
     pub fn protocol_spawn<T: ProtocolSpawn + Send + Sync + 'static>(mut self, spawn: T) -> Self {
         self.spawn = Some(Box::new(spawn));
         self

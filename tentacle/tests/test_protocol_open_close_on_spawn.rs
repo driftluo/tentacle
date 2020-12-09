@@ -1,3 +1,4 @@
+#![cfg(feature = "unstable")]
 use futures::StreamExt;
 use std::{
     sync::mpsc::channel,
