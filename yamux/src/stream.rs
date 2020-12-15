@@ -93,7 +93,10 @@ impl StreamHandle {
 
     fn close(&mut self, cx: &mut Context) -> Result<(), Error> {
         match self.state {
-            StreamState::SynSent | StreamState::SynReceived | StreamState::Established => {
+            StreamState::SynSent
+            | StreamState::SynReceived
+            | StreamState::Established
+            | StreamState::Init => {
                 self.state = StreamState::LocalClosing;
                 self.send_close(cx)?;
             }
@@ -108,7 +111,11 @@ impl StreamHandle {
                 let event = StreamEvent::StateChanged((self.id, self.state));
                 self.send_event(cx, event)?;
             }
-            _ => {}
+            StreamState::LocalClosing => {
+                self.state = StreamState::Closed;
+                let event = StreamEvent::StateChanged((self.id, self.state));
+                self.send_event(cx, event)?;
+            }
         }
         Ok(())
     }
@@ -329,7 +336,7 @@ impl StreamHandle {
         // if read buf is empty and state is close, return close error
         if self.read_buf.is_empty() {
             match self.state {
-                StreamState::RemoteClosing | StreamState::Closed => {
+                StreamState::RemoteClosing => {
                     debug!("closed(EOF)");
                     match Pin::new(self).poll_shutdown(cx) {
                         Poll::Ready(res) => res?,
@@ -345,6 +352,7 @@ impl StreamHandle {
                     }
                     Err(io::ErrorKind::ConnectionReset.into())
                 }
+                StreamState::Closed => Err(io::ErrorKind::BrokenPipe.into()),
                 _ => Ok(()),
             }
         } else {
@@ -399,6 +407,11 @@ impl AsyncRead for StreamHandle {
         buf[..n].copy_from_slice(&b);
         match self.state {
             StreamState::RemoteClosing | StreamState::Closed | StreamState::Reset => (),
+            StreamState::LocalClosing => match self.close(cx) {
+                Err(Error::WouldBlock) => return Poll::Pending,
+                Err(_) => return Poll::Ready(Err(io::ErrorKind::BrokenPipe.into())),
+                _ => (),
+            },
             _ => {
                 if self.send_window_update(Some(cx)).is_err() {
                     return Poll::Ready(Err(io::ErrorKind::BrokenPipe.into()));
@@ -417,26 +430,17 @@ impl AsyncWrite for StreamHandle {
         buf: &[u8],
     ) -> Poll<io::Result<usize>> {
         debug!("[{}] StreamHandle.write({:?})", self.id, buf.len());
-        if let Err(e) = self.recv_frames(cx) {
-            match e {
-                Error::SessionShutdown => {
-                    return Poll::Ready(Err(io::ErrorKind::BrokenPipe.into()))
-                }
-                // read flag error or read data error
-                Error::UnexpectedFlag | Error::RecvWindowExceeded | Error::InvalidMsgType => {
-                    self.send_go_away();
-                    return Poll::Ready(Err(io::ErrorKind::InvalidData.into()));
-                }
-                Error::SubStreamRemoteClosing => (),
-                Error::WouldBlock => return Poll::Pending,
-                _ => (),
+        match self.state {
+            StreamState::RemoteClosing | StreamState::Reset => {
+                return Poll::Ready(Err(io::ErrorKind::BrokenPipe.into()))
             }
-        }
-        if self.state == StreamState::LocalClosing || self.state == StreamState::Closed {
-            return Poll::Ready(Err(io::Error::new(
-                io::ErrorKind::BrokenPipe,
-                "The local is closed and data cannot be written.",
-            )));
+            StreamState::LocalClosing | StreamState::Closed => {
+                return Poll::Ready(Err(io::Error::new(
+                    io::ErrorKind::BrokenPipe,
+                    "The local is closed and data cannot be written.",
+                )));
+            }
+            _ => (),
         }
 
         debug!(
@@ -471,20 +475,17 @@ impl AsyncWrite for StreamHandle {
 
     fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<io::Result<()>> {
         debug!("[{}] StreamHandle.flush()", self.id);
-        if let Err(e) = self.recv_frames(cx) {
-            match e {
-                Error::SessionShutdown => {
-                    return Poll::Ready(Err(io::ErrorKind::BrokenPipe.into()))
-                }
-                // read flag error or read data error
-                Error::UnexpectedFlag | Error::RecvWindowExceeded | Error::InvalidMsgType => {
-                    self.send_go_away();
-                    return Poll::Ready(Err(io::ErrorKind::InvalidData.into()));
-                }
-                Error::SubStreamRemoteClosing => (),
-                Error::WouldBlock => return Poll::Pending,
-                _ => (),
+        match self.state {
+            StreamState::RemoteClosing | StreamState::Reset => {
+                return Poll::Ready(Err(io::ErrorKind::BrokenPipe.into()))
             }
+            StreamState::LocalClosing | StreamState::Closed => {
+                return Poll::Ready(Err(io::Error::new(
+                    io::ErrorKind::BrokenPipe,
+                    "The local is closed and data cannot be written.",
+                )));
+            }
+            _ => (),
         }
         let event = StreamEvent::Flush(self.id);
         match self.send_event(cx, event) {
@@ -524,7 +525,7 @@ impl Drop for StreamHandle {
 }
 
 // Stream event
-#[derive(Debug)]
+#[derive(Debug, Eq, PartialEq)]
 pub(crate) enum StreamEvent {
     Frame(Frame),
     StateChanged((StreamId, StreamState)),
@@ -563,9 +564,9 @@ mod test {
         frame::{Flag, Flags, Frame},
     };
     use bytes::Bytes;
-    use futures::{channel::mpsc::channel, SinkExt};
+    use futures::{channel::mpsc::channel, SinkExt, StreamExt};
     use std::io::ErrorKind;
-    use tokio::{io::AsyncWriteExt, stream::StreamExt};
+    use tokio::io::AsyncReadExt;
 
     #[test]
     fn test_drop() {
@@ -615,10 +616,11 @@ mod test {
             flags.add(Flag::Rst);
             let frame = Frame::new_window_update(flags, 0, 0);
             frame_sender.send(frame).await.unwrap();
+            let mut b = [0; 1024];
 
             // try poll stream handle, then it will recv RST frame and set self state to reset
             assert_eq!(
-                stream.write(b"hello").await.unwrap_err().kind(),
+                stream.read(&mut b).await.unwrap_err().kind(),
                 ErrorKind::BrokenPipe
             );
 
@@ -649,10 +651,11 @@ mod test {
             let flags = Flags::from(Flag::Syn);
             let frame = Frame::new_data(flags, 0, Bytes::from("1234"));
             frame_sender.send(frame).await.unwrap();
+            let mut b = [0; 1024];
 
             // try poll stream handle, then it will recv data frame and return Err
             assert_eq!(
-                stream.write(b"hello").await.unwrap_err().kind(),
+                stream.read(&mut b).await.unwrap_err().kind(),
                 ErrorKind::InvalidData
             );
 

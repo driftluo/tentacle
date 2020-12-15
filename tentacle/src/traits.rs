@@ -1,13 +1,15 @@
 use std::{
     io,
     pin::Pin,
+    sync::Arc,
     task::{Context, Poll},
 };
 use tokio_util::codec::{Decoder, Encoder};
 
 use crate::{
-    context::{ProtocolContext, ProtocolContextMutRef, ServiceContext},
-    service::{ProtocolEvent, ServiceError, ServiceEvent},
+    context::{ProtocolContext, ProtocolContextMutRef, ServiceContext, SessionContext},
+    service::{ProtocolEvent, ServiceControl, ServiceError, ServiceEvent},
+    substream::SubstreamReadPart,
 };
 
 /// Service handle
@@ -37,6 +39,7 @@ pub trait ServiceHandle {
     ///
     /// If the handle of the protocol has event, then its events will be placed here.
     /// If there is no event handle in the protocol, this interface will not be called.
+    #[deprecated(since = "0.3.5", note = "use `ProtocolSpawn` instead")]
     fn handle_proto(&mut self, _control: &mut ServiceContext, _event: ProtocolEvent) {}
 }
 
@@ -108,6 +111,26 @@ pub trait SessionProtocol {
     ) -> Poll<Option<()>> {
         Poll::Ready(None)
     }
+}
+
+/// When the negotiation is completed and the agreement is opened, will call the implementation,
+/// allow users to implement the read processing of the protocol by themselves
+///
+/// Implementing this trait means that streaming reading directly from the underlying substream
+/// will become possible, and at the same time, async methods that cannot be used due to Rust's
+/// temporary lack of support on async trait will also become possible
+///
+/// This trait implementation and the callback implementation are mutually exclusive, and will be
+/// checked during construction, if both exist, it will panic
+#[cfg_attr(not(feature = "unstable"), doc(hidden))]
+pub trait ProtocolSpawn {
+    /// Call on protocol opened
+    fn spawn(
+        &self,
+        context: Arc<SessionContext>,
+        control: &ServiceControl,
+        read_part: SubstreamReadPart,
+    );
 }
 
 /// A trait can define codec, just wrapper `Decoder` and `Encoder`

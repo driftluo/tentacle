@@ -13,6 +13,7 @@ pub use os::*;
 
 #[cfg(not(target_arch = "wasm32"))]
 mod os {
+    use crate::runtime::CompatStream2;
     use async_io::Async;
     use async_std::net::{TcpListener as AsyncListener, TcpStream as AsyncStream, ToSocketAddrs};
     use futures::{
@@ -21,14 +22,13 @@ mod os {
             oneshot::{self, Sender},
         },
         future::select,
-        AsyncRead as _, FutureExt, SinkExt, StreamExt,
+        FutureExt, SinkExt, StreamExt,
     };
     use std::{
         pin::Pin,
         task::{Context, Poll},
     };
     use tokio::prelude::{AsyncRead, AsyncWrite};
-    use tokio_util::compat::{Compat, FuturesAsyncWriteCompatExt};
 
     #[derive(Debug)]
     pub struct TcpListener {
@@ -83,7 +83,7 @@ mod os {
         ) -> Poll<io::Result<(TcpStream, SocketAddr)>> {
             match self.recv.poll_next_unpin(cx) {
                 Poll::Ready(Some(res)) => {
-                    Poll::Ready(res.map(|x| (TcpStream(x.0.compat_write()), x.1)))
+                    Poll::Ready(res.map(|x| (TcpStream(CompatStream2::new(x.0)), x.1)))
                 }
                 Poll::Pending => Poll::Pending,
                 Poll::Ready(None) => Poll::Ready(Err(io::ErrorKind::BrokenPipe.into())),
@@ -92,7 +92,7 @@ mod os {
     }
 
     #[derive(Debug)]
-    pub struct TcpStream(Compat<AsyncStream>);
+    pub struct TcpStream(CompatStream2<AsyncStream>);
 
     impl TcpStream {
         pub fn peer_addr(&self) -> io::Result<SocketAddr> {
@@ -106,7 +106,7 @@ mod os {
             cx: &mut Context<'_>,
             buf: &mut [u8],
         ) -> Poll<Result<usize, io::Error>> {
-            Pin::new(self.0.get_mut()).poll_read(cx, buf)
+            AsyncRead::poll_read(Pin::new(&mut self.0), cx, buf)
         }
     }
 
@@ -171,7 +171,7 @@ mod os {
         match stream.get_ref().take_error()? {
             None => {
                 let tcp = stream.into_inner().unwrap();
-                Ok(TcpStream(AsyncStream::from(tcp).compat_write()))
+                Ok(TcpStream(CompatStream2::new(AsyncStream::from(tcp))))
             }
             Some(err) => Err(err),
         }

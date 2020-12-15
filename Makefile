@@ -21,12 +21,12 @@ fmt:
 	cargo fmt --all -- --check
 
 clippy:
-	$(Change_Work_Path) && RUSTFLAGS='-F warnings' cargo clippy --all --tests --features molc,ws -- -D clippy::let_underscore_must_use
-	$(Change_Work_Path) && RUSTFLAGS='-F warnings' cargo clippy --all --tests --features flatc -- -D clippy::let_underscore_must_use
+	$(Change_Work_Path) && RUSTFLAGS='-F warnings' cargo clippy --all --tests --features molc,ws,unstable -- -D clippy::let_underscore_must_use
+	$(Change_Work_Path) && RUSTFLAGS='-F warnings' cargo clippy --all --tests --features flatc,unstable -- -D clippy::let_underscore_must_use
 
 test:
-	$(Change_Work_Path) && RUSTFLAGS='-F warnings' RUST_BACKTRACE=full cargo test --all --features molc,ws
-	$(Change_Work_Path) && RUSTFLAGS='-F warnings' RUST_BACKTRACE=full cargo test --all --features flatc
+	$(Change_Work_Path) && RUSTFLAGS='-F warnings' RUST_BACKTRACE=full cargo test --all --features molc,ws,unstable
+	$(Change_Work_Path) && RUSTFLAGS='-F warnings' RUST_BACKTRACE=full cargo test --all --features flatc,unstable
 
 fuzz:
 	cargo +nightly fuzz run secio_crypto_decrypt_cipher -- -max_total_time=60
@@ -35,21 +35,22 @@ fuzz:
 
 build:
 	$(Change_Work_Path) && RUSTFLAGS='-F warnings' cargo build --all --features molc,ws
-	$(Change_Work_Path) && RUSTFLAGS='-F warnings' cargo build --all --features flatc
+	$(Change_Work_Path) && RUSTFLAGS='-F warnings' cargo build --all --features molc,ws,unstable
+	$(Change_Work_Path) && RUSTFLAGS='-F warnings' cargo build --all --features flatc,unstable
 
 examples:
-	$(Change_Work_Path) && cargo build --examples --all --features molc
-	$(Change_Work_Path) && cargo build --examples --all --features flatc
+	$(Change_Work_Path) && cargo build --examples --all --features molc,unstable
+	$(Change_Work_Path) && cargo build --examples --all --features flatc,unstable
 
 features-check:
 	# remove yamux default features
 	sed -i 's/"tokio-timer"//g' yamux/Cargo.toml
-	$(Change_Work_Path) && cargo build --features molc
-	$(Change_Work_Path) && cargo build --features molc,tokio-runtime,generic-timer --no-default-features
-	$(Change_Work_Path) && cargo build --features molc,async-runtime,generic-timer --no-default-features
-	$(Change_Work_Path) && cargo build --features molc,async-runtime,async-timer --no-default-features
+	$(Change_Work_Path) && cargo build --features molc,unstable
+	$(Change_Work_Path) && cargo build --features molc,tokio-runtime,generic-timer,unstable --no-default-features
+	$(Change_Work_Path) && cargo build --features molc,async-runtime,generic-timer,unstable --no-default-features
+	$(Change_Work_Path) && cargo build --features molc,async-runtime,async-timer,unstable --no-default-features
 	# required wasm32-unknown-unknown target
-	$(Change_Work_Path) && cargo build --features molc,wasm-timer --no-default-features --target=wasm32-unknown-unknown
+	$(Change_Work_Path) && cargo build --features molc,wasm-timer,unstable --no-default-features --target=wasm32-unknown-unknown
 	git checkout .
 
 bench_p2p:

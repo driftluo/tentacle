@@ -9,7 +9,7 @@ use std::{
     time::Duration,
 };
 use tokio::prelude::{AsyncRead, AsyncWrite};
-use tokio_util::codec::{Framed, FramedParts, LengthDelimitedCodec};
+use tokio_util::codec::{Framed, FramedParts, FramedRead, FramedWrite, LengthDelimitedCodec};
 use yamux::{Control, Session as YamuxSession, StreamHandle};
 
 use crate::{
@@ -24,11 +24,11 @@ use crate::{
     service::{
         config::{Meta, SessionConfig},
         future_task::BoxedFutureTask,
-        SessionType, RECEIVED_BUFFER_SIZE, RECEIVED_SIZE, SEND_SIZE,
+        ServiceControl, SessionType, RECEIVED_BUFFER_SIZE, RECEIVED_SIZE, SEND_SIZE,
     },
-    substream::{ProtocolEvent, SubstreamBuilder},
+    substream::{PatchedReadPart, ProtocolEvent, SubstreamBuilder, SubstreamWritePartBuilder},
     transports::MultiIncoming,
-    ProtocolId, SessionId, StreamId,
+    ProtocolId, SessionId, StreamId, SubstreamReadPart,
 };
 
 pub trait AsyncRW: AsyncWrite + AsyncRead {}
@@ -161,6 +161,7 @@ pub(crate) struct Session {
     state: SessionState,
 
     context: Arc<SessionContext>,
+    service_control: ServiceControl,
 
     next_stream: StreamId,
 
@@ -229,6 +230,7 @@ impl Session {
             config: meta.config,
             timeout: meta.timeout,
             context: meta.context,
+            service_control: meta.service_control,
             keep_buffer: meta.keep_buffer,
             next_stream: 0,
             substreams: HashMap::default(),
@@ -398,38 +400,76 @@ impl Session {
         if self.proto_streams.contains_key(&proto_id) {
             return;
         }
+
         let before_receive_fn = (proto.before_receive)();
-        let raw_part = substream.into_parts();
-        let mut part = FramedParts::new(raw_part.io, (proto.codec)());
-        // Replace buffered data
-        part.read_buf = raw_part.read_buf;
-        part.write_buf = raw_part.write_buf;
-        let frame = Framed::from_parts(part);
         let (session_to_proto_sender, session_to_proto_receiver) =
             priority_mpsc::channel(SEND_SIZE);
 
-        let mut proto_stream = SubstreamBuilder::new(
-            self.proto_event_sender.clone(),
-            session_to_proto_receiver,
-            self.context.clone(),
-        )
-        .proto_id(proto_id)
-        .stream_id(self.next_stream)
-        .config(self.config)
-        .service_proto_sender(self.service_proto_senders.get(&proto_id).cloned())
-        .session_proto_sender(self.session_proto_senders.get(&proto_id).cloned())
-        .keep_buffer(self.keep_buffer)
-        .event(self.event.contains(&proto_id))
-        .before_receive(before_receive_fn)
-        .build(frame);
-
         self.substreams.insert(
             self.next_stream,
-            PriorityBuffer::new(session_to_proto_sender),
+            PriorityBuffer::new(session_to_proto_sender.clone()),
         );
         self.proto_streams.insert(proto_id, self.next_stream);
+        let raw_part = substream.into_parts();
 
-        proto_stream.proto_open(version.clone());
+        match proto.spawn {
+            Some(ref spawn) => {
+                let (read, write) = crate::runtime::split(raw_part.io);
+                let read_part = {
+                    let frame = FramedRead::new(
+                        PatchedReadPart::new(read, raw_part.read_buf),
+                        (proto.codec)(),
+                    );
+
+                    SubstreamReadPart {
+                        substream: frame,
+                        before_receive: before_receive_fn,
+                        proto_id,
+                        stream_id: self.next_stream,
+                        version: version.clone(),
+                        close_sender: session_to_proto_sender,
+                    }
+                };
+
+                let write_part = SubstreamWritePartBuilder::new(
+                    self.proto_event_sender.clone(),
+                    session_to_proto_receiver,
+                    self.context.clone(),
+                )
+                .proto_id(proto_id)
+                .stream_id(self.next_stream)
+                .config(self.config)
+                .build(FramedWrite::new(write, (proto.codec)()));
+
+                crate::runtime::spawn(write_part.for_each(|_| future::ready(())));
+                spawn.spawn(self.context.clone(), &self.service_control, read_part);
+            }
+            None => {
+                let mut part = FramedParts::new(raw_part.io, (proto.codec)());
+                // Replace buffered data
+                part.read_buf = raw_part.read_buf;
+                part.write_buf = raw_part.write_buf;
+                let frame = Framed::from_parts(part);
+
+                let mut proto_stream = SubstreamBuilder::new(
+                    self.proto_event_sender.clone(),
+                    session_to_proto_receiver,
+                    self.context.clone(),
+                )
+                .proto_id(proto_id)
+                .stream_id(self.next_stream)
+                .config(self.config)
+                .service_proto_sender(self.service_proto_senders.get(&proto_id).cloned())
+                .session_proto_sender(self.session_proto_senders.get(&proto_id).cloned())
+                .keep_buffer(self.keep_buffer)
+                .event(self.event.contains(&proto_id))
+                .before_receive(before_receive_fn)
+                .build(frame);
+
+                proto_stream.proto_open(version.clone());
+                crate::runtime::spawn(proto_stream.for_each(|_| future::ready(())));
+            }
+        }
 
         if self.event.contains(&proto_id) {
             self.event_output(
@@ -445,7 +485,6 @@ impl Session {
         self.next_stream += 1;
 
         debug!("session [{}] proto [{}] open", self.context.id, proto_id);
-        crate::runtime::spawn(proto_stream.for_each(|_| future::ready(())));
     }
 
     /// Handling events uploaded by the protocol stream
@@ -829,6 +868,7 @@ pub(crate) struct SessionMeta {
     session_proto_senders: HashMap<ProtocolId, Buffer<SessionProtocolEvent>>,
     event: HashSet<ProtocolId>,
     event_sender: priority_mpsc::Sender<SessionEvent>,
+    service_control: ServiceControl,
     session_proto_handles: Vec<(
         Option<futures::channel::oneshot::Sender<()>>,
         crate::runtime::JoinHandle<()>,
@@ -840,6 +880,7 @@ impl SessionMeta {
         timeout: Duration,
         context: Arc<SessionContext>,
         event_sender: priority_mpsc::Sender<SessionEvent>,
+        control: ServiceControl,
     ) -> Self {
         SessionMeta {
             config: SessionConfig::default(),
@@ -852,6 +893,7 @@ impl SessionMeta {
             session_proto_senders: HashMap::default(),
             event: HashSet::new(),
             session_proto_handles: Vec::new(),
+            service_control: control,
             event_sender,
         }
     }
