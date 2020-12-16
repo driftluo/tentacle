@@ -16,6 +16,7 @@ pub(crate) struct ServiceConfig {
     /// event output or callback output
     pub event: HashSet<ProtocolId>,
     pub keep_buffer: bool,
+    #[cfg(all(not(target_arch = "wasm32"), feature = "upnp"))]
     pub upnp: bool,
     pub max_connection_number: usize,
     pub tcp_bind_addr: Option<SocketAddr>,
@@ -31,6 +32,7 @@ impl Default for ServiceConfig {
             max_frame_length: 1024 * 1024 * 8,
             event: HashSet::default(),
             keep_buffer: false,
+            #[cfg(all(not(target_arch = "wasm32"), feature = "upnp"))]
             upnp: false,
             max_connection_number: 65535,
             tcp_bind_addr: None,

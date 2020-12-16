@@ -124,6 +124,7 @@ impl ServiceBuilder {
     /// then an attempt is made to register the local listener port into the mapping so that it can
     /// receive the access request of the external network, and if the external ip of the route is not the public network,
     /// Then do nothing
+    #[cfg(all(not(target_arch = "wasm32"), feature = "upnp"))]
     pub fn upnp(mut self, enable: bool) -> Self {
         self.config.upnp = enable;
         self

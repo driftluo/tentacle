@@ -13,11 +13,11 @@ use std::{
 #[cfg(feature = "tokio-timer")]
 pub use tokio::time::{delay_for, interval, timeout, Delay, Interval, Timeout};
 
-pub fn from_std(listen: StdListen) -> io::Result<TcpListener> {
+pub(crate) fn from_std(listen: StdListen) -> io::Result<TcpListener> {
     TcpListener::from_std(listen)
 }
 
-pub async fn connect_std(stream: Socket, addr: &SocketAddr) -> io::Result<TcpStream> {
+pub(crate) async fn connect_std(stream: Socket, addr: &SocketAddr) -> io::Result<TcpStream> {
     // on windows, if not set reuse address, but use socket2 and tokio `connect_std` function
     // will cause a error "Os {code: 10022, kind: InvalidInput, message: "An invalid parameter was provided." }"
     // but if set, nothing happened, this is confusing behavior
