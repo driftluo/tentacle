@@ -77,7 +77,6 @@ impl ServiceControl {
     }
 
     /// Create a new listener
-    #[cfg(not(target_arch = "wasm32"))]
     #[inline]
     pub fn listen(&self, address: Multiaddr) -> Result {
         self.quick_send(ServiceTask::Listen { address })
@@ -313,7 +312,6 @@ impl ServiceAsyncControl {
     }
 
     /// Create a new listener
-    #[cfg(not(target_arch = "wasm32"))]
     #[inline]
     pub async fn listen(&mut self, address: Multiaddr) -> Result {
         self.quick_send(ServiceTask::Listen { address }).await

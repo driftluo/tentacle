@@ -217,10 +217,13 @@ where
     ///
     /// Return really listen multiaddr, but if use `/dns4/localhost/tcp/80`,
     /// it will return original value, and create a future task to DNS resolver later.
-    #[cfg(not(target_arch = "wasm32"))]
     pub async fn listen(&mut self, address: Multiaddr) -> Result<Multiaddr> {
         let listen_future = self.multi_transport.listen(address.clone())?;
 
+        #[cfg(target_arch = "wasm32")]
+        unreachable!();
+
+        #[cfg(not(target_arch = "wasm32"))]
         match listen_future.await {
             Ok((addr, incoming)) => {
                 let listen_address = addr.clone();
@@ -268,26 +271,29 @@ where
     }
 
     /// Use by inner
-    #[cfg(not(target_arch = "wasm32"))]
     fn listen_inner(&mut self, address: Multiaddr) -> Result<()> {
         let listen_future = self.multi_transport.listen(address.clone())?;
 
-        let mut sender = self.session_event_sender.clone();
-        let task = async move {
-            let result = listen_future.await;
-            let event = match result {
-                Ok((addr, incoming)) => SessionEvent::ListenStart {
-                    listen_address: addr,
-                    incoming,
-                },
-                Err(error) => SessionEvent::ListenError { address, error },
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let mut sender = self.session_event_sender.clone();
+            let task = async move {
+                let result = listen_future.await;
+                let event = match result {
+                    Ok((addr, incoming)) => SessionEvent::ListenStart {
+                        listen_address: addr,
+                        incoming,
+                    },
+                    Err(error) => SessionEvent::ListenError { address, error },
+                };
+                if let Err(err) = sender.send(event).await {
+                    error!("Listen address result send back error: {:?}", err);
+                }
             };
-            if let Err(err) = sender.send(event).await {
-                error!("Listen address result send back error: {:?}", err);
-            }
-        };
-        self.future_task_sender.push(Box::pin(task));
-        self.state.increase();
+            self.future_task_sender.push(Box::pin(task));
+            self.state.increase();
+        }
+
         Ok(())
     }
 
@@ -1153,9 +1159,7 @@ where
                     }
                 }
             }
-            ServiceTask::Listen { address } =>
-            {
-                #[cfg(not(target_arch = "wasm32"))]
+            ServiceTask::Listen { address } => {
                 if !self.listens.contains(&address) {
                     if let Err(e) = self.listen_inner(address.clone()) {
                         self.handle.handle_error(
