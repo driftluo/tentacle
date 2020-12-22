@@ -180,10 +180,7 @@ where
     fn poll_complete(&mut self, cx: &mut Context) -> Result<bool, io::Error> {
         match Pin::new(&mut self.substream).poll_flush(cx) {
             Poll::Pending => Ok(true),
-            Poll::Ready(res) => {
-                res?;
-                Ok(false)
-            }
+            Poll::Ready(res) => res.map(|_| false),
         }
     }
 
@@ -241,6 +238,14 @@ where
     /// When send or receive message error, output error and close stream
     fn error_close(&mut self, cx: &mut Context, error: io::Error) {
         self.dead = true;
+        match error.kind() {
+            ErrorKind::BrokenPipe
+            | ErrorKind::ConnectionAborted
+            | ErrorKind::ConnectionReset
+            | ErrorKind::NotConnected
+            | ErrorKind::UnexpectedEof => return,
+            _ => (),
+        }
         if !self.keep_buffer {
             self.event_sender.clear()
         }
@@ -409,16 +414,7 @@ where
             Poll::Pending => Poll::Pending,
             Poll::Ready(Some(Err(err))) => {
                 debug!("sub stream codec error: {:?}", err);
-                match err.kind() {
-                    ErrorKind::BrokenPipe
-                    | ErrorKind::ConnectionAborted
-                    | ErrorKind::ConnectionReset
-                    | ErrorKind::NotConnected
-                    | ErrorKind::UnexpectedEof => self.dead = true,
-                    _ => {
-                        self.error_close(cx, err);
-                    }
-                }
+                self.error_close(cx, err);
                 Poll::Ready(None)
             }
         }
@@ -796,6 +792,14 @@ where
     /// When send or receive message error, output error and close stream
     fn error_close(&mut self, cx: &mut Context, error: io::Error) {
         self.dead = true;
+        match error.kind() {
+            ErrorKind::BrokenPipe
+            | ErrorKind::ConnectionAborted
+            | ErrorKind::ConnectionReset
+            | ErrorKind::NotConnected
+            | ErrorKind::UnexpectedEof => return,
+            _ => (),
+        }
         self.event_sender.push(ProtocolEvent::Error {
             id: self.id,
             proto_id: self.proto_id,
