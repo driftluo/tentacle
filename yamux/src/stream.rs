@@ -2,14 +2,13 @@
 
 use bytes::{Bytes, BytesMut};
 use futures::{
-    channel::mpsc::{Receiver, Sender},
+    channel::mpsc::{Receiver, Sender, UnboundedSender},
     stream::FusedStream,
-    task::AtomicWaker,
+    task::Waker,
     Stream,
 };
 
 use std::{
-    collections::VecDeque,
     io,
     pin::Pin,
     task::{Context, Poll},
@@ -34,18 +33,17 @@ pub struct StreamHandle {
     recv_window: u32,
     send_window: u32,
     read_buf: BytesMut,
-    write_buf: BytesMut,
-    window_update_frame_buf: VecDeque<(Flags, u32)>,
 
     // Send stream event to parent session
     event_sender: Sender<StreamEvent>,
+    unbound_event_sender: UnboundedSender<StreamEvent>,
 
     // Receive frame of current stream from parent session
     // (if the sender closed means session closed the stream should close too)
     frame_receiver: Receiver<Frame>,
 
     // when the cache is sent, a writable notification is issued
-    writeable_wake: AtomicWaker,
+    writeable_wake: Option<Waker>,
 }
 
 impl StreamHandle {
@@ -53,6 +51,7 @@ impl StreamHandle {
     pub(crate) fn new(
         id: StreamId,
         event_sender: Sender<StreamEvent>,
+        unbound_event_sender: UnboundedSender<StreamEvent>,
         frame_receiver: Receiver<Frame>,
         state: StreamState,
         recv_window_size: u32,
@@ -66,11 +65,10 @@ impl StreamHandle {
             recv_window: recv_window_size,
             send_window: send_window_size,
             read_buf: BytesMut::default(),
-            write_buf: BytesMut::default(),
-            window_update_frame_buf: VecDeque::default(),
             event_sender,
+            unbound_event_sender,
             frame_receiver,
-            writeable_wake: AtomicWaker::new(),
+            writeable_wake: None,
         }
     }
 
@@ -91,30 +89,30 @@ impl StreamHandle {
         self.send_window
     }
 
-    fn close(&mut self, cx: &mut Context) -> Result<(), Error> {
+    fn close(&mut self) -> Result<(), Error> {
         match self.state {
             StreamState::SynSent
             | StreamState::SynReceived
             | StreamState::Established
             | StreamState::Init => {
                 self.state = StreamState::LocalClosing;
-                self.send_close(cx)?;
+                self.send_close()?;
             }
             StreamState::RemoteClosing => {
                 self.state = StreamState::Closed;
-                self.send_close(cx)?;
+                self.send_close()?;
                 let event = StreamEvent::StateChanged((self.id, self.state));
-                self.send_event(cx, event)?;
+                self.unbound_send_event(event)?;
             }
             StreamState::Reset | StreamState::Closed => {
                 self.state = StreamState::Closed;
                 let event = StreamEvent::StateChanged((self.id, self.state));
-                self.send_event(cx, event)?;
+                self.unbound_send_event(event)?;
             }
             StreamState::LocalClosing => {
                 self.state = StreamState::Closed;
                 let event = StreamEvent::StateChanged((self.id, self.state));
-                self.send_event(cx, event)?;
+                self.unbound_send_event(event)?;
             }
         }
         Ok(())
@@ -122,44 +120,35 @@ impl StreamHandle {
 
     fn send_go_away(&mut self) {
         self.state = StreamState::LocalClosing;
-        let _ignore = self.event_sender.try_send(StreamEvent::GoAway);
+        let _ignore = self
+            .unbound_event_sender
+            .unbounded_send(StreamEvent::GoAway);
     }
 
     #[inline]
     fn send_event(&mut self, cx: &mut Context, event: StreamEvent) -> Result<(), Error> {
         debug!("[{}] StreamHandle.send_event()", self.id);
-        while let Some((flag, delta)) = self.window_update_frame_buf.pop_front() {
-            let event = StreamEvent::Frame(Frame::new_window_update(flag, self.id, delta));
-            match self.event_sender.poll_ready(cx) {
-                Poll::Ready(Ok(())) => {
-                    if let Err(e) = self.event_sender.try_send(event) {
-                        if e.is_full() {
-                            self.window_update_frame_buf.push_front((flag, delta));
-                            return Err(Error::WouldBlock);
-                        } else {
-                            return Err(Error::SessionShutdown);
-                        }
+        match self.event_sender.poll_ready(cx) {
+            Poll::Ready(Ok(())) => {
+                if let Err(e) = self.event_sender.try_send(event) {
+                    if e.is_full() {
+                        return Err(Error::WouldBlock);
+                    } else {
+                        return Err(Error::SessionShutdown);
                     }
                 }
-                Poll::Pending => {
-                    self.window_update_frame_buf.push_front((flag, delta));
-                    return Err(Error::WouldBlock);
-                }
-                Poll::Ready(Err(_)) => {
-                    return Err(Error::SessionShutdown);
-                }
             }
-        }
-
-        if let Err(e) = self.event_sender.try_send(event) {
-            if e.is_full() {
-                return Err(Error::WouldBlock);
-            } else {
-                return Err(Error::SessionShutdown);
-            }
+            Poll::Pending => return Err(Error::WouldBlock),
+            Poll::Ready(Err(_)) => return Err(Error::SessionShutdown),
         }
 
         Ok(())
+    }
+
+    fn unbound_send_event(&mut self, event: StreamEvent) -> Result<(), Error> {
+        self.unbound_event_sender
+            .unbounded_send(event)
+            .map_err(|_| Error::SessionShutdown)
     }
 
     #[inline]
@@ -168,8 +157,14 @@ impl StreamHandle {
         self.send_event(cx, event)
     }
 
+    #[inline]
+    fn unbound_send_frame(&mut self, frame: Frame) -> Result<(), Error> {
+        let event = StreamEvent::Frame(frame);
+        self.unbound_send_event(event)
+    }
+
     // Send a window update
-    pub(crate) fn send_window_update(&mut self, cx: Option<&mut Context>) -> Result<(), Error> {
+    pub(crate) fn send_window_update(&mut self) -> Result<(), Error> {
         let buf_len = self.read_buf.len() as u32;
         let delta = self.max_recv_window - buf_len - self.recv_window;
 
@@ -181,19 +176,9 @@ impl StreamHandle {
         // Update our window
         self.recv_window += delta;
         let frame = Frame::new_window_update(flags, self.id, delta);
-        match cx {
-            Some(cx) => match self.send_frame(cx, frame) {
-                Err(Error::WouldBlock) => self.window_update_frame_buf.push_back((flags, delta)),
-                Err(e) => return Err(e),
-                _ => (),
-            },
-            None => {
-                // init sub stream, this channel is empty
-                let _ignore = self.event_sender.try_send(StreamEvent::Frame(frame));
-            }
-        }
-
-        Ok(())
+        self.unbound_event_sender
+            .unbounded_send(StreamEvent::Frame(frame))
+            .map_err(|_| Error::SessionShutdown)
     }
 
     fn send_data(&mut self, cx: &mut Context, data: &[u8]) -> Result<(), Error> {
@@ -202,14 +187,14 @@ impl StreamHandle {
         self.send_frame(cx, frame)
     }
 
-    fn send_close(&mut self, cx: &mut Context) -> Result<(), Error> {
+    fn send_close(&mut self) -> Result<(), Error> {
         let mut flags = self.get_flags();
         flags.add(Flag::Fin);
         let frame = Frame::new_window_update(flags, self.id, 0);
-        self.send_frame(cx, frame)
+        self.unbound_send_frame(frame)
     }
 
-    fn process_flags(&mut self, cx: &mut Context, flags: Flags) -> Result<(), Error> {
+    fn process_flags(&mut self, flags: Flags) -> Result<(), Error> {
         if flags.contains(Flag::Ack) && self.state == StreamState::SynSent {
             self.state = StreamState::SynReceived;
         }
@@ -235,7 +220,7 @@ impl StreamHandle {
         }
 
         if close_stream {
-            self.close(cx)?;
+            self.close()?;
         }
         Ok(())
     }
@@ -254,14 +239,14 @@ impl StreamHandle {
         }
     }
 
-    fn handle_frame(&mut self, cx: &mut Context, frame: Frame) -> Result<(), Error> {
+    fn handle_frame(&mut self, frame: Frame) -> Result<(), Error> {
         debug!("[{}] StreamHandle.handle_frame({:?})", self.id, frame);
         match frame.ty() {
             Type::WindowUpdate => {
-                self.handle_window_update(cx, &frame)?;
+                self.handle_window_update(&frame)?;
             }
             Type::Data => {
-                self.handle_data(cx, frame)?;
+                self.handle_data(frame)?;
             }
             _ => {
                 return Err(Error::InvalidMsgType);
@@ -270,26 +255,21 @@ impl StreamHandle {
         Ok(())
     }
 
-    fn handle_window_update(&mut self, cx: &mut Context, frame: &Frame) -> Result<(), Error> {
-        self.process_flags(cx, frame.flags())?;
+    fn handle_window_update(&mut self, frame: &Frame) -> Result<(), Error> {
+        self.process_flags(frame.flags())?;
         self.send_window = self
             .send_window
             .checked_add(frame.length())
             .ok_or(Error::InvalidMsgType)?;
-        let n = ::std::cmp::min(self.send_window as usize, self.write_buf.len());
-        // Send cached data
-        if n != 0 {
-            let b = self.write_buf.split_to(n);
-            // don't care about result here
-            let _ignore = Pin::new(self).poll_write(cx, &b);
-        } else {
-            self.writeable_wake.wake();
+        // wake writer continue
+        if let Some(waker) = self.writeable_wake.take() {
+            waker.wake()
         }
         Ok(())
     }
 
-    fn handle_data(&mut self, cx: &mut Context, frame: Frame) -> Result<(), Error> {
-        self.process_flags(cx, frame.flags())?;
+    fn handle_data(&mut self, frame: Frame) -> Result<(), Error> {
+        self.process_flags(frame.flags())?;
         let length = frame.length();
         if length > self.recv_window {
             return Err(Error::RecvWindowExceeded);
@@ -315,13 +295,21 @@ impl StreamHandle {
                 _ => {}
             }
 
+            // After get data, break here
+            // if not, it will never wake upstream here have some cache buffer
+            // buffer will left here, waiting for the next session wake
+            // this will cause the message to be delayed, unable to read, etc.
+            if !self.read_buf.is_empty() {
+                break;
+            }
+
             if self.frame_receiver.is_terminated() {
                 self.state = StreamState::RemoteClosing;
                 return Err(Error::SessionShutdown);
             }
 
             match Pin::new(&mut self.frame_receiver).as_mut().poll_next(cx) {
-                Poll::Ready(Some(frame)) => self.handle_frame(cx, frame)?,
+                Poll::Ready(Some(frame)) => self.handle_frame(frame)?,
                 Poll::Ready(None) => {
                     self.state = StreamState::RemoteClosing;
                     return Err(Error::SessionShutdown);
@@ -332,24 +320,18 @@ impl StreamHandle {
         Ok(())
     }
 
-    fn check_self_state(&mut self, cx: &mut Context) -> Result<(), io::Error> {
+    fn check_self_state(&mut self) -> Result<(), io::Error> {
         // if read buf is empty and state is close, return close error
         if self.read_buf.is_empty() {
             match self.state {
                 StreamState::RemoteClosing => {
                     debug!("closed(EOF)");
-                    match Pin::new(self).poll_shutdown(cx) {
-                        Poll::Ready(res) => res?,
-                        Poll::Pending => (),
-                    }
+                    let _ignore = self.send_close();
                     Err(io::ErrorKind::UnexpectedEof.into())
                 }
                 StreamState::Reset => {
                     debug!("connection reset");
-                    match Pin::new(self).poll_shutdown(cx) {
-                        Poll::Ready(res) => res?,
-                        Poll::Pending => (),
-                    }
+                    let _ignore = self.send_close();
                     Err(io::ErrorKind::ConnectionReset.into())
                 }
                 StreamState::Closed => Err(io::ErrorKind::BrokenPipe.into()),
@@ -367,7 +349,7 @@ impl AsyncRead for StreamHandle {
         cx: &mut Context,
         buf: &mut [u8],
     ) -> Poll<io::Result<usize>> {
-        self.check_self_state(cx)?;
+        self.check_self_state()?;
 
         if let Err(e) = self.recv_frames(cx) {
             match e {
@@ -382,13 +364,12 @@ impl AsyncRead for StreamHandle {
 
         debug!("[{}] StreamHandle.read(), state: {:?}", self.id, self.state);
 
-        self.check_self_state(cx)?;
+        self.check_self_state()?;
 
         debug!(
-            "send window size: {}, receive window size: {}, send buf: {}, read buf: {}",
+            "send window size: {}, receive window size: {}, read buf: {}",
             self.send_window,
             self.recv_window,
-            self.write_buf.len(),
             self.read_buf.len()
         );
 
@@ -407,13 +388,13 @@ impl AsyncRead for StreamHandle {
         buf[..n].copy_from_slice(&b);
         match self.state {
             StreamState::RemoteClosing | StreamState::Closed | StreamState::Reset => (),
-            StreamState::LocalClosing => match self.close(cx) {
-                Err(Error::WouldBlock) => return Poll::Pending,
-                Err(_) => return Poll::Ready(Err(io::ErrorKind::BrokenPipe.into())),
-                _ => (),
-            },
+            StreamState::LocalClosing => {
+                if self.close().is_err() {
+                    return Poll::Ready(Err(io::ErrorKind::BrokenPipe.into()));
+                }
+            }
             _ => {
-                if self.send_window_update(Some(cx)).is_err() {
+                if self.send_window_update().is_err() {
                     return Poll::Ready(Err(io::ErrorKind::BrokenPipe.into()));
                 }
             }
@@ -444,17 +425,16 @@ impl AsyncWrite for StreamHandle {
         }
 
         debug!(
-            "send window size: {}, receive window size: {}, send buf: {}, read buf: {}",
+            "send window size: {}, receive window size: {}, read buf: {}",
             self.send_window,
             self.recv_window,
-            self.write_buf.len(),
             self.read_buf.len()
         );
 
         if self.send_window == 0 {
             // register writer context waker
             // when write buf become empty, it can wake the upper layer to write the message again
-            self.writeable_wake.register(cx.waker());
+            self.writeable_wake = Some(cx.waker().clone());
             return Poll::Pending;
         }
         // Allow n = 0, send an empty frame to remote
@@ -463,42 +443,21 @@ impl AsyncWrite for StreamHandle {
         match self.send_data(cx, data) {
             Ok(_) => {
                 self.send_window -= n as u32;
-                // Cache unsent data
-                self.write_buf.extend_from_slice(&buf[n..]);
 
-                Poll::Ready(Ok(buf.len()))
+                Poll::Ready(Ok(n))
             }
             Err(Error::WouldBlock) => Poll::Pending,
             _ => Poll::Ready(Err(io::ErrorKind::BrokenPipe.into())),
         }
     }
 
-    fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<io::Result<()>> {
-        debug!("[{}] StreamHandle.flush()", self.id);
-        match self.state {
-            StreamState::RemoteClosing | StreamState::Reset => {
-                return Poll::Ready(Err(io::ErrorKind::BrokenPipe.into()))
-            }
-            StreamState::LocalClosing | StreamState::Closed => {
-                return Poll::Ready(Err(io::Error::new(
-                    io::ErrorKind::BrokenPipe,
-                    "The local is closed and data cannot be written.",
-                )));
-            }
-            _ => (),
-        }
-        let event = StreamEvent::Flush(self.id);
-        match self.send_event(cx, event) {
-            Err(Error::WouldBlock) => Poll::Pending,
-            Err(_) => Poll::Ready(Err(io::ErrorKind::BrokenPipe.into())),
-            Ok(()) => Poll::Ready(Ok(())),
-        }
+    fn poll_flush(self: Pin<&mut Self>, _cx: &mut Context) -> Poll<io::Result<()>> {
+        Poll::Ready(Ok(()))
     }
 
-    fn poll_shutdown(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<io::Result<()>> {
+    fn poll_shutdown(mut self: Pin<&mut Self>, _cx: &mut Context) -> Poll<io::Result<()>> {
         debug!("[{}] StreamHandle.shutdown()", self.id);
-        match self.close(cx) {
-            Err(Error::WouldBlock) => Poll::Pending,
+        match self.close() {
             Err(_) => Poll::Ready(Err(io::ErrorKind::BrokenPipe.into())),
             Ok(()) => Poll::Ready(Ok(())),
         }
@@ -518,8 +477,8 @@ impl Drop for StreamHandle {
             let event = StreamEvent::StateChanged((self.id, StreamState::Closed));
             // It is indeed possible that it cannot be sent here, but ignore it for now
             // we should wait a `async drop` api to do this instead of any runtime
-            let _ignore = self.event_sender.try_send(rst_event);
-            let _ignore = self.event_sender.try_send(event);
+            let _ignore = self.unbound_event_sender.unbounded_send(rst_event);
+            let _ignore = self.unbound_event_sender.unbounded_send(event);
         }
     }
 }
@@ -529,8 +488,6 @@ impl Drop for StreamHandle {
 pub(crate) enum StreamEvent {
     Frame(Frame),
     StateChanged((StreamId, StreamState)),
-    // Flush stream's frames to remote stream, with a channel for sync
-    Flush(StreamId),
     // Only use on protocol error
     GoAway,
 }
@@ -564,7 +521,10 @@ mod test {
         frame::{Flag, Flags, Frame},
     };
     use bytes::Bytes;
-    use futures::{channel::mpsc::channel, SinkExt, StreamExt};
+    use futures::{
+        channel::mpsc::{channel, unbounded},
+        SinkExt, StreamExt,
+    };
     use std::io::ErrorKind;
     use tokio::io::AsyncReadExt;
 
@@ -572,11 +532,13 @@ mod test {
     fn test_drop() {
         let mut rt = tokio::runtime::Runtime::new().unwrap();
         rt.block_on(async {
-            let (event_sender, mut event_receiver) = channel(2);
+            let (event_sender, _event_receiver) = channel(2);
             let (_frame_sender, frame_receiver) = channel(2);
+            let (unbound_sender, mut unbound_receiver) = unbounded();
             let stream = StreamHandle::new(
                 0,
                 event_sender,
+                unbound_sender,
                 frame_receiver,
                 StreamState::Init,
                 INITIAL_STREAM_WINDOW,
@@ -584,12 +546,12 @@ mod test {
             );
 
             drop(stream);
-            let event = event_receiver.next().await.unwrap();
+            let event = unbound_receiver.next().await.unwrap();
             match event {
                 StreamEvent::Frame(frame) => assert!(frame.flags().contains(Flag::Rst)),
                 _ => panic!("must be a frame msg contain RST"),
             }
-            let event = event_receiver.next().await.unwrap();
+            let event = unbound_receiver.next().await.unwrap();
             match event {
                 StreamEvent::StateChanged((_, state)) => assert_eq!(state, StreamState::Closed),
                 _ => panic!("must be state change"),
@@ -601,11 +563,13 @@ mod test {
     fn test_drop_with_state_reset() {
         let mut rt = tokio::runtime::Runtime::new().unwrap();
         rt.block_on(async {
-            let (event_sender, mut event_receiver) = channel(2);
+            let (event_sender, _event_receiver) = channel(2);
             let (mut frame_sender, frame_receiver) = channel(2);
+            let (unbound_sender, mut unbound_receiver) = unbounded();
             let mut stream = StreamHandle::new(
                 0,
                 event_sender,
+                unbound_sender,
                 frame_receiver,
                 StreamState::Init,
                 INITIAL_STREAM_WINDOW,
@@ -625,7 +589,7 @@ mod test {
             );
 
             drop(stream);
-            let event = event_receiver.next().await.unwrap();
+            let event = unbound_receiver.next().await.unwrap();
             match event {
                 StreamEvent::StateChanged((_, state)) => assert_eq!(state, StreamState::Closed),
                 _ => panic!("must be state change"),
@@ -637,11 +601,13 @@ mod test {
     fn test_data_large_than_recv_window() {
         let mut rt = tokio::runtime::Runtime::new().unwrap();
         rt.block_on(async {
-            let (event_sender, mut event_receiver) = channel(2);
+            let (event_sender, _event_receiver) = channel(2);
             let (mut frame_sender, frame_receiver) = channel(2);
+            let (unbound_sender, mut unbound_receiver) = unbounded();
             let mut stream = StreamHandle::new(
                 0,
                 event_sender,
+                unbound_sender,
                 frame_receiver,
                 StreamState::Init,
                 2,
@@ -659,7 +625,7 @@ mod test {
                 ErrorKind::InvalidData
             );
 
-            let event = event_receiver.next().await.unwrap();
+            let event = unbound_receiver.next().await.unwrap();
             match event {
                 StreamEvent::GoAway => (),
                 _ => panic!("must be go away"),
