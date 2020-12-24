@@ -127,7 +127,6 @@ impl StreamHandle {
 
     #[inline]
     fn send_event(&mut self, cx: &mut Context, event: StreamEvent) -> Result<(), Error> {
-        debug!("[{}] StreamHandle.send_event()", self.id);
         match self.event_sender.poll_ready(cx) {
             Poll::Ready(Ok(())) => {
                 if let Err(e) = self.event_sender.try_send(event) {
@@ -240,7 +239,6 @@ impl StreamHandle {
     }
 
     fn handle_frame(&mut self, frame: Frame) -> Result<(), Error> {
-        debug!("[{}] StreamHandle.handle_frame({:?})", self.id, frame);
         match frame.ty() {
             Type::WindowUpdate => {
                 self.handle_window_update(&frame)?;
@@ -362,29 +360,14 @@ impl AsyncRead for StreamHandle {
             }
         }
 
-        debug!("[{}] StreamHandle.read(), state: {:?}", self.id, self.state);
-
         self.check_self_state()?;
-
-        debug!(
-            "send window size: {}, receive window size: {}, read buf: {}",
-            self.send_window,
-            self.recv_window,
-            self.read_buf.len()
-        );
 
         let n = ::std::cmp::min(buf.len(), self.read_buf.len());
         if n == 0 {
             return Poll::Pending;
         }
         let b = self.read_buf.split_to(n);
-        debug!(
-            "[{}] StreamHandle.read({}), buf.len()={}, read_buf.len()={}",
-            self.id,
-            n,
-            buf.len(),
-            self.read_buf.len()
-        );
+
         buf[..n].copy_from_slice(&b);
         match self.state {
             StreamState::RemoteClosing | StreamState::Closed | StreamState::Reset => (),
@@ -410,7 +393,6 @@ impl AsyncWrite for StreamHandle {
         cx: &mut Context,
         buf: &[u8],
     ) -> Poll<io::Result<usize>> {
-        debug!("[{}] StreamHandle.write({:?})", self.id, buf.len());
         match self.state {
             StreamState::RemoteClosing | StreamState::Reset => {
                 return Poll::Ready(Err(io::ErrorKind::BrokenPipe.into()))
@@ -423,13 +405,6 @@ impl AsyncWrite for StreamHandle {
             }
             _ => (),
         }
-
-        debug!(
-            "send window size: {}, receive window size: {}, read buf: {}",
-            self.send_window,
-            self.recv_window,
-            self.read_buf.len()
-        );
 
         if self.send_window == 0 {
             // register writer context waker

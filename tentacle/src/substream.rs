@@ -126,7 +126,7 @@ where
         }
     }
 
-    /// Sink `start_send` Ready -> data in buffer or send
+    /// Sink `start_send` Ready -> data send to buffer
     /// Sink `start_send` NotReady -> buffer full need poll complete
     #[inline]
     fn send_inner(
@@ -145,7 +145,6 @@ where
                 Ok(false)
             }
             Poll::Pending => {
-                debug!("framed_stream NotReady, frame len: {:?}", frame.len());
                 self.push_front(priority, frame);
                 self.poll_complete(cx)?;
                 Ok(true)
@@ -169,7 +168,6 @@ where
 
         self.poll_complete(cx)?;
 
-        debug!("send success, proto_id: {}", self.proto_id);
         Ok(())
     }
 
@@ -263,7 +261,6 @@ where
     fn handle_proto_event(&mut self, cx: &mut Context, event: ProtocolEvent, priority: Priority) {
         match event {
             ProtocolEvent::Message { data, .. } => {
-                debug!("proto [{}] send data: {}", self.proto_id, data.len());
                 self.push_back(priority, data);
 
                 if let Err(err) = self.send_data(cx) {
@@ -366,12 +363,6 @@ where
 
         match Pin::new(&mut self.substream).as_mut().poll_next(cx) {
             Poll::Ready(Some(Ok(data))) => {
-                debug!(
-                    "protocol [{}] receive data len: {}",
-                    self.proto_id,
-                    data.len()
-                );
-
                 let data = match self.before_receive {
                     Some(ref function) => match function(data) {
                         Ok(data) => data,
@@ -650,7 +641,7 @@ where
         }
     }
 
-    /// Sink `start_send` Ready -> data in buffer or send
+    /// Sink `start_send` Ready -> data send to buffer
     /// Sink `start_send` NotReady -> buffer full need poll complete
     #[inline]
     fn send_inner(
@@ -669,7 +660,6 @@ where
                 Ok(false)
             }
             Poll::Pending => {
-                debug!("framed_stream NotReady, frame len: {:?}", frame.len());
                 self.push_front(priority, frame);
                 self.poll_complete(cx)?;
                 Ok(true)
@@ -700,7 +690,6 @@ where
 
         self.poll_complete(cx)?;
 
-        debug!("send success, proto_id: {}", self.proto_id);
         Ok(())
     }
 
@@ -726,7 +715,6 @@ where
     fn handle_proto_event(&mut self, cx: &mut Context, event: ProtocolEvent, priority: Priority) {
         match event {
             ProtocolEvent::Message { data, .. } => {
-                debug!("proto [{}] send data: {}", self.proto_id, data.len());
                 self.push_back(priority, data);
 
                 if let Err(err) = self.send_data(cx) {
