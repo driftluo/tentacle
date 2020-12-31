@@ -147,6 +147,7 @@ where
             Poll::Pending => {
                 debug!("framed_stream NotReady, frame len: {:?}", frame.len());
                 self.push_front(priority, frame);
+                self.poll_complete(cx)?;
                 Ok(true)
             }
         }
@@ -189,6 +190,10 @@ where
         self.event_receiver.close();
         if let Poll::Ready(Err(e)) = Pin::new(self.substream.get_mut()).poll_shutdown(cx) {
             log::trace!("sub stream poll shutdown err {}", e)
+        }
+
+        if !self.keep_buffer {
+            self.event_sender.clear()
         }
 
         if let Some(ref mut service_proto_sender) = self.service_proto_sender {
@@ -245,9 +250,6 @@ where
             | ErrorKind::NotConnected
             | ErrorKind::UnexpectedEof => return,
             _ => (),
-        }
-        if !self.keep_buffer {
-            self.event_sender.clear()
         }
         self.event_sender.push(ProtocolEvent::Error {
             id: self.id,
@@ -422,6 +424,7 @@ where
 
     #[inline]
     fn flush(&mut self, cx: &mut Context) -> Result<(), io::Error> {
+        self.poll_complete(cx)?;
         if !self
             .service_proto_sender
             .as_ref()
@@ -487,18 +490,6 @@ where
         let mut is_pending = self.recv_frame(cx).is_pending();
 
         is_pending &= self.recv_event(cx).is_pending();
-
-        if self.dead || self.context.closed.load(Ordering::SeqCst) {
-            debug!(
-                "Substream({}) finished, self.dead || self.context.closed.load(Ordering::SeqCst), tail",
-                self.id
-            );
-            if !self.keep_buffer {
-                self.event_sender.clear()
-            }
-            self.close_proto_stream(cx);
-            return Poll::Ready(None);
-        }
 
         if is_pending {
             Poll::Pending
@@ -680,6 +671,7 @@ where
             Poll::Pending => {
                 debug!("framed_stream NotReady, frame len: {:?}", frame.len());
                 self.push_front(priority, frame);
+                self.poll_complete(cx)?;
                 Ok(true)
             }
         }
@@ -714,6 +706,7 @@ where
 
     #[inline]
     fn flush(&mut self, cx: &mut Context) -> Result<(), io::Error> {
+        self.poll_complete(cx)?;
         if !self.event_sender.is_empty()
             || !self.write_buf.is_empty()
             || !self.high_write_buf.is_empty()
@@ -879,15 +872,6 @@ where
         );
 
         let is_pending = self.recv_event(cx).is_pending();
-
-        if self.dead || self.context.closed.load(Ordering::SeqCst) {
-            debug!(
-                "Substream({}) finished, self.dead || self.context.closed.load(Ordering::SeqCst), tail",
-                self.id
-            );
-            self.close_proto_stream(cx);
-            return Poll::Ready(None);
-        }
 
         if is_pending {
             Poll::Pending

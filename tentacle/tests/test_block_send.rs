@@ -55,12 +55,11 @@ impl ServiceProtocol for PHandle {
     }
 
     fn received(&mut self, context: ProtocolContextMutRef, _data: Bytes) {
-        if context.session.ty.is_outbound() && self.count.load(Ordering::SeqCst) < 512 {
+        if context.session.ty.is_outbound() {
             self.count.fetch_add(1, Ordering::SeqCst);
         }
         let count_now = self.count.load(Ordering::SeqCst);
-        //        println!("> receive {}", count_now);
-        if count_now == 512 {
+        if count_now == 1024 {
             let _res = context.shutdown();
         }
     }
@@ -83,13 +82,12 @@ impl SessionProtocol for PHandle {
     }
 
     fn received(&mut self, context: ProtocolContextMutRef, _data: bytes::Bytes) {
-        if context.session.ty.is_outbound() && self.count.load(Ordering::SeqCst) < 512 {
+        if context.session.ty.is_outbound() {
             self.count.fetch_add(1, Ordering::SeqCst);
         }
         let count_now = self.count.load(Ordering::SeqCst);
-        //        println!("> receive {}", count_now);
         log::warn!("count_now: {}", count_now);
-        if count_now == 512 {
+        if count_now == 1024 {
             let _res = context.shutdown();
         }
     }
@@ -171,7 +169,7 @@ fn test_block_send(secio: bool, session_protocol: bool) {
     });
     handle_2.join().unwrap();
 
-    assert_eq!(result.load(Ordering::SeqCst), 512);
+    assert_eq!(result.load(Ordering::SeqCst), 1024);
 }
 
 #[test]

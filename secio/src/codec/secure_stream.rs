@@ -1,5 +1,5 @@
 use bytes::{Bytes, BytesMut};
-use futures::{Sink, StreamExt};
+use futures::{SinkExt, StreamExt};
 use log::{debug, trace};
 use tokio::{
     io::AsyncReadExt,
@@ -161,13 +161,12 @@ where
     ) -> Poll<io::Result<usize>> {
         debug!("start sending plain data: {:?}", buf);
 
-        let frame = self.encode_buffer(buf);
-        trace!("start sending encrypted data size: {:?}", frame.len());
-        let mut sink = Pin::new(&mut self.socket);
-        match sink.as_mut().poll_ready(cx) {
+        match self.socket.poll_ready_unpin(cx) {
             Poll::Ready(Ok(_)) => {
-                sink.as_mut().start_send(frame)?;
-                let _ignore = sink.as_mut().poll_flush(cx)?;
+                let frame = self.encode_buffer(buf);
+                trace!("start sending encrypted data size: {:?}", frame.len());
+                self.socket.start_send_unpin(frame)?;
+                let _ignore = self.socket.poll_flush_unpin(cx)?;
                 Poll::Ready(Ok(buf.len()))
             }
             Poll::Pending => Poll::Pending,
@@ -176,11 +175,11 @@ where
     }
 
     fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<io::Result<()>> {
-        Pin::new(&mut self.socket).as_mut().poll_flush(cx)
+        self.socket.poll_flush_unpin(cx)
     }
 
     fn poll_shutdown(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<io::Result<()>> {
-        Pin::new(&mut self.socket).as_mut().poll_close(cx)
+        self.socket.poll_close_unpin(cx)
     }
 }
 
