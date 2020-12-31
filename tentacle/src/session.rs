@@ -24,7 +24,7 @@ use crate::{
     service::{
         config::{Meta, SessionConfig},
         future_task::BoxedFutureTask,
-        ServiceControl, SessionType, RECEIVED_BUFFER_SIZE, RECEIVED_SIZE, SEND_SIZE,
+        ServiceControl, SessionType, RECEIVED_SIZE, SEND_SIZE,
     },
     substream::{PatchedReadPart, ProtocolEvent, SubstreamBuilder, SubstreamWritePartBuilder},
     transports::MultiIncoming,
@@ -576,6 +576,7 @@ impl Session {
                         } else {
                             buffer.push_normal(event)
                         }
+                        buffer.try_send(cx);
                     }
                 } else {
                     trace!("protocol {} not ready", proto_id);
@@ -609,7 +610,8 @@ impl Session {
                         buffer.push_high(ProtocolEvent::Close {
                             id: *stream_id,
                             proto_id,
-                        })
+                        });
+                        buffer.try_send(cx);
                     }
                 } else {
                     debug!("proto [{}] has been closed", proto_id);
@@ -635,18 +637,9 @@ impl Session {
             }
             _ => (),
         }
-        self.distribute_to_substream(cx);
     }
 
     fn recv_substreams(&mut self, cx: &mut Context) -> Poll<Option<()>> {
-        if self.service_sender.len() > self.config.recv_event_size() {
-            // The read buffer exceeds the expected range, and no longer receives any event
-            // from the substream, This means that the service process is too slow, and
-            // each time the service processes a event, the session is notified that it can receive
-            // another event.
-            return Poll::Pending;
-        }
-
         match Pin::new(&mut self.proto_event_receiver)
             .as_mut()
             .poll_next(cx)
@@ -671,20 +664,6 @@ impl Session {
     }
 
     fn recv_service(&mut self, cx: &mut Context) -> Poll<Option<()>> {
-        if self
-            .substreams
-            .values()
-            .map(PriorityBuffer::len)
-            .sum::<usize>()
-            > RECEIVED_BUFFER_SIZE
-        {
-            // The write buffer exceeds the expected range, and no longer receives any event
-            // from the service, This means that the substream process is too slow, and
-            // each time the substream processes a event, the session is notified that it can receive
-            // another event.
-            return Poll::Pending;
-        }
-
         match Pin::new(&mut self.service_receiver).as_mut().poll_next(cx) {
             Poll::Ready(Some((priority, event))) => {
                 if !self.state.is_normal() {
@@ -714,9 +693,9 @@ impl Session {
                 buffer.push_high(ProtocolEvent::Close {
                     id: *pid,
                     proto_id: 0.into(),
-                })
+                });
+                buffer.try_send(cx);
             }
-            self.distribute_to_substream(cx);
             self.context.closed.store(true, Ordering::SeqCst);
         }
     }

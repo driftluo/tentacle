@@ -45,9 +45,9 @@ impl Default for ServiceConfig {
 #[derive(Clone, Copy)]
 pub(crate) struct SessionConfig {
     pub yamux_config: YamuxConfig,
-    /// default is 1Mb
+    /// default is 24Mb
     pub send_buffer_size: usize,
-    /// default is 1Mb
+    /// default is 24Mb
     pub recv_buffer_size: usize,
 }
 

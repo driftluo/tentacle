@@ -68,7 +68,7 @@ impl ProtocolSpawn for PHandle {
                 );
                 loop {
                     interval.tick().await;
-                    control.open_protocol(id, pid).await.unwrap();
+                    let _ignore = control.open_protocol(id, pid).await;
                 }
             });
         }

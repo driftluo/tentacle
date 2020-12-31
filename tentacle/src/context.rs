@@ -100,13 +100,13 @@ impl SessionContext {
     // Increase when data pushed to Service's write buffer
     pub(crate) fn incr_pending_data_size(&self, data_size: usize) {
         self.pending_data_size
-            .fetch_add(data_size, Ordering::Relaxed);
+            .fetch_add(data_size, Ordering::Release);
     }
 
     // Decrease when data sent to underlying Yamux Stream
     pub(crate) fn decr_pending_data_size(&self, data_size: usize) {
         self.pending_data_size
-            .fetch_sub(data_size, Ordering::Relaxed);
+            .fetch_sub(data_size, Ordering::Release);
     }
 
     /// Session is closed
@@ -115,7 +115,7 @@ impl SessionContext {
     }
     /// Session pending data size
     pub fn pending_data_size(&self) -> usize {
-        self.pending_data_size.load(Ordering::Relaxed)
+        self.pending_data_size.load(Ordering::Acquire)
     }
 }
 

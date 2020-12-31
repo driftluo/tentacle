@@ -95,13 +95,13 @@ impl ServiceBuilder {
         self
     }
 
-    /// Set send buffer size, default is 1Mb
+    /// Set send buffer size, default is 24Mb
     pub fn set_send_buffer_size(mut self, size: usize) -> Self {
         self.config.session_config.send_buffer_size = size;
         self
     }
 
-    /// Set receive buffer size, default is 1Mb
+    /// Set receive buffer size, default is 24Mb
     pub fn set_recv_buffer_size(mut self, size: usize) -> Self {
         self.config.session_config.recv_buffer_size = size;
         self
