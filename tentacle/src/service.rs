@@ -374,13 +374,19 @@ where
         }
 
         for control in self.sessions.values_mut() {
-            if let SendResult::Pending = control.try_send(cx) {
+            control.try_send(cx);
+            if control.inner.pending_data_size() > self.config.session_config.send_buffer_size {
                 self.handle.handle_error(
                     &mut self.service_context,
                     ServiceError::SessionBlocked {
                         session_context: control.inner.clone(),
                     },
                 );
+                // clean message and try to close this session
+                control.buffer.clear();
+                let id = control.inner.id;
+                control.push(Priority::High, SessionEvent::SessionClose { id });
+                control.try_send(cx);
             }
         }
     }
@@ -514,6 +520,7 @@ where
             TargetSession::Single(id) => {
                 if let Some(control) = self.sessions.get_mut(&id) {
                     control.push_message(proto_id, priority, data);
+                    control.try_send(cx);
                 }
             }
             // Send data to the specified protocol for the specified sessions.
@@ -526,7 +533,8 @@ where
                         data.len()
                     );
                     if let Some(control) = self.sessions.get_mut(&id) {
-                        control.push_message(proto_id, priority, data.clone())
+                        control.push_message(proto_id, priority, data.clone());
+                        control.try_send(cx);
                     }
                 }
             }
@@ -539,11 +547,11 @@ where
                     data.len()
                 );
                 for control in self.sessions.values_mut() {
-                    control.push_message(proto_id, priority, data.clone())
+                    control.push_message(proto_id, priority, data.clone());
+                    control.try_send(cx);
                 }
             }
         }
-        self.distribute_to_session(cx);
     }
 
     /// Handshake
@@ -770,7 +778,7 @@ where
             if let Some(control) = self.sessions.get_mut(&id) {
                 control.push(Priority::High, SessionEvent::SessionClose { id });
                 debug!("try close service session [{}] ", id);
-                self.distribute_to_session(cx);
+                control.try_send(cx);
             }
             return;
         }
@@ -812,7 +820,7 @@ where
                     },
                 );
                 debug!("try open session [{}] proto [{}]", id, proto_id);
-                self.distribute_to_session(cx);
+                control.try_send(cx);
             }
             return;
         }
@@ -883,7 +891,7 @@ where
                     },
                 );
                 debug!("try close session [{}] proto [{}]", session_id, proto_id);
-                self.distribute_to_session(cx);
+                control.try_send(cx);
             }
             return;
         }
@@ -1186,13 +1194,13 @@ where
                 // TODO: if not contains should call handle_error let user know
                 if let Some(buffer) = self.service_proto_handles.get_mut(&proto_id) {
                     buffer.push(ServiceProtocolEvent::SetNotify { interval, token });
-                    self.distribute_to_user_level(cx);
+                    buffer.try_send(cx);
                 }
             }
             ServiceTask::RemoveProtocolNotify { proto_id, token } => {
                 if let Some(buffer) = self.service_proto_handles.get_mut(&proto_id) {
                     buffer.push(ServiceProtocolEvent::RemoveNotify { token });
-                    self.distribute_to_user_level(cx);
+                    buffer.try_send(cx);
                 }
             }
             ServiceTask::SetProtocolSessionNotify {
@@ -1204,7 +1212,7 @@ where
                 // TODO: if not contains should call handle_error let user know
                 if let Some(buffer) = self.session_proto_handles.get_mut(&(session_id, proto_id)) {
                     buffer.push(SessionProtocolEvent::SetNotify { interval, token });
-                    self.distribute_to_user_level(cx);
+                    buffer.try_send(cx);
                 }
             }
             ServiceTask::RemoveProtocolSessionNotify {
@@ -1214,7 +1222,7 @@ where
             } => {
                 if let Some(buffer) = self.session_proto_handles.get_mut(&(session_id, proto_id)) {
                     buffer.push(SessionProtocolEvent::RemoveNotify { token });
-                    self.distribute_to_user_level(cx)
+                    buffer.try_send(cx);
                 }
             }
             ServiceTask::ProtocolOpen { session_id, target } => match target {
@@ -1285,20 +1293,6 @@ where
 
     #[inline]
     fn user_task_poll(&mut self, cx: &mut Context) -> Poll<Option<()>> {
-        if self
-            .sessions
-            .values()
-            .map(|item| item.buffer.len())
-            .sum::<usize>()
-            > self.config.session_config.send_event_size()
-        {
-            // The write buffer exceeds the expected range, and no longer receives any event
-            // from the user, This means that the session handle events is too slow, and each time
-            // the sessions processes a event, the service is notified that it can receive
-            // another event.
-            return Poll::Pending;
-        }
-
         if self.service_task_receiver.is_terminated() {
             return Poll::Ready(None);
         }
@@ -1317,26 +1311,6 @@ where
     }
 
     fn session_poll(&mut self, cx: &mut Context) -> Poll<Option<()>> {
-        if self
-            .service_proto_handles
-            .values()
-            .map(Buffer::len)
-            .sum::<usize>()
-            > self.config.session_config.recv_event_size()
-            || self
-                .session_proto_handles
-                .values()
-                .map(Buffer::len)
-                .sum::<usize>()
-                > self.config.session_config.recv_event_size()
-        {
-            // The read buffer exceeds the expected range, and no longer receives any event
-            // from the sessions, This means that the user's handle processing is too slow, and
-            // each time the user processes a event, the service is notified that it can receive
-            // another event.
-            return Poll::Pending;
-        }
-
         if self.session_event_receiver.is_terminated() {
             return Poll::Ready(None);
         }

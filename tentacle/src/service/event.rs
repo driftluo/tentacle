@@ -59,14 +59,18 @@ pub enum ServiceError {
         error: std::io::Error,
     },
     /// Protocol handle error, will cause memory leaks/abnormal CPU usage
+    /// tentacle will close after this error output
     ProtocolHandleError {
         /// Protocol id
         proto_id: ProtocolId,
         /// error
         error: ProtocolHandleErrorKind,
     },
-    /// Session blocked, can't send message, may blocking global system,
-    /// If the task is too heavy in a short time, it may be repeated multiple times.
+    /// Session blocked, can't send message, if the task is too heavy in a short time.
+    /// such as too many data cache on this session and can't send to remote,
+    /// it may cause oom, so this session will be kill by tentacle
+    ///
+    /// Judging condition: unsent message size > send buffer size set by the user, default 24m
     SessionBlocked {
         /// Session context
         session_context: Arc<SessionContext>,

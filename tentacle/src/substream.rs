@@ -360,7 +360,20 @@ where
             return Poll::Ready(None);
         }
 
-        if self.event_sender.len() > self.config.recv_event_size() {
+        if self.event_sender.len() > self.config.recv_event_size()
+            || self
+                .service_proto_sender
+                .as_ref()
+                .map(Buffer::len)
+                .unwrap_or_default()
+                > self.config.recv_event_size()
+            || self
+                .session_proto_sender
+                .as_ref()
+                .map(Buffer::len)
+                .unwrap_or_default()
+                > self.config.recv_event_size()
+        {
             return Poll::Pending;
         }
 
