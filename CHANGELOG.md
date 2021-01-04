@@ -1,3 +1,16 @@
+## 0.3.4
+
+### Features
+- Add protocol spawn feature(#278)
+- Revert yamux buffer(#281)
+- Remove secp256k1 wasm compatible(#282)
+- Add doc(#289)
+
+### Bug Fix
+- Unified substream error output(#287)
+- Fix some msg left on buffer(#288)
+- Change blocking session detection(#290)
+
 ## 0.3.3
 
 ### Features
