@@ -1418,7 +1418,7 @@ where
             return self.wait_handle_poll(cx);
         }
 
-        if log_enabled!(log::Level::Debug) {
+        if log_enabled!(target: "tentacle", log::Level::Debug) {
             debug!(
                 "listens count: {}, state: {:?}, sessions count: {}, \
              pending task: {}, write_buf: {}, read_service_buf: {}, read_session_buf: {}",

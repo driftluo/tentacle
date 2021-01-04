@@ -14,6 +14,71 @@
 //! - TCP/IP: `/ip4/127.0.0.1/tcp/1337`
 //! - DNS/IP: `/dns4/localhost/tcp/1337`
 //! - UDP: `/ip4/127.0.0.1/udp/1234`
+//! - Websocket: `/ip4/127.0.0.1/tcp/1337/ws`
+//!
+//! #### Protocol
+//!
+//! In this library, the most important concept is protocol, so we need to clarify what is the protocol defined by tentacle.
+//!
+//! If you use the simplest way to understand, then it can be compared to the http protocol on the TCP protocol,
+//! that is, each protocol can have its own behavior standards, analysis methods, etc.
+//!
+//! As a framework, a builder is provided to describe the standard protocol, and three traits
+//! are provided to define the behavior of the protocol. Unfortunately, users also need an event trait to
+//! perceive other events that occur in the service, such as session establishment, protocol exceptions, etc.
+//!
+//! builder: [`MetaBuilder`]
+//!
+//! traits: [`ServiceProtocol`]/[`SessionProtocol`]/[`ProtocolSpawn`]
+//!
+//! event trait: [`ServiceHandle`]
+//!
+//! The biggest question users may have is why there are three different traits defining protocol behavior.
+//!
+//! These three traits can be divided into two groups, representing two different design ideas:
+//!
+//! ##### Callback
+//!
+//! user can only do what it defines, tentacle has stronger constraints on it
+//!
+//! [`ServiceProtocol`] defines a globally unique single-protocol processing capability, and
+//! all the protocol data and behaviors opened by the session will be summarized here for processing.
+//! Its lifetime is from the start of the service to the end.
+//!
+//! [`SessionProtocol`] its lifetime is only in the phase when the corresponding session is opened,
+//! the session is disconnected, and the handle drop, session open, handle open. That's all.
+//!
+//! Obviously, there is an abstraction of data interception
+//!
+//! ##### Stream
+//!
+//! user can combine stream with any existing future ecology, tentacle restricts it weaker
+//!
+//! [`ProtocolSpawn`] Users can get a perfect asynchronous environment to make complex control flow,
+//! and even use this trait to implement data summary processing in callback mode again
+//!
+//! Compared with callback mode, it reduces a layer of abstraction
+//!
+//! ### Use tentacle
+//!
+//! 1. Define protocol behavior with [Callback](#callback) or [Stream](#stream) trait
+//! 2. Define [`ServiceHandle`] to process other event output on tentacle service
+//! 3. Build all need [`ProtocolMeta`] from [`MetaBuilder`]
+//! 4. Register all [`ProtocolMeta`] into [`ServiceBuilder`], then build [`Service`]
+//! 5. Setup an async runtime such as tokio
+//! 6. Run [`Service`] just like other stream, maybe keep a [`Control`] on some place which want to
+//!    communicate with background [`Service`]
+//!
+//!
+//! [`MetaBuilder`]: crate::builder::MetaBuilder
+//! [`ServiceBuilder`]: crate::builder::ServiceBuilder
+//! [`ServiceProtocol`]: crate::traits::ServiceProtocol
+//! [`SessionProtocol`]: crate::traits::SessionProtocol
+//! [`ProtocolSpawn`]: crate::traits::ProtocolSpawn
+//! [`ServiceHandle`]: crate::traits::ServiceHandle
+//! [`ProtocolMeta`]: crate::service::config::ProtocolMeta
+//! [`Control`]: crate::service::ServiceControl
+//! [`Service`]: crate::service::Service
 //!
 
 #![deny(missing_docs)]

@@ -20,6 +20,8 @@ use tentacle::{
     ProtocolId, SessionId,
 };
 
+// Any protocol will be abstracted into a ProtocolMeta structure.
+// From an implementation point of view, tentacle treats any protocol equally
 fn create_meta(id: ProtocolId) -> ProtocolMeta {
     MetaBuilder::new()
         .id(id)
@@ -131,6 +133,8 @@ impl ServiceProtocol for PHandle {
 struct SHandle;
 
 impl ServiceHandle for SHandle {
+    // A lot of internal error events will be output here, but not all errors need to close the service,
+    // some just tell users that they need to pay attention
     fn handle_error(&mut self, _context: &mut ServiceContext, error: ServiceError) {
         info!("service error: {:?}", error);
     }
@@ -164,6 +168,11 @@ fn main() {
     }
 }
 
+// A p2p application is a service. During the construction process,
+// all protocols supported by the application need to be registered in the way of meta.
+// There are many other options in service builder, which are not used here, please refer to the documentation for details
+//
+// For the foreseeable future, there is no idea of dynamic addition and deletion agreements
 fn create_server() -> Service<SHandle> {
     ServiceBuilder::default()
         .insert_protocol(create_meta(0.into()))
@@ -187,6 +196,8 @@ fn create_client() -> Service<SHandle> {
 }
 
 fn server() {
+    // Although Tentacle currently abstracts runtime dependencies and supports multiple runtimes,
+    // as the author, I personally recommend tokio as the asynchronous runtime
     let mut rt = tokio::runtime::Runtime::new().unwrap();
 
     rt.block_on(async {

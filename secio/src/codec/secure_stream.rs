@@ -122,7 +122,6 @@ where
 
         match self.socket.poll_next_unpin(cx) {
             Poll::Ready(Some(Ok(t))) => {
-                debug!("receive encrypted data size: {:?}", t.len());
                 let decoded = self
                     .decode_buffer(t)
                     .map_err::<io::Error, _>(|err| err.into())?;
@@ -159,12 +158,9 @@ where
         cx: &mut Context<'_>,
         buf: &[u8],
     ) -> Poll<io::Result<usize>> {
-        debug!("start sending plain data: {:?}", buf);
-
         match self.socket.poll_ready_unpin(cx) {
             Poll::Ready(Ok(_)) => {
                 let frame = self.encode_buffer(buf);
-                trace!("start sending encrypted data size: {:?}", frame.len());
                 self.socket.start_send_unpin(frame)?;
                 let _ignore = self.socket.poll_flush_unpin(cx)?;
                 Poll::Ready(Ok(buf.len()))

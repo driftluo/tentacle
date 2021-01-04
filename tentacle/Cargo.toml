@@ -61,7 +61,7 @@ futures-test = "0.3.5"
 nix = "0.13.0"
 
 [features]
-default = ["tokio-runtime", "tokio-timer"]
+default = ["tokio-runtime", "tokio-timer", "upnp"]
 # use flatbuffer to handshake
 flatc = [ "flatbuffers", "flatbuffers-verifier", "secio/flatc" ]
 # use molecule to handshake

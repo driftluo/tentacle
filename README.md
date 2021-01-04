@@ -66,7 +66,12 @@ $ RUST_LOG=simple=info,tentacle=debug cargo run --example simple --features molc
 
 4. Now you can see some data interaction information on the terminal.
 
-You can see more detailed example in these three repos: [ckb](https://github.com/nervosnetwork/ckb)/ [cita](https://github.com/cryptape/cita)/ [muta](https://github.com/nervosnetwork/muta).
+You can see more detailed example in these three repos: 
+
+- [p2p-message](https://github.com/doitian/tentacle-p2p-message)
+- [ckb](https://github.com/nervosnetwork/ckb)
+- [cita](https://github.com/cryptape/cita)
+- [muta](https://github.com/nervosnetwork/muta).
 
 ### Run on browser and test
 

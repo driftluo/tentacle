@@ -361,7 +361,10 @@ impl ProtocolContext {
     }
 }
 
-/// Protocol handle context contain session context
+/// Protocol handle context with session context
+///
+/// Use in the callback method with a clear source of the event
+/// means tentacle know the event product from which session
 pub struct ProtocolContextMutRef<'a> {
     inner: &'a mut ProtocolContext,
     /// Session context

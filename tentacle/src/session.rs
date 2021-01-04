@@ -766,7 +766,7 @@ impl Stream for Session {
     type Item = ();
 
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Option<Self::Item>> {
-        if log_enabled!(log::Level::Debug) {
+        if log_enabled!(target: "tentacle", log::Level::Debug) {
             debug!(
                 "session [{}], [{:?}], proto count [{}], state: {:?} ,\
              read buf: {}, write buf: {}",

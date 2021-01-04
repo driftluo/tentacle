@@ -298,7 +298,7 @@ where
         Ok(stream)
     }
 
-    /// Sink `start_send` Ready -> data in buffer or send
+    /// Sink `start_send` Ready -> data send to buffer
     /// Sink `start_send` NotReady -> buffer full need poll complete
     #[inline]
     fn send_all(&mut self, cx: &mut Context) -> Result<bool, io::Error> {
@@ -340,7 +340,6 @@ where
     }
 
     fn send_frame(&mut self, cx: &mut Context, frame: Frame) -> Result<(), io::Error> {
-        debug!("[{:?}] Session::send_frame()", self.ty);
         self.write_pending_frames.push_back(frame);
         if self.send_all(cx)? {
             debug!("[{:?}] Session::send_frame() finished", self.ty);
@@ -349,7 +348,6 @@ where
     }
 
     fn handle_frame(&mut self, cx: &mut Context, frame: Frame) -> Result<(), io::Error> {
-        debug!("[{:?}] Session::handle_frame({:?})", self.ty, frame.ty());
         match frame.ty() {
             Type::Data | Type::WindowUpdate => {
                 self.handle_stream_message(cx, frame)?;
@@ -405,7 +403,6 @@ where
             }
             let disconnected = {
                 if let Some(frame_sender) = self.streams.get_mut(&stream_id) {
-                    debug!("@> sending frame to stream: {}", stream_id);
                     match frame_sender.poll_ready(cx) {
                         Poll::Ready(Ok(())) => match frame_sender.try_send(frame) {
                             Ok(_) => false,
@@ -513,7 +510,6 @@ where
     }
 
     fn handle_event(&mut self, cx: &mut Context, event: StreamEvent) -> Result<(), io::Error> {
-        debug!("[{:?}] Session::handle_event()", self.ty);
         match event {
             StreamEvent::Frame(frame) => {
                 self.send_frame(cx, frame)?;
@@ -529,7 +525,6 @@ where
     }
 
     // Receive events from sub streams
-    // TODO: should handle error
     fn recv_events(&mut self, cx: &mut Context) -> Poll<Option<Result<(), io::Error>>> {
         match Pin::new(&mut self.event_receiver).as_mut().poll_next(cx) {
             Poll::Ready(Some(event)) => {
