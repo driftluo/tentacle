@@ -237,6 +237,13 @@ mod os {
                 MultiStream::Ws(inner) => Pin::new(inner).poll_read(cx, buf),
             }
         }
+
+        unsafe fn prepare_uninitialized_buffer(
+            &self,
+            _buf: &mut [std::mem::MaybeUninit<u8>],
+        ) -> bool {
+            false
+        }
     }
 
     impl AsyncWrite for MultiStream {

@@ -147,6 +147,10 @@ where
             Poll::Pending => Poll::Pending,
         }
     }
+
+    unsafe fn prepare_uninitialized_buffer(&self, buf: &mut [std::mem::MaybeUninit<u8>]) -> bool {
+        self.socket.get_ref().prepare_uninitialized_buffer(buf)
+    }
 }
 
 impl<T> AsyncWrite for SecureStream<T>
