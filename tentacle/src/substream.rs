@@ -1036,4 +1036,8 @@ impl AsyncRead for PatchedReadPart {
             Poll::Ready(Ok(n))
         }
     }
+
+    unsafe fn prepare_uninitialized_buffer(&self, buf: &mut [std::mem::MaybeUninit<u8>]) -> bool {
+        self.io.prepare_uninitialized_buffer(buf)
+    }
 }
