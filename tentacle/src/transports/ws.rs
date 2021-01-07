@@ -382,6 +382,10 @@ impl AsyncRead for WsStream {
             Poll::Pending => Poll::Pending,
         }
     }
+
+    unsafe fn prepare_uninitialized_buffer(&self, _buf: &mut [std::mem::MaybeUninit<u8>]) -> bool {
+        false
+    }
 }
 
 impl AsyncWrite for WsStream {

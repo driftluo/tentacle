@@ -112,6 +112,10 @@ where
     ) -> Poll<io::Result<usize>> {
         AsyncRead::poll_read(Pin::new(&mut self.0), cx, buf)
     }
+
+    unsafe fn prepare_uninitialized_buffer(&self, _buf: &mut [std::mem::MaybeUninit<u8>]) -> bool {
+        false
+    }
 }
 
 impl<T> AsyncWrite for CompatStream<T>
@@ -148,6 +152,10 @@ where
         buf: &mut [u8],
     ) -> Poll<io::Result<usize>> {
         FutureAsyncRead::poll_read(self, cx, buf)
+    }
+
+    unsafe fn prepare_uninitialized_buffer(&self, _buf: &mut [std::mem::MaybeUninit<u8>]) -> bool {
+        false
     }
 }
 
