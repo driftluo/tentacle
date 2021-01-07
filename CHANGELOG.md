@@ -1,3 +1,8 @@
+## 0.3.5
+
+### Bug Fix
+- Fix resolve cpu load issue of prepare_uninitialized_buffer
+
 ## 0.3.4
 
 ### Features
