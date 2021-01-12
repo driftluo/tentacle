@@ -15,7 +15,7 @@ use std::{
 };
 
 use log::{debug, trace};
-use tokio::prelude::{AsyncRead, AsyncWrite};
+use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 
 use crate::{
     error::Error,
@@ -335,8 +335,8 @@ impl AsyncRead for StreamHandle {
     fn poll_read(
         mut self: Pin<&mut Self>,
         cx: &mut Context,
-        buf: &mut [u8],
-    ) -> Poll<io::Result<usize>> {
+        buf: &mut ReadBuf<'_>,
+    ) -> Poll<io::Result<()>> {
         self.check_self_state()?;
 
         if let Err(e) = self.recv_frames(cx) {
@@ -352,7 +352,7 @@ impl AsyncRead for StreamHandle {
 
         self.check_self_state()?;
 
-        let n = ::std::cmp::min(buf.len(), self.read_buf.len());
+        let n = ::std::cmp::min(buf.remaining(), self.read_buf.len());
         trace!(
             "stream-handle({}) poll_read self.read_buf.len={}, buf.len={}, n={}",
             self.id,
@@ -365,7 +365,7 @@ impl AsyncRead for StreamHandle {
         }
         let b = self.read_buf.split_to(n);
 
-        buf[..n].copy_from_slice(&b);
+        buf.put_slice(&b);
         match self.state {
             StreamState::RemoteClosing | StreamState::Closed | StreamState::Reset => (),
             StreamState::LocalClosing => {
@@ -380,11 +380,7 @@ impl AsyncRead for StreamHandle {
             }
         }
 
-        Poll::Ready(Ok(n))
-    }
-
-    unsafe fn prepare_uninitialized_buffer(&self, _buf: &mut [std::mem::MaybeUninit<u8>]) -> bool {
-        false
+        Poll::Ready(Ok(()))
     }
 }
 
@@ -516,7 +512,7 @@ mod test {
 
     #[test]
     fn test_drop() {
-        let mut rt = tokio::runtime::Runtime::new().unwrap();
+        let rt = tokio::runtime::Runtime::new().unwrap();
         rt.block_on(async {
             let (_frame_sender, frame_receiver) = channel(2);
             let (unbound_sender, mut unbound_receiver) = unbounded();
@@ -545,7 +541,7 @@ mod test {
 
     #[test]
     fn test_drop_with_state_reset() {
-        let mut rt = tokio::runtime::Runtime::new().unwrap();
+        let rt = tokio::runtime::Runtime::new().unwrap();
         rt.block_on(async {
             let (mut frame_sender, frame_receiver) = channel(2);
             let (unbound_sender, mut unbound_receiver) = unbounded();
@@ -616,7 +612,7 @@ mod test {
 
     #[test]
     fn test_data_large_than_recv_window() {
-        let mut rt = tokio::runtime::Runtime::new().unwrap();
+        let rt = tokio::runtime::Runtime::new().unwrap();
         rt.block_on(async {
             let (mut frame_sender, frame_receiver) = channel(2);
             let (unbound_sender, mut unbound_receiver) = unbounded();
