@@ -1,6 +1,10 @@
 //! The substream, the main interface is AsyncRead/AsyncWrite
 
+<<<<<<< HEAD
 use bytes::Bytes;
+=======
+use bytes::BytesMut;
+>>>>>>> c7bc8bd (perf: perf yamux, reduce one copy on received)
 use futures::{
     channel::mpsc::{Receiver, UnboundedSender},
     stream::FusedStream,
@@ -32,7 +36,7 @@ pub struct StreamHandle {
     max_recv_window: u32,
     recv_window: u32,
     send_window: u32,
-    read_buf: Bytes,
+    read_buf: BytesMut,
 
     // Send stream event to parent session
     unbound_event_sender: UnboundedSender<StreamEvent>,
@@ -160,8 +164,8 @@ impl StreamHandle {
 
     fn send_data(&mut self, data: &[u8]) -> Result<(), Error> {
         let flags = self.get_flags();
-        let frame = Frame::new_data(flags, self.id, Bytes::from(data.to_owned()));
-        self.unbound_send_frame(frame)
+        let frame = Frame::new_data(flags, self.id, BytesMut::from(data));
+        self.send_frame(cx, frame)
     }
 
     fn send_close(&mut self) -> Result<(), Error> {
@@ -502,7 +506,7 @@ mod test {
         config::INITIAL_STREAM_WINDOW,
         frame::{Flag, Flags, Frame, Type},
     };
-    use bytes::Bytes;
+    use bytes::BytesMut;
     use futures::{
         channel::mpsc::{channel, unbounded},
         SinkExt, StreamExt,
@@ -626,7 +630,7 @@ mod test {
             );
 
             let flags = Flags::from(Flag::Syn);
-            let frame = Frame::new_data(flags, 0, Bytes::from("1234"));
+            let frame = Frame::new_data(flags, 0, BytesMut::from("1234"));
             frame_sender.send(frame).await.unwrap();
             let mut b = [0; 1024];
 
