@@ -1,10 +1,7 @@
 use bytes::{Buf, Bytes, BytesMut};
 use futures::{SinkExt, StreamExt};
 use log::{debug, trace};
-use tokio::{
-    io::AsyncReadExt,
-    prelude::{AsyncRead, AsyncWrite},
-};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, ReadBuf};
 use tokio_util::codec::{length_delimited::LengthDelimitedCodec, Framed};
 
 use std::{
@@ -22,13 +19,13 @@ enum RecvBuf {
 }
 
 impl RecvBuf {
-    fn drain_to(&mut self, buf: &mut [u8], size: usize) {
+    fn drain_to(&mut self, buf: &mut ReadBuf, size: usize) {
         match self {
             RecvBuf::Vec(ref mut b) => {
-                buf[..size].copy_from_slice(b.drain(..size).as_slice());
+                buf.put_slice(b.drain(..size).as_slice());
             }
             RecvBuf::Byte(ref mut b) => {
-                buf[..size].copy_from_slice(&b[..size]);
+                buf.put_slice(&b[..size]);
                 b.advance(size);
             }
         }
@@ -132,14 +129,14 @@ where
     }
 
     #[inline]
-    fn drain(&mut self, buf: &mut [u8]) -> usize {
+    fn drain(&mut self, buf: &mut ReadBuf<'_>) -> usize {
         // Return zero if there is no data remaining in the internal buffer.
         if self.recv_buf.is_empty() {
             return 0;
         }
 
         // calculate number of bytes that we can copy
-        let n = ::std::cmp::min(buf.len(), self.recv_buf.len());
+        let n = ::std::cmp::min(buf.remaining(), self.recv_buf.len());
 
         // Copy data to the output buffer
         self.recv_buf.drain_to(buf, n);
@@ -161,12 +158,12 @@ where
     fn poll_read(
         mut self: Pin<&mut Self>,
         cx: &mut Context<'_>,
-        buf: &mut [u8],
-    ) -> Poll<io::Result<usize>> {
+        buf: &mut ReadBuf<'_>,
+    ) -> Poll<io::Result<()>> {
         // when there is something in recv_buffer
         let copied = self.drain(buf);
         if copied > 0 {
-            return Poll::Ready(Ok(copied));
+            return Poll::Ready(Ok(()));
         }
 
         match self.socket.poll_next_unpin(cx) {
@@ -179,15 +176,15 @@ where
                 // when input buffer is big enough
                 let n = decoded.len();
                 trace!("poll_read decoded.len={}", n);
-                if buf.len() >= n {
-                    buf[..n].copy_from_slice(decoded.as_ref());
-                    Poll::Ready(Ok(n))
+                if buf.remaining() >= n {
+                    buf.put_slice(decoded.as_ref());
+                    Poll::Ready(Ok(()))
                 } else {
                     // fill internal recv buffer
                     self.recv_buf = decoded;
                     // drain for input buffer
-                    let copied = self.drain(buf);
-                    Poll::Ready(Ok(copied))
+                    self.drain(buf);
+                    Poll::Ready(Ok(()))
                 }
             }
             Poll::Ready(Some(Err(err))) => Poll::Ready(Err(err)),
@@ -197,10 +194,6 @@ where
             }
             Poll::Pending => Poll::Pending,
         }
-    }
-
-    unsafe fn prepare_uninitialized_buffer(&self, buf: &mut [std::mem::MaybeUninit<u8>]) -> bool {
-        self.socket.get_ref().prepare_uninitialized_buffer(buf)
     }
 }
 
@@ -276,10 +269,10 @@ mod tests {
 
         let (sender, receiver) = channel::oneshot::channel::<bytes::BytesMut>();
         let (addr_sender, addr_receiver) = channel::oneshot::channel::<::std::net::SocketAddr>();
-        let mut rt = tokio::runtime::Runtime::new().unwrap();
+        let rt = tokio::runtime::Runtime::new().unwrap();
 
         rt.spawn(async move {
-            let mut listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
             let listener_addr = listener.local_addr().unwrap();
             let _res = addr_sender.send(listener_addr);
             let (socket, _) = listener.accept().await.unwrap();

@@ -11,15 +11,15 @@ edition = "2018"
 build = "build.rs"
 
 [package.metadata.docs.rs]
-features = [ ]
+features = []
 all-features = false
 no-default-features = true
 
 [dependencies]
-bytes = "0.5"
+bytes = "1.0"
 futures = { version = "0.3.0" }
-tokio = { version = "0.2.0", features = ["io-util"] }
-tokio-util = { version = "0.3.0", features = ["codec"] }
+tokio = { version = "1.0", features = ["io-util"] }
+tokio-util = { version = "0.6.0", features = ["codec"] }
 log = "0.4.1"
 
 molecule = "0.6.0"
@@ -46,14 +46,11 @@ chacha20poly1305 = "0.7"
 [dev-dependencies]
 env_logger = "0.6"
 criterion = "0.3"
-tokio = { version = "0.2.0", features = ["tcp", "rt-core", "dns"] }
+tokio = { version = "1.0.0", features = ["net", "rt", "rt-multi-thread"] }
 sha2 = "0.9.0"
 hmac = "0.9.0"
 x25519-dalek = "1.1"
 chacha20poly1305 = "0.7"
-
-[features]
-default = []
 
 [[bench]]
 name = "bench"

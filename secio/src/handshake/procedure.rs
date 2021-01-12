@@ -5,7 +5,7 @@
 use futures::{SinkExt, StreamExt};
 use log::{debug, trace};
 use std::{cmp::Ordering, io};
-use tokio::prelude::{AsyncRead, AsyncWrite};
+use tokio::io::{AsyncRead, AsyncWrite};
 use tokio_util::codec::length_delimited::Builder;
 
 use crate::{
@@ -19,7 +19,7 @@ use crate::{
     },
     EphemeralPublicKey, KeyPairInner,
 };
-use bytes::{Buf, BytesMut};
+use bytes::BytesMut;
 use tokio::io::AsyncWriteExt;
 
 /// Performs a handshake on the given socket.
@@ -90,7 +90,7 @@ where
                 .remote
                 .local
                 .proposition_bytes
-                .bytes(),
+                .as_ref(),
         );
         data_to_sign.extend_from_slice(&ephemeral_context.state.remote.proposition_bytes);
         data_to_sign.extend_from_slice(&tmp_pub_key);
@@ -310,12 +310,12 @@ mod tests {
     };
 
     fn handshake_with_self_success(config_1: Config, config_2: Config, data: &'static [u8]) {
-        let mut rt = tokio::runtime::Runtime::new().unwrap();
+        let rt = tokio::runtime::Runtime::new().unwrap();
         let (sender, receiver) = channel::oneshot::channel::<bytes::BytesMut>();
         let (addr_sender, addr_receiver) = channel::oneshot::channel::<::std::net::SocketAddr>();
 
         rt.spawn(async move {
-            let mut listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
             let listener_addr = listener.local_addr().unwrap();
             let _res = addr_sender.send(listener_addr);
             let (connect, _) = listener.accept().await.unwrap();

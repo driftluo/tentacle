@@ -5,7 +5,7 @@ use crate::{
 };
 
 use crate::codec::secure_stream::SecureStream;
-use tokio::prelude::{AsyncRead, AsyncWrite};
+use tokio::io::{AsyncRead, AsyncWrite};
 
 #[rustfmt::skip]
 #[allow(clippy::all)]
