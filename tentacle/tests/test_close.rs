@@ -130,7 +130,7 @@ fn test(secio: bool, shutdown: bool) {
     let (addr_sender, addr_receiver) = channel::<Multiaddr>();
 
     let handle = thread::spawn(|| {
-        let mut rt = tokio::runtime::Runtime::new().unwrap();
+        let rt = tokio::runtime::Runtime::new().unwrap();
         rt.block_on(async move {
             let listen_addr = service_1
                 .listen("/ip4/127.0.0.1/tcp/0".parse().unwrap())
@@ -169,7 +169,7 @@ where
     F: ServiceHandle + Unpin + Send + 'static,
 {
     thread::spawn(move || {
-        let mut rt = tokio::runtime::Runtime::new().unwrap();
+        let rt = tokio::runtime::Runtime::new().unwrap();
         rt.block_on(async move {
             service
                 .dial(listen_addr, TargetProtocol::All)

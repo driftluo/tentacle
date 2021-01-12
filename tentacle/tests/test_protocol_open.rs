@@ -109,7 +109,7 @@ fn test_protocol_open(secio: bool) {
     let (addr_sender, addr_receiver) = channel::oneshot::channel::<Multiaddr>();
 
     thread::spawn(move || {
-        let mut rt = tokio::runtime::Runtime::new().unwrap();
+        let rt = tokio::runtime::Runtime::new().unwrap();
         let mut service = create(secio, meta, ());
         rt.block_on(async move {
             let listen_addr = service
@@ -128,7 +128,7 @@ fn test_protocol_open(secio: bool) {
     let (meta, result) = create_meta(1.into());
 
     let handle_2 = thread::spawn(move || {
-        let mut rt = tokio::runtime::Runtime::new().unwrap();
+        let rt = tokio::runtime::Runtime::new().unwrap();
         let mut service = create(secio, meta, ());
         rt.block_on(async move {
             let listen_addr = addr_receiver.await.unwrap();

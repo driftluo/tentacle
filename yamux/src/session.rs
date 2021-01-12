@@ -989,8 +989,10 @@ mod test {
 
         rt.block_on(async {
             let (remote, local) = MockSocket::new();
-            let mut config = Config::default();
-            config.enable_keepalive = false;
+            let config = Config {
+                enable_keepalive: false,
+                ..Default::default()
+            };
 
             let mut session = Session::new_server(local, config);
 

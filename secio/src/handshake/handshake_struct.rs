@@ -132,7 +132,7 @@ pub enum PublicKey {
 
 impl PublicKey {
     /// Get inner data
-    pub fn inner_ref(&self) -> &Vec<u8> {
+    pub fn inner_ref(&self) -> &[u8] {
         match self {
             PublicKey::Secp256k1(ref key) => key,
         }

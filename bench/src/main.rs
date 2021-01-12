@@ -105,7 +105,7 @@ pub fn init() {
         let mut service = create(true, meta, ());
         let control = service.control().clone();
         thread::spawn(move || {
-            let mut rt = tokio::runtime::Runtime::new().unwrap();
+            let rt = tokio::runtime::Runtime::new().unwrap();
             rt.block_on(async move {
                 let listen_addr = service
                     .listen("/ip4/127.0.0.1/tcp/0".parse().unwrap())
@@ -123,7 +123,7 @@ pub fn init() {
         let (meta, client_receiver) = create_meta(1.into());
 
         thread::spawn(|| {
-            let mut rt = tokio::runtime::Runtime::new().unwrap();
+            let rt = tokio::runtime::Runtime::new().unwrap();
             let mut service = create(true, meta, ());
             rt.block_on(async move {
                 let listen_addr = addr_receiver.await.unwrap();
@@ -153,7 +153,7 @@ pub fn init() {
         let mut service = create(false, meta, ());
         let control = service.control().clone();
         thread::spawn(move || {
-            let mut rt = tokio::runtime::Runtime::new().unwrap();
+            let rt = tokio::runtime::Runtime::new().unwrap();
             rt.block_on(async move {
                 let listen_addr = service
                     .listen("/ip4/127.0.0.1/tcp/0".parse().unwrap())
@@ -171,7 +171,7 @@ pub fn init() {
         let (meta, client_receiver) = create_meta(ProtocolId::new(1));
 
         thread::spawn(move || {
-            let mut rt = tokio::runtime::Runtime::new().unwrap();
+            let rt = tokio::runtime::Runtime::new().unwrap();
             let mut service = create(false, meta, ());
             rt.block_on(async move {
                 let listen_addr = addr_receiver.await.unwrap();

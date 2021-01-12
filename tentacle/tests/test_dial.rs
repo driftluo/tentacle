@@ -227,7 +227,7 @@ fn test_repeated_dial(secio: bool) {
     let (addr_sender, addr_receiver) = channel::oneshot::channel::<Multiaddr>();
 
     thread::spawn(move || {
-        let mut rt = tokio::runtime::Runtime::new().unwrap();
+        let rt = tokio::runtime::Runtime::new().unwrap();
         let mut service = create(secio, meta_1, shandle);
         rt.block_on(async move {
             let listen_addr = service
@@ -246,7 +246,7 @@ fn test_repeated_dial(secio: bool) {
     let (shandle, error_receiver_2) = create_shandle(secio, false);
 
     thread::spawn(move || {
-        let mut rt = tokio::runtime::Runtime::new().unwrap();
+        let rt = tokio::runtime::Runtime::new().unwrap();
         let mut service = create(secio, meta_2, shandle);
         rt.block_on(async move {
             let listen_addr = addr_receiver.await.unwrap();
@@ -287,7 +287,7 @@ fn test_dial_with_no_notify(secio: bool) {
     let mut service = create(secio, meta, shandle);
     let control = service.control().clone();
     thread::spawn(move || {
-        let mut rt = tokio::runtime::Runtime::new().unwrap();
+        let rt = tokio::runtime::Runtime::new().unwrap();
         rt.block_on(async move {
             loop {
                 if service.next().await.is_none() {

@@ -108,7 +108,7 @@ fn test_kill(secio: bool) {
     let mut service = create(secio, meta, ());
     let control = service.control().clone();
     thread::spawn(move || {
-        let mut rt = tokio::runtime::Runtime::new().unwrap();
+        let rt = tokio::runtime::Runtime::new().unwrap();
         rt.block_on(async move {
             let listen_addr = service
                 .listen("/ip4/127.0.0.1/tcp/0".parse().unwrap())
@@ -145,7 +145,7 @@ fn test_kill(secio: bool) {
             assert!((cpu_stop - cpu_start) / cpu_start < 0.1);
         }
         Ok(ForkResult::Child) => {
-            let mut rt = tokio::runtime::Runtime::new().unwrap();
+            let rt = tokio::runtime::Runtime::new().unwrap();
             let (meta, _receiver) = create_meta(1.into());
             let mut service = create(secio, meta, ());
             rt.block_on(async move {

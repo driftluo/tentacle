@@ -14,7 +14,7 @@ use std::{
     },
     task::{Context, Poll},
 };
-use tokio::prelude::{AsyncRead, AsyncWrite};
+use tokio::io::{AsyncRead, AsyncWrite};
 
 #[cfg(not(target_arch = "wasm32"))]
 use crate::service::helper::Listener;

@@ -86,7 +86,7 @@ fn create_meta(id: ProtocolId) -> (ProtocolMeta, Arc<AtomicUsize>) {
 
 fn main() {
     env_logger::init();
-    let mut rt = tokio::runtime::Runtime::new().unwrap();
+    let rt = tokio::runtime::Runtime::new().unwrap();
 
     if std::env::args().nth(1) == Some("server".to_string()) {
         rt.block_on(async move {

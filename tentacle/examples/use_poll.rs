@@ -80,7 +80,7 @@ fn create_server(recv: Receiver<()>) -> Service<SHandle> {
 }
 
 fn run() {
-    let mut rt = tokio::runtime::Runtime::new().unwrap();
+    let rt = tokio::runtime::Runtime::new().unwrap();
 
     rt.block_on(async {
         let (mut tx, rx) = channel(2);
@@ -91,7 +91,7 @@ fn run() {
             .unwrap();
         tokio::spawn(async move {
             loop {
-                tokio::time::delay_for(Duration::from_secs(1)).await;
+                tokio::time::sleep(Duration::from_secs(1)).await;
                 tx.send(()).await.unwrap();
             }
         });

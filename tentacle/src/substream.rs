@@ -7,7 +7,7 @@ use std::{
     sync::{atomic::Ordering, Arc},
     task::{Context, Poll},
 };
-use tokio::prelude::{AsyncRead, AsyncWrite};
+use tokio::io::AsyncWrite;
 use tokio_util::codec::{length_delimited::LengthDelimitedCodec, Framed, FramedRead, FramedWrite};
 
 use crate::{
@@ -886,7 +886,8 @@ where
 
 /// Protocol Stream read part
 pub struct SubstreamReadPart {
-    pub(crate) substream: FramedRead<PatchedReadPart, Box<dyn Codec + Send + 'static>>,
+    pub(crate) substream:
+        FramedRead<crate::runtime::ReadHalf<StreamHandle>, Box<dyn Codec + Send + 'static>>,
     pub(crate) before_receive: Option<BeforeReceive>,
     pub(crate) proto_id: ProtocolId,
     pub(crate) stream_id: StreamId,
@@ -1008,38 +1009,5 @@ impl SubstreamWritePartBuilder {
             event_sender: Buffer::new(self.event_sender),
             event_receiver: self.event_receiver,
         }
-    }
-}
-
-/// Remove after https://github.com/tokio-rs/tokio/pull/3166 merge
-pub(crate) struct PatchedReadPart {
-    buffer: bytes::BytesMut,
-    io: crate::runtime::ReadHalf<StreamHandle>,
-}
-
-impl PatchedReadPart {
-    pub fn new(io: crate::runtime::ReadHalf<StreamHandle>, buffer: bytes::BytesMut) -> Self {
-        Self { io, buffer }
-    }
-}
-
-impl AsyncRead for PatchedReadPart {
-    fn poll_read(
-        mut self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
-        buf: &mut [u8],
-    ) -> Poll<io::Result<usize>> {
-        if self.buffer.is_empty() {
-            Pin::new(&mut self.io).poll_read(cx, buf)
-        } else {
-            let n = ::std::cmp::min(buf.len(), self.buffer.len());
-            let b = self.buffer.split_to(n);
-            buf[..n].copy_from_slice(&b);
-            Poll::Ready(Ok(n))
-        }
-    }
-
-    unsafe fn prepare_uninitialized_buffer(&self, buf: &mut [std::mem::MaybeUninit<u8>]) -> bool {
-        self.io.prepare_uninitialized_buffer(buf)
     }
 }

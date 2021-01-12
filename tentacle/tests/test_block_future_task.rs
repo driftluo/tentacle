@@ -56,7 +56,7 @@ fn create_meta(id: ProtocolId) -> ProtocolMeta {
 fn test_block_future_task() {
     let mut service = create(create_meta(1.into()), ());
 
-    let mut rt = tokio::runtime::Runtime::new().unwrap();
+    let rt = tokio::runtime::Runtime::new().unwrap();
     rt.block_on(async move {
         loop {
             if service.next().await.is_none() {

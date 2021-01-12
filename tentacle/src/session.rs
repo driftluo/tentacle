@@ -8,7 +8,7 @@ use std::{
     task::{Context, Poll},
     time::Duration,
 };
-use tokio::prelude::{AsyncRead, AsyncWrite};
+use tokio::io::{AsyncRead, AsyncWrite};
 use tokio_util::codec::{Framed, FramedParts, FramedRead, FramedWrite, LengthDelimitedCodec};
 use yamux::{Control, Session as YamuxSession, StreamHandle};
 
@@ -26,7 +26,7 @@ use crate::{
         future_task::BoxedFutureTask,
         ServiceControl, SessionType, RECEIVED_SIZE, SEND_SIZE,
     },
-    substream::{PatchedReadPart, ProtocolEvent, SubstreamBuilder, SubstreamWritePartBuilder},
+    substream::{ProtocolEvent, SubstreamBuilder, SubstreamWritePartBuilder},
     transports::MultiIncoming,
     ProtocolId, SessionId, StreamId, SubstreamReadPart,
 };
@@ -434,10 +434,8 @@ impl Session {
             Some(ref spawn) => {
                 let (read, write) = crate::runtime::split(raw_part.io);
                 let read_part = {
-                    let frame = FramedRead::new(
-                        PatchedReadPart::new(read, raw_part.read_buf),
-                        (proto.codec)(),
-                    );
+                    let mut frame = FramedRead::new(read, (proto.codec)());
+                    *frame.read_buffer_mut() = raw_part.read_buf;
 
                     SubstreamReadPart {
                         substream: frame,

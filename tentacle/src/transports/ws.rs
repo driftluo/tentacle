@@ -12,7 +12,7 @@ use std::{
     task::{Context, Poll},
     time::Duration,
 };
-use tokio::io::{AsyncRead, AsyncWrite};
+use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 use tokio_tungstenite::{
     accept_async, client_async_with_config,
     tungstenite::{Error, Message},
@@ -311,17 +311,17 @@ impl WsStream {
     }
 
     #[inline]
-    fn drain(&mut self, buf: &mut [u8]) -> usize {
+    fn drain(&mut self, buf: &mut ReadBuf) -> usize {
         // Return zero if there is no data remaining in the internal buffer.
         if self.recv_buf.is_empty() {
             return 0;
         }
 
         // calculate number of bytes that we can copy
-        let n = ::std::cmp::min(buf.len(), self.recv_buf.len());
+        let n = ::std::cmp::min(buf.remaining(), self.recv_buf.len());
 
         // Copy data to the output buffer
-        buf[..n].copy_from_slice(self.recv_buf.drain(..n).as_slice());
+        buf.put_slice(self.recv_buf.drain(..n).as_slice());
 
         n
     }
@@ -331,14 +331,14 @@ impl AsyncRead for WsStream {
     fn poll_read(
         mut self: Pin<&mut Self>,
         cx: &mut Context<'_>,
-        buf: &mut [u8],
-    ) -> Poll<io::Result<usize>> {
+        buf: &mut ReadBuf,
+    ) -> Poll<io::Result<()>> {
         self.respond_ping(cx)?;
 
         // when there is something in recv_buffer
         let copied = self.drain(buf);
         if copied > 0 {
-            return Poll::Ready(Ok(copied));
+            return Poll::Ready(Ok(()));
         }
 
         match self.inner.poll_next_unpin(cx) {
@@ -360,15 +360,15 @@ impl AsyncRead for WsStream {
                 }
                 // when input buffer is big enough
                 let n = data.len();
-                if buf.len() >= n {
-                    buf[..n].copy_from_slice(data.as_ref());
-                    Poll::Ready(Ok(n))
+                if buf.remaining() >= n {
+                    buf.put_slice(data.as_ref());
+                    Poll::Ready(Ok(()))
                 } else {
                     // fill internal recv buffer
                     self.recv_buf = data;
                     // drain for input buffer
-                    let copied = self.drain(buf);
-                    Poll::Ready(Ok(copied))
+                    self.drain(buf);
+                    Poll::Ready(Ok(()))
                 }
             }
             Poll::Ready(Some(Err(err))) => {
@@ -381,10 +381,6 @@ impl AsyncRead for WsStream {
             }
             Poll::Pending => Poll::Pending,
         }
-    }
-
-    unsafe fn prepare_uninitialized_buffer(&self, _buf: &mut [std::mem::MaybeUninit<u8>]) -> bool {
-        false
     }
 }
 

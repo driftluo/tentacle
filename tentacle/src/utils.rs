@@ -3,7 +3,7 @@ use crate::{
     secio::PeerId,
 };
 use std::{
-    iter::{self, FromIterator},
+    iter::{self},
     net::{IpAddr, SocketAddr},
 };
 
@@ -96,8 +96,9 @@ pub fn socketaddr_to_multiaddr(address: SocketAddr) -> Multiaddr {
         IpAddr::V4(ip) => Protocol::IP4(ip),
         IpAddr::V6(ip) => Protocol::IP6(ip),
     };
-    let it = iter::once(proto).chain(iter::once(Protocol::TCP(address.port())));
-    Multiaddr::from_iter(it)
+    iter::once(proto)
+        .chain(iter::once(Protocol::TCP(address.port())))
+        .collect()
 }
 
 /// Get peer id from multiaddr

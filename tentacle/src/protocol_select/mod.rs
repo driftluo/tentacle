@@ -5,7 +5,7 @@ use futures::prelude::*;
 use log::{debug, trace};
 use std::cmp::Ordering;
 use std::{collections::HashMap, io};
-use tokio::prelude::{AsyncRead, AsyncWrite};
+use tokio::io::{AsyncRead, AsyncWrite};
 use tokio_util::codec::{length_delimited::LengthDelimitedCodec, Framed};
 
 #[rustfmt::skip]
@@ -52,11 +52,14 @@ impl ProtocolInfo {
             .set(versions)
             .build();
 
-        protocol_select_mol::ProtocolInfo::new_builder()
-            .name(name)
-            .support_versions(versions)
-            .build()
-            .as_bytes()
+        Bytes::from(
+            protocol_select_mol::ProtocolInfo::new_builder()
+                .name(name)
+                .support_versions(versions)
+                .build()
+                .as_slice()
+                .to_owned(),
+        )
     }
 
     /// Decode with molecule
@@ -185,9 +188,10 @@ mod tests {
 
     #[test]
     fn protocol_message_decode_encode() {
-        let mut message = ProtocolInfo::default();
-        message.name = "test".to_owned();
-        message.support_versions = vec!["1.0.0".to_string(), "1.1.1".to_string()];
+        let message = ProtocolInfo {
+            name: "test".to_owned(),
+            support_versions: vec!["1.0.0".to_string(), "1.1.1".to_string()],
+        };
 
         let byte = message.clone();
         assert_eq!(message, ProtocolInfo::decode(&byte.encode()).unwrap())
@@ -223,18 +227,19 @@ mod tests {
         let (sender_2, receiver_2) = channel::oneshot::channel::<Option<String>>();
         let (addr_sender, addr_receiver) = channel::oneshot::channel::<::std::net::SocketAddr>();
 
-        let mut rt = tokio::runtime::Runtime::new().unwrap();
+        let rt = tokio::runtime::Runtime::new().unwrap();
 
         rt.spawn(async move {
-            let mut listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
             let listener_addr = listener.local_addr().unwrap();
             let _res = addr_sender.send(listener_addr);
 
             let (connect, _) = listener.accept().await.unwrap();
 
-            let mut message = ProtocolInfo::default();
-            message.name = "test".to_owned();
-            message.support_versions = server;
+            let message = ProtocolInfo {
+                name: "test".to_owned(),
+                support_versions: server,
+            };
             let mut messages = HashMap::new();
             messages.insert("test".to_owned(), (message, None));
 
@@ -246,9 +251,10 @@ mod tests {
             let listener_addr = addr_receiver.await.unwrap();
             let connect = TcpStream::connect(&listener_addr).await.unwrap();
 
-            let mut message = ProtocolInfo::default();
-            message.name = "test".to_owned();
-            message.support_versions = client;
+            let message = ProtocolInfo {
+                name: "test".to_owned(),
+                support_versions: client,
+            };
 
             let (_, _, a) = client_select(connect, message).await.unwrap();
             let _res = sender_2.send(a);

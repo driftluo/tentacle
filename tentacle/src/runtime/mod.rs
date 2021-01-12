@@ -43,7 +43,7 @@ pub use generic_split::*;
 mod generic_split {
     use super::{CompatStream, CompatStream2};
     use futures::io::{AsyncReadExt, ReadHalf as R, WriteHalf as W};
-    use tokio::prelude::{AsyncRead, AsyncWrite};
+    use tokio::io::{AsyncRead, AsyncWrite};
 
     pub type ReadHalf<T> = CompatStream2<R<CompatStream<T>>>;
     pub type WriteHalf<T> = CompatStream2<W<CompatStream<T>>>;
@@ -56,13 +56,13 @@ mod generic_split {
     }
 }
 
-use futures::{AsyncRead as FutureAsyncRead, AsyncWrite as FutureAsyncWrite};
+use futures::{ready, AsyncRead as FutureAsyncRead, AsyncWrite as FutureAsyncWrite};
 use std::{
     fmt, io,
     pin::Pin,
     task::{Context, Poll},
 };
-use tokio::prelude::{AsyncRead, AsyncWrite};
+use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 
 /// Compact tokio to future
 pub struct CompatStream<T>(T);
@@ -76,7 +76,9 @@ where
         cx: &mut Context<'_>,
         buf: &mut [u8],
     ) -> Poll<io::Result<usize>> {
-        AsyncRead::poll_read(self, cx, buf)
+        let mut buf = tokio::io::ReadBuf::new(buf);
+        ready!(AsyncRead::poll_read(self, cx, &mut buf))?;
+        Poll::Ready(Ok(buf.filled().len()))
     }
 }
 
@@ -108,13 +110,9 @@ where
     fn poll_read(
         mut self: Pin<&mut Self>,
         cx: &mut Context<'_>,
-        buf: &mut [u8],
-    ) -> Poll<io::Result<usize>> {
+        buf: &mut ReadBuf<'_>,
+    ) -> Poll<io::Result<()>> {
         AsyncRead::poll_read(Pin::new(&mut self.0), cx, buf)
-    }
-
-    unsafe fn prepare_uninitialized_buffer(&self, _buf: &mut [std::mem::MaybeUninit<u8>]) -> bool {
-        false
     }
 }
 
@@ -149,13 +147,12 @@ where
     fn poll_read(
         self: Pin<&mut Self>,
         cx: &mut Context<'_>,
-        buf: &mut [u8],
-    ) -> Poll<io::Result<usize>> {
-        FutureAsyncRead::poll_read(self, cx, buf)
-    }
-
-    unsafe fn prepare_uninitialized_buffer(&self, _buf: &mut [std::mem::MaybeUninit<u8>]) -> bool {
-        false
+        buf: &mut ReadBuf<'_>,
+    ) -> Poll<io::Result<()>> {
+        let slice = buf.initialize_unfilled();
+        let n = ready!(FutureAsyncRead::poll_read(self, cx, slice))?;
+        buf.advance(n);
+        Poll::Ready(Ok(()))
     }
 }
 

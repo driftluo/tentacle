@@ -152,7 +152,7 @@ impl HandshakeContext<Local> {
             }
         };
 
-        if public_key.inner_ref() == &self.state.public_key {
+        if public_key.inner_ref() == self.state.public_key {
             return Err(SecioError::ConnectSelf);
         }
 

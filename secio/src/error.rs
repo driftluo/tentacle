@@ -11,8 +11,8 @@ pub enum SecioError {
     #[cfg(unix)]
     Openssl(openssl::error::ErrorStack),
 
-    /// Ring Crypto error
-    RingCryptoError,
+    /// Crypto error
+    CryptoError,
 
     /// Failed to generate ephemeral key.
     EphemeralKeyGenerationFailed,
@@ -94,7 +94,7 @@ impl From<openssl::error::ErrorStack> for SecioError {
 #[cfg(not(target_arch = "wasm32"))]
 impl From<ring::error::Unspecified> for SecioError {
     fn from(_err: ring::error::Unspecified) -> SecioError {
-        SecioError::RingCryptoError
+        SecioError::CryptoError
     }
 }
 
@@ -106,7 +106,7 @@ impl fmt::Display for SecioError {
             SecioError::IoError(e) => fmt::Display::fmt(&e, f),
             #[cfg(unix)]
             SecioError::Openssl(e) => fmt::Display::fmt(&e, f),
-            SecioError::RingCryptoError => write!(f, "Ring Crypto Error"),
+            SecioError::CryptoError => write!(f, "Crypto Error"),
             SecioError::EphemeralKeyGenerationFailed => write!(f, "EphemeralKey Generation Failed"),
             SecioError::SecretGenerationFailed => write!(f, "Secret Generation Failed"),
             SecioError::NoSupportIntersection => write!(f, "No Support Intersection"),
