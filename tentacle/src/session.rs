@@ -349,7 +349,11 @@ impl Session {
 
     #[inline]
     fn distribute_to_substream(&mut self, cx: &mut Context) {
-        for buffer in self.substreams.values_mut() {
+        for buffer in self
+            .substreams
+            .values_mut()
+            .filter(|buffer| !buffer.is_empty())
+        {
             buffer.try_send(cx);
         }
     }
@@ -753,10 +757,8 @@ impl Session {
 
     #[inline]
     fn flush(&mut self, cx: &mut Context) {
-        if !self.service_sender.is_empty()
-            || !self.substreams.values().all(|buffer| buffer.is_empty())
-        {
-            self.distribute_to_substream(cx);
+        self.distribute_to_substream(cx);
+        if !self.service_sender.is_empty() {
             self.output(cx);
         }
     }
