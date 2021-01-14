@@ -49,11 +49,7 @@ impl SessionController {
 
     pub(crate) fn push_message(&mut self, proto_id: ProtocolId, priority: Priority, data: Bytes) {
         self.inner.incr_pending_data_size(data.len());
-        let message_event = SessionEvent::ProtocolMessage {
-            id: self.inner.id,
-            proto_id,
-            data,
-        };
+        let message_event = SessionEvent::ProtocolMessage { proto_id, data };
         self.push(priority, message_event)
     }
 

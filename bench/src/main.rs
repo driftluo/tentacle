@@ -83,7 +83,7 @@ fn create_meta(id: ProtocolId) -> (ProtocolMeta, crossbeam_channel::Receiver<Not
         })
         .service_handle(move || {
             if id == ProtocolId::default() {
-                ProtocolHandle::Neither
+                ProtocolHandle::None
             } else {
                 let handle = Box::new(PHandle {
                     connected_count: 0,

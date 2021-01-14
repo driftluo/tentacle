@@ -74,7 +74,7 @@ fn create_meta(id: ProtocolId) -> (ProtocolMeta, Arc<AtomicBool>) {
             .id(id)
             .service_handle(move || {
                 if id == 0.into() {
-                    ProtocolHandle::Neither
+                    ProtocolHandle::None
                 } else {
                     let handle = Box::new(PHandle {
                         count: 0,

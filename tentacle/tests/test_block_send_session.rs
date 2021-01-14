@@ -101,7 +101,7 @@ fn create_meta(id: ProtocolId, session_protocol: bool) -> (ProtocolMeta, Arc<Ato
         (
             meta.session_handle(move || {
                 if id == 0.into() {
-                    ProtocolHandle::Neither
+                    ProtocolHandle::None
                 } else {
                     let handle = Box::new(PHandle {
                         count: count_clone.clone(),
@@ -116,7 +116,7 @@ fn create_meta(id: ProtocolId, session_protocol: bool) -> (ProtocolMeta, Arc<Ato
         (
             meta.service_handle(move || {
                 if id == 0.into() {
-                    ProtocolHandle::Neither
+                    ProtocolHandle::None
                 } else {
                     let handle = Box::new(PHandle { count: count_clone });
                     ProtocolHandle::Callback(handle)

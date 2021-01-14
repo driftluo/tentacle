@@ -4,7 +4,7 @@ use crate::{
     yamux::config::Config as YamuxConfig,
     ProtocolId, SessionId,
 };
-use std::{collections::HashSet, net::SocketAddr, sync::Arc, time::Duration};
+use std::{net::SocketAddr, sync::Arc, time::Duration};
 
 /// Default max buffer size
 const MAX_BUF_SIZE: usize = 24 * 1024 * 1024;
@@ -13,8 +13,6 @@ pub(crate) struct ServiceConfig {
     pub timeout: Duration,
     pub session_config: SessionConfig,
     pub max_frame_length: usize,
-    /// event output or callback output
-    pub event: HashSet<ProtocolId>,
     pub keep_buffer: bool,
     #[cfg(all(not(target_arch = "wasm32"), feature = "upnp"))]
     pub upnp: bool,
@@ -30,7 +28,6 @@ impl Default for ServiceConfig {
             timeout: Duration::from_secs(10),
             session_config: SessionConfig::default(),
             max_frame_length: 1024 * 1024 * 8,
-            event: HashSet::default(),
             keep_buffer: false,
             #[cfg(all(not(target_arch = "wasm32"), feature = "upnp"))]
             upnp: false,
@@ -166,12 +163,12 @@ impl ProtocolMeta {
     ///
     /// #### Warning
     ///
-    /// Only can be called once, and will return `ProtocolHandle::Neither` or later.
+    /// Only can be called once, and will return `ProtocolHandle::None` or later.
     #[inline]
     pub fn service_handle(
         &mut self,
     ) -> ProtocolHandle<Box<dyn ServiceProtocol + Send + 'static + Unpin>> {
-        ::std::mem::replace(&mut self.service_handle, ProtocolHandle::Neither)
+        ::std::mem::replace(&mut self.service_handle, ProtocolHandle::None)
     }
 
     /// A session level callback handle for a protocol.
@@ -211,22 +208,7 @@ pub(crate) struct Meta {
 /// please carefully consider which mode should be used in the protocol
 pub enum ProtocolHandle<T: Sized> {
     /// No operation: Receive messages, but do not process, silently discard
-    Neither,
-    /// Event output: It is only received through the `ServiceHandle::handle_proto` interface.
-    /// Any protocol that registers this mode will pass the protocol behavior out of the interface.
-    /// Therefore, this makes the interface a single point of performance bottleneck.
-    /// Please carefully consider whether you need to use this behavior mode.
-    Event,
-    /// Both event and callback: This is the result of permutation and combination, but this mode is generally not recommended.
-    /// It makes a copy of all protocol data and outputs it to both the Event and Callback receivers.
-    /// This means that it not only has a single point of performance problems,
-    /// but also has data replication consumption and redundant execution actions
-    ///
-    /// ---
-    ///
-    /// By the way, if a protocol registers `ServiceProtocol` and `SessionProtocol` at the same time,
-    /// it is also sent to two receiving ends at the same time, and if use both mode, there will be three copies
-    Both(T),
+    None,
     /// Callback handle: The behavior of receiving the protocol through the corresponding
     /// `ServiceProtocol` or `SessionProtocol`, according to the registered trait, has different
     /// behaviors, each has its own advantages and disadvantages, please carefully consider.
@@ -243,26 +225,8 @@ impl<T> ProtocolHandle<T> {
 
     /// Returns true if the enum is a empty value.
     #[inline]
-    pub fn is_neither(&self) -> bool {
-        matches!(self, ProtocolHandle::Neither)
-    }
-
-    /// Returns true if the enum is a event value.
-    #[inline]
-    pub fn is_event(&self) -> bool {
-        matches!(self, ProtocolHandle::Event)
-    }
-
-    /// Returns true if the enum is a both value.
-    #[inline]
-    pub fn is_both(&self) -> bool {
-        matches!(self, ProtocolHandle::Both(_))
-    }
-
-    /// Returns true if the enum is a both value.
-    #[inline]
-    pub fn has_event(&self) -> bool {
-        self.is_event() || self.is_both()
+    pub fn is_none(&self) -> bool {
+        matches!(self, ProtocolHandle::None)
     }
 }
 

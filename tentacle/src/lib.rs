@@ -86,8 +86,6 @@
     target_arch = "wasm32",
     allow(dead_code, unused_variables, unused_imports)
 )]
-// delete until break change
-#![allow(deprecated)]
 
 /// Re-pub bytes crate
 pub use bytes;

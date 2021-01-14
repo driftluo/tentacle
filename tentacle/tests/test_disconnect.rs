@@ -46,7 +46,7 @@ fn create_meta(id: impl Into<ProtocolId> + Copy + Send + 'static) -> ProtocolMet
         .id(id.into())
         .service_handle(move || {
             if id.into() == 0.into() {
-                ProtocolHandle::Neither
+                ProtocolHandle::None
             } else {
                 let handle = Box::new(PHandle { connected_count: 0 });
                 ProtocolHandle::Callback(handle)

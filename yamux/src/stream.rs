@@ -1,10 +1,6 @@
 //! The substream, the main interface is AsyncRead/AsyncWrite
 
-<<<<<<< HEAD
-use bytes::Bytes;
-=======
 use bytes::BytesMut;
->>>>>>> c7bc8bd (perf: perf yamux, reduce one copy on received)
 use futures::{
     channel::mpsc::{Receiver, UnboundedSender},
     stream::FusedStream,
@@ -66,7 +62,7 @@ impl StreamHandle {
             max_recv_window: recv_window_size,
             recv_window: recv_window_size,
             send_window: send_window_size,
-            read_buf: Bytes::default(),
+            read_buf: BytesMut::default(),
             unbound_event_sender,
             frame_receiver,
             writeable_wake: None,
@@ -165,7 +161,7 @@ impl StreamHandle {
     fn send_data(&mut self, data: &[u8]) -> Result<(), Error> {
         let flags = self.get_flags();
         let frame = Frame::new_data(flags, self.id, BytesMut::from(data));
-        self.send_frame(cx, frame)
+        self.unbound_send_frame(frame)
     }
 
     fn send_close(&mut self) -> Result<(), Error> {
@@ -361,7 +357,7 @@ impl AsyncRead for StreamHandle {
             "stream-handle({}) poll_read self.read_buf.len={}, buf.len={}, n={}",
             self.id,
             self.read_buf.len(),
-            buf.len(),
+            buf.remaining(),
             n,
         );
         if n == 0 {

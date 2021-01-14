@@ -73,7 +73,6 @@ pub(crate) struct Substream<U> {
     proto_id: ProtocolId,
 
     context: Arc<SessionContext>,
-    event: bool,
 
     config: SessionConfig,
     /// The buffer will be prioritized for send to underlying network
@@ -357,13 +356,12 @@ where
             return Poll::Ready(None);
         }
 
-        if self.event_sender.len() > self.config.recv_event_size()
-            || self
-                .service_proto_sender
-                .as_ref()
-                .map(Buffer::len)
-                .unwrap_or_default()
-                > self.config.recv_event_size()
+        if self
+            .service_proto_sender
+            .as_ref()
+            .map(Buffer::len)
+            .unwrap_or_default()
+            > self.config.recv_event_size()
             || self
                 .session_proto_sender
                 .as_ref()
@@ -387,29 +385,19 @@ where
                     None => data.freeze(),
                 };
 
-                if let Some(ref mut buffer) = self.service_proto_sender {
-                    buffer.push(ServiceProtocolEvent::Received {
-                        id: self.context.id,
-                        data: data.clone(),
-                    })
-                }
-
                 if let Some(ref mut buffer) = self.session_proto_sender {
                     buffer.push(SessionProtocolEvent::Received { data: data.clone() })
                 }
 
+                if let Some(ref mut buffer) = self.service_proto_sender {
+                    buffer.push(ServiceProtocolEvent::Received {
+                        id: self.context.id,
+                        data,
+                    })
+                }
+
                 self.distribute_to_user_level(cx);
 
-                if self.event {
-                    self.output_event(
-                        cx,
-                        ProtocolEvent::Message {
-                            id: self.id,
-                            proto_id: self.proto_id,
-                            data,
-                        },
-                    )
-                }
                 Poll::Ready(Some(()))
             }
             Poll::Ready(None) => {
@@ -509,7 +497,6 @@ pub(crate) struct SubstreamBuilder {
     proto_id: ProtocolId,
     keep_buffer: bool,
     config: SessionConfig,
-    event: bool,
 
     context: Arc<SessionContext>,
 
@@ -540,7 +527,6 @@ impl SubstreamBuilder {
             proto_id: 0.into(),
             keep_buffer: false,
             config: SessionConfig::default(),
-            event: false,
         }
     }
 
@@ -561,11 +547,6 @@ impl SubstreamBuilder {
 
     pub fn keep_buffer(mut self, keep: bool) -> Self {
         self.keep_buffer = keep;
-        self
-    }
-
-    pub fn event(mut self, event: bool) -> Self {
-        self.event = event;
         self
     }
 
@@ -594,7 +575,6 @@ impl SubstreamBuilder {
             proto_id: self.proto_id,
             config: self.config,
             context: self.context,
-            event: self.event,
 
             high_write_buf: VecDeque::new(),
 

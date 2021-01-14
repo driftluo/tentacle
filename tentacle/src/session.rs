@@ -1,7 +1,7 @@
 use futures::{channel::mpsc, prelude::*, stream::iter, SinkExt};
 use log::{debug, error, log_enabled, trace, warn};
-use std::collections::{HashMap, HashSet};
 use std::{
+    collections::HashMap,
     io::{self, ErrorKind},
     pin::Pin,
     sync::{atomic::Ordering, Arc},
@@ -81,8 +81,6 @@ pub(crate) enum SessionEvent {
     },
     /// Protocol data
     ProtocolMessage {
-        /// Session id
-        id: SessionId,
         /// Protocol id
         proto_id: ProtocolId,
         /// Data
@@ -90,17 +88,11 @@ pub(crate) enum SessionEvent {
     },
     /// Protocol open event
     ProtocolOpen {
-        /// Session id
-        id: SessionId,
         /// Protocol id
         proto_id: ProtocolId,
-        /// Protocol version
-        version: String,
     },
     /// Protocol close event
     ProtocolClose {
-        /// Session id
-        id: SessionId,
         /// Protocol id
         proto_id: ProtocolId,
     },
@@ -153,8 +145,6 @@ pub(crate) struct Session {
     config: SessionConfig,
 
     timeout: Duration,
-
-    event: HashSet<ProtocolId>,
 
     keep_buffer: bool,
 
@@ -242,7 +232,6 @@ impl Session {
             service_proto_senders: meta.service_proto_senders,
             session_proto_senders: meta.session_proto_senders,
             state: SessionState::Normal,
-            event: meta.event,
             future_task_sender,
             wait_handle: meta.session_proto_handles,
         }
@@ -442,7 +431,7 @@ impl Session {
                         before_receive: before_receive_fn,
                         proto_id,
                         stream_id: self.next_stream,
-                        version: version.clone(),
+                        version,
                         close_sender: session_to_proto_sender,
                     }
                 };
@@ -478,24 +467,12 @@ impl Session {
                 .service_proto_sender(self.service_proto_senders.get(&proto_id).cloned())
                 .session_proto_sender(self.session_proto_senders.get(&proto_id).cloned())
                 .keep_buffer(self.keep_buffer)
-                .event(self.event.contains(&proto_id))
                 .before_receive(before_receive_fn)
                 .build(frame);
 
-                proto_stream.proto_open(version.clone());
+                proto_stream.proto_open(version);
                 crate::runtime::spawn(proto_stream.for_each(|_| future::ready(())));
             }
-        }
-
-        if self.event.contains(&proto_id) {
-            self.event_output(
-                cx,
-                SessionEvent::ProtocolOpen {
-                    id: self.context.id,
-                    proto_id,
-                    version,
-                },
-            );
         }
 
         self.next_stream += 1;
@@ -517,31 +494,9 @@ impl Session {
                 debug!("session [{}] proto [{}] closed", self.context.id, proto_id);
                 if self.substreams.remove(&id).is_some() {
                     self.proto_streams.remove(&proto_id);
-                    if self.event.contains(&proto_id) {
-                        self.event_output(
-                            cx,
-                            SessionEvent::ProtocolClose {
-                                id: self.context.id,
-                                proto_id,
-                            },
-                        );
-                    }
                 }
             }
-            ProtocolEvent::Message { data, proto_id, .. } => {
-                debug!("get proto [{}] data len: {}", proto_id, data.len());
-                if self.state == SessionState::RemoteClose && !self.keep_buffer {
-                    return;
-                }
-                self.event_output(
-                    cx,
-                    SessionEvent::ProtocolMessage {
-                        id: self.context.id,
-                        proto_id,
-                        data,
-                    },
-                )
-            }
+            ProtocolEvent::Message { .. } => unreachable!(),
             ProtocolEvent::SelectError { proto_name } => self.event_output(
                 cx,
                 SessionEvent::ProtocolSelectError {
@@ -817,15 +772,7 @@ impl Stream for Session {
                     "Session({:?}) finished, LocalClose||Abnormal",
                     self.context.id
                 );
-                let id = self.context.id;
-                let protos = ::std::mem::take(&mut self.proto_streams);
-                for (proto_id, _) in protos {
-                    // make sure close protocol is early than close session
-                    if self.event.contains(&proto_id) {
-                        self.service_sender
-                            .push(SessionEvent::ProtocolClose { id, proto_id });
-                    }
-                }
+                ::std::mem::take(&mut self.proto_streams);
                 self.close_session();
                 return self.wait_handle_poll(cx);
             }
@@ -859,7 +806,6 @@ pub(crate) struct SessionMeta {
     keep_buffer: bool,
     service_proto_senders: HashMap<ProtocolId, Buffer<ServiceProtocolEvent>>,
     session_proto_senders: HashMap<ProtocolId, Buffer<SessionProtocolEvent>>,
-    event: HashSet<ProtocolId>,
     event_sender: priority_mpsc::Sender<SessionEvent>,
     service_control: ServiceControl,
     session_proto_handles: Vec<(
@@ -884,7 +830,6 @@ impl SessionMeta {
             keep_buffer: false,
             service_proto_senders: HashMap::default(),
             session_proto_senders: HashMap::default(),
-            event: HashSet::new(),
             session_proto_handles: Vec::new(),
             service_control: control,
             event_sender,
@@ -935,11 +880,6 @@ impl SessionMeta {
         )>,
     ) -> Self {
         self.session_proto_handles = handles;
-        self
-    }
-
-    pub fn event(mut self, event: HashSet<ProtocolId>) -> Self {
-        self.event = event;
         self
     }
 }

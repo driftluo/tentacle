@@ -38,11 +38,7 @@ impl ServiceBuilder {
     }
 
     /// Insert a custom protocol
-    pub fn insert_protocol(mut self, mut protocol: ProtocolMeta) -> Self {
-        if protocol.session_handle().has_event() || protocol.service_handle.has_event() {
-            self.config.event.insert(protocol.id());
-        }
-
+    pub fn insert_protocol(mut self, protocol: ProtocolMeta) -> Self {
         self.inner.insert(protocol.id(), protocol);
         self
     }
@@ -162,7 +158,6 @@ impl ServiceBuilder {
     /// Clear all protocols
     pub fn clear(&mut self) {
         self.inner.clear();
-        self.config.event.clear();
     }
 }
 
@@ -317,8 +312,8 @@ impl MetaBuilder {
     /// Combine the configuration of this builder to create a ProtocolMeta
     pub fn build(mut self) -> ProtocolMeta {
         if self.spawn.is_some() {
-            assert!(self.service_handle.is_neither());
-            assert!((self.session_handle)().is_neither());
+            assert!(self.service_handle.is_none());
+            assert!((self.session_handle)().is_none());
         }
         let meta = Meta {
             id: self.id,
@@ -346,8 +341,8 @@ impl Default for MetaBuilder {
             name: Box::new(|id| format!("/p2p/{}", id.value())),
             support_versions: vec!["0.0.1".to_owned()],
             codec: Box::new(|| Box::new(LengthDelimitedCodec::new())),
-            service_handle: ProtocolHandle::Neither,
-            session_handle: Box::new(|| ProtocolHandle::Neither),
+            service_handle: ProtocolHandle::None,
+            session_handle: Box::new(|| ProtocolHandle::None),
             select_version: Box::new(|| None),
             before_send: None,
             before_receive: Box::new(|| None),
