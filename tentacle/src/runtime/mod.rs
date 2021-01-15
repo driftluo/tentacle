@@ -149,8 +149,15 @@ where
         cx: &mut Context<'_>,
         buf: &mut ReadBuf<'_>,
     ) -> Poll<io::Result<()>> {
-        let slice = buf.initialize_unfilled();
+        // see https://github.com/tokio-rs/tokio/issues/3417
+        let slice = unsafe {
+            let buf = buf.unfilled_mut();
+            ::std::slice::from_raw_parts_mut(buf.as_mut_ptr().cast::<u8>(), buf.len())
+        };
         let n = ready!(FutureAsyncRead::poll_read(self, cx, slice))?;
+        unsafe {
+            buf.assume_init(n);
+        }
         buf.advance(n);
         Poll::Ready(Ok(()))
     }

@@ -217,14 +217,27 @@ impl AsyncRead for BrowserStream {
                         let data = js_sys::Uint8Array::new(&data);
                         let n = data.length() as usize;
                         if buf.remaining() >= n {
-                            data.copy_to(buf.initialize_unfilled_to(n));
+                            // see https://github.com/tokio-rs/tokio/issues/3417
+                            let slice = unsafe {
+                                let buf = buf.unfilled_mut();
+                                ::std::slice::from_raw_parts_mut(
+                                    buf.as_mut_ptr().cast::<u8>(),
+                                    buf.len(),
+                                )
+                            };
+                            data.copy_to(&mut slice[..n]);
+                            unsafe {
+                                buf.assume_init(n);
+                            }
                             buf.advance(n);
                             return Poll::Ready(Ok(()));
                         } else {
                             // fill internal recv buffer
-                            let mut tmp = vec![0; n];
-                            data.copy_to(&mut tmp);
-                            self.recv_buf = tmp;
+                            self.recv_buf.reserve(n);
+                            unsafe {
+                                self.recv_buf.set_len(n);
+                            }
+                            data.copy_to(&mut self.recv_buf);
                             // drain for input buffer
                             self.drain(buf);
                             return Poll::Ready(Ok(()));

@@ -719,6 +719,10 @@ mod timer {
                     Poll::Pending => Poll::Pending,
                 }
             }
+
+            fn size_hint(&self) -> (usize, Option<usize>) {
+                (std::usize::MAX, None)
+            }
         }
 
         pub fn interval(period: Duration) -> Interval {
