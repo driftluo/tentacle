@@ -1,6 +1,6 @@
 //! The substream, the main interface is AsyncRead/AsyncWrite
 
-use bytes::{Bytes, BytesMut};
+use bytes::Bytes;
 use futures::{
     channel::mpsc::{Receiver, Sender, UnboundedSender},
     stream::FusedStream,
@@ -32,7 +32,7 @@ pub struct StreamHandle {
     max_recv_window: u32,
     recv_window: u32,
     send_window: u32,
-    read_buf: BytesMut,
+    read_buf: Bytes,
 
     // Send stream event to parent session
     event_sender: Sender<StreamEvent>,
@@ -64,7 +64,7 @@ impl StreamHandle {
             max_recv_window: recv_window_size,
             recv_window: recv_window_size,
             send_window: send_window_size,
-            read_buf: BytesMut::default(),
+            read_buf: Bytes::default(),
             event_sender,
             unbound_event_sender,
             frame_receiver,
@@ -275,7 +275,8 @@ impl StreamHandle {
 
         let (_, body) = frame.into_parts();
         if let Some(data) = body {
-            self.read_buf.extend_from_slice(&data);
+            // only when buf is empty, poll read can read from remote
+            self.read_buf = data;
         }
         self.recv_window -= length;
         Ok(())
