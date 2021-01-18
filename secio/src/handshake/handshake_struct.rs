@@ -57,17 +57,14 @@ impl Propose {
             )
             .build();
 
-        Bytes::from(
-            handshake_mol::Propose::new_builder()
-                .rand(rand)
-                .pubkey(pubkey)
-                .exchanges(exchange)
-                .ciphers(ciphers)
-                .hashes(hashes)
-                .build()
-                .as_slice()
-                .to_owned(),
-        )
+        handshake_mol::Propose::new_builder()
+            .rand(rand)
+            .pubkey(pubkey)
+            .exchanges(exchange)
+            .ciphers(ciphers)
+            .hashes(hashes)
+            .build()
+            .as_bytes()
     }
 
     /// Decode with molecule
@@ -103,14 +100,11 @@ impl Exchange {
             .set(self.signature.into_iter().map(Into::into).collect())
             .build();
 
-        Bytes::from(
-            handshake_mol::Exchange::new_builder()
-                .epubkey(epubkey)
-                .signature(signature)
-                .build()
-                .as_slice()
-                .to_owned(),
-        )
+        handshake_mol::Exchange::new_builder()
+            .epubkey(epubkey)
+            .signature(signature)
+            .build()
+            .as_bytes()
     }
 
     /// Decode with molecule
@@ -163,7 +157,7 @@ impl PublicKey {
         let pubkey = handshake_mol::PublicKey::new_builder()
             .set(secp256k1)
             .build();
-        Bytes::from(pubkey.as_slice().to_owned())
+        pubkey.as_bytes()
     }
 
     /// Decode with molecule

@@ -1,8 +1,8 @@
 MOLC    := moleculec
-MOLC_VERSION := 0.6.0
+MOLC_VERSION := 0.7.0
 
 MOL_FILES := \
-  src/protocol_select/protocol_select.mol \
+  tentacle/src/protocol_select/protocol_select.mol \
   secio/src/handshake/handshake.mol \
 
 MOL_RUST_FILES := $(patsubst %.mol,%_mol.rs,${MOL_FILES})

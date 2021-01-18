@@ -52,14 +52,11 @@ impl ProtocolInfo {
             .set(versions)
             .build();
 
-        Bytes::from(
-            protocol_select_mol::ProtocolInfo::new_builder()
-                .name(name)
-                .support_versions(versions)
-                .build()
-                .as_slice()
-                .to_owned(),
-        )
+        protocol_select_mol::ProtocolInfo::new_builder()
+            .name(name)
+            .support_versions(versions)
+            .build()
+            .as_bytes()
     }
 
     /// Decode with molecule
