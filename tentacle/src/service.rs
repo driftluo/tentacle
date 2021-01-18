@@ -373,7 +373,11 @@ where
             return;
         }
 
-        for control in self.sessions.values_mut() {
+        for control in self
+            .sessions
+            .values_mut()
+            .filter(|control| !control.buffer.is_empty())
+        {
             control.try_send(cx);
             if control.inner.pending_data_size() > self.config.session_config.send_buffer_size {
                 self.handle.handle_error(
@@ -399,7 +403,11 @@ where
         }
         let mut error = false;
 
-        for (proto_id, buffer) in self.service_proto_handles.iter_mut() {
+        for (proto_id, buffer) in self
+            .service_proto_handles
+            .iter_mut()
+            .filter(|(_, buffer)| !buffer.is_empty())
+        {
             match buffer.try_send(cx) {
                 SendResult::Pending => {
                     let error = ProtocolHandleErrorKind::Block(None);
@@ -425,7 +433,11 @@ where
             }
         }
 
-        for ((session_id, proto_id), ref mut buffer) in self.session_proto_handles.iter_mut() {
+        for ((session_id, proto_id), ref mut buffer) in self
+            .session_proto_handles
+            .iter_mut()
+            .filter(|(_, buffer)| !buffer.is_empty())
+        {
             match buffer.try_send(cx) {
                 SendResult::Pending => {
                     let error = ProtocolHandleErrorKind::Block(Some(*session_id));
@@ -1329,20 +1341,9 @@ where
     }
 
     fn flush_buffer(&mut self, cx: &mut Context) {
-        if !self.sessions.values().all(|con| con.buffer.is_empty()) {
-            self.distribute_to_session(cx);
-        }
-        if !self
-            .service_proto_handles
-            .values()
-            .all(|buffer| buffer.is_empty())
-            || !self
-                .session_proto_handles
-                .values()
-                .all(|buffer| buffer.is_empty())
-        {
-            self.distribute_to_user_level(cx);
-        }
+        self.distribute_to_session(cx);
+
+        self.distribute_to_user_level(cx);
     }
 
     #[cold]
