@@ -21,6 +21,17 @@ pub trait StreamCipher {
     fn encrypt(&mut self, input: &[u8]) -> Result<Vec<u8>, SecioError>;
     /// Feeds data from input through the cipher, return decrypted bytes.
     fn decrypt(&mut self, input: &[u8]) -> Result<Vec<u8>, SecioError>;
+    /// Whether support in place decrypt
+    #[inline]
+    fn is_in_place(&self) -> bool {
+        false
+    }
+    /// Feeds data from input through the cipher, in place decrypted.
+    fn decrypt_in_place(&mut self, _input: &mut bytes::BytesMut) -> Result<(), SecioError> {
+        Err(SecioError::InvalidProposition(
+            "don't support in place decrypted",
+        ))
+    }
 }
 
 /// Crypto mode, encrypt or decrypt

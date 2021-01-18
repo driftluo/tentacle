@@ -1,4 +1,4 @@
-use bytes::{Bytes, BytesMut};
+use bytes::{Buf, Bytes, BytesMut};
 use futures::{SinkExt, StreamExt};
 use log::{debug, trace};
 use tokio::{
@@ -16,6 +16,45 @@ use std::{
 
 use crate::{crypto::BoxStreamCipher, error::SecioError};
 
+enum RecvBuf {
+    Vec(Vec<u8>),
+    Byte(BytesMut),
+}
+
+impl RecvBuf {
+    fn copy_to(&mut self, buf: &mut [u8], size: usize) {
+        match self {
+            RecvBuf::Vec(ref mut b) => {
+                buf[..size].copy_from_slice(b.drain(..size).as_slice());
+            }
+            RecvBuf::Byte(ref mut b) => {
+                buf[..size].copy_from_slice(&b[..size]);
+                b.advance(size);
+            }
+        }
+    }
+
+    fn len(&self) -> usize {
+        match self {
+            RecvBuf::Vec(ref b) => b.len(),
+            RecvBuf::Byte(ref b) => b.len(),
+        }
+    }
+
+    fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+}
+
+impl AsRef<[u8]> for RecvBuf {
+    fn as_ref(&self) -> &[u8] {
+        match self {
+            RecvBuf::Vec(ref b) => b.as_ref(),
+            RecvBuf::Byte(ref b) => b.as_ref(),
+        }
+    }
+}
+
 /// Encrypted stream
 pub struct SecureStream<T> {
     socket: Framed<T, LengthDelimitedCodec>,
@@ -31,7 +70,7 @@ pub struct SecureStream<T> {
     /// frame from the underlying Framed<>, the frame will be filled
     /// into this buffer so that multiple following 'read' will eventually
     /// get the message correctly
-    recv_buf: Vec<u8>,
+    recv_buf: RecvBuf,
 }
 
 impl<T> SecureStream<T>
@@ -45,19 +84,29 @@ where
         encode_cipher: BoxStreamCipher,
         nonce: Vec<u8>,
     ) -> Self {
+        let recv_buf = if decode_cipher.is_in_place() {
+            RecvBuf::Byte(BytesMut::new())
+        } else {
+            RecvBuf::Vec(Vec::default())
+        };
         SecureStream {
             socket,
             decode_cipher,
             encode_cipher,
             nonce,
-            recv_buf: Vec::default(),
+            recv_buf,
         }
     }
 
     /// Decoding data
     #[inline]
-    fn decode_buffer(&mut self, frame: BytesMut) -> Result<Vec<u8>, SecioError> {
-        Ok(self.decode_cipher.decrypt(&frame)?)
+    fn decode_buffer(&mut self, mut frame: BytesMut) -> Result<RecvBuf, SecioError> {
+        if self.decode_cipher.is_in_place() {
+            self.decode_cipher.decrypt_in_place(&mut frame)?;
+            Ok(RecvBuf::Byte(frame))
+        } else {
+            Ok(RecvBuf::Vec(self.decode_cipher.decrypt(&frame)?))
+        }
     }
 
     pub(crate) async fn verify_nonce(&mut self) -> Result<(), SecioError> {
@@ -93,7 +142,7 @@ where
         let n = ::std::cmp::min(buf.len(), self.recv_buf.len());
 
         // Copy data to the output buffer
-        buf[..n].copy_from_slice(self.recv_buf.drain(..n).as_slice());
+        self.recv_buf.copy_to(buf, n);
 
         n
     }
