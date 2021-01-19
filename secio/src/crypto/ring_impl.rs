@@ -104,10 +104,7 @@ impl RingAeadCipher {
         buf.copy_from_slice(input);
 
         if let RingAeadCryptoVariant::Open(ref mut key) = self.cipher {
-            match key.open_in_place(Aad::empty(), &mut buf) {
-                Ok(_) => (),
-                Err(e) => return Err(e.into()),
-            }
+            key.open_in_place(Aad::empty(), &mut buf)?;
         } else {
             unreachable!("encrypt is called on a non-open cipher")
         }
@@ -115,17 +112,14 @@ impl RingAeadCipher {
         Ok(buf)
     }
 
-    pub fn decrypt_in_place(&mut self, input: &mut bytes::BytesMut) -> Result<(), SecioError> {
+    pub fn decrypt_in_place(&mut self, input: &mut BytesMut) -> Result<(), SecioError> {
         let output_len = input
             .len()
             .checked_sub(self.cipher_type.tag_size())
             .ok_or(SecioError::FrameTooShort)?;
 
         if let RingAeadCryptoVariant::Open(ref mut key) = self.cipher {
-            match key.open_in_place(Aad::empty(), input) {
-                Ok(_) => (),
-                Err(e) => return Err(e.into()),
-            }
+            key.open_in_place(Aad::empty(), input)?;
         } else {
             unreachable!("encrypt is called on a non-open cipher")
         }
@@ -148,7 +142,7 @@ impl StreamCipher for RingAeadCipher {
         true
     }
 
-    fn decrypt_in_place(&mut self, input: &mut bytes::BytesMut) -> Result<(), SecioError> {
+    fn decrypt_in_place(&mut self, input: &mut BytesMut) -> Result<(), SecioError> {
         self.decrypt_in_place(input)
     }
 }

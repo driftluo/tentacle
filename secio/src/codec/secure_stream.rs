@@ -22,7 +22,7 @@ enum RecvBuf {
 }
 
 impl RecvBuf {
-    fn copy_to(&mut self, buf: &mut [u8], size: usize) {
+    fn drain_to(&mut self, buf: &mut [u8], size: usize) {
         match self {
             RecvBuf::Vec(ref mut b) => {
                 buf[..size].copy_from_slice(b.drain(..size).as_slice());
@@ -142,7 +142,7 @@ where
         let n = ::std::cmp::min(buf.len(), self.recv_buf.len());
 
         // Copy data to the output buffer
-        self.recv_buf.copy_to(buf, n);
+        self.recv_buf.drain_to(buf, n);
 
         n
     }

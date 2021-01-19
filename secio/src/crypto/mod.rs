@@ -1,4 +1,5 @@
 use crate::error::SecioError;
+use bytes::BytesMut;
 
 /// Define cipher
 pub mod cipher;
@@ -27,7 +28,7 @@ pub trait StreamCipher {
         false
     }
     /// Feeds data from input through the cipher, in place decrypted.
-    fn decrypt_in_place(&mut self, _input: &mut bytes::BytesMut) -> Result<(), SecioError> {
+    fn decrypt_in_place(&mut self, _input: &mut BytesMut) -> Result<(), SecioError> {
         Err(SecioError::InvalidProposition(
             "don't support in place decrypted",
         ))
