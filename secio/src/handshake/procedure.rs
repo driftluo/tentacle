@@ -247,6 +247,7 @@ where
     secure_stream
         .write_all(&pub_ephemeral_context.state.remote.nonce)
         .await?;
+    secure_stream.flush().await?;
     secure_stream.verify_nonce().await?;
 
     Ok((

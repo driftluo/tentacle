@@ -594,10 +594,6 @@ where
             return Poll::Ready(None);
         }
 
-        self.flush(cx)?;
-
-        self.poll_complete(cx)?;
-
         debug!(
             "send buf: {}, read buf: {}",
             self.write_pending_frames.len(),
@@ -621,6 +617,9 @@ where
             if self.is_dead() {
                 break;
             }
+
+            self.flush(cx)?;
+            self.poll_complete(cx)?;
 
             let mut is_pending = self.control_poll(cx)?.is_pending();
             is_pending &= self.recv_frames(cx)?.is_pending();
