@@ -96,29 +96,35 @@ impl RingAeadCipher {
             .len()
             .checked_sub(self.cipher_type.tag_size())
             .ok_or(SecioError::FrameTooShort)?;
-        let mut output = Vec::with_capacity(output_len);
-        let mut buf = Vec::with_capacity(
-            self.cipher_type
-                .tag_size()
-                .checked_add(input.len())
-                .ok_or(SecioError::InvalidMessage)?,
-        );
+        let mut buf = Vec::with_capacity(input.len());
 
         unsafe {
-            output.set_len(output_len);
             buf.set_len(input.len());
         }
         buf.copy_from_slice(input);
 
         if let RingAeadCryptoVariant::Open(ref mut key) = self.cipher {
-            match key.open_in_place(Aad::empty(), &mut buf) {
-                Ok(out_buf) => output.copy_from_slice(out_buf),
-                Err(e) => return Err(e.into()),
-            }
+            key.open_in_place(Aad::empty(), &mut buf)?;
         } else {
             unreachable!("encrypt is called on a non-open cipher")
         }
-        Ok(output)
+        buf.truncate(output_len);
+        Ok(buf)
+    }
+
+    pub fn decrypt_in_place(&mut self, input: &mut BytesMut) -> Result<(), SecioError> {
+        let output_len = input
+            .len()
+            .checked_sub(self.cipher_type.tag_size())
+            .ok_or(SecioError::FrameTooShort)?;
+
+        if let RingAeadCryptoVariant::Open(ref mut key) = self.cipher {
+            key.open_in_place(Aad::empty(), input)?;
+        } else {
+            unreachable!("encrypt is called on a non-open cipher")
+        }
+        input.truncate(output_len);
+        Ok(())
     }
 }
 
@@ -129,6 +135,15 @@ impl StreamCipher for RingAeadCipher {
 
     fn decrypt(&mut self, input: &[u8]) -> Result<Vec<u8>, SecioError> {
         self.decrypt(input)
+    }
+
+    #[inline]
+    fn is_in_place(&self) -> bool {
+        true
+    }
+
+    fn decrypt_in_place(&mut self, input: &mut BytesMut) -> Result<(), SecioError> {
+        self.decrypt_in_place(input)
     }
 }
 
