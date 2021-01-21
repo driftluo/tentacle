@@ -78,13 +78,30 @@ pub struct Session<T> {
     // The buffer which will distribute to sub streams
     read_pending_frames: VecDeque<Frame>,
 
+    // Why can unbound channel be used here?
+    //
+    // The only reason for the unbound channel being rejected is
+    // that there is a potential memory explosion problem.
+    // We just need to prove that there is no potential infinite
+    // write problem here to use it safely.
+    //
+    // As a network library, it has two influencers, remote behavior and local behavior,
+    // we discuss separately:
+    //
+    // remote:
+    // This unbound channel cannot be used by the remote end, only for local transmission
+    //
+    // local:
+    // Since each stream has a limit such as `send window`, when the upper limit is reached,
+    // it will return to pending and can no longer send data to the channel
+    //
+    // The only problem is that if the stream is opened infinitely, the upper limit of the total
+    // buffer will increase linearly. This behavior can be controlled by the user
+
     // For receive events from sub streams (for clone to new stream)
-    event_sender: Sender<StreamEvent>,
+    event_sender: UnboundedSender<StreamEvent>,
     // For receive events from sub streams
-    event_receiver: Receiver<StreamEvent>,
-    // The control information must be sent successfully and will not cause memory problems
-    unbound_event_sender: UnboundedSender<StreamEvent>,
-    unbound_event_receiver: UnboundedReceiver<StreamEvent>,
+    event_receiver: UnboundedReceiver<StreamEvent>,
 
     /// use to async open stream/close session
     control_sender: Sender<Command>,
@@ -124,8 +141,7 @@ where
             SessionType::Client => 1,
             SessionType::Server => 2,
         };
-        let (event_sender, event_receiver) = channel(32);
-        let (unbound_event_sender, unbound_event_receiver) = unbounded();
+        let (event_sender, event_receiver) = unbounded();
         let (control_sender, control_receiver) = channel(32);
         let framed_stream = Framed::new(
             raw_stream,
@@ -153,8 +169,6 @@ where
             read_pending_frames: VecDeque::default(),
             event_sender,
             event_receiver,
-            unbound_event_sender,
-            unbound_event_receiver,
             control_sender,
             control_receiver,
             keepalive,
@@ -286,7 +300,6 @@ where
         let mut stream = StreamHandle::new(
             stream_id,
             self.event_sender.clone(),
-            self.unbound_event_sender.clone(),
             frame_receiver,
             state,
             self.config.max_stream_window_size,
@@ -517,6 +530,9 @@ where
             StreamEvent::StateChanged((stream_id, state)) => {
                 if let StreamState::Closed = state {
                     self.streams.remove(&stream_id);
+                    if self.streams.capacity() - self.streams.len() > BUF_SHRINK_THRESHOLD {
+                        self.streams.shrink_to_fit();
+                    }
                 }
             }
             StreamEvent::GoAway => self.send_go_away_with_code(cx, GoAwayCode::ProtocolError)?,
@@ -527,24 +543,6 @@ where
     // Receive events from sub streams
     fn recv_events(&mut self, cx: &mut Context) -> Poll<Option<Result<(), io::Error>>> {
         match Pin::new(&mut self.event_receiver).as_mut().poll_next(cx) {
-            Poll::Ready(Some(event)) => {
-                self.handle_event(cx, event)?;
-                Poll::Ready(Some(Ok(())))
-            }
-            Poll::Ready(None) => {
-                // Since session hold one event sender,
-                // the channel can not be disconnected.
-                unreachable!()
-            }
-            Poll::Pending => Poll::Pending,
-        }
-    }
-
-    fn recv_unbound_events(&mut self, cx: &mut Context) -> Poll<Option<Result<(), io::Error>>> {
-        match Pin::new(&mut self.unbound_event_receiver)
-            .as_mut()
-            .poll_next(cx)
-        {
             Poll::Ready(Some(event)) => {
                 self.handle_event(cx, event)?;
                 Poll::Ready(Some(Ok(())))
@@ -621,9 +619,13 @@ where
             self.flush(cx)?;
             self.poll_complete(cx)?;
 
+            // Open stream as soon as possible
+            if !self.pending_streams.is_empty() {
+                break;
+            }
+
             let mut is_pending = self.control_poll(cx)?.is_pending();
             is_pending &= self.recv_frames(cx)?.is_pending();
-            is_pending &= self.recv_unbound_events(cx)?.is_pending();
             is_pending &= self.recv_events(cx)?.is_pending();
             if is_pending {
                 break;
