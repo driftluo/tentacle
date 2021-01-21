@@ -4,47 +4,50 @@ pub use tokio::{
     task::{block_in_place, spawn_blocking, JoinHandle},
 };
 
-use std::{
-    io,
-    net::SocketAddr,
-    pin::Pin,
-    task::{Context, Poll},
-    time::Duration,
-};
+use std::{io, net::SocketAddr};
 
-use futures::Stream;
+#[cfg(feature = "tokio-timer")]
+pub use time::{interval, Interval};
+use tokio::net::TcpSocket;
 #[cfg(feature = "tokio-timer")]
 pub use tokio::time::{sleep as delay_for, timeout, Sleep as Delay, Timeout};
-use tokio::{
-    net::TcpSocket,
-    time::{interval as inner_interval, Interval as Inner},
-};
 
-pub struct Interval(Inner);
+#[cfg(feature = "tokio-timer")]
+mod time {
+    use futures::Stream;
+    use std::{
+        pin::Pin,
+        task::{Context, Poll},
+        time::Duration,
+    };
+    use tokio::time::{interval as inner_interval, Interval as Inner};
 
-impl Interval {
-    pub fn new(period: Duration) -> Self {
-        Self(inner_interval(period))
-    }
-}
+    pub struct Interval(Inner);
 
-impl Stream for Interval {
-    type Item = ();
-
-    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<()>> {
-        match self.0.poll_tick(cx) {
-            Poll::Ready(_) => Poll::Ready(Some(())),
-            Poll::Pending => Poll::Pending,
+    impl Interval {
+        pub fn new(period: Duration) -> Self {
+            Self(inner_interval(period))
         }
     }
 
-    fn size_hint(&self) -> (usize, Option<usize>) {
-        (std::usize::MAX, None)
-    }
-}
+    impl Stream for Interval {
+        type Item = ();
 
-pub fn interval(period: Duration) -> Interval {
-    Interval::new(period)
+        fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<()>> {
+            match self.0.poll_tick(cx) {
+                Poll::Ready(_) => Poll::Ready(Some(())),
+                Poll::Pending => Poll::Pending,
+            }
+        }
+
+        fn size_hint(&self) -> (usize, Option<usize>) {
+            (std::usize::MAX, None)
+        }
+    }
+
+    pub fn interval(period: Duration) -> Interval {
+        Interval::new(period)
+    }
 }
 
 pub(crate) fn reuse_listen(addr: SocketAddr) -> io::Result<TcpListener> {

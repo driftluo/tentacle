@@ -700,7 +700,7 @@ mod timer {
             task::{Context, Poll},
             time::Duration,
         };
-        use tokio::time::{interval_at, Interval as Inner, Instant};
+        use tokio::time::{interval_at, Instant, Interval as Inner};
 
         pub struct Interval(Inner);
 
@@ -1093,7 +1093,7 @@ mod test {
 
     #[test]
     fn test_open_too_many_stream() {
-        let mut rt = tokio::runtime::Runtime::new().unwrap();
+        let rt = tokio::runtime::Runtime::new().unwrap();
 
         rt.block_on(async {
             let (remote, local) = MockSocket::new();
@@ -1143,7 +1143,7 @@ mod test {
 
     #[test]
     fn test_remote_does_not_respond_go_away() {
-        let mut rt = tokio::runtime::Runtime::new().unwrap();
+        let rt = tokio::runtime::Runtime::new().unwrap();
 
         rt.block_on(async {
             let (_remote, local) = MockSocket::new();

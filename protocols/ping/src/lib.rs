@@ -1,24 +1,7 @@
-#[cfg(all(feature = "flatc", feature = "molc"))]
-compile_error!("features `flatc` and `molc` are mutually exclusive");
-#[cfg(all(not(feature = "flatc"), not(feature = "molc")))]
-compile_error!("Please choose a serialization format via feature. Possible choices: flatc, molc");
-
-#[cfg(feature = "flatc")]
-#[rustfmt::skip]
-#[allow(clippy::all)]
-mod protocol_generated;
-#[cfg(feature = "flatc")]
-#[rustfmt::skip]
-#[allow(clippy::all)]
-#[allow(dead_code)]
-mod protocol_generated_verifier;
-
-#[cfg(feature = "molc")]
 #[rustfmt::skip]
 #[allow(clippy::all)]
 #[allow(dead_code)]
 mod protocol_mol;
-#[cfg(feature = "molc")]
 use molecule::prelude::{Builder, Entity, Reader};
 
 use log::{debug, error, trace, warn};
@@ -269,56 +252,6 @@ enum PingPayload {
 struct PingMessage;
 
 impl PingMessage {
-    #[cfg(feature = "flatc")]
-    fn build_ping(nonce: u32) -> Bytes {
-        let mut fbb = flatbuffers::FlatBufferBuilder::new();
-        let ping = {
-            let mut ping = protocol_generated::p2p::ping::PingBuilder::new(&mut fbb);
-            ping.add_nonce(nonce);
-            ping.finish()
-        };
-
-        let mut builder = protocol_generated::p2p::ping::PingMessageBuilder::new(&mut fbb);
-        builder.add_payload_type(protocol_generated::p2p::ping::PingPayload::Ping);
-        builder.add_payload(ping.as_union_value());
-        let data = builder.finish();
-        fbb.finish(data, None);
-        Bytes::from(fbb.finished_data().to_owned())
-    }
-
-    #[cfg(feature = "flatc")]
-    fn build_pong(nonce: u32) -> Bytes {
-        let mut fbb = flatbuffers::FlatBufferBuilder::new();
-        let pong = {
-            let mut pong = protocol_generated::p2p::ping::PongBuilder::new(&mut fbb);
-            pong.add_nonce(nonce);
-            pong.finish()
-        };
-        let mut builder = protocol_generated::p2p::ping::PingMessageBuilder::new(&mut fbb);
-        builder.add_payload_type(protocol_generated::p2p::ping::PingPayload::Pong);
-        builder.add_payload(pong.as_union_value());
-        let data = builder.finish();
-        fbb.finish(data, None);
-        Bytes::from(fbb.finished_data().to_owned())
-    }
-
-    #[cfg(feature = "flatc")]
-    fn decode(data: &[u8]) -> Option<PingPayload> {
-        let msg =
-            flatbuffers_verifier::get_root::<protocol_generated::p2p::ping::PingMessage>(data)
-                .ok()?;
-        match msg.payload_type() {
-            protocol_generated::p2p::ping::PingPayload::Ping => {
-                Some(PingPayload::Ping(msg.payload_as_ping().unwrap().nonce()))
-            }
-            protocol_generated::p2p::ping::PingPayload::Pong => {
-                Some(PingPayload::Pong(msg.payload_as_pong().unwrap().nonce()))
-            }
-            protocol_generated::p2p::ping::PingPayload::NONE => None,
-        }
-    }
-
-    #[cfg(feature = "molc")]
     fn build_ping(nonce: u32) -> Bytes {
         let nonce_le = nonce.to_le_bytes();
         let nonce = protocol_mol::Uint32::new_builder()
@@ -336,7 +269,6 @@ impl PingMessage {
             .as_bytes()
     }
 
-    #[cfg(feature = "molc")]
     fn build_pong(nonce: u32) -> Bytes {
         let nonce_le = nonce.to_le_bytes();
         let nonce = protocol_mol::Uint32::new_builder()
@@ -354,7 +286,6 @@ impl PingMessage {
             .as_bytes()
     }
 
-    #[cfg(feature = "molc")]
     #[allow(clippy::cast_ptr_alignment)]
     fn decode(data: &[u8]) -> Option<PingPayload> {
         let reader = protocol_mol::PingMessageReader::from_compatible_slice(data).ok()?;

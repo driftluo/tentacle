@@ -577,7 +577,7 @@ mod test {
 
     #[test]
     fn test_drop_with_state_local_close() {
-        let mut rt = tokio::runtime::Runtime::new().unwrap();
+        let rt = tokio::runtime::Runtime::new().unwrap();
         rt.block_on(async {
             let (_frame_sender, frame_receiver) = channel(2);
             let (unbound_sender, mut unbound_receiver) = unbounded();
@@ -654,7 +654,7 @@ mod test {
     // the protocol cannot be opened
     #[test]
     fn test_open_stream_with_data() {
-        let mut rt = tokio::runtime::Runtime::new().unwrap();
+        let rt = tokio::runtime::Runtime::new().unwrap();
         rt.block_on(async {
             let (_frame_sender, frame_receiver) = channel(2);
             let (unbound_sender, mut unbound_receiver) = unbounded();
