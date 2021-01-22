@@ -391,15 +391,25 @@ where
                     // TODO: should report error?
                     return Ok(());
                 }
-                debug!("[{:?}] Accept a stream id={}", self.ty, stream_id);
-                let stream = match self.create_stream(Some(stream_id)) {
-                    Ok(stream) => stream,
-                    Err(_) => {
-                        self.send_go_away_with_code(cx, GoAwayCode::ProtocolError)?;
-                        return Ok(());
-                    }
-                };
-                self.pending_streams.push_back(stream);
+                if self.streams.len() < self.config.max_stream_count
+                    && self.pending_streams.len() < self.config.accept_backlog
+                {
+                    debug!("[{:?}] Accept a stream id={}", self.ty, stream_id);
+                    let stream = match self.create_stream(Some(stream_id)) {
+                        Ok(stream) => stream,
+                        Err(_) => {
+                            self.send_go_away_with_code(cx, GoAwayCode::ProtocolError)?;
+                            return Ok(());
+                        }
+                    };
+                    self.pending_streams.push_back(stream);
+                } else {
+                    // close the stream immediately
+                    let mut flags = Flags::from(Flag::Syn);
+                    flags.add(Flag::Rst);
+                    let frame = Frame::new_window_update(flags, stream_id, 0);
+                    self.write_pending_frames.push_back(frame);
+                }
             }
             let disconnected = {
                 if let Some(frame_sender) = self.streams.get_mut(&stream_id) {
@@ -1014,5 +1024,53 @@ mod test {
             let mut buf = [0; 100];
             let _ignore = stream.read(&mut buf).await;
         })
+    }
+
+    #[test]
+    fn test_open_too_many_stream() {
+        let mut rt = tokio::runtime::Runtime::new().unwrap();
+
+        rt.block_on(async {
+            let (remote, local) = MockSocket::new();
+            let mut config = Config::default();
+            config.enable_keepalive = false;
+            config.max_stream_count = 1;
+
+            let mut session = Session::new_server(local, config);
+
+            tokio::spawn(async move {
+                while let Some(Ok(mut stream)) = session.next().await {
+                    tokio::spawn(async move {
+                        let mut buf = [0; 100];
+                        let _ignore = stream.read(&mut buf).await;
+                    });
+                }
+            });
+
+            let mut client = Framed::new(
+                remote,
+                FrameCodec::default().max_frame_size(config.max_stream_window_size),
+            );
+
+            let next_stream_id = 3;
+            // open stream
+            let frame = Frame::new_window_update(Flags::from(Flag::Syn), next_stream_id, 0);
+            client.send(frame).await.unwrap();
+            // stream window respond
+            assert_eq!(
+                Frame::new_window_update(Flags::from(Flag::Ack), next_stream_id, 0),
+                client.next().await.unwrap().unwrap()
+            );
+
+            let frame = Frame::new_window_update(Flags::from(Flag::Syn), next_stream_id + 2, 0);
+            client.send(frame).await.unwrap();
+
+            // get reset msg
+            let reset_msg = client.next().await.unwrap().unwrap();
+
+            assert_eq!(reset_msg.ty(), Type::WindowUpdate);
+            assert!(reset_msg.flags().contains(Flag::Rst));
+            assert_eq!(reset_msg.stream_id(), 5)
+        });
     }
 }
