@@ -537,12 +537,10 @@ where
             StreamEvent::Frame(frame) => {
                 self.send_frame(cx, frame)?;
             }
-            StreamEvent::StateChanged((stream_id, state)) => {
-                if let StreamState::Closed = state {
-                    self.streams.remove(&stream_id);
-                    if self.streams.capacity() - self.streams.len() > BUF_SHRINK_THRESHOLD {
-                        self.streams.shrink_to_fit();
-                    }
+            StreamEvent::Closed(stream_id) => {
+                self.streams.remove(&stream_id);
+                if self.streams.capacity() - self.streams.len() > BUF_SHRINK_THRESHOLD {
+                    self.streams.shrink_to_fit();
                 }
             }
             StreamEvent::GoAway => self.send_go_away_with_code(cx, GoAwayCode::ProtocolError)?,

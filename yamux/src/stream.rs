@@ -98,17 +98,17 @@ impl StreamHandle {
             StreamState::RemoteClosing => {
                 self.state = StreamState::Closed;
                 self.send_close()?;
-                let event = StreamEvent::StateChanged((self.id, self.state));
+                let event = StreamEvent::Closed(self.id);
                 self.unbound_send_event(event)?;
             }
             StreamState::Reset | StreamState::Closed => {
                 self.state = StreamState::Closed;
-                let event = StreamEvent::StateChanged((self.id, self.state));
+                let event = StreamEvent::Closed(self.id);
                 self.unbound_send_event(event)?;
             }
             StreamState::LocalClosing => {
                 self.state = StreamState::Closed;
-                let event = StreamEvent::StateChanged((self.id, self.state));
+                let event = StreamEvent::Closed(self.id);
                 self.unbound_send_event(event)?;
             }
         }
@@ -426,7 +426,7 @@ impl Drop for StreamHandle {
             flags.add(Flag::Rst);
             let frame = Frame::new_window_update(flags, self.id, 0);
             let rst_event = StreamEvent::Frame(frame);
-            let event = StreamEvent::StateChanged((self.id, StreamState::Closed));
+            let event = StreamEvent::Closed(self.id);
             // Always successful unless the session is dropped
             let _ignore = self.unbound_event_sender.unbounded_send(rst_event);
             let _ignore = self.unbound_event_sender.unbounded_send(event);
@@ -438,7 +438,7 @@ impl Drop for StreamHandle {
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) enum StreamEvent {
     Frame(Frame),
-    StateChanged((StreamId, StreamState)),
+    Closed(StreamId),
     // Only use on protocol error
     GoAway,
 }
@@ -502,8 +502,8 @@ mod test {
             }
             let event = unbound_receiver.next().await.unwrap();
             match event {
-                StreamEvent::StateChanged((_, state)) => assert_eq!(state, StreamState::Closed),
-                _ => panic!("must be state change"),
+                StreamEvent::Closed(_) => (),
+                _ => panic!("must be state closed"),
             }
         });
     }
@@ -538,8 +538,8 @@ mod test {
             drop(stream);
             let event = unbound_receiver.next().await.unwrap();
             match event {
-                StreamEvent::StateChanged((_, state)) => assert_eq!(state, StreamState::Closed),
-                _ => panic!("must be state change"),
+                StreamEvent::Closed(_) => (),
+                _ => panic!("must be state closed"),
             }
         });
     }
