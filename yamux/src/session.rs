@@ -418,7 +418,7 @@ where
                     self.pending_streams.push_back(stream);
                 } else {
                     // close the stream immediately
-                    let mut flags = Flags::from(Flag::Syn);
+                    let mut flags = Flags::from(Flag::Ack);
                     flags.add(Flag::Rst);
                     let frame = Frame::new_window_update(flags, stream_id, 0);
                     self.write_pending_frames.push_back(frame);
@@ -1071,6 +1071,8 @@ mod test {
             let reset_msg = client.next().await.unwrap().unwrap();
 
             assert_eq!(reset_msg.ty(), Type::WindowUpdate);
+            assert!(!reset_msg.flags().contains(Flag::Syn));
+            assert!(reset_msg.flags().contains(Flag::Ack));
             assert!(reset_msg.flags().contains(Flag::Rst));
             assert_eq!(reset_msg.stream_id(), 5)
         });
