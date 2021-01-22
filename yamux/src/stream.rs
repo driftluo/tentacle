@@ -14,7 +14,7 @@ use std::{
     task::{Context, Poll},
 };
 
-use log::debug;
+use log::{debug, trace};
 use tokio::prelude::{AsyncRead, AsyncWrite};
 
 use crate::{
@@ -130,6 +130,12 @@ impl StreamHandle {
 
     #[inline]
     fn unbound_send_frame(&mut self, frame: Frame) -> Result<(), Error> {
+        trace!(
+            "stream-handle({}) send_frame ty={:?}, size={}",
+            self.id,
+            frame.ty(),
+            frame.size()
+        );
         let event = StreamEvent::Frame(frame);
         self.unbound_send_event(event)
     }
@@ -211,6 +217,12 @@ impl StreamHandle {
     }
 
     fn handle_frame(&mut self, frame: Frame) -> Result<(), Error> {
+        trace!(
+            "stream-handle({}) handle_frame ty={:?}, size={}",
+            self.id,
+            frame.ty(),
+            frame.size()
+        );
         match frame.ty() {
             Type::WindowUpdate => {
                 self.handle_window_update(&frame)?;
@@ -255,6 +267,7 @@ impl StreamHandle {
     }
 
     fn recv_frames(&mut self, cx: &mut Context) -> Result<(), Error> {
+        trace!("stream-handle({}) recv_frames", self.id);
         loop {
             match self.state {
                 StreamState::RemoteClosing => {
@@ -271,6 +284,10 @@ impl StreamHandle {
             // buffer will left here, waiting for the next session wake
             // this will cause the message to be delayed, unable to read, etc.
             if !self.read_buf.is_empty() {
+                trace!(
+                    "stream-handle({}) recv_frames break since buf is not empty",
+                    self.id
+                );
                 break;
             }
 
@@ -336,6 +353,13 @@ impl AsyncRead for StreamHandle {
         self.check_self_state()?;
 
         let n = ::std::cmp::min(buf.len(), self.read_buf.len());
+        trace!(
+            "stream-hanlde({}) poll_read self.read_buf.len={}, buf.len={}, n={}",
+            self.id,
+            self.read_buf.len(),
+            buf.len(),
+            n,
+        );
         if n == 0 {
             return Poll::Pending;
         }
@@ -391,6 +415,13 @@ impl AsyncWrite for StreamHandle {
         }
         // Allow n = 0, send an empty frame to remote
         let n = ::std::cmp::min(self.send_window as usize, buf.len());
+        trace!(
+            "stream-hanlde({}) poll_write self.send_window={}, buf.len={}, n={}",
+            self.id,
+            self.send_window,
+            buf.len(),
+            n,
+        );
         let data = &buf[0..n];
         match self.send_data(data) {
             Ok(_) => {

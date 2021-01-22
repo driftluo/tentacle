@@ -261,6 +261,7 @@ impl Decoder for FrameCodec {
     type Error = io::Error;
 
     fn decode(&mut self, src: &mut BytesMut) -> Result<Option<Self::Item>, Self::Error> {
+        trace!("FrameCodec decode src.len={}", src.len());
         if src.is_empty() {
             return Ok(None);
         }
@@ -333,6 +334,7 @@ impl Decoder for FrameCodec {
 impl Encoder<Frame> for FrameCodec {
     type Error = io::Error;
     fn encode(&mut self, item: Frame, dst: &mut BytesMut) -> Result<(), Self::Error> {
+        trace!("FrameCodec encode item.size={}", item.size());
         // Must ensure that there is enough space in the buf
         dst.reserve(item.size());
         let (header, body) = item.into_parts();
@@ -344,7 +346,6 @@ impl Encoder<Frame> for FrameCodec {
         if let Some(data) = body {
             dst.put(data);
         }
-        trace!("encode item: length={}", dst.len());
         Ok(())
     }
 }

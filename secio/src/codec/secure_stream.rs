@@ -171,12 +171,14 @@ where
 
         match self.socket.poll_next_unpin(cx) {
             Poll::Ready(Some(Ok(t))) => {
+                trace!("poll_read raw.len={}", t.len());
                 let decoded = self
                     .decode_buffer(t)
                     .map_err::<io::Error, _>(|err| err.into())?;
 
                 // when input buffer is big enough
                 let n = decoded.len();
+                trace!("poll_read decoded.len={}", n);
                 if buf.len() >= n {
                     buf[..n].copy_from_slice(decoded.as_ref());
                     Poll::Ready(Ok(n))
@@ -213,6 +215,7 @@ where
     ) -> Poll<io::Result<usize>> {
         match self.socket.poll_ready_unpin(cx) {
             Poll::Ready(Ok(_)) => {
+                trace!("poll_write buf.len={}", buf.len());
                 let frame = self.encode_buffer(buf);
                 self.socket.start_send_unpin(frame)?;
                 let _ignore = self.socket.poll_flush_unpin(cx)?;
