@@ -46,10 +46,10 @@ impl<T> PriorityBuffer<T> {
     }
 
     fn shrink_to_fit(&mut self) {
-        if self.high_buffer.capacity() > self.high_buffer.len() + BUF_SHRINK_THRESHOLD {
+        if self.high_buffer.capacity() - self.high_buffer.len() > BUF_SHRINK_THRESHOLD {
             self.high_buffer.shrink_to_fit();
         }
-        if self.normal_buffer.capacity() > self.normal_buffer.len() + BUF_SHRINK_THRESHOLD {
+        if self.normal_buffer.capacity() - self.normal_buffer.len() > BUF_SHRINK_THRESHOLD {
             self.normal_buffer.shrink_to_fit();
         }
     }
@@ -137,7 +137,7 @@ impl<T> Buffer<T> {
     }
 
     fn shrink_to_fit(&mut self) {
-        if self.buffer.capacity() > self.buffer.len() + BUF_SHRINK_THRESHOLD {
+        if self.buffer.capacity() - self.buffer.len() > BUF_SHRINK_THRESHOLD {
             self.buffer.shrink_to_fit();
         }
     }

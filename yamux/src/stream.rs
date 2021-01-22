@@ -2,7 +2,7 @@
 
 use bytes::Bytes;
 use futures::{
-    channel::mpsc::{Receiver, Sender, UnboundedSender},
+    channel::mpsc::{Receiver, UnboundedSender},
     stream::FusedStream,
     task::Waker,
     Stream,
@@ -35,7 +35,6 @@ pub struct StreamHandle {
     read_buf: Bytes,
 
     // Send stream event to parent session
-    event_sender: Sender<StreamEvent>,
     unbound_event_sender: UnboundedSender<StreamEvent>,
 
     // Receive frame of current stream from parent session
@@ -50,7 +49,6 @@ impl StreamHandle {
     // Create a StreamHandle from session
     pub(crate) fn new(
         id: StreamId,
-        event_sender: Sender<StreamEvent>,
         unbound_event_sender: UnboundedSender<StreamEvent>,
         frame_receiver: Receiver<Frame>,
         state: StreamState,
@@ -65,7 +63,6 @@ impl StreamHandle {
             recv_window: recv_window_size,
             send_window: send_window_size,
             read_buf: Bytes::default(),
-            event_sender,
             unbound_event_sender,
             frame_receiver,
             writeable_wake: None,
@@ -125,35 +122,10 @@ impl StreamHandle {
             .unbounded_send(StreamEvent::GoAway);
     }
 
-    #[inline]
-    fn send_event(&mut self, cx: &mut Context, event: StreamEvent) -> Result<(), Error> {
-        match self.event_sender.poll_ready(cx) {
-            Poll::Ready(Ok(())) => {
-                if let Err(e) = self.event_sender.try_send(event) {
-                    if e.is_full() {
-                        return Err(Error::WouldBlock);
-                    } else {
-                        return Err(Error::SessionShutdown);
-                    }
-                }
-            }
-            Poll::Pending => return Err(Error::WouldBlock),
-            Poll::Ready(Err(_)) => return Err(Error::SessionShutdown),
-        }
-
-        Ok(())
-    }
-
     fn unbound_send_event(&mut self, event: StreamEvent) -> Result<(), Error> {
         self.unbound_event_sender
             .unbounded_send(event)
             .map_err(|_| Error::SessionShutdown)
-    }
-
-    #[inline]
-    fn send_frame(&mut self, cx: &mut Context, frame: Frame) -> Result<(), Error> {
-        let event = StreamEvent::Frame(frame);
-        self.send_event(cx, event)
     }
 
     #[inline]
@@ -180,10 +152,10 @@ impl StreamHandle {
             .map_err(|_| Error::SessionShutdown)
     }
 
-    fn send_data(&mut self, cx: &mut Context, data: &[u8]) -> Result<(), Error> {
+    fn send_data(&mut self, data: &[u8]) -> Result<(), Error> {
         let flags = self.get_flags();
         let frame = Frame::new_data(flags, self.id, Bytes::from(data.to_owned()));
-        self.send_frame(cx, frame)
+        self.unbound_send_frame(frame)
     }
 
     fn send_close(&mut self) -> Result<(), Error> {
@@ -420,7 +392,7 @@ impl AsyncWrite for StreamHandle {
         // Allow n = 0, send an empty frame to remote
         let n = ::std::cmp::min(self.send_window as usize, buf.len());
         let data = &buf[0..n];
-        match self.send_data(cx, data) {
+        match self.send_data(data) {
             Ok(_) => {
                 self.send_window -= n as u32;
 
@@ -446,7 +418,7 @@ impl AsyncWrite for StreamHandle {
 
 impl Drop for StreamHandle {
     fn drop(&mut self) {
-        if !self.event_sender.is_closed()
+        if !self.unbound_event_sender.is_closed()
             && self.state != StreamState::Closed
             && self.state != StreamState::LocalClosing
         {
@@ -455,8 +427,7 @@ impl Drop for StreamHandle {
             let frame = Frame::new_window_update(flags, self.id, 0);
             let rst_event = StreamEvent::Frame(frame);
             let event = StreamEvent::StateChanged((self.id, StreamState::Closed));
-            // It is indeed possible that it cannot be sent here, but ignore it for now
-            // we should wait a `async drop` api to do this instead of any runtime
+            // Always successful unless the session is dropped
             let _ignore = self.unbound_event_sender.unbounded_send(rst_event);
             let _ignore = self.unbound_event_sender.unbounded_send(event);
         }
@@ -498,7 +469,7 @@ mod test {
     use super::{StreamEvent, StreamHandle, StreamState};
     use crate::{
         config::INITIAL_STREAM_WINDOW,
-        frame::{Flag, Flags, Frame},
+        frame::{Flag, Flags, Frame, Type},
     };
     use bytes::Bytes;
     use futures::{
@@ -506,18 +477,16 @@ mod test {
         SinkExt, StreamExt,
     };
     use std::io::ErrorKind;
-    use tokio::io::AsyncReadExt;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
     #[test]
     fn test_drop() {
         let mut rt = tokio::runtime::Runtime::new().unwrap();
         rt.block_on(async {
-            let (event_sender, _event_receiver) = channel(2);
             let (_frame_sender, frame_receiver) = channel(2);
             let (unbound_sender, mut unbound_receiver) = unbounded();
             let stream = StreamHandle::new(
                 0,
-                event_sender,
                 unbound_sender,
                 frame_receiver,
                 StreamState::Init,
@@ -543,12 +512,10 @@ mod test {
     fn test_drop_with_state_reset() {
         let mut rt = tokio::runtime::Runtime::new().unwrap();
         rt.block_on(async {
-            let (event_sender, _event_receiver) = channel(2);
             let (mut frame_sender, frame_receiver) = channel(2);
             let (unbound_sender, mut unbound_receiver) = unbounded();
             let mut stream = StreamHandle::new(
                 0,
-                event_sender,
                 unbound_sender,
                 frame_receiver,
                 StreamState::Init,
@@ -581,12 +548,10 @@ mod test {
     fn test_data_large_than_recv_window() {
         let mut rt = tokio::runtime::Runtime::new().unwrap();
         rt.block_on(async {
-            let (event_sender, _event_receiver) = channel(2);
             let (mut frame_sender, frame_receiver) = channel(2);
             let (unbound_sender, mut unbound_receiver) = unbounded();
             let mut stream = StreamHandle::new(
                 0,
-                event_sender,
                 unbound_sender,
                 frame_receiver,
                 StreamState::Init,
@@ -609,6 +574,48 @@ mod test {
             match event {
                 StreamEvent::GoAway => (),
                 _ => panic!("must be go away"),
+            }
+        });
+    }
+
+    // https://github.com/nervosnetwork/tentacle/issues/297
+    //
+    // As you can see from the description, the real cause of the problem
+    // is that the two channels cannot guarantee the consistency of the sending
+    // order, that is, the order of the message to start the stream and the
+    // message to send data is reversed, causing the remote end to receive
+    // an unowned message , Silently discarded, causing the problem that
+    // the protocol cannot be opened
+    #[test]
+    fn test_open_stream_with_data() {
+        let mut rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async {
+            let (_frame_sender, frame_receiver) = channel(2);
+            let (unbound_sender, mut unbound_receiver) = unbounded();
+            let mut stream = StreamHandle::new(
+                0,
+                unbound_sender,
+                frame_receiver,
+                StreamState::Init,
+                2,
+                INITIAL_STREAM_WINDOW,
+            );
+
+            let data = [0; 8];
+
+            stream.send_window_update().unwrap();
+            stream.write(&data).await.unwrap();
+
+            let event = unbound_receiver.next().await.unwrap();
+            match event {
+                StreamEvent::Frame(frame) => assert!(frame.ty() == Type::WindowUpdate),
+                _ => panic!("must be a window update msg"),
+            }
+
+            let event = unbound_receiver.next().await.unwrap();
+            match event {
+                StreamEvent::Frame(frame) => assert!(frame.ty() == Type::Data),
+                _ => panic!("must be a frame msg"),
             }
         });
     }
