@@ -1,6 +1,6 @@
 # Tentacle
 
-[![Build Status](https://api.travis-ci.org/nervosnetwork/tentacle.svg?branch=master)](https://travis-ci.org/nervosnetwork/tentacle)
+[![Build Status](https://travis-ci.com/nervosnetwork/tentacle.svg?branch=master)](https://travis-ci.com/nervosnetwork/tentacle)
 ![image](https://img.shields.io/badge/rustc-1.46-blue.svg)
 
 ## Overview
