@@ -158,19 +158,18 @@ pub(crate) async fn client_select<T: AsyncWrite + AsyncRead + Send + Unpin>(
 
     let (raw_remote_info, socket) = socket.into_future().await;
 
-    let mut remote_info = match raw_remote_info {
+    let mut remote_info = match raw_remote_info.transpose()? {
         Some(info) => {
-            let info = info?;
             trace!("client_select recv_proto(len={}): {:#x}", info.len(), info);
-            match ProtocolInfo::decode(&info) {
-                Some(info) => info,
-                None => return Err(io::ErrorKind::InvalidData.into()),
-            }
+            ProtocolInfo::decode(&info)
+                .ok_or_else(|| io::Error::from(io::ErrorKind::InvalidData))?
         }
         None => {
-            let err = io::Error::new(io::ErrorKind::UnexpectedEof, "unexpected eof");
-            debug!("unexpected eof while waiting for remote's protocol proposition");
-            return Err(err);
+            debug!("client_select unexpected eof while waiting for remote's protocol proposition");
+            return Err(io::Error::new(
+                io::ErrorKind::UnexpectedEof,
+                "unexpected eof",
+            ));
         }
     };
 
@@ -193,19 +192,18 @@ pub(crate) async fn server_select<T: AsyncWrite + AsyncRead + Send + Unpin>(
     let socket = Framed::new(handle, LengthDelimitedCodec::new());
 
     let (raw_remote_info, mut socket) = socket.into_future().await;
-    let remote_info = match raw_remote_info {
+    let remote_info = match raw_remote_info.transpose()? {
         Some(info) => {
-            let info = info?;
             trace!("server_select recv_proto(len={}): {:#x}", info.len(), info);
-            match ProtocolInfo::decode(&info) {
-                Some(info) => info,
-                None => return Err(io::ErrorKind::InvalidData.into()),
-            }
+            ProtocolInfo::decode(&info)
+                .ok_or_else(|| io::Error::from(io::ErrorKind::InvalidData))?
         }
         None => {
-            let err = io::Error::new(io::ErrorKind::UnexpectedEof, "unexpected eof");
-            debug!("unexpected eof while waiting for remote's protocol proposition");
-            return Err(err);
+            debug!("server_select unexpected eof while waiting for remote's protocol proposition");
+            return Err(io::Error::new(
+                io::ErrorKind::UnexpectedEof,
+                "unexpected eof",
+            ));
         }
     };
 
