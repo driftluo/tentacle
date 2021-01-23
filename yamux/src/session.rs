@@ -16,7 +16,7 @@ use futures::{
     channel::mpsc::{channel, unbounded, Receiver, Sender, UnboundedReceiver, UnboundedSender},
     Sink, Stream,
 };
-use log::debug;
+use log::{debug, log_enabled, trace, warn};
 use tokio::prelude::{AsyncRead, AsyncWrite};
 use tokio_util::codec::Framed;
 
@@ -389,6 +389,7 @@ where
             let stream_id = frame.stream_id();
             // Guarantee the order in which messages are sent
             if block_substream.contains(&stream_id) {
+                trace!("substream({}) blocked", stream_id);
                 self.read_pending_frames.push_back(frame);
                 continue;
             }
@@ -398,8 +399,8 @@ where
                     let frame = Frame::new_window_update(flags, stream_id, 0);
                     self.send_frame(cx, frame)?;
                     debug!(
-                        "[{:?}] local go away send Reset to remote stream_id={}",
-                        self.ty, stream_id
+                        "substream({}) local go away send Reset to remote, session.ty={:?}",
+                        stream_id, self.ty
                     );
                     // TODO: should report error?
                     return Ok(());
@@ -407,7 +408,10 @@ where
                 if self.streams.len() < self.config.max_stream_count
                     && self.pending_streams.len() < self.config.accept_backlog
                 {
-                    debug!("[{:?}] Accept a stream id={}", self.ty, stream_id);
+                    debug!(
+                        "substream({}) accepted, session.ty={:?}",
+                        stream_id, self.ty
+                    );
                     let stream = match self.create_stream(Some(stream_id)) {
                         Ok(stream) => stream,
                         Err(_) => {
@@ -418,6 +422,7 @@ where
                     self.pending_streams.push_back(stream);
                 } else {
                     // close the stream immediately
+                    debug!("substream({}) closed, session.ty={:?}", stream_id, self.ty);
                     let mut flags = Flags::from(Flag::Ack);
                     flags.add(Flag::Rst);
                     let frame = Frame::new_window_update(flags, stream_id, 0);
@@ -431,32 +436,35 @@ where
                             Ok(_) => false,
                             Err(err) => {
                                 if err.is_full() {
+                                    trace!("substream({}) try_send but full", stream_id);
                                     self.read_pending_frames.push_back(err.into_inner());
                                     block_substream.insert(stream_id);
                                     false
                                 } else {
-                                    debug!("send to stream error: {:?}", err);
+                                    debug!("substream({}) try_send but failed: {}", stream_id, err);
                                     true
                                 }
                             }
                         },
                         Poll::Pending => {
+                            trace!("substream({}) poll_ready but pending", stream_id);
                             self.read_pending_frames.push_back(frame);
                             block_substream.insert(stream_id);
                             false
                         }
                         Poll::Ready(Err(err)) => {
-                            debug!("send to stream error: {:?}", err);
+                            debug!("substream({}) poll_ready but failed: {}", stream_id, err);
                             true
                         }
                     }
                 } else {
                     // TODO: stream already closed ?
+                    warn!("substream({}) should exist but not", stream_id);
                     false
                 }
             };
             if disconnected {
-                debug!("[{:?}] remove a stream id={}", self.ty, stream_id);
+                debug!("substream({}) removed, session.ty={:?}", stream_id, self.ty);
                 self.streams.remove(&stream_id);
             }
         }
@@ -600,11 +608,15 @@ where
             return Poll::Ready(None);
         }
 
-        debug!(
-            "send buf: {}, read buf: {}",
-            self.write_pending_frames.len(),
-            self.read_pending_frames.len()
-        );
+        if log_enabled!(log::Level::Trace)
+            && !(self.write_pending_frames.is_empty() && self.read_pending_frames.is_empty())
+        {
+            trace!(
+                "yamux::Session write_pending_frames: {}, read_pending_frames: {}",
+                self.write_pending_frames.len(),
+                self.read_pending_frames.len()
+            );
+        }
 
         while let Some(ref mut interval) = self.keepalive {
             match Pin::new(interval).as_mut().poll_next(cx) {
@@ -612,7 +624,7 @@ where
                     self.keep_alive(cx, Instant::now())?;
                 }
                 Poll::Ready(None) => {
-                    debug!("poll keepalive interval finished");
+                    debug!("yamux::Session poll keepalive interval finished");
                     break;
                 }
                 Poll::Pending => break,
@@ -644,9 +656,11 @@ where
             debug!("yamux::Session finished because is_dead, end");
             return Poll::Ready(None);
         } else if let Some(stream) = self.pending_streams.pop_front() {
-            debug!("[{:?}] A stream is ready", self.ty);
+            debug!("yamux::Session [{:?}] A stream is ready", self.ty);
             return Poll::Ready(Some(Ok(stream)));
         }
+
+        trace!("yamux::Session pending");
 
         Poll::Pending
     }

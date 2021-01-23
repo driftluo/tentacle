@@ -486,7 +486,8 @@ where
         }
 
         debug!(
-            "write buf: {}, read buf: {}",
+            "Substream({}) write buf: {}, read buf: {}",
+            self.id,
             self.write_buf.len(),
             self.event_sender.len()
         );
@@ -867,7 +868,8 @@ where
         }
 
         debug!(
-            "write buf: {}, read buf: {}",
+            "Substream({}) write buf: {}, read buf: {}",
+            self.id,
             self.write_buf.len(),
             self.event_sender.len()
         );

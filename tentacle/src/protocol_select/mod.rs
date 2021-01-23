@@ -12,7 +12,7 @@ use molecule::prelude::{Builder, Entity, Reader};
 
 use bytes::Bytes;
 use futures::prelude::*;
-use log::debug;
+use log::{debug, trace};
 use std::cmp::Ordering;
 use std::{collections::HashMap, io};
 use tokio::prelude::{AsyncRead, AsyncWrite};
@@ -152,19 +152,24 @@ pub(crate) async fn client_select<T: AsyncWrite + AsyncRead + Send + Unpin>(
 ) -> Result<(Framed<T, LengthDelimitedCodec>, String, Option<String>), io::Error> {
     let mut socket = Framed::new(handle, LengthDelimitedCodec::new());
 
-    socket.send(proto_info.encode()).await?;
+    let data = proto_info.encode();
+    trace!("client_select send_proto(len={}): {:#x}", data.len(), data);
+    socket.send(data).await?;
 
     let (raw_remote_info, socket) = socket.into_future().await;
 
-    let mut remote_info = match raw_remote_info {
-        Some(info) => match ProtocolInfo::decode(&info?) {
-            Some(info) => info,
-            None => return Err(io::ErrorKind::InvalidData.into()),
-        },
+    let mut remote_info = match raw_remote_info.transpose()? {
+        Some(info) => {
+            trace!("client_select recv_proto(len={}): {:#x}", info.len(), info);
+            ProtocolInfo::decode(&info)
+                .ok_or_else(|| io::Error::from(io::ErrorKind::InvalidData))?
+        }
         None => {
-            let err = io::Error::new(io::ErrorKind::UnexpectedEof, "unexpected eof");
-            debug!("unexpected eof while waiting for remote's protocol proposition");
-            return Err(err);
+            debug!("client_select unexpected eof while waiting for remote's protocol proposition");
+            return Err(io::Error::new(
+                io::ErrorKind::UnexpectedEof,
+                "unexpected eof",
+            ));
         }
     };
 
@@ -187,15 +192,18 @@ pub(crate) async fn server_select<T: AsyncWrite + AsyncRead + Send + Unpin>(
     let socket = Framed::new(handle, LengthDelimitedCodec::new());
 
     let (raw_remote_info, mut socket) = socket.into_future().await;
-    let remote_info = match raw_remote_info {
-        Some(info) => match ProtocolInfo::decode(&info?) {
-            Some(info) => info,
-            None => return Err(io::ErrorKind::InvalidData.into()),
-        },
+    let remote_info = match raw_remote_info.transpose()? {
+        Some(info) => {
+            trace!("server_select recv_proto(len={}): {:#x}", info.len(), info);
+            ProtocolInfo::decode(&info)
+                .ok_or_else(|| io::Error::from(io::ErrorKind::InvalidData))?
+        }
         None => {
-            let err = io::Error::new(io::ErrorKind::UnexpectedEof, "unexpected eof");
-            debug!("unexpected eof while waiting for remote's protocol proposition");
-            return Err(err);
+            debug!("server_select unexpected eof while waiting for remote's protocol proposition");
+            return Err(io::Error::new(
+                io::ErrorKind::UnexpectedEof,
+                "unexpected eof",
+            ));
         }
     };
 
@@ -209,15 +217,13 @@ pub(crate) async fn server_select<T: AsyncWrite + AsyncRead + Send + Unpin>(
                 })
         });
 
-    socket
-        .send(
-            ProtocolInfo {
-                name: remote_info.name.clone(),
-                support_versions: version.clone().into_iter().collect(),
-            }
-            .encode(),
-        )
-        .await?;
+    let data = ProtocolInfo {
+        name: remote_info.name.clone(),
+        support_versions: version.clone().into_iter().collect(),
+    }
+    .encode();
+    trace!("server_select send_proto(len={}): {:#x}", data.len(), data);
+    socket.send(data).await?;
 
     Ok((socket, remote_info.name, version))
 }
