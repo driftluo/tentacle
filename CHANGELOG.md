@@ -1,3 +1,14 @@
+## 0.3.6
+
+### Bug Fix
+- Fix random open stream fail(#298)
+- yamux session flush must once a loop(#296)
+- Fix config doesnt use(#300 #302)
+
+### Features
+- Perf yamux and secio(#295)
+- Avoiding double loops(#294)
+
 ## 0.3.5
 
 ### Bug Fix

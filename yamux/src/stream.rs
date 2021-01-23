@@ -354,7 +354,7 @@ impl AsyncRead for StreamHandle {
 
         let n = ::std::cmp::min(buf.len(), self.read_buf.len());
         trace!(
-            "stream-hanlde({}) poll_read self.read_buf.len={}, buf.len={}, n={}",
+            "stream-handle({}) poll_read self.read_buf.len={}, buf.len={}, n={}",
             self.id,
             self.read_buf.len(),
             buf.len(),
