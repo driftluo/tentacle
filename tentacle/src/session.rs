@@ -1,5 +1,5 @@
 use futures::{channel::mpsc, prelude::*, stream::iter, SinkExt};
-use log::{debug, error, log_enabled, trace};
+use log::{debug, error, log_enabled, trace, warn};
 use std::collections::{HashMap, HashSet};
 use std::{
     io::{self, ErrorKind},
@@ -354,7 +354,21 @@ impl Session {
             .values_mut()
             .filter(|buffer| !buffer.is_empty())
         {
-            buffer.try_send(cx);
+            if let SendResult::Pending = buffer.try_send(cx) {
+                if self.context.pending_data_size() > self.config.send_buffer_size {
+                    self.state = SessionState::Abnormal;
+                    warn!(
+                        "session {:?} unable to send message, \
+                         user allow buffer size: {}, \
+                         current buffer size: {}, so kill it",
+                        self.context,
+                        self.config.send_buffer_size,
+                        self.context.pending_data_size()
+                    );
+                    buffer.clear();
+                }
+                break;
+            }
         }
     }
 
