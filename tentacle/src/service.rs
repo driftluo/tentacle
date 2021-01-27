@@ -3,7 +3,7 @@ use futures::{
     prelude::*,
     stream::{FusedStream, StreamExt},
 };
-use log::{debug, error, log_enabled, trace};
+use log::{debug, error, log_enabled, trace, warn};
 use std::{
     borrow::Cow,
     collections::{HashMap, HashSet},
@@ -378,19 +378,30 @@ where
             .values_mut()
             .filter(|control| !control.buffer.is_empty())
         {
-            control.try_send(cx);
-            if control.inner.pending_data_size() > self.config.session_config.send_buffer_size {
-                self.handle.handle_error(
-                    &mut self.service_context,
-                    ServiceError::SessionBlocked {
-                        session_context: control.inner.clone(),
-                    },
-                );
-                // clean message and try to close this session
-                control.buffer.clear();
-                let id = control.inner.id;
-                control.push(Priority::High, SessionEvent::SessionClose { id });
-                control.try_send(cx);
+            if let SendResult::Pending = control.try_send(cx) {
+                if control.inner.pending_data_size() > self.config.session_config.send_buffer_size {
+                    self.handle.handle_error(
+                        &mut self.service_context,
+                        ServiceError::SessionBlocked {
+                            session_context: control.inner.clone(),
+                        },
+                    );
+
+                    warn!(
+                        "session {:?} unable to send message, \
+                         user allow buffer size: {}, \
+                         current buffer size: {}, so kill it",
+                        control.inner,
+                        self.config.session_config.send_buffer_size,
+                        control.inner.pending_data_size()
+                    );
+
+                    // clean message and try to close this session
+                    control.buffer.clear();
+                    let id = control.inner.id;
+                    control.push(Priority::High, SessionEvent::SessionClose { id });
+                    control.try_send(cx);
+                }
             }
         }
     }

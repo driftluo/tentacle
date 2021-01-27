@@ -1,3 +1,8 @@
+## 0.3.7
+
+### Bug Fix
+- Blocking session detection(#306)
+
 ## 0.3.6
 
 ### Bug Fix
