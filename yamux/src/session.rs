@@ -16,7 +16,7 @@ use futures::{
     channel::mpsc::{channel, unbounded, Receiver, Sender, UnboundedReceiver, UnboundedSender},
     Sink, Stream,
 };
-use log::{debug, log_enabled, trace, warn};
+use log::{debug, log_enabled, trace};
 use tokio::prelude::{AsyncRead, AsyncWrite};
 use tokio_util::codec::Framed;
 
@@ -459,7 +459,10 @@ where
                     }
                 } else {
                     // TODO: stream already closed ?
-                    warn!("substream({}) should exist but not", stream_id);
+                    debug!(
+                        "substream({}) should exist but not, may drop by self",
+                        stream_id
+                    );
                     false
                 }
             };
