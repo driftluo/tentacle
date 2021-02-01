@@ -239,6 +239,8 @@ where
         let frame = Frame::new_go_away(code);
         self.send_frame(cx, frame)?;
         self.local_go_away = true;
+        // max wait time for remote go away
+        self.keepalive = Some(interval(self.config.connection_write_timeout));
         Ok(())
     }
 
@@ -624,7 +626,12 @@ where
         if let Some(ref mut interval) = self.keepalive {
             match Pin::new(interval).as_mut().poll_next(cx) {
                 Poll::Ready(Some(_)) => {
-                    self.keep_alive(cx, Instant::now())?;
+                    if self.local_go_away {
+                        // deadline for local go away wait time
+                        self.remote_go_away = true;
+                    } else {
+                        self.keep_alive(cx, Instant::now())?;
+                    }
                 }
                 Poll::Ready(None) => {
                     debug!("yamux::Session poll keepalive interval finished");
@@ -678,7 +685,14 @@ mod timer {
     #[cfg(feature = "generic-timer")]
     pub use generic_time::{interval, Interval};
     #[cfg(feature = "tokio-timer")]
-    pub use tokio::time::{interval, Interval};
+    pub use tokio::time::Interval;
+
+    #[cfg(feature = "tokio-timer")]
+    pub fn interval(period: ::std::time::Duration) -> Interval {
+        use tokio::time::{self, interval_at};
+
+        interval_at(time::Instant::now() + period, period)
+    }
 
     #[cfg(target_arch = "wasm32")]
     pub use wasm_mock::Instant;
@@ -842,6 +856,7 @@ mod test {
         io,
         pin::Pin,
         task::{Context, Poll},
+        time::Duration,
     };
     use tokio::{
         io::AsyncReadExt,
@@ -1095,6 +1110,32 @@ mod test {
             assert!(reset_msg.flags().contains(Flag::Ack));
             assert!(reset_msg.flags().contains(Flag::Rst));
             assert_eq!(reset_msg.stream_id(), 5)
+        });
+    }
+
+    #[test]
+    fn test_remote_does_not_respond_go_away() {
+        let mut rt = tokio::runtime::Runtime::new().unwrap();
+
+        rt.block_on(async {
+            let (_remote, local) = MockSocket::new();
+            let mut config = Config::default();
+            config.enable_keepalive = false;
+            config.connection_write_timeout = Duration::from_secs(1);
+
+            let mut session = Session::new_server(local, config);
+
+            let mut control = session.control();
+            tokio::spawn(async move {
+                let _ignore = control.close().await;
+            });
+
+            while let Some(Ok(mut stream)) = session.next().await {
+                tokio::spawn(async move {
+                    let mut buf = [0; 100];
+                    let _ignore = stream.read(&mut buf).await;
+                });
+            }
         });
     }
 }
