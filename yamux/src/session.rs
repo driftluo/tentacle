@@ -239,8 +239,11 @@ where
         let frame = Frame::new_go_away(code);
         self.send_frame(cx, frame)?;
         self.local_go_away = true;
+        let mut new_timer = interval(self.config.connection_write_timeout);
+        // force registration of new timer to driver
+        let _ignore = Pin::new(&mut new_timer).as_mut().poll_next(cx);
         // max wait time for remote go away
-        self.keepalive = Some(interval(self.config.connection_write_timeout));
+        self.keepalive = Some(new_timer);
         Ok(())
     }
 
