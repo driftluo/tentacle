@@ -44,6 +44,12 @@ struct State {
     num_messages: usize,
 }
 
+impl State {
+    fn is_closed(&self) -> bool {
+        !self.is_open && self.num_messages == 0
+    }
+}
+
 fn decode_state(num: usize) -> State {
     State {
         is_open: num & OPEN_MASK == OPEN_MASK,
