@@ -618,49 +618,54 @@ where
             );
         }
 
-        while let Some(ref mut interval) = self.keepalive {
+        if let Some(ref mut interval) = self.keepalive {
             match Pin::new(interval).as_mut().poll_next(cx) {
                 Poll::Ready(Some(_)) => {
                     self.keep_alive(cx, Instant::now())?;
                 }
                 Poll::Ready(None) => {
                     debug!("yamux::Session poll keepalive interval finished");
-                    break;
                 }
-                Poll::Pending => break,
+                Poll::Pending => (),
             }
         }
 
-        loop {
+        let mut need_wake = false;
+
+        for _ in 0..16 {
             if self.is_dead() {
-                break;
+                debug!("yamux::Session finished because is_dead, end");
+                return Poll::Ready(None);
             }
+
+            // Reset initial value
+            need_wake = false;
 
             self.flush(cx)?;
             self.poll_complete(cx)?;
 
             // Open stream as soon as possible
-            if !self.pending_streams.is_empty() {
-                break;
+            if let Some(stream) = self.pending_streams.pop_front() {
+                debug!("yamux::Session [{:?}] A stream is ready", self.ty);
+                return Poll::Ready(Some(Ok(stream)));
             }
 
             let mut is_pending = self.control_poll(cx)?.is_pending();
             is_pending &= self.recv_frames(cx)?.is_pending();
             is_pending &= self.recv_events(cx)?.is_pending();
+
             if is_pending {
                 break;
+            } else {
+                need_wake = true;
             }
         }
 
-        if self.is_dead() {
-            debug!("yamux::Session finished because is_dead, end");
-            return Poll::Ready(None);
-        } else if let Some(stream) = self.pending_streams.pop_front() {
-            debug!("yamux::Session [{:?}] A stream is ready", self.ty);
-            return Poll::Ready(Some(Ok(stream)));
+        if need_wake {
+            // To ensure we do not starve other tasks waiting on the executor,
+            // we yield here, but immediately wake ourselves up to continue.
+            cx.waker().wake_by_ref()
         }
-
-        trace!("yamux::Session pending");
 
         Poll::Pending
     }
