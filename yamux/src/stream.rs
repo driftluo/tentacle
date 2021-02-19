@@ -452,6 +452,8 @@ impl Drop for StreamHandle {
         if !self.unbound_event_sender.is_closed() && self.state != StreamState::Closed {
             let event = StreamEvent::Closed(self.id);
             if self.state == StreamState::LocalClosing {
+                // LocalClosing means that local have sent Fin to the remote and waiting for a response.
+                // So, here only need to send a cleanup message
                 let _ignore = self.unbound_event_sender.unbounded_send(event);
             } else {
                 let mut flags = self.get_flags();

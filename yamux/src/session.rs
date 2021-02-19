@@ -242,7 +242,8 @@ where
         let mut new_timer = interval(self.config.connection_write_timeout);
         // force registration of new timer to driver
         let _ignore = Pin::new(&mut new_timer).as_mut().poll_next(cx);
-        // max wait time for remote go away
+        // Reuse the keepalive timer to set a time out. If remote peer does not respond
+        // within the time out, consider this session as remote gone away.
         self.keepalive = Some(new_timer);
         Ok(())
     }
@@ -630,7 +631,8 @@ where
             match Pin::new(interval).as_mut().poll_next(cx) {
                 Poll::Ready(Some(_)) => {
                     if self.local_go_away {
-                        // deadline for local go away wait time
+                        // The remote peer has not responded to our sent go away code.
+                        // Assume that remote peer has gone away and this session should be closed.
                         self.remote_go_away = true;
                     } else {
                         self.keep_alive(cx, Instant::now())?;
@@ -1133,6 +1135,9 @@ mod test {
                 let _ignore = control.close().await;
             });
 
+            // The purpose of this test is to ensure that if the remote does not respond to the
+            // go away message, it must be able to actively disconnect the session instead of hanging.
+            // So, if the test fails to exit, it means there has a problem
             while let Some(Ok(mut stream)) = session.next().await {
                 tokio::spawn(async move {
                     let mut buf = [0; 100];
