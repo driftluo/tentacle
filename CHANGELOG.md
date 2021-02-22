@@ -1,3 +1,10 @@
+## 0.3.8
+
+### Bug Fix
+- Port futures-rs fix on channel(#308)
+- Don't use loop on yamux(#307)
+- Fix yamux close(#309)
+
 ## 0.3.7
 
 ### Bug Fix
