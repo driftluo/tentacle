@@ -449,18 +449,22 @@ impl AsyncWrite for StreamHandle {
 
 impl Drop for StreamHandle {
     fn drop(&mut self) {
-        if !self.unbound_event_sender.is_closed()
-            && self.state != StreamState::Closed
-            && self.state != StreamState::LocalClosing
-        {
-            let mut flags = self.get_flags();
-            flags.add(Flag::Rst);
-            let frame = Frame::new_window_update(flags, self.id, 0);
-            let rst_event = StreamEvent::Frame(frame);
+        if !self.unbound_event_sender.is_closed() && self.state != StreamState::Closed {
             let event = StreamEvent::Closed(self.id);
-            // Always successful unless the session is dropped
-            let _ignore = self.unbound_event_sender.unbounded_send(rst_event);
-            let _ignore = self.unbound_event_sender.unbounded_send(event);
+            if self.state == StreamState::LocalClosing {
+                // LocalClosing means that local have sent Fin to the remote and waiting for a response.
+                // So, here only need to send a cleanup message
+                let _ignore = self.unbound_event_sender.unbounded_send(event);
+            } else {
+                let mut flags = self.get_flags();
+                flags.add(Flag::Rst);
+                let frame = Frame::new_window_update(flags, self.id, 0);
+                let rst_event = StreamEvent::Frame(frame);
+
+                // Always successful unless the session is dropped
+                let _ignore = self.unbound_event_sender.unbounded_send(rst_event);
+                let _ignore = self.unbound_event_sender.unbounded_send(event);
+            }
         }
     }
 }
@@ -565,6 +569,41 @@ mod test {
                 stream.read(&mut b).await.unwrap_err().kind(),
                 ErrorKind::BrokenPipe
             );
+
+            drop(stream);
+            let event = unbound_receiver.next().await.unwrap();
+            match event {
+                StreamEvent::Closed(_) => (),
+                _ => panic!("must be state closed"),
+            }
+        });
+    }
+
+    #[test]
+    fn test_drop_with_state_local_close() {
+        let mut rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async {
+            let (_frame_sender, frame_receiver) = channel(2);
+            let (unbound_sender, mut unbound_receiver) = unbounded();
+            let mut stream = StreamHandle::new(
+                0,
+                unbound_sender,
+                frame_receiver,
+                StreamState::Init,
+                INITIAL_STREAM_WINDOW,
+                INITIAL_STREAM_WINDOW,
+            );
+
+            let _ignore = stream.shutdown().await;
+
+            let event = unbound_receiver.next().await.unwrap();
+            match event {
+                StreamEvent::Frame(frame) => {
+                    assert!(frame.flags().contains(Flag::Fin));
+                    assert_eq!(frame.ty(), Type::WindowUpdate);
+                }
+                _ => panic!("must be fin window update"),
+            }
 
             drop(stream);
             let event = unbound_receiver.next().await.unwrap();

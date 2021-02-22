@@ -16,7 +16,7 @@ use futures::{
     channel::mpsc::{channel, unbounded, Receiver, Sender, UnboundedReceiver, UnboundedSender},
     Sink, Stream,
 };
-use log::{debug, log_enabled, trace, warn};
+use log::{debug, log_enabled, trace};
 use tokio::prelude::{AsyncRead, AsyncWrite};
 use tokio_util::codec::Framed;
 
@@ -239,6 +239,12 @@ where
         let frame = Frame::new_go_away(code);
         self.send_frame(cx, frame)?;
         self.local_go_away = true;
+        let mut new_timer = interval(self.config.connection_write_timeout);
+        // force registration of new timer to driver
+        let _ignore = Pin::new(&mut new_timer).as_mut().poll_next(cx);
+        // Reuse the keepalive timer to set a time out. If remote peer does not respond
+        // within the time out, consider this session as remote gone away.
+        self.keepalive = Some(new_timer);
         Ok(())
     }
 
@@ -459,7 +465,10 @@ where
                     }
                 } else {
                     // TODO: stream already closed ?
-                    warn!("substream({}) should exist but not", stream_id);
+                    debug!(
+                        "substream({}) should exist but not, may drop by self",
+                        stream_id
+                    );
                     false
                 }
             };
@@ -621,7 +630,13 @@ where
         if let Some(ref mut interval) = self.keepalive {
             match Pin::new(interval).as_mut().poll_next(cx) {
                 Poll::Ready(Some(_)) => {
-                    self.keep_alive(cx, Instant::now())?;
+                    if self.local_go_away {
+                        // The remote peer has not responded to our sent go away code.
+                        // Assume that remote peer has gone away and this session should be closed.
+                        self.remote_go_away = true;
+                    } else {
+                        self.keep_alive(cx, Instant::now())?;
+                    }
                 }
                 Poll::Ready(None) => {
                     debug!("yamux::Session poll keepalive interval finished");
@@ -675,7 +690,14 @@ mod timer {
     #[cfg(feature = "generic-timer")]
     pub use generic_time::{interval, Interval};
     #[cfg(feature = "tokio-timer")]
-    pub use tokio::time::{interval, Interval};
+    pub use tokio::time::Interval;
+
+    #[cfg(feature = "tokio-timer")]
+    pub fn interval(period: ::std::time::Duration) -> Interval {
+        use tokio::time::{self, interval_at};
+
+        interval_at(time::Instant::now() + period, period)
+    }
 
     #[cfg(target_arch = "wasm32")]
     pub use wasm_mock::Instant;
@@ -839,6 +861,7 @@ mod test {
         io,
         pin::Pin,
         task::{Context, Poll},
+        time::Duration,
     };
     use tokio::{
         io::AsyncReadExt,
@@ -1092,6 +1115,35 @@ mod test {
             assert!(reset_msg.flags().contains(Flag::Ack));
             assert!(reset_msg.flags().contains(Flag::Rst));
             assert_eq!(reset_msg.stream_id(), 5)
+        });
+    }
+
+    #[test]
+    fn test_remote_does_not_respond_go_away() {
+        let mut rt = tokio::runtime::Runtime::new().unwrap();
+
+        rt.block_on(async {
+            let (_remote, local) = MockSocket::new();
+            let mut config = Config::default();
+            config.enable_keepalive = false;
+            config.connection_write_timeout = Duration::from_secs(1);
+
+            let mut session = Session::new_server(local, config);
+
+            let mut control = session.control();
+            tokio::spawn(async move {
+                let _ignore = control.close().await;
+            });
+
+            // The purpose of this test is to ensure that if the remote does not respond to the
+            // go away message, it must be able to actively disconnect the session instead of hanging.
+            // So, if the test fails to exit, it means there has a problem
+            while let Some(Ok(mut stream)) = session.next().await {
+                tokio::spawn(async move {
+                    let mut buf = [0; 100];
+                    let _ignore = stream.read(&mut buf).await;
+                });
+            }
         });
     }
 }
