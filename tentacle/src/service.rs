@@ -545,20 +545,20 @@ where
                 }
             }
             // Send data to the specified protocol for the specified sessions.
-            TargetSession::Multi(ids) => {
-                for id in ids {
+            TargetSession::Filter(filter) => self
+                .sessions
+                .iter_mut()
+                .filter(|(id, _)| filter(id))
+                .for_each(|(id, control)| {
                     debug!(
                         "send message to session [{}], proto [{}], data len: {}",
                         id,
                         proto_id,
                         data.len()
                     );
-                    if let Some(control) = self.sessions.get_mut(&id) {
-                        control.push_message(proto_id, priority, data.clone());
-                        control.try_send(cx);
-                    }
-                }
-            }
+                    control.push_message(proto_id, priority, data.clone());
+                    control.try_send(cx);
+                }),
             // Broadcast data for a specified protocol.
             TargetSession::All => {
                 debug!(
@@ -775,11 +775,11 @@ where
                         session.open_proto_stream(&meta.name());
                     }
                 }
-                TargetProtocol::Multi(proto_ids) => proto_ids.into_iter().for_each(|id| {
-                    if let Some(meta) = self.protocol_configs.get(&id) {
-                        session.open_proto_stream(&meta.name());
-                    }
-                }),
+                TargetProtocol::Filter(filter) => self
+                    .protocol_configs
+                    .iter()
+                    .filter(|(id, _)| filter(id))
+                    .for_each(|(_, meta)| session.open_proto_stream(&meta.name())),
             }
         }
 
@@ -1149,9 +1149,12 @@ where
                     }
                 }
                 TargetProtocol::Single(id) => self.protocol_open(cx, session_id, id),
-                TargetProtocol::Multi(ids) => ids
-                    .into_iter()
-                    .for_each(|id| self.protocol_open(cx, session_id, id)),
+                TargetProtocol::Filter(filter) => {
+                    let ids = self.protocol_configs.keys().copied().collect::<Vec<_>>();
+                    ids.into_iter()
+                        .filter(filter)
+                        .for_each(|id| self.protocol_open(cx, session_id, id))
+                }
             },
             ServiceTask::ProtocolClose {
                 session_id,

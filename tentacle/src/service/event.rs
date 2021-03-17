@@ -197,15 +197,9 @@ impl fmt::Debug for ServiceTask {
         use self::ServiceTask::*;
 
         match self {
-            ProtocolMessage {
-                target,
-                proto_id,
-                data,
-            } => write!(
-                f,
-                "id: {:?}, proto_id: {}, message: {:?}",
-                target, proto_id, data
-            ),
+            ProtocolMessage { proto_id, data, .. } => {
+                write!(f, "proto_id: {}, message: {:?}", proto_id, data)
+            }
             SetProtocolNotify {
                 proto_id, token, ..
             } => write!(f, "set protocol({}) notify({})", proto_id, token),
@@ -235,9 +229,7 @@ impl fmt::Debug for ServiceTask {
             Disconnect { session_id } => write!(f, "Disconnect session [{}]", session_id),
             Dial { address, .. } => write!(f, "Dial address: {}", address),
             Listen { address } => write!(f, "Listen address: {}", address),
-            ProtocolOpen { session_id, target } => {
-                write!(f, "Open session [{}] proto [{:?}]", session_id, target)
-            }
+            ProtocolOpen { session_id, .. } => write!(f, "Open session [{}] proto", session_id),
             ProtocolClose {
                 session_id,
                 proto_id,

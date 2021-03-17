@@ -73,14 +73,13 @@ impl Default for SessionConfig {
 }
 
 /// When dial, specify which protocol want to open
-#[derive(Debug, Clone, Eq, PartialEq, Ord, PartialOrd)]
 pub enum TargetProtocol {
     /// Try open all protocol
     All,
     /// Try open one protocol
     Single(ProtocolId),
-    /// Try open some protocol
-    Multi(Vec<ProtocolId>),
+    /// Try open some protocol, if return true, open it
+    Filter(Box<dyn Fn(&ProtocolId) -> bool + Send>),
 }
 
 impl From<ProtocolId> for TargetProtocol {
@@ -96,14 +95,13 @@ impl From<usize> for TargetProtocol {
 }
 
 /// When sending a message, select the specified session
-#[derive(Debug, Clone, Eq, PartialEq, Ord, PartialOrd)]
 pub enum TargetSession {
     /// Try broadcast
     All,
     /// Try send to only one
     Single(SessionId),
-    /// Try send to some session
-    Multi(Vec<SessionId>),
+    /// Try send to some session, if return true, send to it
+    Filter(Box<dyn Fn(&SessionId) -> bool + Send>),
 }
 
 impl From<SessionId> for TargetSession {
