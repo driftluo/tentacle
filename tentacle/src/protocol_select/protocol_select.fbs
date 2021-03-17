@@ -1,6 +1,0 @@
-namespace P2P.ProtocolSelect;
-
-table ProtocolInfo {
-    name: string;
-    support_versions: [string];
-}

@@ -14,7 +14,7 @@ use std::{
     },
     task::{Context, Poll},
 };
-use tokio::prelude::{AsyncRead, AsyncWrite};
+use tokio::io::{AsyncRead, AsyncWrite};
 
 #[cfg(not(target_arch = "wasm32"))]
 use crate::service::helper::Listener;
@@ -52,7 +52,7 @@ mod helper;
 pub use crate::service::{
     config::{BlockingFlag, ProtocolHandle, ProtocolMeta, TargetProtocol, TargetSession},
     control::{ServiceAsyncControl, ServiceControl},
-    event::{ProtocolEvent, ServiceError, ServiceEvent},
+    event::{ServiceError, ServiceEvent},
     helper::SessionType,
 };
 use bytes::Bytes;
@@ -491,9 +491,7 @@ where
     )> {
         let mut handles = Vec::new();
         for (proto_id, meta) in self.protocol_configs.iter_mut() {
-            if let ProtocolHandle::Callback(handle) | ProtocolHandle::Both(handle) =
-                meta.session_handle()
-            {
+            if let ProtocolHandle::Callback(handle) = meta.session_handle() {
                 if let Some(session_control) = self.sessions.get(&id) {
                     debug!("init session [{}] level proto [{}] handle", id, proto_id);
                     let (sender, receiver) = mpsc::channel(RECEIVED_SIZE);
@@ -755,8 +753,7 @@ where
                 })
                 .collect(),
         )
-        .session_proto_handles(handles)
-        .event(self.config.event.clone());
+        .session_proto_handles(handles);
 
         let mut session = Session::new(
             handle,
@@ -824,118 +821,22 @@ where
 
     /// Open the handle corresponding to the protocol
     #[inline]
-    fn protocol_open(
-        &mut self,
-        cx: &mut Context,
-        id: SessionId,
-        proto_id: ProtocolId,
-        version: String,
-        source: Source,
-    ) {
-        if source == Source::External {
-            if let Some(control) = self.sessions.get_mut(&id) {
-                control.push(
-                    Priority::High,
-                    SessionEvent::ProtocolOpen {
-                        id,
-                        proto_id,
-                        version,
-                    },
-                );
-                debug!("try open session [{}] proto [{}]", id, proto_id);
-                control.try_send(cx);
-            }
-            return;
-        }
-
-        debug!("service session [{}] proto [{}] open", id, proto_id);
-
-        if self.config.event.contains(&proto_id) {
-            if let Some(session_control) = self.sessions.get(&id) {
-                // event output
-                self.handle.handle_proto(
-                    &mut self.service_context,
-                    ProtocolEvent::Connected {
-                        session_context: Arc::clone(&session_control.inner),
-                        proto_id,
-                        version,
-                    },
-                );
-            }
-        }
-    }
-
-    /// Processing the received data
-    #[inline]
-    fn protocol_message(
-        &mut self,
-        session_id: SessionId,
-        proto_id: ProtocolId,
-        data: bytes::Bytes,
-    ) {
-        debug!(
-            "service receive session [{}] proto [{}] data len: {}",
-            session_id,
-            proto_id,
-            data.len()
-        );
-
-        if self.config.event.contains(&proto_id) {
-            if let Some(session_control) = self.sessions.get(&session_id) {
-                // event output
-                self.handle.handle_proto(
-                    &mut self.service_context,
-                    ProtocolEvent::Received {
-                        session_context: Arc::clone(&session_control.inner),
-                        proto_id,
-                        data,
-                    },
-                );
-            }
+    fn protocol_open(&mut self, cx: &mut Context, id: SessionId, proto_id: ProtocolId) {
+        if let Some(control) = self.sessions.get_mut(&id) {
+            control.push(Priority::High, SessionEvent::ProtocolOpen { proto_id });
+            debug!("try open session [{}] proto [{}]", id, proto_id);
+            control.try_send(cx);
         }
     }
 
     /// Protocol stream is closed, clean up data
     #[inline]
-    fn protocol_close(
-        &mut self,
-        cx: &mut Context,
-        session_id: SessionId,
-        proto_id: ProtocolId,
-        source: Source,
-    ) {
-        if source == Source::External {
-            if let Some(control) = self.sessions.get_mut(&session_id) {
-                control.push(
-                    Priority::High,
-                    SessionEvent::ProtocolClose {
-                        id: session_id,
-                        proto_id,
-                    },
-                );
-                debug!("try close session [{}] proto [{}]", session_id, proto_id);
-                control.try_send(cx);
-            }
-            return;
+    fn protocol_close(&mut self, cx: &mut Context, session_id: SessionId, proto_id: ProtocolId) {
+        if let Some(control) = self.sessions.get_mut(&session_id) {
+            control.push(Priority::High, SessionEvent::ProtocolClose { proto_id });
+            debug!("try close session [{}] proto [{}]", session_id, proto_id);
+            control.try_send(cx);
         }
-
-        debug!(
-            "service session [{}] proto [{}] close",
-            session_id, proto_id
-        );
-
-        if self.config.event.contains(&proto_id) {
-            if let Some(session_control) = self.sessions.get(&session_id) {
-                self.handle.handle_proto(
-                    &mut self.service_context,
-                    ProtocolEvent::Disconnected {
-                        proto_id,
-                        session_context: Arc::clone(&session_control.inner),
-                    },
-                )
-            }
-        }
-        self.session_proto_handles.remove(&(session_id, proto_id));
     }
 
     fn send_pending_task(&mut self, cx: &mut Context) {
@@ -950,9 +851,7 @@ where
 
     fn init_proto_handles(&mut self) {
         for (proto_id, meta) in self.protocol_configs.iter_mut() {
-            if let ProtocolHandle::Callback(handle) | ProtocolHandle::Both(handle) =
-                meta.service_handle()
-            {
+            if let ProtocolHandle::Callback(handle) = meta.service_handle() {
                 debug!("init service level [{}] proto handle", proto_id);
                 let (sender, receiver) = mpsc::channel(RECEIVED_SIZE);
                 self.service_proto_handles
@@ -1044,18 +943,9 @@ where
                     )
                 }
             }
-            SessionEvent::ProtocolMessage {
-                id, proto_id, data, ..
-            } => self.protocol_message(id, proto_id, data),
-            SessionEvent::ProtocolOpen {
-                id,
-                proto_id,
-                version,
-                ..
-            } => self.protocol_open(cx, id, proto_id, version, Source::Internal),
-            SessionEvent::ProtocolClose { id, proto_id } => {
-                self.protocol_close(cx, id, proto_id, Source::Internal)
-            }
+            SessionEvent::ProtocolMessage { .. }
+            | SessionEvent::ProtocolOpen { .. }
+            | SessionEvent::ProtocolClose { .. } => unreachable!(),
             SessionEvent::ProtocolSelectError { id, proto_name } => {
                 if let Some(session_control) = self.sessions.get(&id) {
                     self.handle.handle_error(
@@ -1254,28 +1144,19 @@ where
                     #[allow(clippy::needless_collect)]
                     {
                         let ids = self.protocol_configs.keys().copied().collect::<Vec<_>>();
-                        ids.into_iter().for_each(|id| {
-                            self.protocol_open(
-                                cx,
-                                session_id,
-                                id,
-                                String::default(),
-                                Source::External,
-                            )
-                        });
+                        ids.into_iter()
+                            .for_each(|id| self.protocol_open(cx, session_id, id));
                     }
                 }
-                TargetProtocol::Single(id) => {
-                    self.protocol_open(cx, session_id, id, String::default(), Source::External)
-                }
-                TargetProtocol::Multi(ids) => ids.into_iter().for_each(|id| {
-                    self.protocol_open(cx, session_id, id, String::default(), Source::External)
-                }),
+                TargetProtocol::Single(id) => self.protocol_open(cx, session_id, id),
+                TargetProtocol::Multi(ids) => ids
+                    .into_iter()
+                    .for_each(|id| self.protocol_open(cx, session_id, id)),
             },
             ServiceTask::ProtocolClose {
                 session_id,
                 proto_id,
-            } => self.protocol_close(cx, session_id, proto_id, Source::External),
+            } => self.protocol_close(cx, session_id, proto_id),
             ServiceTask::Shutdown(quick) => {
                 self.state.pre_shutdown();
 

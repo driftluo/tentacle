@@ -152,7 +152,7 @@ mod test {
         let mut send_task = sender.clone();
 
         let handle = thread::spawn(|| {
-            let mut rt = tokio::runtime::Runtime::new().unwrap();
+            let rt = tokio::runtime::Runtime::new().unwrap();
             rt.spawn(async move {
                 for _ in 1..100 {
                     let _res = send_task
@@ -193,7 +193,7 @@ mod test {
         let mut send_task = sender.clone();
 
         let handle = thread::spawn(|| {
-            let mut rt = tokio::runtime::Runtime::new().unwrap();
+            let rt = tokio::runtime::Runtime::new().unwrap();
             rt.spawn(async move {
                 for i in 1..100u64 {
                     let finished_tasks_inner_clone = Arc::clone(&finished_tasks_inner);

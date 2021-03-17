@@ -2,7 +2,7 @@
 
 use std::io;
 
-use bytes::{Buf, BufMut, Bytes, BytesMut};
+use bytes::{Buf, BufMut, BytesMut};
 use log::trace;
 use tokio_util::codec::{Decoder, Encoder};
 
@@ -14,12 +14,12 @@ use crate::{
 #[derive(Debug, Eq, PartialEq)]
 pub struct Frame {
     header: Header,
-    body: Option<Bytes>,
+    body: Option<BytesMut>,
 }
 
 impl Frame {
     /// Create a data frame
-    pub fn new_data(flags: Flags, stream_id: StreamId, body: Bytes) -> Frame {
+    pub fn new_data(flags: Flags, stream_id: StreamId, body: BytesMut) -> Frame {
         Frame {
             header: Header {
                 version: PROTOCOL_VERSION,
@@ -95,7 +95,7 @@ impl Frame {
     }
 
     /// Consume current frame split into header and body
-    pub fn into_parts(self) -> (Header, Option<Bytes>) {
+    pub fn into_parts(self) -> (Header, Option<BytesMut>) {
         (self.header, self.body)
     }
 
@@ -320,7 +320,7 @@ impl Decoder for FrameCodec {
                 self.unused_data_header = Some(header);
                 return Ok(None);
             } else {
-                Some(src.split_to(header.length as usize).freeze())
+                Some(src.split_to(header.length as usize))
             }
         } else {
             // Not data frame
@@ -353,12 +353,17 @@ impl Encoder<Frame> for FrameCodec {
 #[cfg(test)]
 mod test {
     use super::{Flags, Frame, FrameCodec, Type, HEADER_SIZE, INITIAL_STREAM_WINDOW};
-    use bytes::{Bytes, BytesMut};
+    use bytes::BytesMut;
     use tokio_util::codec::{Decoder, Encoder};
 
     #[test]
     fn test_decode_encode() {
-        let rand_data = Bytes::from((0..512).map(|_| rand::random::<u8>()).collect::<Vec<_>>());
+        let rand_data = BytesMut::from(
+            (0..512)
+                .map(|_| rand::random::<u8>())
+                .collect::<Vec<_>>()
+                .as_slice(),
+        );
         let frame = Frame::new_data(Flags(1), 1, rand_data.clone());
         let mut data = BytesMut::default();
 

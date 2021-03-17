@@ -53,7 +53,7 @@ impl WasmCrypt {
         nonce_advance(self.iv.as_mut());
         self.cipher
             .encrypt(Nonce::from_slice(self.iv.as_ref()), input)
-            .map_err(|_| SecioError::RingCryptoError)
+            .map_err(|_| SecioError::CryptoError)
     }
 
     /// Decrypt `input` to `output` with `tag`. `output.len()` should equals to `input.len() - tag.len()`.
@@ -66,7 +66,7 @@ impl WasmCrypt {
         nonce_advance(self.iv.as_mut());
         self.cipher
             .decrypt(Nonce::from_slice(self.iv.as_ref()), input)
-            .map_err(|_| SecioError::RingCryptoError)
+            .map_err(|_| SecioError::CryptoError)
     }
 }
 

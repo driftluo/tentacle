@@ -101,7 +101,7 @@ fn create_meta(id: ProtocolId, session_protocol: bool) -> (ProtocolMeta, Arc<Ato
         (
             meta.session_handle(move || {
                 if id == 0.into() {
-                    ProtocolHandle::Neither
+                    ProtocolHandle::None
                 } else {
                     let handle = Box::new(PHandle {
                         count: count_clone.clone(),
@@ -116,7 +116,7 @@ fn create_meta(id: ProtocolId, session_protocol: bool) -> (ProtocolMeta, Arc<Ato
         (
             meta.service_handle(move || {
                 if id == 0.into() {
-                    ProtocolHandle::Neither
+                    ProtocolHandle::None
                 } else {
                     let handle = Box::new(PHandle { count: count_clone });
                     ProtocolHandle::Callback(handle)
@@ -133,7 +133,7 @@ fn test_block_send(secio: bool, session_protocol: bool) {
     let (addr_sender, addr_receiver) = channel::oneshot::channel::<Multiaddr>();
 
     thread::spawn(move || {
-        let mut rt = tokio::runtime::Runtime::new().unwrap();
+        let rt = tokio::runtime::Runtime::new().unwrap();
         let mut service = create(secio, meta, ());
         rt.block_on(async move {
             let listen_addr = service
@@ -152,7 +152,7 @@ fn test_block_send(secio: bool, session_protocol: bool) {
     let (meta, result) = create_meta(1.into(), session_protocol);
 
     let handle_2 = thread::spawn(move || {
-        let mut rt = tokio::runtime::Runtime::new().unwrap();
+        let rt = tokio::runtime::Runtime::new().unwrap();
         let mut service = create(secio, meta, ());
         rt.block_on(async move {
             let listen_addr = addr_receiver.await.unwrap();

@@ -1,11 +1,4 @@
-#[cfg(feature = "flatc")]
-use crate::handshake::handshake_generated::p2p::handshake::{
-    Exchange as FBSExchange, ExchangeBuilder, Propose as FBSPropose, ProposeBuilder,
-    PublicKey as FBSPublicKey, PublicKeyBuilder, Type,
-};
-#[cfg(feature = "molc")]
 use crate::handshake::handshake_mol;
-#[cfg(feature = "molc")]
 use molecule::prelude::{Builder, Entity, Reader};
 
 use crate::peer_id::PeerId;
@@ -28,54 +21,7 @@ impl Propose {
         Default::default()
     }
 
-    /// Encode with flatbuffer
-    #[cfg(feature = "flatc")]
-    pub fn encode(&self) -> Bytes {
-        let mut fbb = flatbuffers::FlatBufferBuilder::new();
-        let rand = fbb.create_vector(&self.rand);
-        let pub_key = fbb.create_vector(&self.pubkey);
-        let exchange = fbb.create_string(&self.exchange);
-        let ciphers = fbb.create_string(&self.ciphers);
-        let hashes = fbb.create_string(&self.hashes);
-
-        let mut builder = ProposeBuilder::new(&mut fbb);
-        builder.add_rand(rand);
-        builder.add_pubkey(pub_key);
-        builder.add_exchanges(exchange);
-        builder.add_ciphers(ciphers);
-        builder.add_hashes(hashes);
-        let data = builder.finish();
-
-        fbb.finish(data, None);
-        Bytes::from(fbb.finished_data().to_owned())
-    }
-
-    /// Decode with Flatbuffer
-    #[cfg(feature = "flatc")]
-    pub fn decode(data: &[u8]) -> Option<Self> {
-        let fbs_propose = flatbuffers_verifier::get_root::<FBSPropose>(data).ok()?;
-        match (
-            fbs_propose.rand(),
-            fbs_propose.pubkey(),
-            fbs_propose.exchanges(),
-            fbs_propose.ciphers(),
-            fbs_propose.hashes(),
-        ) {
-            (Some(rand), Some(pubkey), Some(exchange), Some(ciphers), Some(hashes)) => {
-                Some(Propose {
-                    rand: rand.to_owned(),
-                    pubkey: Bytes::from(pubkey.to_owned()),
-                    exchange: exchange.to_owned(),
-                    ciphers: ciphers.to_owned(),
-                    hashes: hashes.to_owned(),
-                })
-            }
-            _ => None,
-        }
-    }
-
     /// Encode with molecule
-    #[cfg(feature = "molc")]
     pub fn encode(self) -> Bytes {
         let rand = handshake_mol::Bytes::new_builder()
             .set(self.rand.into_iter().map(Into::into).collect())
@@ -122,7 +68,6 @@ impl Propose {
     }
 
     /// Decode with molecule
-    #[cfg(feature = "molc")]
     pub fn decode(data: &[u8]) -> Option<Self> {
         let reader = handshake_mol::ProposeReader::from_compatible_slice(data).ok()?;
         Some(Propose {
@@ -146,37 +91,7 @@ impl Exchange {
         Default::default()
     }
 
-    /// Encode with flatbuffer
-    #[cfg(feature = "flatc")]
-    pub fn encode(&self) -> Bytes {
-        let mut fbb = flatbuffers::FlatBufferBuilder::new();
-        let epubkey = fbb.create_vector(&self.epubkey);
-        let signature = fbb.create_vector(&self.signature);
-
-        let mut builder = ExchangeBuilder::new(&mut fbb);
-        builder.add_epubkey(epubkey);
-        builder.add_signature(signature);
-        let data = builder.finish();
-
-        fbb.finish(data, None);
-        Bytes::from(fbb.finished_data().to_owned())
-    }
-
-    /// Decode with Flatbuffer
-    #[cfg(feature = "flatc")]
-    pub fn decode(data: &[u8]) -> Option<Self> {
-        let fbs_exchange = flatbuffers_verifier::get_root::<FBSExchange>(data).ok()?;
-        match (fbs_exchange.epubkey(), fbs_exchange.signature()) {
-            (Some(epubkey), Some(signature)) => Some(Exchange {
-                epubkey: epubkey.to_owned(),
-                signature: signature.to_owned(),
-            }),
-            _ => None,
-        }
-    }
-
     /// Encode with molecule
-    #[cfg(feature = "molc")]
     pub fn encode(self) -> Bytes {
         let epubkey = handshake_mol::Bytes::new_builder()
             .set(self.epubkey.into_iter().map(Into::into).collect())
@@ -193,7 +108,6 @@ impl Exchange {
     }
 
     /// Decode with molecule
-    #[cfg(feature = "molc")]
     pub fn decode(data: &[u8]) -> Option<Self> {
         let reader = handshake_mol::ExchangeReader::from_compatible_slice(data).ok()?;
         Some(Exchange {
@@ -212,7 +126,7 @@ pub enum PublicKey {
 
 impl PublicKey {
     /// Get inner data
-    pub fn inner_ref(&self) -> &Vec<u8> {
+    pub fn inner_ref(&self) -> &[u8] {
         match self {
             PublicKey::Secp256k1(ref key) => key,
         }
@@ -235,36 +149,7 @@ impl PublicKey {
             .map_err(|_| crate::error::SecioError::SecretGenerationFailed)
     }
 
-    /// Encode with flatbuffer
-    #[cfg(feature = "flatc")]
-    pub fn encode(&self) -> Bytes {
-        let mut fbb = flatbuffers::FlatBufferBuilder::new();
-        let pubkey = fbb.create_vector(self.inner_ref());
-
-        let mut builder = PublicKeyBuilder::new(&mut fbb);
-        builder.add_key_type(Type::Secp256k1);
-        builder.add_pubkey(pubkey);
-
-        let data = builder.finish();
-
-        fbb.finish(data, None);
-        Bytes::from(fbb.finished_data().to_owned())
-    }
-
-    /// Decode with Flatbuffer
-    #[cfg(feature = "flatc")]
-    pub fn decode(data: &[u8]) -> Option<Self> {
-        let pubkey = flatbuffers_verifier::get_root::<FBSPublicKey>(data).ok()?;
-        match pubkey.pubkey() {
-            Some(pub_key) => match pubkey.key_type() {
-                Type::Secp256k1 => Some(PublicKey::Secp256k1(pub_key.to_owned())),
-            },
-            None => None,
-        }
-    }
-
     /// Encode with molecule
-    #[cfg(feature = "molc")]
     pub fn encode(self) -> Bytes {
         let secp256k1 = handshake_mol::Secp256k1::new_builder()
             .set(self.inner().into_iter().map(Into::into).collect())
@@ -276,7 +161,6 @@ impl PublicKey {
     }
 
     /// Decode with molecule
-    #[cfg(feature = "molc")]
     pub fn decode(data: &[u8]) -> Option<Self> {
         let reader = handshake_mol::PublicKeyReader::from_compatible_slice(data).ok()?;
         let union = reader.to_enum();

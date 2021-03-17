@@ -150,7 +150,7 @@ fn test_session_proto_open_close(secio: bool) {
     let (addr_sender, addr_receiver) = channel::<Multiaddr>();
 
     thread::spawn(move || {
-        let mut rt = tokio::runtime::Runtime::new().unwrap();
+        let rt = tokio::runtime::Runtime::new().unwrap();
         rt.block_on(async move {
             let listen_addr = service_2
                 .listen("/ip4/127.0.0.1/tcp/0".parse().unwrap())
@@ -170,7 +170,7 @@ fn test_session_proto_open_close(secio: bool) {
     let listen_addr = addr_receiver.recv().unwrap();
 
     let handle = thread::spawn(move || {
-        let mut rt = tokio::runtime::Runtime::new().unwrap();
+        let rt = tokio::runtime::Runtime::new().unwrap();
         rt.block_on(async move {
             service_1
                 .dial(listen_addr, TargetProtocol::Single(0.into()))

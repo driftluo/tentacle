@@ -11,11 +11,11 @@ cargo-fuzz = true
 
 [dependencies]
 libfuzzer-sys = "0.3"
-tentacle-secio = { path = "../secio", features = ["molc"] }
+tentacle-secio = { path = "../secio" }
 tokio-yamux = { path = "../yamux" }
 rand = "0.7"
-bytes = "0.5.0"
-tokio-util = { version = "0.3.0", features = ["codec"] }
+bytes = "1.0.0"
+tokio-util = { version = "0.6.0", features = ["codec"] }
 
 # Prevent this from interfering with workspaces
 [workspace]

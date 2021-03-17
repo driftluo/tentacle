@@ -147,7 +147,7 @@ mod test {
     fn dns_parser() {
         let future: DNSResolver =
             DNSResolver::new("/dns4/localhost/tcp/80".parse().unwrap()).unwrap();
-        let mut rt = tokio::runtime::Runtime::new().unwrap();
+        let rt = tokio::runtime::Runtime::new().unwrap();
         let addr = rt.block_on(future).unwrap();
         match addr.iter().next().unwrap() {
             Protocol::IP4(_) => {

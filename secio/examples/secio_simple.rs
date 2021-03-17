@@ -23,10 +23,10 @@ fn server() {
     let key = SecioKeyPair::secp256k1_generated();
     let config = Config::new(key);
 
-    let mut rt = tokio::runtime::Runtime::new().unwrap();
+    let rt = tokio::runtime::Runtime::new().unwrap();
 
     rt.block_on(async move {
-        let mut listener = TcpListener::bind("127.0.0.1:1337").await.unwrap();
+        let listener = TcpListener::bind("127.0.0.1:1337").await.unwrap();
 
         while let Ok((socket, _)) = listener.accept().await {
             let config = config.clone();
@@ -47,7 +47,7 @@ fn client() {
 
     let data = b"hello world";
 
-    let mut rt = tokio::runtime::Runtime::new().unwrap();
+    let rt = tokio::runtime::Runtime::new().unwrap();
 
     rt.block_on(async move {
         let stream = TcpStream::connect("127.0.0.1:1337").await.unwrap();

@@ -8,7 +8,7 @@ use tokio_util::codec::{Decoder, Encoder};
 
 use crate::{
     context::{ProtocolContext, ProtocolContextMutRef, ServiceContext, SessionContext},
-    service::{ProtocolEvent, ServiceControl, ServiceError, ServiceEvent},
+    service::{ServiceControl, ServiceError, ServiceEvent},
     substream::SubstreamReadPart,
 };
 
@@ -31,16 +31,6 @@ pub trait ServiceHandle {
     fn handle_error(&mut self, _control: &mut ServiceContext, _error: ServiceError) {}
     /// Handling session establishment and disconnection events
     fn handle_event(&mut self, _control: &mut ServiceContext, _event: ServiceEvent) {}
-    /// Handling all protocol events
-    ///
-    /// ---
-    ///
-    /// **Note** that this is a compatibility mode interface.
-    ///
-    /// If the handle of the protocol has event, then its events will be placed here.
-    /// If there is no event handle in the protocol, this interface will not be called.
-    #[deprecated(since = "0.3.5", note = "use `ProtocolSpawn` instead")]
-    fn handle_proto(&mut self, _control: &mut ServiceContext, _event: ProtocolEvent) {}
 }
 
 /// Service level protocol handle
@@ -170,10 +160,6 @@ impl ServiceHandle for Box<dyn ServiceHandle + Send + 'static> {
     fn handle_event(&mut self, control: &mut ServiceContext, event: ServiceEvent) {
         (&mut **self).handle_event(control, event)
     }
-
-    fn handle_proto(&mut self, control: &mut ServiceContext, event: ProtocolEvent) {
-        (&mut **self).handle_proto(control, event)
-    }
 }
 
 impl ServiceHandle for Box<dyn ServiceHandle + Send + Sync + 'static> {
@@ -183,10 +169,6 @@ impl ServiceHandle for Box<dyn ServiceHandle + Send + Sync + 'static> {
 
     fn handle_event(&mut self, control: &mut ServiceContext, event: ServiceEvent) {
         (&mut **self).handle_event(control, event)
-    }
-
-    fn handle_proto(&mut self, control: &mut ServiceContext, event: ProtocolEvent) {
-        (&mut **self).handle_proto(control, event)
     }
 }
 

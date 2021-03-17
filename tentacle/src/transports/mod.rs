@@ -64,7 +64,6 @@ mod os {
 
     use futures::{prelude::Stream, FutureExt};
     use log::debug;
-    use socket2::{Domain, Protocol as SocketProtocol, Socket, Type};
     use std::{
         fmt,
         future::Future,
@@ -74,7 +73,7 @@ mod os {
         task::{Context, Poll},
         time::Duration,
     };
-    use tokio::prelude::{AsyncRead, AsyncWrite};
+    use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 
     use self::tcp::{TcpDialFuture, TcpListenFuture, TcpTransport};
     #[cfg(feature = "ws")]
@@ -229,20 +228,13 @@ mod os {
         fn poll_read(
             self: Pin<&mut Self>,
             cx: &mut Context,
-            buf: &mut [u8],
-        ) -> Poll<io::Result<usize>> {
+            buf: &mut ReadBuf,
+        ) -> Poll<io::Result<()>> {
             match self.get_mut() {
                 MultiStream::Tcp(inner) => Pin::new(inner).poll_read(cx, buf),
                 #[cfg(feature = "ws")]
                 MultiStream::Ws(inner) => Pin::new(inner).poll_read(cx, buf),
             }
-        }
-
-        unsafe fn prepare_uninitialized_buffer(
-            &self,
-            _buf: &mut [std::mem::MaybeUninit<u8>],
-        ) -> bool {
-            false
         }
     }
 
@@ -321,21 +313,7 @@ mod os {
     #[inline(always)]
     pub async fn tcp_listen(addr: SocketAddr, reuse: bool) -> Result<(SocketAddr, TcpListener)> {
         let tcp = if reuse {
-            let domain = match addr {
-                SocketAddr::V4(_) => Domain::ipv4(),
-                SocketAddr::V6(_) => Domain::ipv6(),
-            };
-            let socket = Socket::new(domain, Type::stream(), Some(SocketProtocol::tcp()))?;
-
-            // reuse addr and reuse port's situation on each platform
-            // https://stackoverflow.com/questions/14388706/how-do-so-reuseaddr-and-so-reuseport-differ
-            #[cfg(unix)]
-            socket.set_reuse_port(true)?;
-
-            socket.set_reuse_address(true)?;
-            socket.bind(&addr.into())?;
-            socket.listen(1024)?;
-            crate::runtime::from_std(socket.into_tcp_listener()).unwrap()
+            crate::runtime::reuse_listen(addr).unwrap()
         } else {
             TcpListener::bind(&addr)
                 .await
@@ -352,20 +330,7 @@ mod os {
         bind_addr: Option<SocketAddr>,
         timeout: Duration,
     ) -> Result<TcpStream> {
-        let domain = match addr {
-            SocketAddr::V4(_) => Domain::ipv4(),
-            SocketAddr::V6(_) => Domain::ipv6(),
-        };
-        let socket = Socket::new(domain, Type::stream(), Some(SocketProtocol::tcp()))?;
-
-        if let Some(addr) = bind_addr {
-            #[cfg(unix)]
-            socket.set_reuse_port(true)?;
-            socket.set_reuse_address(true)?;
-            socket.bind(&addr.into())?;
-        }
-
-        match crate::runtime::timeout(timeout, crate::runtime::connect_std(socket, &addr)).await {
+        match crate::runtime::timeout(timeout, crate::runtime::connect(addr, bind_addr)).await {
             Err(_) => Err(TransportErrorKind::Io(io::ErrorKind::TimedOut.into())),
             Ok(res) => Ok(res?),
         }

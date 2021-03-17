@@ -26,7 +26,7 @@ console_error_panic_hook = { version = "0.1.6", optional = true }
 # Unfortunately, `wee_alloc` requires nightly Rust when targeting wasm for now.
 wee_alloc = { version = "0.4.5", optional = true }
 
-tentacle = { path = "../tentacle", default-features= false, features = ["molc", "wasm-timer"]}
+tentacle = { path = "../tentacle", default-features= false, features = ["wasm-timer"]}
 wasm-bindgen-futures = "0.4"
 futures = "0.3"
 log = "0.4"

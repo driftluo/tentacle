@@ -31,7 +31,7 @@ use std::{
     task::{Context, Poll},
     time::Duration,
 };
-use tokio::io::{AsyncRead, AsyncWrite};
+use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 
 use crate::{
     error::TransportErrorKind,
@@ -176,17 +176,17 @@ impl BrowserStream {
     }
 
     #[inline]
-    fn drain(&mut self, buf: &mut [u8]) -> usize {
+    fn drain(&mut self, buf: &mut ReadBuf) -> usize {
         // Return zero if there is no data remaining in the internal buffer.
         if self.recv_buf.is_empty() {
             return 0;
         }
 
         // calculate number of bytes that we can copy
-        let n = ::std::cmp::min(buf.len(), self.recv_buf.len());
+        let n = ::std::cmp::min(buf.remaining(), self.recv_buf.len());
 
         // Copy data to the output buffer
-        buf[..n].copy_from_slice(self.recv_buf.drain(..n).as_slice());
+        buf.put_slice(self.recv_buf.drain(..n).as_slice());
 
         n
     }
@@ -196,12 +196,12 @@ impl AsyncRead for BrowserStream {
     fn poll_read(
         mut self: Pin<&mut Self>,
         cx: &mut Context<'_>,
-        buf: &mut [u8],
-    ) -> Poll<io::Result<usize>> {
+        buf: &mut ReadBuf<'_>,
+    ) -> Poll<io::Result<()>> {
         // when there is something in recv_buffer
         let copied = self.drain(buf);
         if copied > 0 {
-            return Poll::Ready(Ok(copied));
+            return Poll::Ready(Ok(()));
         }
         loop {
             if let Some(mut promise) = self.pending_read.take() {
@@ -216,17 +216,31 @@ impl AsyncRead for BrowserStream {
                         // data type is arraybuffer
                         let data = js_sys::Uint8Array::new(&data);
                         let n = data.length() as usize;
-                        if buf.len() >= n {
-                            data.copy_to(&mut buf[..n]);
-                            return Poll::Ready(Ok(n));
+                        if buf.remaining() >= n {
+                            // see https://github.com/tokio-rs/tokio/issues/3417
+                            let slice = unsafe {
+                                let buf = buf.unfilled_mut();
+                                ::std::slice::from_raw_parts_mut(
+                                    buf.as_mut_ptr().cast::<u8>(),
+                                    buf.len(),
+                                )
+                            };
+                            data.copy_to(&mut slice[..n]);
+                            unsafe {
+                                buf.assume_init(n);
+                            }
+                            buf.advance(n);
+                            return Poll::Ready(Ok(()));
                         } else {
                             // fill internal recv buffer
-                            let mut tmp = vec![0; n];
-                            data.copy_to(&mut tmp);
-                            self.recv_buf = tmp;
+                            self.recv_buf.reserve(n);
+                            unsafe {
+                                self.recv_buf.set_len(n);
+                            }
+                            data.copy_to(&mut self.recv_buf);
                             // drain for input buffer
-                            let copied = self.drain(buf);
-                            return Poll::Ready(Ok(copied));
+                            self.drain(buf);
+                            return Poll::Ready(Ok(()));
                         }
                     }
                     Poll::Ready(Err(err)) => return Poll::Ready(Err(convert_to_io_err(err))),
@@ -240,10 +254,6 @@ impl AsyncRead for BrowserStream {
                 continue;
             }
         }
-    }
-
-    unsafe fn prepare_uninitialized_buffer(&self, _buf: &mut [std::mem::MaybeUninit<u8>]) -> bool {
-        false
     }
 }
 

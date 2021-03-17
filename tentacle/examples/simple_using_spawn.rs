@@ -98,7 +98,7 @@ impl ServiceHandle for SHandle {
             let delay_sender = context.control().clone();
 
             let _ = context.future_task(async move {
-                tokio::time::delay_until(tokio::time::Instant::now() + Duration::from_secs(3))
+                tokio::time::sleep_until(tokio::time::Instant::now() + Duration::from_secs(3))
                     .await;
                 let _ = delay_sender.filter_broadcast(
                     TargetSession::All,
@@ -145,7 +145,7 @@ fn create_client() -> Service<SHandle> {
 }
 
 fn server() {
-    let mut rt = tokio::runtime::Runtime::new().unwrap();
+    let rt = tokio::runtime::Runtime::new().unwrap();
 
     rt.block_on(async {
         let mut service = create_server();
@@ -166,7 +166,7 @@ fn server() {
 }
 
 fn client() {
-    let mut rt = tokio::runtime::Runtime::new().unwrap();
+    let rt = tokio::runtime::Runtime::new().unwrap();
 
     rt.block_on(async {
         let mut service = create_client();

@@ -1,10 +1,10 @@
 use super::{bound::Sender, unbound::UnboundedSender, SendError, TrySendError};
-use futures::{
-    ready,
+use futures::{ready, Sink};
+use std::{
+    future::Future,
+    pin::Pin,
     task::{Context, Poll},
-    Sink,
 };
-use std::{future::Future, pin::Pin};
 
 impl<T> Sink<T> for Sender<T> {
     type Error = SendError;

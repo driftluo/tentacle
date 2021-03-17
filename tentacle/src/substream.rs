@@ -7,7 +7,7 @@ use std::{
     sync::{atomic::Ordering, Arc},
     task::{Context, Poll},
 };
-use tokio::prelude::{AsyncRead, AsyncWrite};
+use tokio::io::AsyncWrite;
 use tokio_util::codec::{length_delimited::LengthDelimitedCodec, Framed, FramedRead, FramedWrite};
 
 use crate::{
@@ -73,7 +73,6 @@ pub(crate) struct Substream<U> {
     proto_id: ProtocolId,
 
     context: Arc<SessionContext>,
-    event: bool,
 
     config: SessionConfig,
     /// The buffer will be prioritized for send to underlying network
@@ -357,13 +356,12 @@ where
             return Poll::Ready(None);
         }
 
-        if self.event_sender.len() > self.config.recv_event_size()
-            || self
-                .service_proto_sender
-                .as_ref()
-                .map(Buffer::len)
-                .unwrap_or_default()
-                > self.config.recv_event_size()
+        if self
+            .service_proto_sender
+            .as_ref()
+            .map(Buffer::len)
+            .unwrap_or_default()
+            > self.config.recv_event_size()
             || self
                 .session_proto_sender
                 .as_ref()
@@ -387,29 +385,19 @@ where
                     None => data.freeze(),
                 };
 
-                if let Some(ref mut buffer) = self.service_proto_sender {
-                    buffer.push(ServiceProtocolEvent::Received {
-                        id: self.context.id,
-                        data: data.clone(),
-                    })
-                }
-
                 if let Some(ref mut buffer) = self.session_proto_sender {
                     buffer.push(SessionProtocolEvent::Received { data: data.clone() })
                 }
 
+                if let Some(ref mut buffer) = self.service_proto_sender {
+                    buffer.push(ServiceProtocolEvent::Received {
+                        id: self.context.id,
+                        data,
+                    })
+                }
+
                 self.distribute_to_user_level(cx);
 
-                if self.event {
-                    self.output_event(
-                        cx,
-                        ProtocolEvent::Message {
-                            id: self.id,
-                            proto_id: self.proto_id,
-                            data,
-                        },
-                    )
-                }
                 Poll::Ready(Some(()))
             }
             Poll::Ready(None) => {
@@ -509,7 +497,6 @@ pub(crate) struct SubstreamBuilder {
     proto_id: ProtocolId,
     keep_buffer: bool,
     config: SessionConfig,
-    event: bool,
 
     context: Arc<SessionContext>,
 
@@ -540,7 +527,6 @@ impl SubstreamBuilder {
             proto_id: 0.into(),
             keep_buffer: false,
             config: SessionConfig::default(),
-            event: false,
         }
     }
 
@@ -561,11 +547,6 @@ impl SubstreamBuilder {
 
     pub fn keep_buffer(mut self, keep: bool) -> Self {
         self.keep_buffer = keep;
-        self
-    }
-
-    pub fn event(mut self, event: bool) -> Self {
-        self.event = event;
         self
     }
 
@@ -594,7 +575,6 @@ impl SubstreamBuilder {
             proto_id: self.proto_id,
             config: self.config,
             context: self.context,
-            event: self.event,
 
             high_write_buf: VecDeque::new(),
 
@@ -886,7 +866,8 @@ where
 
 /// Protocol Stream read part
 pub struct SubstreamReadPart {
-    pub(crate) substream: FramedRead<PatchedReadPart, Box<dyn Codec + Send + 'static>>,
+    pub(crate) substream:
+        FramedRead<crate::runtime::ReadHalf<StreamHandle>, Box<dyn Codec + Send + 'static>>,
     pub(crate) before_receive: Option<BeforeReceive>,
     pub(crate) proto_id: ProtocolId,
     pub(crate) stream_id: StreamId,
@@ -1008,38 +989,5 @@ impl SubstreamWritePartBuilder {
             event_sender: Buffer::new(self.event_sender),
             event_receiver: self.event_receiver,
         }
-    }
-}
-
-/// Remove after https://github.com/tokio-rs/tokio/pull/3166 merge
-pub(crate) struct PatchedReadPart {
-    buffer: bytes::BytesMut,
-    io: crate::runtime::ReadHalf<StreamHandle>,
-}
-
-impl PatchedReadPart {
-    pub fn new(io: crate::runtime::ReadHalf<StreamHandle>, buffer: bytes::BytesMut) -> Self {
-        Self { io, buffer }
-    }
-}
-
-impl AsyncRead for PatchedReadPart {
-    fn poll_read(
-        mut self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
-        buf: &mut [u8],
-    ) -> Poll<io::Result<usize>> {
-        if self.buffer.is_empty() {
-            Pin::new(&mut self.io).poll_read(cx, buf)
-        } else {
-            let n = ::std::cmp::min(buf.len(), self.buffer.len());
-            let b = self.buffer.split_to(n);
-            buf[..n].copy_from_slice(&b);
-            Poll::Ready(Ok(n))
-        }
-    }
-
-    unsafe fn prepare_uninitialized_buffer(&self, buf: &mut [std::mem::MaybeUninit<u8>]) -> bool {
-        self.io.prepare_uninitialized_buffer(buf)
     }
 }

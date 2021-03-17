@@ -28,7 +28,7 @@ mod os {
         pin::Pin,
         task::{Context, Poll},
     };
-    use tokio::prelude::{AsyncRead, AsyncWrite};
+    use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 
     #[derive(Debug)]
     pub struct TcpListener {
@@ -104,16 +104,9 @@ mod os {
         fn poll_read(
             mut self: Pin<&mut Self>,
             cx: &mut Context<'_>,
-            buf: &mut [u8],
-        ) -> Poll<Result<usize, io::Error>> {
+            buf: &mut ReadBuf<'_>,
+        ) -> Poll<Result<(), io::Error>> {
             AsyncRead::poll_read(Pin::new(&mut self.0), cx, buf)
-        }
-
-        unsafe fn prepare_uninitialized_buffer(
-            &self,
-            _buf: &mut [std::mem::MaybeUninit<u8>],
-        ) -> bool {
-            false
         }
     }
 
@@ -141,21 +134,48 @@ mod os {
     #[cfg(feature = "async-timer")]
     pub use time::*;
 
-    use socket2::Socket;
-    use std::{
-        io,
-        net::{SocketAddr, TcpListener as StdListen},
-    };
+    use socket2::{Domain, Protocol as SocketProtocol, Socket, Type};
+    use std::{io, net::SocketAddr};
 
-    pub(crate) fn from_std(listen: StdListen) -> io::Result<TcpListener> {
+    pub(crate) fn reuse_listen(addr: SocketAddr) -> io::Result<TcpListener> {
+        let domain = match addr {
+            SocketAddr::V4(_) => Domain::ipv4(),
+            SocketAddr::V6(_) => Domain::ipv6(),
+        };
+        let socket = Socket::new(domain, Type::stream(), Some(SocketProtocol::tcp()))?;
+
+        #[cfg(all(unix, not(target_os = "solaris"), not(target_os = "illumos")))]
+        socket.set_reuse_port(true)?;
+
+        socket.set_reuse_address(true)?;
+        socket.bind(&addr.into())?;
+        socket.listen(1024)?;
+
+        let listen = socket.into_tcp_listener();
         let addr = listen.local_addr()?;
         Ok(TcpListener::new(AsyncListener::from(listen), addr))
     }
 
-    pub(crate) async fn connect_std(std_tcp: Socket, addr: &SocketAddr) -> io::Result<TcpStream> {
+    pub(crate) async fn connect(
+        addr: SocketAddr,
+        bind_addr: Option<SocketAddr>,
+    ) -> io::Result<TcpStream> {
+        let domain = match addr {
+            SocketAddr::V4(_) => Domain::ipv4(),
+            SocketAddr::V6(_) => Domain::ipv6(),
+        };
+        let socket = Socket::new(domain, Type::stream(), Some(SocketProtocol::tcp()))?;
+
+        if let Some(addr) = bind_addr {
+            #[cfg(all(unix, not(target_os = "solaris"), not(target_os = "illumos")))]
+            socket.set_reuse_port(true)?;
+            socket.set_reuse_address(true)?;
+            socket.bind(&addr.into())?;
+        }
+
         // Begin async connect and ignore the inevitable "in progress" error.
-        std_tcp.set_nonblocking(true)?;
-        std_tcp.connect(&(*addr).into()).or_else(|err| {
+        socket.set_nonblocking(true)?;
+        socket.connect(&addr.into()).or_else(|err| {
             // Check for EINPROGRESS on Unix and WSAEWOULDBLOCK on Windows.
             #[cfg(unix)]
             let in_progress = err.raw_os_error() == Some(libc::EINPROGRESS);
@@ -169,7 +189,7 @@ mod os {
                 Err(err)
             }
         })?;
-        let stream = Async::new(std_tcp.into_tcp_stream())?;
+        let stream = Async::new(socket.into_tcp_stream())?;
 
         // The stream becomes writable when connected.
         stream.writable().await?;

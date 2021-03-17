@@ -144,7 +144,7 @@ impl ServiceHandle for SHandle {
             let delay_sender = context.control().clone();
 
             let _ = context.future_task(async move {
-                tokio::time::delay_until(tokio::time::Instant::now() + Duration::from_secs(3))
+                tokio::time::sleep_until(tokio::time::Instant::now() + Duration::from_secs(3))
                     .await;
                 let _ = delay_sender.filter_broadcast(
                     TargetSession::All,
@@ -198,7 +198,7 @@ fn create_client() -> Service<SHandle> {
 fn server() {
     // Although Tentacle currently abstracts runtime dependencies and supports multiple runtimes,
     // as the author, I personally recommend tokio as the asynchronous runtime
-    let mut rt = tokio::runtime::Runtime::new().unwrap();
+    let rt = tokio::runtime::Runtime::new().unwrap();
 
     rt.block_on(async {
         let mut service = create_server();
@@ -219,7 +219,7 @@ fn server() {
 }
 
 fn client() {
-    let mut rt = tokio::runtime::Runtime::new().unwrap();
+    let rt = tokio::runtime::Runtime::new().unwrap();
 
     rt.block_on(async {
         let mut service = create_client();

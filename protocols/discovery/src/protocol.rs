@@ -1,8 +1,3 @@
-#[cfg(all(feature = "flatc", feature = "molc"))]
-compile_error!("features `flatc` and `molc` are mutually exclusive");
-#[cfg(all(not(feature = "flatc"), not(feature = "molc")))]
-compile_error!("Please choose a serialization format via feature. Possible choices: flatc, molc");
-
 use std::convert::TryFrom;
 
 use bytes::{Bytes, BytesMut};
@@ -11,15 +6,7 @@ use p2p::multiaddr::Multiaddr;
 use tokio_util::codec::length_delimited::LengthDelimitedCodec;
 use tokio_util::codec::{Decoder, Encoder};
 
-#[cfg(feature = "flatc")]
-use crate::protocol_generated::p2p::discovery::{
-    BytesBuilder, DiscoveryMessage as FbsDiscoveryMessage, DiscoveryMessageBuilder,
-    DiscoveryPayload as FbsDiscoveryPayload, GetNodes as FbsGetNodes, GetNodesBuilder, NodeBuilder,
-    Nodes as FbsNodes, NodesBuilder,
-};
-#[cfg(feature = "molc")]
 use crate::protocol_mol;
-#[cfg(feature = "molc")]
 use molecule::prelude::{Builder, Entity, Reader};
 
 pub(crate) fn encode(data: DiscoveryMessage) -> Bytes {
@@ -58,101 +45,6 @@ pub enum DiscoveryMessage {
 }
 
 impl DiscoveryMessage {
-    #[cfg(feature = "flatc")]
-    pub fn encode(&self) -> Bytes {
-        let mut fbb = flatbuffers::FlatBufferBuilder::new();
-        let offset = match self {
-            DiscoveryMessage::GetNodes {
-                version,
-                count,
-                listen_port,
-            } => {
-                let mut get_nodes_builder = GetNodesBuilder::new(&mut fbb);
-                get_nodes_builder.add_version(*version);
-                get_nodes_builder.add_count(*count);
-                get_nodes_builder.add_listen_port(listen_port.unwrap_or(0));
-
-                let get_nodes = get_nodes_builder.finish();
-
-                let mut builder = DiscoveryMessageBuilder::new(&mut fbb);
-                builder.add_payload_type(FbsDiscoveryPayload::GetNodes);
-                builder.add_payload(get_nodes.as_union_value());
-                builder.finish()
-            }
-            DiscoveryMessage::Nodes(Nodes { announce, items }) => {
-                let mut vec_items = Vec::new();
-                for item in items {
-                    let mut vec_addrs = Vec::new();
-                    for address in &item.addresses {
-                        let seq = fbb.create_vector(address.as_ref());
-                        let mut bytes_builder = BytesBuilder::new(&mut fbb);
-                        bytes_builder.add_seq(seq);
-                        vec_addrs.push(bytes_builder.finish());
-                    }
-                    let fbs_addrs = fbb.create_vector(&vec_addrs);
-                    let mut node_builder = NodeBuilder::new(&mut fbb);
-                    node_builder.add_addresses(fbs_addrs);
-                    vec_items.push(node_builder.finish());
-                }
-                let fbs_items = fbb.create_vector(&vec_items);
-                let mut nodes_builder = NodesBuilder::new(&mut fbb);
-                nodes_builder.add_announce(*announce);
-                nodes_builder.add_items(fbs_items);
-                let nodes = nodes_builder.finish();
-
-                let mut builder = DiscoveryMessageBuilder::new(&mut fbb);
-                builder.add_payload_type(FbsDiscoveryPayload::Nodes);
-                builder.add_payload(nodes.as_union_value());
-                builder.finish()
-            }
-        };
-        fbb.finish(offset, None);
-        Bytes::from(fbb.finished_data().to_owned())
-    }
-
-    #[cfg(feature = "flatc")]
-    pub fn decode(data: &[u8]) -> Option<Self> {
-        let fbs_message = flatbuffers_verifier::get_root::<FbsDiscoveryMessage>(data).ok()?;
-        let payload = fbs_message.payload()?;
-        match fbs_message.payload_type() {
-            FbsDiscoveryPayload::GetNodes => {
-                let fbs_get_nodes = FbsGetNodes::init_from_table(payload);
-                let listen_port = if fbs_get_nodes.listen_port() == 0 {
-                    None
-                } else {
-                    Some(fbs_get_nodes.listen_port())
-                };
-                Some(DiscoveryMessage::GetNodes {
-                    version: fbs_get_nodes.version(),
-                    count: fbs_get_nodes.count(),
-                    listen_port,
-                })
-            }
-            FbsDiscoveryPayload::Nodes => {
-                let fbs_nodes = FbsNodes::init_from_table(payload);
-                let fbs_items = fbs_nodes.items()?;
-                let mut items = Vec::new();
-                for i in 0..fbs_items.len() {
-                    let fbs_node = fbs_items.get(i);
-                    let fbs_addresses = fbs_node.addresses()?;
-                    let mut addresses = Vec::new();
-                    for j in 0..fbs_addresses.len() {
-                        let address = fbs_addresses.get(j);
-                        let multiaddr = Multiaddr::try_from(address.seq()?.to_vec()).ok()?;
-                        addresses.push(multiaddr);
-                    }
-                    items.push(Node { addresses });
-                }
-                Some(DiscoveryMessage::Nodes(Nodes {
-                    announce: fbs_nodes.announce(),
-                    items,
-                }))
-            }
-            _ => None,
-        }
-    }
-
-    #[cfg(feature = "molc")]
     pub fn encode(self) -> Bytes {
         let playload = match self {
             DiscoveryMessage::GetNodes {
@@ -230,7 +122,6 @@ impl DiscoveryMessage {
             .as_bytes()
     }
 
-    #[cfg(feature = "molc")]
     #[allow(clippy::cast_ptr_alignment)]
     pub fn decode(data: &[u8]) -> Option<Self> {
         let reader = protocol_mol::DiscoveryMessageReader::from_compatible_slice(data).ok()?;

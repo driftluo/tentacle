@@ -5,23 +5,8 @@ use crate::{
 };
 
 use crate::codec::secure_stream::SecureStream;
-use tokio::prelude::{AsyncRead, AsyncWrite};
+use tokio::io::{AsyncRead, AsyncWrite};
 
-#[cfg(all(feature = "flatc", feature = "molc"))]
-compile_error!("features `flatc` and `molc` are mutually exclusive");
-#[cfg(all(not(feature = "flatc"), not(feature = "molc")))]
-compile_error!("Please choose a serialization format via feature. Possible choices: flatc, molc");
-
-#[cfg(feature = "flatc")]
-#[rustfmt::skip]
-#[allow(clippy::all)]
-mod handshake_generated;
-#[cfg(feature = "flatc")]
-#[rustfmt::skip]
-#[allow(clippy::all)]
-#[allow(dead_code)]
-mod handshake_generated_verifier;
-#[cfg(feature = "molc")]
 #[rustfmt::skip]
 #[allow(clippy::all)]
 #[allow(dead_code)]

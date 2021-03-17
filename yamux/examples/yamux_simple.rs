@@ -18,10 +18,10 @@ fn main() {
 }
 
 fn run_server() {
-    let mut rt = tokio::runtime::Runtime::new().unwrap();
+    let rt = tokio::runtime::Runtime::new().unwrap();
 
     rt.block_on(async move {
-        let mut listener = TcpListener::bind("127.0.0.1:12345").await.unwrap();
+        let listener = TcpListener::bind("127.0.0.1:12345").await.unwrap();
 
         while let Ok((socket, _)) = listener.accept().await {
             info!("accepted a socket: {:?}", socket.peer_addr());
@@ -48,7 +48,7 @@ fn run_server() {
 }
 
 fn run_client() {
-    let mut rt = tokio::runtime::Runtime::new().unwrap();
+    let rt = tokio::runtime::Runtime::new().unwrap();
 
     rt.block_on(async move {
         let socket = TcpStream::connect("127.0.0.1:12345").await.unwrap();

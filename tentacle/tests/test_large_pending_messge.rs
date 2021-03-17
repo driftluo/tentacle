@@ -53,7 +53,7 @@ fn create_meta(id: ProtocolId) -> ProtocolMeta {
         .id(id)
         .service_handle(move || {
             if id == 0.into() {
-                ProtocolHandle::Neither
+                ProtocolHandle::None
             } else {
                 let handle = Box::new(PHandle);
                 ProtocolHandle::Callback(handle)
@@ -79,7 +79,7 @@ fn test_large_message(secio: bool) {
     let (addr_sender, addr_receiver) = channel::oneshot::channel::<Multiaddr>();
 
     thread::spawn(move || {
-        let mut rt = tokio::runtime::Runtime::new().unwrap();
+        let rt = tokio::runtime::Runtime::new().unwrap();
         let mut service = create(secio, meta_1, SHandle);
         rt.block_on(async move {
             let listen_addr = service
@@ -96,7 +96,7 @@ fn test_large_message(secio: bool) {
     });
 
     let meta = create_meta(1.into());
-    let mut rt = tokio::runtime::Runtime::new().unwrap();
+    let rt = tokio::runtime::Runtime::new().unwrap();
     let mut service = create(secio, meta, SHandle);
     rt.block_on(async move {
         let listen_addr = addr_receiver.await.unwrap();

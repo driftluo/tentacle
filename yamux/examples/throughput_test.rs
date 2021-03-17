@@ -4,7 +4,7 @@ use log::{info, warn};
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::{TcpListener, TcpStream},
-    time::delay_for,
+    time::sleep,
 };
 use tokio_yamux::stream::StreamHandle;
 use tokio_yamux::{config::Config, session::Session};
@@ -51,7 +51,7 @@ fn respc() -> usize {
 async fn show_metric() {
     let secs = 10;
     loop {
-        delay_for(Duration::from_millis(1000 * secs)).await;
+        sleep(Duration::from_millis(1000 * secs)).await;
         let reqc = reqc();
         let respc = respc();
         info!(
@@ -68,12 +68,12 @@ async fn show_metric() {
 }
 
 fn run_server() {
-    let mut rt = tokio::runtime::Runtime::new().unwrap();
+    let rt = tokio::runtime::Runtime::new().unwrap();
 
     rt.spawn(show_metric());
 
     rt.block_on(async move {
-        let mut listener = TcpListener::bind("127.0.0.1:12345").await.unwrap();
+        let listener = TcpListener::bind("127.0.0.1:12345").await.unwrap();
 
         while let Ok((socket, _)) = listener.accept().await {
             info!("accepted a socket: {:?}", socket.peer_addr());
@@ -108,7 +108,7 @@ fn run_client() {
         .and_then(|s| s.parse::<usize>().ok())
         .unwrap_or(2);
 
-    let mut rt = tokio::runtime::Runtime::new().unwrap();
+    let rt = tokio::runtime::Runtime::new().unwrap();
 
     rt.block_on(async move {
         let socket = TcpStream::connect("127.0.0.1:12345").await.unwrap();

@@ -46,7 +46,7 @@ fn create_meta(id: impl Into<ProtocolId> + Copy + Send + 'static) -> ProtocolMet
         .id(id.into())
         .service_handle(move || {
             if id.into() == 0.into() {
-                ProtocolHandle::Neither
+                ProtocolHandle::None
             } else {
                 let handle = Box::new(PHandle { connected_count: 0 });
                 ProtocolHandle::Callback(handle)
@@ -59,7 +59,7 @@ fn test_disconnect(secio: bool) {
     let (addr_sender, addr_receiver) = channel::oneshot::channel::<Multiaddr>();
 
     thread::spawn(move || {
-        let mut rt = tokio::runtime::Runtime::new().unwrap();
+        let rt = tokio::runtime::Runtime::new().unwrap();
         let mut service = create(secio, create_meta(1), ());
         rt.block_on(async move {
             let listen_addr = service
@@ -78,7 +78,7 @@ fn test_disconnect(secio: bool) {
     let mut service = create(secio, create_meta(1), ());
     let control = service.control().clone();
     let handle = thread::spawn(move || {
-        let mut rt = tokio::runtime::Runtime::new().unwrap();
+        let rt = tokio::runtime::Runtime::new().unwrap();
         rt.block_on(async move {
             let listen_addr = addr_receiver.await.unwrap();
             service

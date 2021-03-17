@@ -17,7 +17,7 @@ use futures::{
     Sink, Stream,
 };
 use log::{debug, log_enabled, trace};
-use tokio::prelude::{AsyncRead, AsyncWrite};
+use tokio::io::{AsyncRead, AsyncWrite};
 use tokio_util::codec::Framed;
 
 use crate::{
@@ -690,13 +690,44 @@ mod timer {
     #[cfg(feature = "generic-timer")]
     pub use generic_time::{interval, Interval};
     #[cfg(feature = "tokio-timer")]
-    pub use tokio::time::Interval;
+    pub use inter::{interval, Interval};
 
     #[cfg(feature = "tokio-timer")]
-    pub fn interval(period: ::std::time::Duration) -> Interval {
-        use tokio::time::{self, interval_at};
+    mod inter {
+        use futures::Stream;
+        use std::{
+            pin::Pin,
+            task::{Context, Poll},
+            time::Duration,
+        };
+        use tokio::time::{interval_at, Instant, Interval as Inner};
 
-        interval_at(time::Instant::now() + period, period)
+        pub struct Interval(Inner);
+
+        impl Interval {
+            fn new(period: Duration) -> Self {
+                Self(interval_at(Instant::now() + period, period))
+            }
+        }
+
+        impl Stream for Interval {
+            type Item = ();
+
+            fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<()>> {
+                match self.0.poll_tick(cx) {
+                    Poll::Ready(_) => Poll::Ready(Some(())),
+                    Poll::Pending => Poll::Pending,
+                }
+            }
+
+            fn size_hint(&self) -> (usize, Option<usize>) {
+                (std::usize::MAX, None)
+            }
+        }
+
+        pub fn interval(period: Duration) -> Interval {
+            Interval::new(period)
+        }
     }
 
     #[cfg(target_arch = "wasm32")]
@@ -863,10 +894,7 @@ mod test {
         task::{Context, Poll},
         time::Duration,
     };
-    use tokio::{
-        io::AsyncReadExt,
-        prelude::{AsyncRead, AsyncWrite},
-    };
+    use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, ReadBuf};
     use tokio_util::codec::Framed;
 
     struct MockSocket {
@@ -899,8 +927,8 @@ mod test {
         fn poll_read(
             mut self: Pin<&mut Self>,
             cx: &mut Context,
-            buf: &mut [u8],
-        ) -> Poll<io::Result<usize>> {
+            buf: &mut ReadBuf<'_>,
+        ) -> Poll<io::Result<()>> {
             loop {
                 if self.receiver.is_terminated() {
                     break;
@@ -914,22 +942,15 @@ mod test {
                 }
             }
 
-            let n = ::std::cmp::min(buf.len(), self.read_buffer.len());
+            let n = ::std::cmp::min(buf.remaining(), self.read_buffer.len());
 
             if n == 0 {
                 Poll::Pending
             } else {
-                buf[..n].copy_from_slice(&self.read_buffer[..n]);
+                buf.put_slice(&self.read_buffer[..n]);
                 self.read_buffer.drain(..n);
-                Poll::Ready(Ok(n))
+                Poll::Ready(Ok(()))
             }
-        }
-
-        unsafe fn prepare_uninitialized_buffer(
-            &self,
-            _buf: &mut [std::mem::MaybeUninit<u8>],
-        ) -> bool {
-            false
         }
     }
 
@@ -968,12 +989,14 @@ mod test {
 
     #[test]
     fn test_open_exist_stream() {
-        let mut rt = tokio::runtime::Runtime::new().unwrap();
+        let rt = tokio::runtime::Runtime::new().unwrap();
 
         rt.block_on(async {
             let (remote, local) = MockSocket::new();
-            let mut config = Config::default();
-            config.enable_keepalive = false;
+            let config = Config {
+                enable_keepalive: false,
+                ..Default::default()
+            };
 
             let mut session = Session::new_server(local, config);
 
@@ -1024,7 +1047,7 @@ mod test {
     // the test will remain stuck and cannot be finished.
     #[test]
     fn test_close_session_on_stream_opened() {
-        let mut rt = tokio::runtime::Runtime::new().unwrap();
+        let rt = tokio::runtime::Runtime::new().unwrap();
 
         rt.block_on(async {
             let (remote, local) = MockSocket::new();
@@ -1070,7 +1093,7 @@ mod test {
 
     #[test]
     fn test_open_too_many_stream() {
-        let mut rt = tokio::runtime::Runtime::new().unwrap();
+        let rt = tokio::runtime::Runtime::new().unwrap();
 
         rt.block_on(async {
             let (remote, local) = MockSocket::new();
@@ -1120,7 +1143,7 @@ mod test {
 
     #[test]
     fn test_remote_does_not_respond_go_away() {
-        let mut rt = tokio::runtime::Runtime::new().unwrap();
+        let rt = tokio::runtime::Runtime::new().unwrap();
 
         rt.block_on(async {
             let (_remote, local) = MockSocket::new();

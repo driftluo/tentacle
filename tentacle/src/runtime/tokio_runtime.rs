@@ -4,31 +4,83 @@ pub use tokio::{
     task::{block_in_place, spawn_blocking, JoinHandle},
 };
 
-use socket2::Socket;
-use std::{
-    io,
-    net::{SocketAddr, TcpListener as StdListen},
-};
+use std::{io, net::SocketAddr};
 
 #[cfg(feature = "tokio-timer")]
-pub use tokio::time::{delay_for, interval, timeout, Delay, Interval, Timeout};
+pub use time::{interval, Interval};
+use tokio::net::TcpSocket;
+#[cfg(feature = "tokio-timer")]
+pub use tokio::time::{sleep as delay_for, timeout, Sleep as Delay, Timeout};
 
-pub(crate) fn from_std(listen: StdListen) -> io::Result<TcpListener> {
-    TcpListener::from_std(listen)
-}
+#[cfg(feature = "tokio-timer")]
+mod time {
+    use futures::Stream;
+    use std::{
+        pin::Pin,
+        task::{Context, Poll},
+        time::Duration,
+    };
+    use tokio::time::{interval as inner_interval, Interval as Inner};
 
-pub(crate) async fn connect_std(stream: Socket, addr: &SocketAddr) -> io::Result<TcpStream> {
-    // on windows, if not set reuse address, but use socket2 and tokio `connect_std` function
-    // will cause a error "Os {code: 10022, kind: InvalidInput, message: "An invalid parameter was provided." }"
-    // but if set, nothing happened, this is confusing behavior
-    // issue: https://github.com/tokio-rs/tokio/issues/3030
-    #[cfg(windows)]
-    if stream.reuse_address()? {
-        TcpStream::connect_std(stream.into_tcp_stream(), addr).await
-    } else {
-        TcpStream::connect(addr).await
+    pub struct Interval(Inner);
+
+    impl Interval {
+        pub fn new(period: Duration) -> Self {
+            Self(inner_interval(period))
+        }
     }
 
-    #[cfg(unix)]
-    TcpStream::connect_std(stream.into_tcp_stream(), addr).await
+    impl Stream for Interval {
+        type Item = ();
+
+        fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<()>> {
+            match self.0.poll_tick(cx) {
+                Poll::Ready(_) => Poll::Ready(Some(())),
+                Poll::Pending => Poll::Pending,
+            }
+        }
+
+        fn size_hint(&self) -> (usize, Option<usize>) {
+            (std::usize::MAX, None)
+        }
+    }
+
+    pub fn interval(period: Duration) -> Interval {
+        Interval::new(period)
+    }
+}
+
+pub(crate) fn reuse_listen(addr: SocketAddr) -> io::Result<TcpListener> {
+    let socket = match addr {
+        SocketAddr::V4(_) => TcpSocket::new_v4(),
+        SocketAddr::V6(_) => TcpSocket::new_v6(),
+    }?;
+
+    // reuse addr and reuse port's situation on each platform
+    // https://stackoverflow.com/questions/14388706/how-do-so-reuseaddr-and-so-reuseport-differ
+    #[cfg(all(unix, not(target_os = "solaris"), not(target_os = "illumos")))]
+    socket.set_reuseport(true)?;
+
+    socket.set_reuseaddr(true)?;
+    socket.bind(addr)?;
+    socket.listen(1024)
+}
+
+pub(crate) async fn connect(
+    addr: SocketAddr,
+    bind_addr: Option<SocketAddr>,
+) -> io::Result<TcpStream> {
+    let socket = match addr {
+        SocketAddr::V4(_) => TcpSocket::new_v4(),
+        SocketAddr::V6(_) => TcpSocket::new_v6(),
+    }?;
+
+    if let Some(addr) = bind_addr {
+        #[cfg(all(unix, not(target_os = "solaris"), not(target_os = "illumos")))]
+        socket.set_reuseport(true)?;
+        socket.set_reuseaddr(true)?;
+        socket.bind(addr)?;
+    }
+
+    socket.connect(addr).await
 }

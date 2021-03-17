@@ -8,7 +8,7 @@ use std::{
     task::{Context, Poll},
     time::Duration,
 };
-use tokio::prelude::{AsyncRead, AsyncWrite};
+use tokio::io::{AsyncRead, AsyncWrite};
 use yamux::session::SessionType as YamuxType;
 
 use crate::{

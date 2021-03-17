@@ -20,16 +20,6 @@ mod addr;
 mod protocol;
 mod state;
 
-#[cfg(feature = "flatc")]
-#[rustfmt::skip]
-#[allow(clippy::all)]
-mod protocol_generated;
-#[cfg(feature = "flatc")]
-#[rustfmt::skip]
-#[allow(clippy::all)]
-#[allow(dead_code)]
-mod protocol_generated_verifier;
-#[cfg(feature = "molc")]
 #[rustfmt::skip]
 #[allow(clippy::all)]
 #[allow(dead_code)]

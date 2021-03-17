@@ -1,13 +1,3 @@
-#[cfg(all(feature = "flatc", feature = "molc"))]
-compile_error!("features `flatc` and `molc` are mutually exclusive");
-#[cfg(all(not(feature = "flatc"), not(feature = "molc")))]
-compile_error!("Please choose a serialization format via feature. Possible choices: flatc, molc");
-
-#[cfg(feature = "flatc")]
-use crate::protocol_select::protocol_select_generated::p2p::protocol_select::{
-    ProtocolInfo as FBSProtocolInfo, ProtocolInfoBuilder,
-};
-#[cfg(feature = "molc")]
 use molecule::prelude::{Builder, Entity, Reader};
 
 use bytes::Bytes;
@@ -15,21 +5,9 @@ use futures::prelude::*;
 use log::{debug, trace};
 use std::cmp::Ordering;
 use std::{collections::HashMap, io};
-use tokio::prelude::{AsyncRead, AsyncWrite};
+use tokio::io::{AsyncRead, AsyncWrite};
 use tokio_util::codec::{length_delimited::LengthDelimitedCodec, Framed};
 
-#[cfg(feature = "flatc")]
-#[rustfmt::skip]
-#[allow(clippy::all)]
-#[allow(dead_code)]
-#[allow(unused_imports)]
-mod protocol_select_generated;
-#[cfg(feature = "flatc")]
-#[rustfmt::skip]
-#[allow(clippy::all)]
-#[allow(dead_code)]
-mod protocol_select_generated_verifier;
-#[cfg(feature = "molc")]
 #[rustfmt::skip]
 #[allow(clippy::all)]
 #[allow(dead_code)]
@@ -56,51 +34,7 @@ impl ProtocolInfo {
         }
     }
 
-    /// Encode to flatbuffer
-    #[cfg(feature = "flatc")]
-    pub fn encode(&self) -> Bytes {
-        let mut fbb = flatbuffers::FlatBufferBuilder::new();
-        let name = fbb.create_string(&self.name);
-        let versions = &self
-            .support_versions
-            .iter()
-            .map(|version| fbb.create_string(version))
-            .collect::<Vec<_>>();
-        let versions = fbb.create_vector(versions);
-
-        let mut builder = ProtocolInfoBuilder::new(&mut fbb);
-        builder.add_name(name);
-        builder.add_support_versions(versions);
-        let data = builder.finish();
-
-        fbb.finish(data, None);
-        Bytes::from(fbb.finished_data().to_owned())
-    }
-
-    /// Decode from flatbuffer
-    #[cfg(feature = "flatc")]
-    pub fn decode(data: &[u8]) -> Option<Self> {
-        let fbs_protocol_info = flatbuffers_verifier::get_root::<FBSProtocolInfo>(data).ok()?;
-        match (
-            fbs_protocol_info.name(),
-            fbs_protocol_info.support_versions(),
-        ) {
-            (Some(name), Some(fbs_versions)) => {
-                let mut versions: Vec<String> = Vec::with_capacity(fbs_versions.len() + 1);
-                for i in 0..fbs_versions.len() {
-                    versions.push(fbs_versions.get(i).to_owned());
-                }
-                Some(ProtocolInfo {
-                    name: name.to_owned(),
-                    support_versions: versions,
-                })
-            }
-            _ => None,
-        }
-    }
-
     /// Encode with molecule
-    #[cfg(feature = "molc")]
     pub fn encode(self) -> Bytes {
         let name = protocol_select_mol::String::new_builder()
             .set(self.name.into_bytes().into_iter().map(Into::into).collect())
@@ -126,7 +60,6 @@ impl ProtocolInfo {
     }
 
     /// Decode with molecule
-    #[cfg(feature = "molc")]
     pub fn decode(data: &[u8]) -> Option<Self> {
         let reader = protocol_select_mol::ProtocolInfoReader::from_compatible_slice(data).ok()?;
 
@@ -252,9 +185,10 @@ mod tests {
 
     #[test]
     fn protocol_message_decode_encode() {
-        let mut message = ProtocolInfo::default();
-        message.name = "test".to_owned();
-        message.support_versions = vec!["1.0.0".to_string(), "1.1.1".to_string()];
+        let message = ProtocolInfo {
+            name: "test".to_owned(),
+            support_versions: vec!["1.0.0".to_string(), "1.1.1".to_string()],
+        };
 
         let byte = message.clone();
         assert_eq!(message, ProtocolInfo::decode(&byte.encode()).unwrap())
@@ -290,18 +224,19 @@ mod tests {
         let (sender_2, receiver_2) = channel::oneshot::channel::<Option<String>>();
         let (addr_sender, addr_receiver) = channel::oneshot::channel::<::std::net::SocketAddr>();
 
-        let mut rt = tokio::runtime::Runtime::new().unwrap();
+        let rt = tokio::runtime::Runtime::new().unwrap();
 
         rt.spawn(async move {
-            let mut listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
             let listener_addr = listener.local_addr().unwrap();
             let _res = addr_sender.send(listener_addr);
 
             let (connect, _) = listener.accept().await.unwrap();
 
-            let mut message = ProtocolInfo::default();
-            message.name = "test".to_owned();
-            message.support_versions = server;
+            let message = ProtocolInfo {
+                name: "test".to_owned(),
+                support_versions: server,
+            };
             let mut messages = HashMap::new();
             messages.insert("test".to_owned(), (message, None));
 
@@ -313,9 +248,10 @@ mod tests {
             let listener_addr = addr_receiver.await.unwrap();
             let connect = TcpStream::connect(&listener_addr).await.unwrap();
 
-            let mut message = ProtocolInfo::default();
-            message.name = "test".to_owned();
-            message.support_versions = client;
+            let message = ProtocolInfo {
+                name: "test".to_owned(),
+                support_versions: client,
+            };
 
             let (_, _, a) = client_select(connect, message).await.unwrap();
             let _res = sender_2.send(a);

@@ -79,7 +79,7 @@ fn create_meta(id: ProtocolId) -> ProtocolMeta {
         .id(id)
         .service_handle(move || {
             if id == 0.into() {
-                ProtocolHandle::Neither
+                ProtocolHandle::None
             } else {
                 let handle = Box::new(PHandle);
                 ProtocolHandle::Callback(handle)
@@ -95,7 +95,7 @@ fn test_peer_id(fail: bool) {
     let mut service = create(key.clone(), meta, ());
 
     thread::spawn(move || {
-        let mut rt = tokio::runtime::Runtime::new().unwrap();
+        let rt = tokio::runtime::Runtime::new().unwrap();
         rt.block_on(async move {
             let listen_addr = service
                 .listen("/ip4/127.0.0.1/tcp/0".parse().unwrap())
@@ -119,7 +119,7 @@ fn test_peer_id(fail: bool) {
     let mut service = create(SecioKeyPair::secp256k1_generated(), meta, shandle);
     let control = service.control().clone();
     thread::spawn(move || {
-        let mut rt = tokio::runtime::Runtime::new().unwrap();
+        let rt = tokio::runtime::Runtime::new().unwrap();
         rt.block_on(async move {
             loop {
                 if service.next().await.is_none() {
