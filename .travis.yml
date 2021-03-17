@@ -32,9 +32,3 @@ jobs:
       name: Bench
       script:
         - make bench_p2p
-    - stage: Test
-      name: Fuzz
-      script:
-        - rustup install nightly
-        - cargo +nightly install cargo-fuzz
-        - make fuzz
