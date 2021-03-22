@@ -138,11 +138,8 @@ mod os {
     use std::{io, net::SocketAddr};
 
     pub(crate) fn reuse_listen(addr: SocketAddr) -> io::Result<TcpListener> {
-        let domain = match addr {
-            SocketAddr::V4(_) => Domain::ipv4(),
-            SocketAddr::V6(_) => Domain::ipv6(),
-        };
-        let socket = Socket::new(domain, Type::stream(), Some(SocketProtocol::tcp()))?;
+        let domain = Domain::for_address(addr);
+        let socket = Socket::new(domain, Type::STREAM, Some(SocketProtocol::TCP))?;
 
         #[cfg(all(unix, not(target_os = "solaris"), not(target_os = "illumos")))]
         socket.set_reuse_port(true)?;
@@ -151,7 +148,7 @@ mod os {
         socket.bind(&addr.into())?;
         socket.listen(1024)?;
 
-        let listen = socket.into_tcp_listener();
+        let listen = std::net::TcpListener::from(socket);
         let addr = listen.local_addr()?;
         Ok(TcpListener::new(AsyncListener::from(listen), addr))
     }
@@ -160,11 +157,8 @@ mod os {
         addr: SocketAddr,
         bind_addr: Option<SocketAddr>,
     ) -> io::Result<TcpStream> {
-        let domain = match addr {
-            SocketAddr::V4(_) => Domain::ipv4(),
-            SocketAddr::V6(_) => Domain::ipv6(),
-        };
-        let socket = Socket::new(domain, Type::stream(), Some(SocketProtocol::tcp()))?;
+        let domain = Domain::for_address(addr);
+        let socket = Socket::new(domain, Type::STREAM, Some(SocketProtocol::TCP))?;
 
         if let Some(addr) = bind_addr {
             #[cfg(all(unix, not(target_os = "solaris"), not(target_os = "illumos")))]
@@ -189,7 +183,7 @@ mod os {
                 Err(err)
             }
         })?;
-        let stream = Async::new(socket.into_tcp_stream())?;
+        let stream = Async::new(std::net::TcpStream::from(socket))?;
 
         // The stream becomes writable when connected.
         stream.writable().await?;
