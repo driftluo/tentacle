@@ -18,6 +18,7 @@ const TCP: u32 = 0x06;
 const TLS: u32 = 0x01c0;
 const WS: u32 = 0x01dd;
 const WSS: u32 = 0x01de;
+const MEMORY: u32 = 0x0309;
 
 const SHA256_CODE: u16 = 0x12;
 const SHA256_SIZE: u8 = 32;
@@ -34,6 +35,8 @@ pub enum Protocol<'a> {
     Tls(Cow<'a, str>),
     Ws,
     Wss,
+    /// Contains the "port" to contact. Similar to TCP or UDP, 0 means "assign me a port".
+    Memory(u64),
 }
 
 impl<'a> Protocol<'a> {
@@ -80,6 +83,10 @@ impl<'a> Protocol<'a> {
             }
             "ws" => Ok(Protocol::Ws),
             "wss" => Ok(Protocol::Wss),
+            "memory" => {
+                let s = iter.next().ok_or(Error::InvalidProtocolString)?;
+                Ok(Protocol::Memory(s.parse()?))
+            }
             _ => Err(Error::UnknownProtocolString),
         }
     }
@@ -147,6 +154,12 @@ impl<'a> Protocol<'a> {
             }
             WS => Ok((Protocol::Ws, input)),
             WSS => Ok((Protocol::Wss, input)),
+            MEMORY => {
+                let (data, rest) = split_header(8, input)?;
+                let mut rdr = Cursor::new(data);
+                let num = rdr.get_u64();
+                Ok((Protocol::Memory(num), rest))
+            }
             _ => Err(Error::UnknownProtocolId(id)),
         }
     }
@@ -196,6 +209,10 @@ impl<'a> Protocol<'a> {
             }
             Protocol::Ws => w.put(encode::u32(WS, &mut buf)),
             Protocol::Wss => w.put(encode::u32(WSS, &mut buf)),
+            Protocol::Memory(port) => {
+                w.put(encode::u32(MEMORY, &mut buf));
+                w.put_u64(*port)
+            }
         }
     }
 
@@ -211,6 +228,7 @@ impl<'a> Protocol<'a> {
             Protocol::P2P(s) => Protocol::P2P(Cow::Owned(s.into_owned())),
             Protocol::Ws => Protocol::Ws,
             Protocol::Wss => Protocol::Wss,
+            Protocol::Memory(a) => Protocol::Memory(a),
         }
     }
 }
@@ -228,6 +246,7 @@ impl<'a> fmt::Display for Protocol<'a> {
             Tls(s) => write!(f, "/tls/{}", s),
             Ws => write!(f, "/ws"),
             Wss => write!(f, "/wss"),
+            Memory(port) => write!(f, "/memory/{}", port),
         }
     }
 }
