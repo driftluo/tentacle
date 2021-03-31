@@ -31,9 +31,9 @@ use crate::{
     ProtocolId, SessionId, StreamId, SubstreamReadPart,
 };
 
-pub trait AsyncRW: AsyncWrite + AsyncRead {}
+pub trait AsyncRw: AsyncWrite + AsyncRead {}
 
-impl<T: AsyncRead + AsyncWrite> AsyncRW for T {}
+impl<T: AsyncRead + AsyncWrite> AsyncRw for T {}
 
 /// Event generated/received by the Session
 pub(crate) enum SessionEvent {
@@ -49,7 +49,7 @@ pub(crate) enum SessionEvent {
     HandshakeSuccess {
         /// In order to be compatible with multiple underlying connection abstractions,
         /// the dyn trait needs to be used here
-        handle: Box<dyn AsyncRW + Send + Unpin + 'static>,
+        handle: Box<dyn AsyncRw + Send + Unpin + 'static>,
         /// Remote Public key
         public_key: Option<PublicKey>,
         /// Remote address

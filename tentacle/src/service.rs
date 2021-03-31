@@ -77,7 +77,7 @@ pub struct Service<T> {
     listens: HashSet<Multiaddr>,
 
     #[cfg(all(not(target_arch = "wasm32"), feature = "upnp"))]
-    igd_client: Option<crate::upnp::IGDClient>,
+    igd_client: Option<crate::upnp::IgdClient>,
 
     dial_protocols: HashMap<Multiaddr, TargetProtocol>,
     config: ServiceConfig,
@@ -143,7 +143,7 @@ where
         let shutdown = Arc::new(AtomicBool::new(false));
         #[cfg(all(not(target_arch = "wasm32"), feature = "upnp"))]
         let igd_client = if config.upnp {
-            crate::upnp::IGDClient::new()
+            crate::upnp::IgdClient::new()
         } else {
             None
         };

@@ -50,7 +50,7 @@ impl Multiaddr {
     /// use tentacle_multiaddr::{Multiaddr, Protocol};
     ///
     /// let mut address: Multiaddr = "/ip4/127.0.0.1".parse().unwrap();
-    /// address.push(Protocol::TCP(10000));
+    /// address.push(Protocol::Tcp(10000));
     /// println!("{}", address);
     /// assert_eq!(address, "/ip4/127.0.0.1/tcp/10000".parse().unwrap());
     /// ```
@@ -70,8 +70,8 @@ impl Multiaddr {
     ///
     /// let mut address: Multiaddr = "/ip4/127.0.0.1/tcp/5678".parse().unwrap();
     ///
-    /// assert_eq!(address.pop().unwrap(), Protocol::TCP(5678));
-    /// assert_eq!(address.pop().unwrap(), Protocol::IP4(Ipv4Addr::new(127, 0, 0, 1)));
+    /// assert_eq!(address.pop().unwrap(), Protocol::Tcp(5678));
+    /// assert_eq!(address.pop().unwrap(), Protocol::Ip4(Ipv4Addr::new(127, 0, 0, 1)));
     /// ```
     ///
     pub fn pop<'a>(&mut self) -> Option<Protocol<'a>> {
@@ -100,8 +100,8 @@ impl Multiaddr {
     /// let address: Multiaddr = "/ip4/127.0.0.1/tcp/5678".parse().unwrap();
     ///
     /// let components = address.iter().collect::<Vec<_>>();
-    /// assert_eq!(components[0], Protocol::IP4(Ipv4Addr::new(127, 0, 0, 1)));
-    /// assert_eq!(components[1], Protocol::TCP(5678));
+    /// assert_eq!(components[0], Protocol::Ip4(Ipv4Addr::new(127, 0, 0, 1)));
+    /// assert_eq!(components[1], Protocol::Tcp(5678));
     /// ```
     ///
     pub fn iter(&self) -> Iter<'_> {
@@ -264,13 +264,13 @@ impl From<IpAddr> for Multiaddr {
 
 impl From<Ipv4Addr> for Multiaddr {
     fn from(v: Ipv4Addr) -> Multiaddr {
-        Protocol::IP4(v).into()
+        Protocol::Ip4(v).into()
     }
 }
 
 impl From<Ipv6Addr> for Multiaddr {
     fn from(v: Ipv6Addr) -> Multiaddr {
-        Protocol::IP6(v).into()
+        Protocol::Ip6(v).into()
     }
 }
 
@@ -340,7 +340,7 @@ impl<'de> Deserialize<'de> for Multiaddr {
     {
         struct Visitor {
             is_human_readable: bool,
-        };
+        }
 
         impl<'de> de::Visitor<'de> for Visitor {
             type Value = Multiaddr;
@@ -401,7 +401,7 @@ impl<'de> Deserialize<'de> for Multiaddr {
 ///
 /// ```rust
 /// # use tentacle_multiaddr::multiaddr;
-/// let addr = multiaddr!(IP4([127, 0, 0, 1]), TCP(10500u16));
+/// let addr = multiaddr!(Ip4([127, 0, 0, 1]), Tcp(10500u16));
 /// ```
 ///
 /// Each element passed to `multiaddr!` should be a variant of the `Protocol` enum. The
@@ -433,7 +433,7 @@ mod test {
     #[test]
     fn compatibility_test() {
         let mut address: Multiaddr = "/ip4/127.0.0.1".parse().unwrap();
-        address.push(Protocol::TCP(10000));
+        address.push(Protocol::Tcp(10000));
         assert_eq!(address, "/ip4/127.0.0.1/tcp/10000".parse().unwrap());
 
         let _address: Multiaddr = "/ip4/127.0.0.1/tcp/20/tls/main".parse().unwrap();

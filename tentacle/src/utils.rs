@@ -7,7 +7,7 @@ use std::{
     net::{IpAddr, SocketAddr},
 };
 
-/// This module create a `DNSResolver` future task to DNS resolver
+/// This module create a `DnsResolver` future task to DNS resolver
 #[cfg(not(target_arch = "wasm32"))]
 pub mod dns;
 
@@ -65,7 +65,7 @@ pub fn multiaddr_to_socketaddr(addr: &Multiaddr) -> Option<SocketAddr> {
 
     while iter.peek().is_some() {
         match iter.peek() {
-            Some(Protocol::IP4(_)) | Some(Protocol::IP6(_)) => (),
+            Some(Protocol::Ip4(_)) | Some(Protocol::Ip6(_)) => (),
             _ => {
                 // ignore is true
                 let _ignore = iter.next();
@@ -77,10 +77,10 @@ pub fn multiaddr_to_socketaddr(addr: &Multiaddr) -> Option<SocketAddr> {
         let proto2 = iter.next()?;
 
         match (proto1, proto2) {
-            (Protocol::IP4(ip), Protocol::TCP(port)) => {
+            (Protocol::Ip4(ip), Protocol::Tcp(port)) => {
                 return Some(SocketAddr::new(ip.into(), port));
             }
-            (Protocol::IP6(ip), Protocol::TCP(port)) => {
+            (Protocol::Ip6(ip), Protocol::Tcp(port)) => {
                 return Some(SocketAddr::new(ip.into(), port));
             }
             _ => (),
@@ -93,11 +93,11 @@ pub fn multiaddr_to_socketaddr(addr: &Multiaddr) -> Option<SocketAddr> {
 /// convert socket address to multiaddr
 pub fn socketaddr_to_multiaddr(address: SocketAddr) -> Multiaddr {
     let proto = match address.ip() {
-        IpAddr::V4(ip) => Protocol::IP4(ip),
-        IpAddr::V6(ip) => Protocol::IP6(ip),
+        IpAddr::V4(ip) => Protocol::Ip4(ip),
+        IpAddr::V6(ip) => Protocol::Ip6(ip),
     };
     iter::once(proto)
-        .chain(iter::once(Protocol::TCP(address.port())))
+        .chain(iter::once(Protocol::Tcp(address.port())))
         .collect()
 }
 

@@ -53,7 +53,7 @@ async fn connect(addr: Multiaddr, timeout: Duration) -> Result<(Multiaddr, Brows
                     return Err(TransportErrorKind::NotSupported(addr.clone()));
                 }
                 match iter.peek() {
-                    Some(Protocol::DNS4(_)) | Some(Protocol::DNS6(_)) => (),
+                    Some(Protocol::Dns4(_)) | Some(Protocol::Dns6(_)) => (),
                     _ => {
                         // this ignore is true
                         let _ignore = iter.next();
@@ -69,10 +69,10 @@ async fn connect(addr: Multiaddr, timeout: Duration) -> Result<(Multiaddr, Brows
                     .ok_or(TransportErrorKind::NotSupported(addr.clone()))?;
 
                 match (proto1, proto2) {
-                    (Protocol::DNS4(domain), Protocol::TCP(port)) => {
+                    (Protocol::Dns4(domain), Protocol::Tcp(port)) => {
                         break format!("ws://{}:{}", domain, port)
                     }
-                    (Protocol::DNS6(domain), Protocol::TCP(port)) => {
+                    (Protocol::Dns6(domain), Protocol::Tcp(port)) => {
                         break format!("ws://{}:{}", domain, port)
                     }
                     _ => return Err(TransportErrorKind::NotSupported(addr.clone())),

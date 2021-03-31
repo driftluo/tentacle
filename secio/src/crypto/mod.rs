@@ -49,7 +49,7 @@ pub enum CryptoMode {
 #[doc(hidden)]
 #[cfg(all(ossl110, unix))]
 pub fn new_stream(t: cipher::CipherType, key: &[u8], _mode: CryptoMode) -> BoxStreamCipher {
-    Box::new(openssl_impl::OpenSSLCrypt::new(t, key))
+    Box::new(openssl_impl::OpenSsLCrypt::new(t, key))
 }
 
 /// Generate a specific Cipher with key and initialize vector
@@ -59,7 +59,7 @@ pub fn new_stream(t: cipher::CipherType, key: &[u8], mode: CryptoMode) -> BoxStr
     use cipher::CipherType::*;
 
     match t {
-        Aes128Gcm | Aes256Gcm => Box::new(openssl_impl::OpenSSLCrypt::new(t, key)),
+        Aes128Gcm | Aes256Gcm => Box::new(openssl_impl::OpenSsLCrypt::new(t, key)),
         ChaCha20Poly1305 => Box::new(ring_impl::RingAeadCipher::new(t, key, mode)),
     }
 }
@@ -100,7 +100,7 @@ fn nonce_advance(nonce: &mut [u8]) {
 #[cfg(all(test, unix))]
 mod test {
     use super::{
-        cipher::CipherType, openssl_impl::OpenSSLCrypt, ring_impl::RingAeadCipher,
+        cipher::CipherType, openssl_impl::OpenSsLCrypt, ring_impl::RingAeadCipher,
         wasm_compat::WasmCrypt, CryptoMode,
     };
 
@@ -109,7 +109,7 @@ mod test {
             .map(|_| rand::random::<u8>())
             .collect::<Vec<_>>();
 
-        let mut openssl_encrypt = OpenSSLCrypt::new(cipher, &key);
+        let mut openssl_encrypt = OpenSsLCrypt::new(cipher, &key);
         let mut ring_decrypt = RingAeadCipher::new(cipher, &key, CryptoMode::Decrypt);
 
         // first time
@@ -135,7 +135,7 @@ mod test {
             .collect::<Vec<_>>();
 
         let mut ring_encrypt = RingAeadCipher::new(cipher, &key, CryptoMode::Encrypt);
-        let mut openssl_decrypt = OpenSSLCrypt::new(cipher, &key);
+        let mut openssl_decrypt = OpenSsLCrypt::new(cipher, &key);
 
         // first time
         let message = b"HELLO WORLD";
@@ -185,7 +185,7 @@ mod test {
             .collect::<Vec<_>>();
 
         let mut wasm_encrypt = WasmCrypt::new(cipher, &key);
-        let mut openssl_decrypt = OpenSSLCrypt::new(cipher, &key);
+        let mut openssl_decrypt = OpenSsLCrypt::new(cipher, &key);
 
         // first time
         let message = b"HELLO WORLD";

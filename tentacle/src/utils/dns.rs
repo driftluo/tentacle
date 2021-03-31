@@ -17,7 +17,7 @@ use crate::{
 };
 
 /// DNS resolver, use on multi-thread tokio runtime
-pub struct DNSResolver {
+pub struct DnsResolver {
     source_address: Multiaddr,
     ty: TransportType,
     peer_id: Option<PeerId>,
@@ -26,7 +26,7 @@ pub struct DNSResolver {
     join_handle: Option<crate::runtime::JoinHandle<::std::io::Result<IntoIter<SocketAddr>>>>,
 }
 
-impl DNSResolver {
+impl DnsResolver {
     /// If address like `/dns4/localhost/tcp/80` or `"/dns6/localhost/tcp/80"`,
     /// it will be return Some, else None
     pub fn new(source_address: Multiaddr) -> Option<Self> {
@@ -37,7 +37,7 @@ impl DNSResolver {
                 break (None, None);
             }
             match iter.peek() {
-                Some(Protocol::DNS4(_)) | Some(Protocol::DNS6(_)) => (),
+                Some(Protocol::Dns4(_)) | Some(Protocol::Dns6(_)) => (),
                 _ => {
                     // this ignore is true
                     let _ignore = iter.next();
@@ -49,14 +49,14 @@ impl DNSResolver {
             let proto2 = iter.next()?;
 
             match (proto1, proto2) {
-                (Protocol::DNS4(domain), Protocol::TCP(port)) => break (Some(domain), Some(port)),
-                (Protocol::DNS6(domain), Protocol::TCP(port)) => break (Some(domain), Some(port)),
+                (Protocol::Dns4(domain), Protocol::Tcp(port)) => break (Some(domain), Some(port)),
+                (Protocol::Dns6(domain), Protocol::Tcp(port)) => break (Some(domain), Some(port)),
                 _ => (),
             }
         };
 
         match (domain, port) {
-            (Some(domain), Some(port)) => Some(DNSResolver {
+            (Some(domain), Some(port)) => Some(DnsResolver {
                 ty: find_type(&source_address),
                 peer_id: extract_peer_id(&source_address),
                 domain: domain.to_string(),
@@ -76,7 +76,7 @@ impl DNSResolver {
             Some(address) => {
                 let mut address = socketaddr_to_multiaddr(address);
                 match self.ty {
-                    TransportType::Tcp | TransportType::TLS => (),
+                    TransportType::Tcp | TransportType::Tls => (),
                     TransportType::Ws => address.push(Protocol::Ws),
                     TransportType::Wss => address.push(Protocol::Wss),
                 }
@@ -94,7 +94,7 @@ impl DNSResolver {
     }
 }
 
-impl Future for DNSResolver {
+impl Future for DnsResolver {
     type Output = Result<Multiaddr, (Multiaddr, io::Error)>;
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
@@ -140,20 +140,20 @@ impl Future for DNSResolver {
 mod test {
     use crate::{
         multiaddr::{Multiaddr, Protocol},
-        utils::dns::DNSResolver,
+        utils::dns::DnsResolver,
     };
 
     #[test]
     fn dns_parser() {
-        let future: DNSResolver =
-            DNSResolver::new("/dns4/localhost/tcp/80".parse().unwrap()).unwrap();
+        let future: DnsResolver =
+            DnsResolver::new("/dns4/localhost/tcp/80".parse().unwrap()).unwrap();
         let rt = tokio::runtime::Runtime::new().unwrap();
         let addr = rt.block_on(future).unwrap();
         match addr.iter().next().unwrap() {
-            Protocol::IP4(_) => {
+            Protocol::Ip4(_) => {
                 assert_eq!("/ip4/127.0.0.1/tcp/80".parse::<Multiaddr>().unwrap(), addr)
             }
-            Protocol::IP6(_) => assert_eq!("/ip6/::1/tcp/80".parse::<Multiaddr>().unwrap(), addr),
+            Protocol::Ip6(_) => assert_eq!("/ip6/::1/tcp/80".parse::<Multiaddr>().unwrap(), addr),
             _ => panic!("Dns resolver fail"),
         }
     }

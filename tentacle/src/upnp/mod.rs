@@ -30,7 +30,7 @@ pub struct Network {
     net_mask: Ipv4Addr,
 }
 
-pub struct IGDClient {
+pub struct IgdClient {
     gateway: igd::Gateway,
     state: Network,
     only_leases_support: bool,
@@ -38,7 +38,7 @@ pub struct IGDClient {
     leases: HashMap<SocketAddr, Option<Instant>>,
 }
 
-impl IGDClient {
+impl IgdClient {
     /// init
     pub fn new() -> Option<Self> {
         let gateway = match igd::search_gateway(Default::default()) {
@@ -77,7 +77,7 @@ impl IGDClient {
             })
         })?;
 
-        Some(IGDClient {
+        Some(IgdClient {
             gateway,
             state,
             only_leases_support: false,
@@ -174,7 +174,7 @@ impl IGDClient {
     }
 }
 
-impl Drop for IGDClient {
+impl Drop for IgdClient {
     fn drop(&mut self) {
         self.clear();
     }

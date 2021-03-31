@@ -14,7 +14,7 @@ pub enum TransportErrorKind {
     NotSupported(Multiaddr),
     /// Dns resolver error
     #[error("can not resolve `{0:?}`, io error: `{1:?}`")]
-    DNSResolverError(Multiaddr, IOError),
+    DnsResolverError(Multiaddr, IOError),
 }
 
 #[derive(Error, Debug)]

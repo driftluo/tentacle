@@ -26,23 +26,23 @@ impl PeerId {
     }
 
     /// If data is a valid `PeerId`, return `PeerId`, else return error
-    pub fn from_bytes(data: Vec<u8>) -> Result<Self, ()> {
+    pub fn from_bytes(data: Vec<u8>) -> Result<Self, Error> {
         if data.is_empty() {
-            return Err(());
+            return Err(Error::Empty);
         }
 
-        let (code, bytes) = decode::u16(&data).map_err(|_| ())?;
+        let (code, bytes) = decode::u16(&data).map_err(|_| Error::InvalidData)?;
 
         if code != SHA256_CODE {
-            return Err(());
+            return Err(Error::NotSupportHashCode);
         }
 
         if bytes.len() != SHA256_SIZE as usize + 1 {
-            return Err(());
+            return Err(Error::WrongLength);
         }
 
         if bytes[0] != SHA256_SIZE {
-            return Err(());
+            return Err(Error::InvalidData);
         }
 
         Ok(PeerId { inner: data })
@@ -119,14 +119,40 @@ impl From<PublicKey> for PeerId {
 }
 
 impl ::std::str::FromStr for PeerId {
-    type Err = ();
+    type Err = Error;
 
     #[inline]
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let bytes = bs58::decode(s).into_vec().map_err(|_| ())?;
+        let bytes = bs58::decode(s).into_vec().map_err(|_| Error::InvalidData)?;
         PeerId::from_bytes(bytes)
     }
 }
+
+/// Error code from generate peer id
+#[derive(Debug)]
+pub enum Error {
+    /// invalid data
+    InvalidData,
+    /// data has wrong length
+    WrongLength,
+    /// not support hash code
+    NotSupportHashCode,
+    /// empty data
+    Empty,
+}
+
+impl fmt::Display for Error {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Error::Empty => write!(f, "data is empty"),
+            Error::InvalidData => write!(f, "invalid data"),
+            Error::WrongLength => write!(f, "wrong length"),
+            Error::NotSupportHashCode => write!(f, "not support hash code"),
+        }
+    }
+}
+
+impl ::std::error::Error for Error {}
 
 #[cfg(test)]
 mod tests {

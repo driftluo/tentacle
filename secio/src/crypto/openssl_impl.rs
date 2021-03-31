@@ -6,14 +6,14 @@ use crate::{
     error::SecioError,
 };
 
-pub(crate) struct OpenSSLCrypt {
+pub(crate) struct OpenSsLCrypt {
     cipher: symm::Cipher,
     cipher_type: CipherType,
     key: Bytes,
     iv: BytesMut,
 }
 
-impl OpenSSLCrypt {
+impl OpenSsLCrypt {
     pub fn new(cipher_type: CipherType, key: &[u8]) -> Self {
         let cipher = match cipher_type {
             CipherType::Aes128Gcm => symm::Cipher::aes_128_gcm(),
@@ -22,7 +22,7 @@ impl OpenSSLCrypt {
             CipherType::ChaCha20Poly1305 => symm::Cipher::chacha20_poly1305(),
             #[cfg(not(ossl110))]
             _ => panic!(
-                "Cipher type {:?} does not supported by OpenSSLCrypt yet",
+                "Cipher type {:?} does not supported by OpenSsLCrypt yet",
                 cipher_type
             ),
         };
@@ -35,7 +35,7 @@ impl OpenSSLCrypt {
             ::std::ptr::write_bytes(nonce.as_mut_ptr(), 0, nonce_size);
         }
 
-        OpenSSLCrypt {
+        OpenSsLCrypt {
             cipher,
             cipher_type,
             key: Bytes::from(key.to_owned()),
@@ -86,7 +86,7 @@ impl OpenSSLCrypt {
     }
 }
 
-impl StreamCipher for OpenSSLCrypt {
+impl StreamCipher for OpenSsLCrypt {
     fn encrypt(&mut self, input: &[u8]) -> Result<Vec<u8>, SecioError> {
         self.encrypt(input)
     }
@@ -98,15 +98,15 @@ impl StreamCipher for OpenSSLCrypt {
 
 #[cfg(test)]
 mod test {
-    use super::{CipherType, OpenSSLCrypt};
+    use super::{CipherType, OpenSsLCrypt};
 
     fn test_openssl(mode: CipherType) {
         let key = (0..mode.key_size())
             .map(|_| rand::random::<u8>())
             .collect::<Vec<_>>();
 
-        let mut encryptor = OpenSSLCrypt::new(mode, &key[0..]);
-        let mut decryptor = OpenSSLCrypt::new(mode, &key[0..]);
+        let mut encryptor = OpenSsLCrypt::new(mode, &key[0..]);
+        let mut decryptor = OpenSsLCrypt::new(mode, &key[0..]);
 
         // first time
         let message = b"HELLO WORLD";
