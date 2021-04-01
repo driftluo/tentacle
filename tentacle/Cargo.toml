@@ -25,6 +25,7 @@ tokio-util = { version = "0.6.0", features = ["codec"] }
 log = "0.4"
 bytes = "1.0.0"
 thiserror = "1.0"
+pin-project-lite = "0.2.0"
 tokio-tungstenite = { version = "0.13", optional = true }
 futures-timer = { version = "3.0.2", optional = true }
 async-std = { version = "1", features = ["unstable"], optional = true }

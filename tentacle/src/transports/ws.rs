@@ -23,7 +23,7 @@ use crate::{
     error::TransportErrorKind,
     multiaddr::{Multiaddr, Protocol},
     runtime::{TcpListener, TcpStream},
-    transports::{tcp_dial, tcp_listen, Result, Transport},
+    transports::{tcp_dial, tcp_listen, Result, Transport, TransportFuture},
     utils::{dns::DNSResolver, multiaddr_to_socketaddr, socketaddr_to_multiaddr},
 };
 
@@ -88,6 +88,14 @@ impl WsTransport {
     }
 }
 
+pub type WsListenFuture = TransportFuture<
+    Pin<Box<dyn Future<Output = Result<(Multiaddr, WebsocketListener)>> + Send>>,
+    WebsocketListener,
+>;
+
+pub type WsDialFuture =
+    TransportFuture<Pin<Box<dyn Future<Output = Result<(Multiaddr, WsStream)>> + Send>>, WsStream>;
+
 impl Transport for WsTransport {
     type ListenFuture = WsListenFuture;
     type DialFuture = WsDialFuture;
@@ -102,11 +110,11 @@ impl Transport for WsTransport {
                     self.timeout,
                     self.bind_addr.is_some(),
                 );
-                Ok(WsListenFuture::new(task))
+                Ok(TransportFuture::new(Box::pin(task)))
             }
             None => {
                 let task = bind(ok(address), self.timeout, self.bind_addr.is_some());
-                Ok(WsListenFuture::new(task))
+                Ok(TransportFuture::new(Box::pin(task)))
             }
         }
     }
@@ -124,66 +132,13 @@ impl Transport for WsTransport {
                     Some(address),
                     self.bind_addr,
                 );
-                Ok(WsDialFuture::new(task))
+                Ok(TransportFuture::new(Box::pin(task)))
             }
             None => {
                 let dial = connect(ok(address), self.timeout, None, self.bind_addr);
-                Ok(WsDialFuture::new(dial))
+                Ok(TransportFuture::new(Box::pin(dial)))
             }
         }
-    }
-}
-
-type WsListenFutureInner =
-    Pin<Box<dyn Future<Output = Result<(Multiaddr, WebsocketListener)>> + Send>>;
-
-/// websocket listen future
-pub struct WsListenFuture {
-    executed: WsListenFutureInner,
-}
-
-impl WsListenFuture {
-    fn new<T>(executed: T) -> Self
-    where
-        T: Future<Output = Result<(Multiaddr, WebsocketListener)>> + 'static + Send,
-    {
-        WsListenFuture {
-            executed: Box::pin(executed),
-        }
-    }
-}
-
-impl Future for WsListenFuture {
-    type Output = Result<(Multiaddr, WebsocketListener)>;
-
-    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        self.executed.as_mut().poll(cx)
-    }
-}
-
-type WsDialFutureInner = Pin<Box<dyn Future<Output = Result<(Multiaddr, WsStream)>> + Send>>;
-
-/// websocket dial future
-pub struct WsDialFuture {
-    executed: WsDialFutureInner,
-}
-
-impl WsDialFuture {
-    fn new<T>(executed: T) -> Self
-    where
-        T: Future<Output = Result<(Multiaddr, WsStream)>> + 'static + Send,
-    {
-        WsDialFuture {
-            executed: Box::pin(executed),
-        }
-    }
-}
-
-impl Future for WsDialFuture {
-    type Output = Result<(Multiaddr, WsStream)>;
-
-    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        self.executed.as_mut().poll(cx)
     }
 }
 

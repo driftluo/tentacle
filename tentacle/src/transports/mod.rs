@@ -3,6 +3,14 @@ use crate::{
     multiaddr::{Multiaddr, Protocol},
 };
 
+use pin_project_lite::pin_project;
+use std::{
+    future::Future,
+    marker::PhantomData,
+    pin::Pin,
+    task::{Context, Poll},
+};
+
 #[cfg(target_arch = "wasm32")]
 mod browser;
 #[cfg(not(target_arch = "wasm32"))]
@@ -26,6 +34,40 @@ pub trait Transport {
     fn listen(self, address: Multiaddr) -> Result<Self::ListenFuture>;
     /// Transport dial
     fn dial(self, address: Multiaddr) -> Result<Self::DialFuture>;
+}
+
+pin_project! {
+    pub struct TransportFuture<T, F> {
+        #[pin]
+        executed: T,
+        maker: PhantomData<F>
+    }
+}
+
+impl<T, F> TransportFuture<T, F>
+where
+    T: Future<Output = Result<(Multiaddr, F)>> + 'static,
+{
+    pub fn new(executed: T) -> TransportFuture<T, F> {
+        TransportFuture {
+            executed,
+            maker: PhantomData::default(),
+        }
+    }
+}
+
+unsafe impl<T, F> Send for TransportFuture<T, F> where T: Send {}
+
+impl<T, F> Future for TransportFuture<T, F>
+where
+    T: Future<Output = Result<(Multiaddr, F)>> + 'static,
+{
+    type Output = Result<(Multiaddr, F)>;
+
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        let this = self.project();
+        this.executed.poll(cx)
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
