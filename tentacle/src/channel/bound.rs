@@ -2,6 +2,7 @@ use crate::channel::{
     decode_state, encode_state, queue::Queue, Priority, SendError, SendErrorKind, TryRecvError,
     TrySendError, INIT_STATE, MAX_BUFFER, MAX_CAPACITY, OPEN_MASK,
 };
+use crate::lock::Mutex;
 
 use futures::{
     stream::{FusedStream, Stream},
@@ -14,7 +15,7 @@ use std::{
             AtomicBool, AtomicUsize,
             Ordering::{Relaxed, SeqCst},
         },
-        Arc, Mutex,
+        Arc,
     },
     task::{Context, Poll},
 };
@@ -256,7 +257,7 @@ impl<T> BoundedSenderInner<T> {
 
     fn park(&self) {
         {
-            let mut sender = self.sender_task.lock().unwrap();
+            let mut sender = self.sender_task.lock();
             sender.task = None;
             sender.is_parked = true;
         }
@@ -326,7 +327,7 @@ impl<T> BoundedSenderInner<T> {
         // lock in most cases
         if self.maybe_parked.load(Relaxed) {
             // Get a lock on the task handle
-            let mut task = self.sender_task.lock().unwrap();
+            let mut task = self.sender_task.lock();
 
             if !task.is_parked {
                 self.maybe_parked.store(false, Relaxed);
@@ -537,7 +538,7 @@ impl<T> Receiver<T> {
             // Wake up any threads waiting as they'll see that we've closed the
             // channel and will continue on their merry way.
             while let Some(task) = unsafe { inner.parked_queue.pop_spin() } {
-                task.lock().unwrap().notify();
+                task.lock().notify();
             }
         }
     }
@@ -613,7 +614,7 @@ impl<T> Receiver<T> {
     fn unpark_one(&mut self) {
         if let Some(inner) = &mut self.inner {
             if let Some(task) = unsafe { inner.parked_queue.pop_spin() } {
-                task.lock().unwrap().notify();
+                task.lock().notify();
             }
         }
     }

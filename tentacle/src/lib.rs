@@ -104,6 +104,7 @@ pub mod builder;
 pub mod context;
 /// Error
 pub mod error;
+pub(crate) mod lock;
 /// Protocol handle callback stream
 pub(crate) mod protocol_handle_stream;
 /// Protocol select
