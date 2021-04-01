@@ -1,18 +1,12 @@
 use super::Result;
 use futures::{future::ok, TryFutureExt};
-use std::{
-    future::Future,
-    net::SocketAddr,
-    pin::Pin,
-    task::{Context, Poll},
-    time::Duration,
-};
+use std::{future::Future, net::SocketAddr, pin::Pin, time::Duration};
 
 use crate::{
     error::TransportErrorKind,
     multiaddr::Multiaddr,
     runtime::{TcpListener, TcpStream},
-    transports::{tcp_dial, tcp_listen, Transport},
+    transports::{tcp_dial, tcp_listen, Transport, TransportFuture},
     utils::{dns::DnsResolver, multiaddr_to_socketaddr, socketaddr_to_multiaddr},
 };
 
@@ -64,6 +58,12 @@ impl TcpTransport {
     }
 }
 
+// If `Existence type` is available, `Pin<Box<...>>` will no longer be needed here, and the signature is `TransportFuture<impl Future<Output=xxx>>`
+pub type TcpListenFuture =
+    TransportFuture<Pin<Box<dyn Future<Output = Result<(Multiaddr, TcpListener)>> + Send>>>;
+pub type TcpDialFuture =
+    TransportFuture<Pin<Box<dyn Future<Output = Result<(Multiaddr, TcpStream)>> + Send>>>;
+
 impl Transport for TcpTransport {
     type ListenFuture = TcpListenFuture;
     type DialFuture = TcpDialFuture;
@@ -77,11 +77,11 @@ impl Transport for TcpTransport {
                     }),
                     self.bind_addr.is_some(),
                 );
-                Ok(TcpListenFuture::new(task))
+                Ok(TransportFuture::new(Box::pin(task)))
             }
             None => {
                 let task = bind(ok(address), self.bind_addr.is_some());
-                Ok(TcpListenFuture::new(task))
+                Ok(TransportFuture::new(Box::pin(task)))
             }
         }
     }
@@ -99,64 +99,12 @@ impl Transport for TcpTransport {
                     Some(address),
                     self.bind_addr,
                 );
-                Ok(TcpDialFuture::new(task))
+                Ok(TransportFuture::new(Box::pin(task)))
             }
             None => {
                 let dial = connect(ok(address), self.timeout, None, self.bind_addr);
-                Ok(TcpDialFuture::new(dial))
+                Ok(TransportFuture::new(Box::pin(dial)))
             }
         }
-    }
-}
-
-type TcpListenFutureInner = Pin<Box<dyn Future<Output = Result<(Multiaddr, TcpListener)>> + Send>>;
-
-/// Tcp listen future
-pub struct TcpListenFuture {
-    executed: TcpListenFutureInner,
-}
-
-impl TcpListenFuture {
-    fn new<T>(executed: T) -> Self
-    where
-        T: Future<Output = Result<(Multiaddr, TcpListener)>> + 'static + Send,
-    {
-        TcpListenFuture {
-            executed: Box::pin(executed),
-        }
-    }
-}
-
-impl Future for TcpListenFuture {
-    type Output = Result<(Multiaddr, TcpListener)>;
-
-    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        self.executed.as_mut().poll(cx)
-    }
-}
-
-type TcpDialFutureInner = Pin<Box<dyn Future<Output = Result<(Multiaddr, TcpStream)>> + Send>>;
-
-/// Tcp dial future
-pub struct TcpDialFuture {
-    executed: TcpDialFutureInner,
-}
-
-impl TcpDialFuture {
-    fn new<T>(executed: T) -> Self
-    where
-        T: Future<Output = Result<(Multiaddr, TcpStream)>> + 'static + Send,
-    {
-        TcpDialFuture {
-            executed: Box::pin(executed),
-        }
-    }
-}
-
-impl Future for TcpDialFuture {
-    type Output = Result<(Multiaddr, TcpStream)>;
-
-    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        self.executed.as_mut().poll(cx)
     }
 }

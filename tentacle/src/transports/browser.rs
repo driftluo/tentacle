@@ -36,7 +36,7 @@ use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 use crate::{
     error::TransportErrorKind,
     multiaddr::{Multiaddr, Protocol},
-    transports::{find_type, Result, Transport, TransportType},
+    transports::{find_type, Result, Transport, TransportFuture, TransportType},
     utils::multiaddr_to_socketaddr,
 };
 use futures::FutureExt;
@@ -110,6 +110,9 @@ impl BrowserTransport {
     }
 }
 
+pub type BrowserDialFuture =
+    TransportFuture<Pin<Box<dyn Future<Output = Result<(Multiaddr, BrowserStream)>>>>>;
+
 impl Transport for BrowserTransport {
     type ListenFuture = ();
     type DialFuture = BrowserDialFuture;
@@ -123,35 +126,7 @@ impl Transport for BrowserTransport {
             return Err(TransportErrorKind::NotSupported(address));
         }
         let dial = connect(address, self.timeout);
-        Ok(BrowserDialFuture::new(dial))
-    }
-}
-
-type BrowserDialFutureInner = Pin<Box<dyn Future<Output = Result<(Multiaddr, BrowserStream)>>>>;
-
-pub struct BrowserDialFuture {
-    executed: BrowserDialFutureInner,
-}
-
-// Browser runtime is always single threaded
-unsafe impl Send for BrowserDialFuture {}
-
-impl BrowserDialFuture {
-    fn new<T>(executed: T) -> Self
-    where
-        T: Future<Output = Result<(Multiaddr, BrowserStream)>> + 'static,
-    {
-        BrowserDialFuture {
-            executed: Box::pin(executed),
-        }
-    }
-}
-
-impl Future for BrowserDialFuture {
-    type Output = Result<(Multiaddr, BrowserStream)>;
-
-    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        self.executed.as_mut().poll(cx)
+        Ok(TransportFuture::new(Box::pin(dial)))
     }
 }
 
