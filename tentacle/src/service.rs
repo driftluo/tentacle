@@ -1058,6 +1058,7 @@ where
     }
 
     /// Handling various tasks sent externally
+    #[allow(clippy::needless_collect)]
     fn handle_service_task(&mut self, cx: &mut Context, event: ServiceTask, priority: Priority) {
         match event {
             ServiceTask::ProtocolMessage {
