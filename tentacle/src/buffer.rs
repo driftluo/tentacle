@@ -234,10 +234,9 @@ mod test {
         assert_eq!(buffer.normal_buffer, VecDeque::from(vec![5, 6]));
 
         let res: Vec<_> = block_on(async {
-            let mut a = Vec::new();
-            a.push(rx.next().await.unwrap().1);
-            a.push(rx.next().await.unwrap().1);
-            a
+            let v1 = rx.next().await.unwrap().1;
+            let v2 = rx.next().await.unwrap().1;
+            vec![v1, v2]
         });
 
         assert_eq!(res, vec![1, 2]);
@@ -252,10 +251,9 @@ mod test {
         assert_eq!(buffer.normal_buffer, VecDeque::from(vec![5, 6]));
 
         let res: Vec<_> = block_on(async {
-            let mut a = Vec::new();
-            a.push(rx.next().await.unwrap().1);
-            a.push(rx.next().await.unwrap().1);
-            a
+            let v1 = rx.next().await.unwrap().1;
+            let v2 = rx.next().await.unwrap().1;
+            vec![v1, v2]
         });
 
         assert_eq!(res, vec![3, 4]);
@@ -290,10 +288,9 @@ mod test {
         assert_eq!(buffer.buffer, VecDeque::from(vec![3, 4, 5]));
 
         let res: Vec<_> = block_on(async {
-            let mut a = Vec::new();
-            a.push(rx.next().await.unwrap());
-            a.push(rx.next().await.unwrap());
-            a
+            let v1 = rx.next().await.unwrap();
+            let v2 = rx.next().await.unwrap();
+            vec![v1, v2]
         });
 
         assert_eq!(res, vec![1, 2]);

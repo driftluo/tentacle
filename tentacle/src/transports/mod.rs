@@ -33,7 +33,7 @@ pub enum TransportType {
     Ws,
     Wss,
     Tcp,
-    TLS,
+    Tls,
 }
 
 pub fn find_type(addr: &Multiaddr) -> TransportType {
@@ -44,8 +44,8 @@ pub fn find_type(addr: &Multiaddr) -> TransportType {
             Some(TransportType::Ws)
         } else if let Protocol::Wss = proto {
             Some(TransportType::Wss)
-        } else if let Protocol::TLS(_) = proto {
-            Some(TransportType::TLS)
+        } else if let Protocol::Tls(_) = proto {
+            Some(TransportType::Tls)
         } else {
             None
         }
@@ -133,7 +133,7 @@ mod os {
                 #[cfg(not(feature = "ws"))]
                 TransportType::Ws => Err(TransportErrorKind::NotSupported(address)),
                 TransportType::Wss => Err(TransportErrorKind::NotSupported(address)),
-                TransportType::TLS => Err(TransportErrorKind::NotSupported(address)),
+                TransportType::Tls => Err(TransportErrorKind::NotSupported(address)),
             }
         }
 
@@ -155,7 +155,7 @@ mod os {
                 #[cfg(not(feature = "ws"))]
                 TransportType::Ws => Err(TransportErrorKind::NotSupported(address)),
                 TransportType::Wss => Err(TransportErrorKind::NotSupported(address)),
-                TransportType::TLS => Err(TransportErrorKind::NotSupported(address)),
+                TransportType::Tls => Err(TransportErrorKind::NotSupported(address)),
             }
         }
     }
@@ -369,8 +369,8 @@ mod test {
 
         assert_eq!(find_type(&a), TransportType::Tcp);
 
-        a.push(Protocol::TLS(Cow::Owned("/".to_string())));
+        a.push(Protocol::Tls(Cow::Owned("/".to_string())));
 
-        assert_eq!(find_type(&a), TransportType::TLS);
+        assert_eq!(find_type(&a), TransportType::Tls);
     }
 }

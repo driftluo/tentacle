@@ -1097,9 +1097,11 @@ mod test {
 
         rt.block_on(async {
             let (remote, local) = MockSocket::new();
-            let mut config = Config::default();
-            config.enable_keepalive = false;
-            config.max_stream_count = 1;
+            let config = Config {
+                enable_keepalive: false,
+                max_stream_count: 1,
+                ..Default::default()
+            };
 
             let mut session = Session::new_server(local, config);
 
@@ -1147,9 +1149,11 @@ mod test {
 
         rt.block_on(async {
             let (_remote, local) = MockSocket::new();
-            let mut config = Config::default();
-            config.enable_keepalive = false;
-            config.connection_write_timeout = Duration::from_secs(1);
+            let config = Config {
+                enable_keepalive: false,
+                connection_write_timeout: Duration::from_secs(1),
+                ..Default::default()
+            };
 
             let mut session = Session::new_server(local, config);
 

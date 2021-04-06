@@ -62,10 +62,10 @@ impl From<YamuxType> for SessionType {
     }
 }
 
-impl Into<YamuxType> for SessionType {
+impl From<SessionType> for YamuxType {
     #[inline]
-    fn into(self) -> YamuxType {
-        match self {
+    fn from(ty: SessionType) -> YamuxType {
+        match ty {
             SessionType::Outbound => YamuxType::Client,
             SessionType::Inbound => YamuxType::Server,
         }

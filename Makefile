@@ -13,10 +13,10 @@ fmt:
 	cargo fmt --all -- --check
 
 clippy:
-	$(Change_Work_Path) && RUSTFLAGS='-F warnings' cargo clippy --all --tests --features ws,unstable -- -D clippy::let_underscore_must_use
+	$(Change_Work_Path) && RUSTFLAGS='-W warnings' cargo clippy --all --tests --features ws,unstable -- -D clippy::let_underscore_must_use
 
 test:
-	$(Change_Work_Path) && RUSTFLAGS='-F warnings' RUST_BACKTRACE=full cargo test --all --features ws,unstable
+	$(Change_Work_Path) && RUSTFLAGS='-W warnings' RUST_BACKTRACE=full cargo test --all --features ws,unstable
 
 fuzz:
 	cargo +nightly fuzz run secio_crypto_decrypt_cipher -- -max_total_time=60
@@ -32,14 +32,12 @@ examples:
 
 features-check:
 	# remove yamux default features
-	sed -i 's/"tokio-timer"//g' yamux/Cargo.toml
 	$(Change_Work_Path) && cargo build --features unstable
 	$(Change_Work_Path) && cargo build --features tokio-runtime,generic-timer,unstable --no-default-features
 	$(Change_Work_Path) && cargo build --features async-runtime,generic-timer,unstable --no-default-features
 	$(Change_Work_Path) && cargo build --features async-runtime,async-timer,unstable --no-default-features
 	# required wasm32-unknown-unknown target
 	$(Change_Work_Path) && cargo build --features wasm-timer,unstable --no-default-features --target=wasm32-unknown-unknown
-	git checkout .
 
 bench_p2p:
 	cd bench && cargo run --release

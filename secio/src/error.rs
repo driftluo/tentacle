@@ -75,9 +75,10 @@ impl From<io::Error> for SecioError {
     }
 }
 
-impl Into<io::Error> for SecioError {
-    fn into(self) -> io::Error {
-        match self {
+impl From<SecioError> for io::Error {
+    #[inline]
+    fn from(err: SecioError) -> io::Error {
+        match err {
             SecioError::IoError(e) => e,
             e => io::Error::new(io::ErrorKind::BrokenPipe, e.to_string()),
         }

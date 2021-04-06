@@ -190,17 +190,22 @@ impl<T> Clone for UnboundedSenderInner<T> {
             debug_assert!(curr < MAX_BUFFER);
 
             let next = curr + 1;
-            let actual = self.inner.num_senders.compare_and_swap(curr, next, SeqCst);
-
-            // The ABA problem doesn't matter here. We only care that the
-            // number of senders never exceeds the maximum.
-            if actual == curr {
-                return UnboundedSenderInner {
-                    inner: self.inner.clone(),
-                };
+            match self
+                .inner
+                .num_senders
+                .compare_exchange(curr, next, SeqCst, SeqCst)
+            {
+                Ok(actual) => {
+                    // The ABA problem doesn't matter here. We only care that the
+                    // number of senders never exceeds the maximum.
+                    if actual == curr {
+                        return UnboundedSenderInner {
+                            inner: self.inner.clone(),
+                        };
+                    }
+                }
+                Err(actual) => curr = actual,
             }
-
-            curr = actual;
         }
     }
 }

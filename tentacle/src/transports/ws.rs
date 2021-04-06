@@ -24,7 +24,7 @@ use crate::{
     multiaddr::{Multiaddr, Protocol},
     runtime::{TcpListener, TcpStream},
     transports::{tcp_dial, tcp_listen, Result, Transport},
-    utils::{dns::DNSResolver, multiaddr_to_socketaddr, socketaddr_to_multiaddr},
+    utils::{dns::DnsResolver, multiaddr_to_socketaddr, socketaddr_to_multiaddr},
 };
 
 /// websocket listen bind
@@ -93,11 +93,11 @@ impl Transport for WsTransport {
     type DialFuture = WsDialFuture;
 
     fn listen(self, address: Multiaddr) -> Result<Self::ListenFuture> {
-        match DNSResolver::new(address.clone()) {
+        match DnsResolver::new(address.clone()) {
             Some(dns) => {
                 let task = bind(
                     dns.map_err(|(multiaddr, io_error)| {
-                        TransportErrorKind::DNSResolverError(multiaddr, io_error)
+                        TransportErrorKind::DnsResolverError(multiaddr, io_error)
                     }),
                     self.timeout,
                     self.bind_addr.is_some(),
@@ -112,13 +112,13 @@ impl Transport for WsTransport {
     }
 
     fn dial(self, address: Multiaddr) -> Result<Self::DialFuture> {
-        match DNSResolver::new(address.clone()) {
+        match DnsResolver::new(address.clone()) {
             Some(dns) => {
                 // Why do this?
                 // Because here need to save the original address as an index to open the specified protocol.
                 let task = connect(
                     dns.map_err(|(multiaddr, io_error)| {
-                        TransportErrorKind::DNSResolverError(multiaddr, io_error)
+                        TransportErrorKind::DnsResolverError(multiaddr, io_error)
                     }),
                     self.timeout,
                     Some(address),

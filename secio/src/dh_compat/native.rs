@@ -8,10 +8,10 @@ use super::KeyAgreement;
 use crate::error::SecioError;
 pub use ring::agreement::EphemeralPrivateKey;
 
-impl Into<&'static agreement::Algorithm> for KeyAgreement {
+impl From<KeyAgreement> for &'static agreement::Algorithm {
     #[inline]
-    fn into(self) -> &'static agreement::Algorithm {
-        match self {
+    fn from(a: KeyAgreement) -> &'static agreement::Algorithm {
+        match a {
             KeyAgreement::EcdhP256 => &agreement::ECDH_P256,
             KeyAgreement::EcdhP384 => &agreement::ECDH_P384,
             KeyAgreement::X25519 => &agreement::X25519,
