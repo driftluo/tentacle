@@ -1,4 +1,5 @@
 use crate::channel::mpsc;
+use crate::lock::Mutex;
 use futures::channel::oneshot;
 use futures::executor::{block_on, block_on_stream};
 use futures::future::{poll_fn, FutureExt};
@@ -8,7 +9,7 @@ use futures::stream::{Stream, StreamExt};
 use futures::task::{Context, Poll};
 use futures_test::task::{new_count_waker, noop_context};
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::thread;
 
 trait AssertSend: Send {}
@@ -283,7 +284,7 @@ fn stress_receiver_multi_task_bounded_hard() {
 
             loop {
                 i += 1;
-                let mut rx_opt = rx.lock().unwrap();
+                let mut rx_opt = rx.lock();
                 if let Some(rx) = &mut *rx_opt {
                     if i % 5 == 0 {
                         let item = block_on(rx.next());

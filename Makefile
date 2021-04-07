@@ -31,7 +31,7 @@ examples:
 	$(Change_Work_Path) && cargo build --examples --all --features unstable
 
 features-check:
-	# remove yamux default features
+	$(Change_Work_Path) && cargo build --features parking_lot
 	$(Change_Work_Path) && cargo build --features unstable
 	$(Change_Work_Path) && cargo build --features tokio-runtime,generic-timer,unstable --no-default-features
 	$(Change_Work_Path) && cargo build --features async-runtime,generic-timer,unstable --no-default-features
