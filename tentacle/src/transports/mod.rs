@@ -3,6 +3,12 @@ use crate::{
     multiaddr::{Multiaddr, Protocol},
 };
 
+use std::{
+    future::Future,
+    pin::Pin,
+    task::{Context, Poll},
+};
+
 #[cfg(target_arch = "wasm32")]
 mod browser;
 #[cfg(not(target_arch = "wasm32"))]
@@ -26,6 +32,32 @@ pub trait Transport {
     fn listen(self, address: Multiaddr) -> Result<Self::ListenFuture>;
     /// Transport dial
     fn dial(self, address: Multiaddr) -> Result<Self::DialFuture>;
+}
+
+pub struct TransportFuture<T> {
+    executed: T,
+}
+
+impl<T> TransportFuture<T> {
+    pub fn new(executed: T) -> TransportFuture<T> {
+        TransportFuture { executed }
+    }
+}
+
+impl<T> Future for TransportFuture<T>
+where
+    T: Future,
+{
+    type Output = T::Output;
+
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        // Safety: we just polled it and didn't move it
+        let executed = unsafe {
+            let this = self.get_unchecked_mut();
+            Pin::new_unchecked(&mut this.executed)
+        };
+        executed.poll(cx)
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

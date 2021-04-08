@@ -16,7 +16,10 @@ use std::{
 use crate::service::SEND_SIZE;
 
 pub(crate) type FutureTaskId = u64;
+#[cfg(not(target_arch = "wasm32"))]
 pub(crate) type BoxedFutureTask = Pin<Box<dyn Future<Output = ()> + 'static + Send>>;
+#[cfg(target_arch = "wasm32")]
+pub(crate) type BoxedFutureTask = Pin<Box<dyn Future<Output = ()> + 'static>>;
 
 /// A future task manager
 pub(crate) struct FutureTaskManager {
