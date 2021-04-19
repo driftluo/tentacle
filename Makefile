@@ -24,8 +24,8 @@ fuzz:
 	cargo +nightly fuzz run yamux_frame_codec           -- -max_total_time=60
 
 build:
-	$(Change_Work_Path) && RUSTFLAGS='-F warnings' cargo build --all --features ws
-	$(Change_Work_Path) && RUSTFLAGS='-F warnings' cargo build --all --features ws,unstable
+	$(Change_Work_Path) && RUSTFLAGS='-W warnings' cargo build --all --features ws
+	$(Change_Work_Path) && RUSTFLAGS='-W warnings' cargo build --all --features ws,unstable
 
 examples:
 	$(Change_Work_Path) && cargo build --examples --all --features unstable

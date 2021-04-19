@@ -69,6 +69,25 @@
 //! 6. Run [`Service`] just like other stream, maybe keep a [`Control`] on some place which want to
 //!    communicate with background [`Service`]
 //!
+//! ### Feature flags
+//! Tentacle uses the Feature flag to enable some optional functions and split the smallest dependencies
+//! for use as much as possible. Users can choose the dependencies they want according to their needs.
+//!
+//! Related to runtime :
+//! - `tokio-runtime`: Enable by default, use tokio runtime
+//! - `tokio-timer`: Enable by default, use tokio inner timer
+//!
+//! - `async-timer`: use async-io timer
+//! - `async-runtime`: use async-std runtime
+//!
+//! - `generic-timer`: use futures-timer
+//! - `wasm-timer`: only use on Browser WebAssembly platform
+//!
+//! Function related:
+//! - `ws`: Enable websocket protocol support
+//! - `upnp`: Enable upnp protocol, automatically try to register the port to the gateway
+//! - `unstable`: Enable the feature that has not yet decided to stabilize the API
+//! - `parking_lot`: Enable priority channel use `parking_lot`
 //!
 //! [`MetaBuilder`]: crate::builder::MetaBuilder
 //! [`ServiceBuilder`]: crate::builder::ServiceBuilder
@@ -123,7 +142,8 @@ pub(crate) mod transports;
 pub mod utils;
 
 mod channel;
-#[doc(hidden)]
+#[cfg_attr(not(feature = "unstable"), doc(hidden))]
+#[allow(missing_docs)]
 pub mod runtime;
 
 #[cfg(all(not(target_arch = "wasm32"), feature = "upnp"))]

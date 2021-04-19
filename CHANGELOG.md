@@ -1,3 +1,13 @@
+## 0.4.0-alpha.1
+
+### Features
+- Upgrade tokio to 1.x(#293)
+- Upgrade toolchain to 1.51.0(#315)
+- Change `Multi(Vec<Id>)` to `Filter(Box<Fn(ID) -> bool)`(#312)
+- Introduce `parking_lot` to tentacle priority channel(#316)
+- Support `/Memory/port` to test(#318)
+- Use no hash map to usize key map(#325)
+
 ## 0.3.8
 
 ### Bug Fix
