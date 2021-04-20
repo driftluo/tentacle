@@ -12,6 +12,8 @@ use std::{
 #[cfg(target_arch = "wasm32")]
 mod browser;
 #[cfg(not(target_arch = "wasm32"))]
+mod memory;
+#[cfg(not(target_arch = "wasm32"))]
 mod tcp;
 #[cfg(all(feature = "ws", not(target_arch = "wasm32")))]
 mod ws;
@@ -66,6 +68,7 @@ pub enum TransportType {
     Wss,
     Tcp,
     Tls,
+    Memory,
 }
 
 pub fn find_type(addr: &Multiaddr) -> TransportType {
@@ -78,6 +81,8 @@ pub fn find_type(addr: &Multiaddr) -> TransportType {
             Some(TransportType::Wss)
         } else if let Protocol::Tls(_) = proto {
             Some(TransportType::Tls)
+        } else if let Protocol::Memory(_) = proto {
+            Some(TransportType::Memory)
         } else {
             None
         }
@@ -94,7 +99,7 @@ mod os {
         utils::socketaddr_to_multiaddr,
     };
 
-    use futures::{prelude::Stream, FutureExt};
+    use futures::{prelude::Stream, FutureExt, StreamExt};
     use log::debug;
     use std::{
         fmt,
@@ -107,11 +112,12 @@ mod os {
     };
     use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 
+    use self::memory::{
+        MemoryDialFuture, MemoryListenFuture, MemoryListener, MemorySocket, MemoryTransport,
+    };
     use self::tcp::{TcpDialFuture, TcpListenFuture, TcpTransport};
     #[cfg(feature = "ws")]
     use self::ws::{WebsocketListener, WsDialFuture, WsListenFuture, WsStream, WsTransport};
-    #[cfg(feature = "ws")]
-    use futures::StreamExt;
 
     #[derive(Clone, Copy)]
     pub struct MultiTransport {
@@ -164,6 +170,10 @@ mod os {
                 }
                 #[cfg(not(feature = "ws"))]
                 TransportType::Ws => Err(TransportErrorKind::NotSupported(address)),
+                TransportType::Memory => match MemoryTransport::default().listen(address) {
+                    Ok(future) => Ok(MultiListenFuture::Memory(future)),
+                    Err(e) => Err(e),
+                },
                 TransportType::Wss => Err(TransportErrorKind::NotSupported(address)),
                 TransportType::Tls => Err(TransportErrorKind::NotSupported(address)),
             }
@@ -186,6 +196,10 @@ mod os {
                 }
                 #[cfg(not(feature = "ws"))]
                 TransportType::Ws => Err(TransportErrorKind::NotSupported(address)),
+                TransportType::Memory => match MemoryTransport::default().dial(address) {
+                    Ok(future) => Ok(MultiDialFuture::Memory(future)),
+                    Err(e) => Err(e),
+                },
                 TransportType::Wss => Err(TransportErrorKind::NotSupported(address)),
                 TransportType::Tls => Err(TransportErrorKind::NotSupported(address)),
             }
@@ -194,6 +208,7 @@ mod os {
 
     pub enum MultiListenFuture {
         Tcp(TcpListenFuture),
+        Memory(MemoryListenFuture),
         #[cfg(feature = "ws")]
         Ws(WsListenFuture),
     }
@@ -207,6 +222,10 @@ mod os {
                     &mut inner.map(|res| res.map(|res| (res.0, MultiIncoming::Tcp(res.1)))),
                 )
                 .poll(cx),
+                MultiListenFuture::Memory(inner) => Pin::new(
+                    &mut inner.map(|res| res.map(|res| (res.0, MultiIncoming::Memory(res.1)))),
+                )
+                .poll(cx),
                 #[cfg(feature = "ws")]
                 MultiListenFuture::Ws(inner) => {
                     Pin::new(&mut inner.map(|res| res.map(|res| (res.0, MultiIncoming::Ws(res.1)))))
@@ -218,6 +237,7 @@ mod os {
 
     pub enum MultiDialFuture {
         Tcp(TcpDialFuture),
+        Memory(MemoryDialFuture),
         #[cfg(feature = "ws")]
         Ws(WsDialFuture),
     }
@@ -231,6 +251,10 @@ mod os {
                     Pin::new(&mut inner.map(|res| res.map(|res| (res.0, MultiStream::Tcp(res.1)))))
                         .poll(cx)
                 }
+                MultiDialFuture::Memory(inner) => Pin::new(
+                    &mut inner.map(|res| res.map(|res| (res.0, MultiStream::Memory(res.1)))),
+                )
+                .poll(cx),
                 #[cfg(feature = "ws")]
                 MultiDialFuture::Ws(inner) => Pin::new(
                     &mut inner.map(|res| res.map(|res| (res.0, MultiStream::Ws(Box::new(res.1))))),
@@ -242,6 +266,7 @@ mod os {
 
     pub enum MultiStream {
         Tcp(TcpStream),
+        Memory(MemorySocket),
         #[cfg(feature = "ws")]
         Ws(Box<WsStream>),
     }
@@ -250,6 +275,7 @@ mod os {
         fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
             match self {
                 MultiStream::Tcp(_) => write!(f, "Tcp stream"),
+                MultiStream::Memory(_) => write!(f, "Memory stream"),
                 #[cfg(feature = "ws")]
                 MultiStream::Ws(_) => write!(f, "Websocket stream"),
             }
@@ -264,6 +290,7 @@ mod os {
         ) -> Poll<io::Result<()>> {
             match self.get_mut() {
                 MultiStream::Tcp(inner) => Pin::new(inner).poll_read(cx, buf),
+                MultiStream::Memory(inner) => Pin::new(inner).poll_read(cx, buf),
                 #[cfg(feature = "ws")]
                 MultiStream::Ws(inner) => Pin::new(inner).poll_read(cx, buf),
             }
@@ -278,6 +305,7 @@ mod os {
         ) -> Poll<io::Result<usize>> {
             match self.get_mut() {
                 MultiStream::Tcp(inner) => Pin::new(inner).poll_write(cx, buf),
+                MultiStream::Memory(inner) => Pin::new(inner).poll_write(cx, buf),
                 #[cfg(feature = "ws")]
                 MultiStream::Ws(inner) => Pin::new(inner).poll_write(cx, buf),
             }
@@ -286,6 +314,7 @@ mod os {
         fn poll_flush(self: Pin<&mut Self>, cx: &mut Context) -> Poll<io::Result<()>> {
             match self.get_mut() {
                 MultiStream::Tcp(inner) => Pin::new(inner).poll_flush(cx),
+                MultiStream::Memory(inner) => Pin::new(inner).poll_flush(cx),
                 #[cfg(feature = "ws")]
                 MultiStream::Ws(inner) => Pin::new(inner).poll_flush(cx),
             }
@@ -295,6 +324,7 @@ mod os {
         fn poll_shutdown(self: Pin<&mut Self>, cx: &mut Context) -> Poll<io::Result<()>> {
             match self.get_mut() {
                 MultiStream::Tcp(inner) => Pin::new(inner).poll_shutdown(cx),
+                MultiStream::Memory(inner) => Pin::new(inner).poll_shutdown(cx),
                 #[cfg(feature = "ws")]
                 MultiStream::Ws(inner) => Pin::new(inner).poll_shutdown(cx),
             }
@@ -304,6 +334,7 @@ mod os {
     #[derive(Debug)]
     pub enum MultiIncoming {
         Tcp(TcpListener),
+        Memory(MemoryListener),
         #[cfg(feature = "ws")]
         Ws(WebsocketListener),
     }
@@ -327,6 +358,13 @@ mod os {
                             Poll::Pending
                         }
                     },
+                    Poll::Pending => Poll::Pending,
+                },
+                MultiIncoming::Memory(inner) => match inner.poll_next_unpin(cx)? {
+                    Poll::Ready(Some((addr, stream))) => {
+                        Poll::Ready(Some(Ok((addr, MultiStream::Memory(stream)))))
+                    }
+                    Poll::Ready(None) => Poll::Ready(None),
                     Poll::Pending => Poll::Pending,
                 },
                 #[cfg(feature = "ws")]

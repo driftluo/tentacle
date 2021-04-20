@@ -88,7 +88,7 @@ fn create_meta(id: ProtocolId) -> (ProtocolMeta, Arc<AtomicBool>) {
     )
 }
 
-fn test_priority(secio: bool) {
+fn test_priority(secio: bool, addr: &'static str) {
     let (meta, _) = create_meta(1.into());
     let (addr_sender, addr_receiver) = channel::oneshot::channel::<Multiaddr>();
 
@@ -96,10 +96,7 @@ fn test_priority(secio: bool) {
         let rt = tokio::runtime::Runtime::new().unwrap();
         let mut service = create(secio, meta, ());
         rt.block_on(async move {
-            let listen_addr = service
-                .listen("/ip4/127.0.0.1/tcp/0".parse().unwrap())
-                .await
-                .unwrap();
+            let listen_addr = service.listen(addr.parse().unwrap()).await.unwrap();
             let _res = addr_sender.send(listen_addr);
             loop {
                 if service.next().await.is_none() {
@@ -133,11 +130,31 @@ fn test_priority(secio: bool) {
 }
 
 #[test]
-fn test_priority_with_secio() {
-    test_priority(true)
+fn test_priority_with_secio_tcp() {
+    test_priority(true, "/ip4/127.0.0.1/tcp/0")
 }
 
 #[test]
-fn test_priority_with_no_secio() {
-    test_priority(false)
+fn test_priority_with_no_secio_tcp() {
+    test_priority(false, "/ip4/127.0.0.1/tcp/0")
+}
+
+#[test]
+fn test_priority_with_secio_ws() {
+    test_priority(true, "/ip4/127.0.0.1/tcp/0/ws")
+}
+
+#[test]
+fn test_priority_with_no_secio_ws() {
+    test_priority(false, "/ip4/127.0.0.1/tcp/0/ws")
+}
+
+#[test]
+fn test_priority_with_secio_mem() {
+    test_priority(true, "/memory/0")
+}
+
+#[test]
+fn test_priority_with_no_secio_mem() {
+    test_priority(false, "/memory/0")
 }
