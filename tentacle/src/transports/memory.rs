@@ -23,11 +23,6 @@ use std::{
 };
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 
-#[cfg(feature = "parking_lot")]
-static MEMORY_HUB: Lazy<Mutex<HashMap<NonZeroU64, Sender<MemorySocket>>>> =
-    Lazy::new(|| crate::lock::const_mutex(HashMap::default()));
-
-#[cfg(not(feature = "parking_lot"))]
 static MEMORY_HUB: Lazy<Mutex<HashMap<NonZeroU64, Sender<MemorySocket>>>> =
     Lazy::new(|| Mutex::new(HashMap::default()));
 
