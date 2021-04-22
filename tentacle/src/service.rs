@@ -1,6 +1,6 @@
-use nohash_hasher::IntMap;
 use futures::{channel::mpsc, prelude::*, stream::StreamExt};
 use log::{debug, error, trace};
+use nohash_hasher::IntMap;
 use std::{
     borrow::Cow,
     collections::{HashMap, HashSet},
@@ -1026,6 +1026,18 @@ where
                 // if handle panic, close service
                 self.handle_service_task(ServiceTask::Shutdown(false), Priority::High)
                     .await;
+            }
+            SessionEvent::ChangeState { id, .. } => {
+                if let Some(session) = self.sessions.get(&id) {
+                    self.handle
+                        .handle_error(
+                            &mut self.service_context,
+                            ServiceError::SessionBlocked {
+                                session_context: session.inner.clone(),
+                            },
+                        )
+                        .await
+                }
             }
             _ => (),
         }
