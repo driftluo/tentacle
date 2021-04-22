@@ -7,7 +7,7 @@ use std::{
 };
 
 use crate::{
-    channel::{mpsc, QuickSinkExt},
+    channel::mpsc,
     error::SendErrorKind,
     multiaddr::Multiaddr,
     protocol_select::ProtocolInfo,
@@ -283,11 +283,11 @@ pub struct ServiceAsyncControl {
 
 impl ServiceAsyncControl {
     /// Send raw event
-    async fn send(&mut self, event: ServiceTask) -> Result {
+    async fn send(&self, event: ServiceTask) -> Result {
         if self.closed.load(Ordering::SeqCst) {
             return Err(SendErrorKind::BrokenPipe);
         }
-        self.task_sender.send(event).await.map_err(|_err| {
+        self.task_sender.async_send(event).await.map_err(|_err| {
             // await only return err when channel close
             SendErrorKind::BrokenPipe
         })
@@ -295,14 +295,17 @@ impl ServiceAsyncControl {
 
     /// Send raw event on quick channel
     #[inline]
-    async fn quick_send(&mut self, event: ServiceTask) -> Result {
+    async fn quick_send(&self, event: ServiceTask) -> Result {
         if self.closed.load(Ordering::SeqCst) {
             return Err(SendErrorKind::BrokenPipe);
         }
-        self.task_sender.quick_send(event).await.map_err(|_err| {
-            // await only return err when channel close
-            SendErrorKind::BrokenPipe
-        })
+        self.task_sender
+            .async_quick_send(event)
+            .await
+            .map_err(|_err| {
+                // await only return err when channel close
+                SendErrorKind::BrokenPipe
+            })
     }
 
     /// Get service protocol message, Map(ID, Name), but can't modify
@@ -313,19 +316,19 @@ impl ServiceAsyncControl {
 
     /// Create a new listener
     #[inline]
-    pub async fn listen(&mut self, address: Multiaddr) -> Result {
+    pub async fn listen(&self, address: Multiaddr) -> Result {
         self.quick_send(ServiceTask::Listen { address }).await
     }
 
     /// Initiate a connection request to address
     #[inline]
-    pub async fn dial(&mut self, address: Multiaddr, target: TargetProtocol) -> Result {
+    pub async fn dial(&self, address: Multiaddr, target: TargetProtocol) -> Result {
         self.quick_send(ServiceTask::Dial { address, target }).await
     }
 
     /// Disconnect a connection
     #[inline]
-    pub async fn disconnect(&mut self, session_id: SessionId) -> Result {
+    pub async fn disconnect(&self, session_id: SessionId) -> Result {
         self.quick_send(ServiceTask::Disconnect { session_id })
             .await
     }
@@ -333,7 +336,7 @@ impl ServiceAsyncControl {
     /// Send message
     #[inline]
     pub async fn send_message_to(
-        &mut self,
+        &self,
         session_id: SessionId,
         proto_id: ProtocolId,
         data: Bytes,
@@ -345,7 +348,7 @@ impl ServiceAsyncControl {
     /// Send message on quick channel
     #[inline]
     pub async fn quick_send_message_to(
-        &mut self,
+        &self,
         session_id: SessionId,
         proto_id: ProtocolId,
         data: Bytes,
@@ -357,7 +360,7 @@ impl ServiceAsyncControl {
     /// Send data to the specified protocol for the specified sessions.
     #[inline]
     pub async fn filter_broadcast(
-        &mut self,
+        &self,
         target: TargetSession,
         proto_id: ProtocolId,
         data: Bytes,
@@ -373,7 +376,7 @@ impl ServiceAsyncControl {
     /// Send data to the specified protocol for the specified sessions on quick channel.
     #[inline]
     pub async fn quick_filter_broadcast(
-        &mut self,
+        &self,
         target: TargetSession,
         proto_id: ProtocolId,
         data: Bytes,
@@ -388,7 +391,7 @@ impl ServiceAsyncControl {
 
     /// Send a future task
     #[inline]
-    pub async fn future_task<T>(&mut self, task: T) -> Result
+    pub async fn future_task<T>(&self, task: T) -> Result
     where
         T: Future<Output = ()> + 'static + Send,
     {
@@ -402,7 +405,7 @@ impl ServiceAsyncControl {
     ///
     /// If the protocol has been open, do nothing
     #[inline]
-    pub async fn open_protocol(&mut self, session_id: SessionId, proto_id: ProtocolId) -> Result {
+    pub async fn open_protocol(&self, session_id: SessionId, proto_id: ProtocolId) -> Result {
         self.quick_send(ServiceTask::ProtocolOpen {
             session_id,
             target: proto_id.into(),
@@ -414,11 +417,7 @@ impl ServiceAsyncControl {
     ///
     /// If the protocol has been open, do nothing
     #[inline]
-    pub async fn open_protocols(
-        &mut self,
-        session_id: SessionId,
-        target: TargetProtocol,
-    ) -> Result {
+    pub async fn open_protocols(&self, session_id: SessionId, target: TargetProtocol) -> Result {
         self.quick_send(ServiceTask::ProtocolOpen { session_id, target })
             .await
     }
@@ -427,7 +426,7 @@ impl ServiceAsyncControl {
     ///
     /// If the protocol has been closed, do nothing
     #[inline]
-    pub async fn close_protocol(&mut self, session_id: SessionId, proto_id: ProtocolId) -> Result {
+    pub async fn close_protocol(&self, session_id: SessionId, proto_id: ProtocolId) -> Result {
         self.quick_send(ServiceTask::ProtocolClose {
             session_id,
             proto_id,
@@ -437,7 +436,7 @@ impl ServiceAsyncControl {
 
     /// Set a service notify token
     pub async fn set_service_notify(
-        &mut self,
+        &self,
         proto_id: ProtocolId,
         interval: Duration,
         token: u64,
@@ -451,14 +450,14 @@ impl ServiceAsyncControl {
     }
 
     /// remove a service notify token
-    pub async fn remove_service_notify(&mut self, proto_id: ProtocolId, token: u64) -> Result {
+    pub async fn remove_service_notify(&self, proto_id: ProtocolId, token: u64) -> Result {
         self.send(ServiceTask::RemoveProtocolNotify { proto_id, token })
             .await
     }
 
     /// Set a session notify token
     pub async fn set_session_notify(
-        &mut self,
+        &self,
         session_id: SessionId,
         proto_id: ProtocolId,
         interval: Duration,
@@ -475,7 +474,7 @@ impl ServiceAsyncControl {
 
     /// Remove a session notify token
     pub async fn remove_session_notify(
-        &mut self,
+        &self,
         session_id: SessionId,
         proto_id: ProtocolId,
         token: u64,
@@ -495,12 +494,12 @@ impl ServiceAsyncControl {
     /// 2. try close all session's protocol stream
     /// 3. try close all session
     /// 4. close service
-    pub async fn close(&mut self) -> Result {
+    pub async fn close(&self) -> Result {
         self.quick_send(ServiceTask::Shutdown(false)).await
     }
 
     /// Shutdown service, don't care anything, may cause partial message loss
-    pub async fn shutdown(&mut self) -> Result {
+    pub async fn shutdown(&self) -> Result {
         self.quick_send(ServiceTask::Shutdown(true)).await
     }
 }

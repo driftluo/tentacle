@@ -7,24 +7,26 @@ use std::{
         atomic::{AtomicBool, AtomicUsize, Ordering},
         Arc,
     },
-    task::Context,
     time::Duration,
 };
 
+use crate::channel::QuickSinkExt;
 use crate::{
-    buffer::{PriorityBuffer, SendResult},
     channel::{mpsc, mpsc::Priority},
     error::SendErrorKind,
     multiaddr::Multiaddr,
     protocol_select::ProtocolInfo,
     secio::{PublicKey, SecioKeyPair},
-    service::{event::ServiceTask, ServiceControl, SessionType, TargetProtocol, TargetSession},
+    service::{
+        event::ServiceTask, ServiceAsyncControl, ServiceControl, SessionType, TargetProtocol,
+        TargetSession,
+    },
     session::SessionEvent,
     ProtocolId, SessionId,
 };
 
 pub(crate) struct SessionController {
-    pub(crate) buffer: PriorityBuffer<SessionEvent>,
+    pub(crate) sender: mpsc::Sender<SessionEvent>,
     pub(crate) inner: Arc<SessionContext>,
 }
 
@@ -34,27 +36,23 @@ impl SessionController {
         inner: Arc<SessionContext>,
     ) -> Self {
         Self {
-            buffer: PriorityBuffer::new(event_sender),
+            sender: event_sender,
             inner,
         }
     }
 
-    pub(crate) fn push(&mut self, priority: Priority, event: SessionEvent) {
+    pub(crate) async fn send(&mut self, priority: Priority, event: SessionEvent) -> Result {
         if priority.is_high() {
-            self.buffer.push_high(event)
+            self.sender.quick_send(event).await.map_err(|_err| {
+                // await only return err when channel close
+                SendErrorKind::BrokenPipe
+            })
         } else {
-            self.buffer.push_normal(event)
+            self.sender.send(event).await.map_err(|_err| {
+                // await only return err when channel close
+                SendErrorKind::BrokenPipe
+            })
         }
-    }
-
-    pub(crate) fn push_message(&mut self, proto_id: ProtocolId, priority: Priority, data: Bytes) {
-        self.inner.incr_pending_data_size(data.len());
-        let message_event = SessionEvent::ProtocolMessage { proto_id, data };
-        self.push(priority, message_event)
-    }
-
-    pub(crate) fn try_send(&mut self, cx: &mut Context) -> SendResult {
-        self.buffer.try_send(cx)
     }
 }
 
@@ -123,7 +121,7 @@ type Result = std::result::Result<(), SendErrorKind>;
 pub struct ServiceContext {
     listens: Vec<Multiaddr>,
     key_pair: Option<SecioKeyPair>,
-    inner: ServiceControl,
+    inner: ServiceAsyncControl,
 }
 
 impl ServiceContext {
@@ -135,7 +133,7 @@ impl ServiceContext {
         closed: Arc<AtomicBool>,
     ) -> Self {
         ServiceContext {
-            inner: ServiceControl::new(task_sender, proto_infos, closed),
+            inner: ServiceControl::new(task_sender, proto_infos, closed).into(),
             key_pair,
             listens: Vec::new(),
         }
@@ -143,58 +141,62 @@ impl ServiceContext {
 
     /// Create a new listener
     #[inline]
-    pub fn listen(&self, address: Multiaddr) -> Result {
-        self.inner.listen(address)
+    pub async fn listen(&self, address: Multiaddr) -> Result {
+        self.inner.listen(address).await
     }
 
     /// Initiate a connection request to address
     #[inline]
-    pub fn dial(&self, address: Multiaddr, target: TargetProtocol) -> Result {
-        self.inner.dial(address, target)
+    pub async fn dial(&self, address: Multiaddr, target: TargetProtocol) -> Result {
+        self.inner.dial(address, target).await
     }
 
     /// Disconnect a connection
     #[inline]
-    pub fn disconnect(&self, session_id: SessionId) -> Result {
-        self.inner.disconnect(session_id)
+    pub async fn disconnect(&self, session_id: SessionId) -> Result {
+        self.inner.disconnect(session_id).await
     }
 
     /// Send message
     #[inline]
-    pub fn send_message_to(
+    pub async fn send_message_to(
         &self,
         session_id: SessionId,
         proto_id: ProtocolId,
         data: Bytes,
     ) -> Result {
-        self.inner.send_message_to(session_id, proto_id, data)
+        self.inner.send_message_to(session_id, proto_id, data).await
     }
 
     /// Send message on quick channel
     #[inline]
-    pub fn quick_send_message_to(
+    pub async fn quick_send_message_to(
         &self,
         session_id: SessionId,
         proto_id: ProtocolId,
         data: Bytes,
     ) -> Result {
-        self.inner.quick_send_message_to(session_id, proto_id, data)
+        self.inner
+            .quick_send_message_to(session_id, proto_id, data)
+            .await
     }
 
     /// Send data to the specified protocol for the specified sessions.
     #[inline]
-    pub fn filter_broadcast(
+    pub async fn filter_broadcast(
         &self,
         session_ids: TargetSession,
         proto_id: ProtocolId,
         data: Bytes,
     ) -> Result {
-        self.inner.filter_broadcast(session_ids, proto_id, data)
+        self.inner
+            .filter_broadcast(session_ids, proto_id, data)
+            .await
     }
 
     /// Send data to the specified protocol for the specified sessions on quick channel.
     #[inline]
-    pub fn quick_filter_broadcast(
+    pub async fn quick_filter_broadcast(
         &self,
         session_ids: TargetSession,
         proto_id: ProtocolId,
@@ -202,51 +204,52 @@ impl ServiceContext {
     ) -> Result {
         self.inner
             .quick_filter_broadcast(session_ids, proto_id, data)
+            .await
     }
 
     /// Send a future task
     #[inline]
-    pub fn future_task<T>(&self, task: T) -> Result
+    pub async fn future_task<T>(&self, task: T) -> Result
     where
         T: Future<Output = ()> + 'static + Send,
     {
-        self.inner.future_task(task)
+        self.inner.future_task(task).await
     }
 
     /// Try open a protocol
     ///
     /// If the protocol has been open, do nothing
     #[inline]
-    pub fn open_protocol(&self, session_id: SessionId, proto_id: ProtocolId) -> Result {
-        self.inner.open_protocol(session_id, proto_id)
+    pub async fn open_protocol(&self, session_id: SessionId, proto_id: ProtocolId) -> Result {
+        self.inner.open_protocol(session_id, proto_id).await
     }
 
     /// Try open protocol
     ///
     /// If the protocol has been open, do nothing
     #[inline]
-    pub fn open_protocols(&self, session_id: SessionId, target: TargetProtocol) -> Result {
-        self.inner.open_protocols(session_id, target)
+    pub async fn open_protocols(&self, session_id: SessionId, target: TargetProtocol) -> Result {
+        self.inner.open_protocols(session_id, target).await
     }
 
     /// Try close a protocol
     ///
     /// If the protocol has been closed, do nothing
     #[inline]
-    pub fn close_protocol(&self, session_id: SessionId, proto_id: ProtocolId) -> Result {
-        self.inner.close_protocol(session_id, proto_id)
+    pub async fn close_protocol(&self, session_id: SessionId, proto_id: ProtocolId) -> Result {
+        self.inner.close_protocol(session_id, proto_id).await
     }
 
     /// Get the internal channel sender side handle
     #[inline]
-    pub fn control(&self) -> &ServiceControl {
+    pub fn control(&self) -> &ServiceAsyncControl {
         &self.inner
     }
 
     /// Get service protocol message, Map(ID, Name), but can't modify
     #[inline]
     pub fn protocols(&self) -> &Arc<HashMap<ProtocolId, ProtocolInfo>> {
-        &self.inner.proto_infos
+        &self.inner.protocols()
     }
 
     /// Get the key pair of self
@@ -268,17 +271,19 @@ impl ServiceContext {
     }
 
     /// Set a service notify token
-    pub fn set_service_notify(
+    pub async fn set_service_notify(
         &self,
         proto_id: ProtocolId,
         interval: Duration,
         token: u64,
     ) -> Result {
-        self.inner.set_service_notify(proto_id, interval, token)
+        self.inner
+            .set_service_notify(proto_id, interval, token)
+            .await
     }
 
     /// Set a session notify token
-    pub fn set_session_notify(
+    pub async fn set_session_notify(
         &self,
         session_id: SessionId,
         proto_id: ProtocolId,
@@ -287,15 +292,16 @@ impl ServiceContext {
     ) -> Result {
         self.inner
             .set_session_notify(session_id, proto_id, interval, token)
+            .await
     }
 
     /// Remove a service timer by a token
-    pub fn remove_service_notify(&self, proto_id: ProtocolId, token: u64) -> Result {
-        self.inner.remove_service_notify(proto_id, token)
+    pub async fn remove_service_notify(&self, proto_id: ProtocolId, token: u64) -> Result {
+        self.inner.remove_service_notify(proto_id, token).await
     }
 
     /// Remove a session timer by a token
-    pub fn remove_session_notify(
+    pub async fn remove_session_notify(
         &self,
         session_id: SessionId,
         proto_id: ProtocolId,
@@ -303,6 +309,7 @@ impl ServiceContext {
     ) -> Result {
         self.inner
             .remove_session_notify(session_id, proto_id, token)
+            .await
     }
 
     /// Close service.
@@ -312,13 +319,13 @@ impl ServiceContext {
     /// 2. try close all session's protocol stream
     /// 3. try close all session
     /// 4. close service
-    pub fn close(&self) -> Result {
-        self.inner.close()
+    pub async fn close(&self) -> Result {
+        self.inner.close().await
     }
 
     /// Shutdown service, don't care anything, may cause partial message loss
-    pub fn shutdown(&self) -> Result {
-        self.inner.shutdown()
+    pub async fn shutdown(&self) -> Result {
+        self.inner.shutdown().await
     }
 
     pub(crate) fn clone_self(&self) -> Self {
@@ -370,17 +377,20 @@ pub struct ProtocolContextMutRef<'a> {
 impl<'a> ProtocolContextMutRef<'a> {
     /// Send message to current protocol current session
     #[inline]
-    pub fn send_message(&self, data: Bytes) -> Result {
+    pub async fn send_message(&self, data: Bytes) -> Result {
         let proto_id = self.proto_id();
-        self.inner.send_message_to(self.session.id, proto_id, data)
+        self.inner
+            .send_message_to(self.session.id, proto_id, data)
+            .await
     }
 
     /// Send message to current protocol current session on quick channel
     #[inline]
-    pub fn quick_send_message(&self, data: Bytes) -> Result {
+    pub async fn quick_send_message(&self, data: Bytes) -> Result {
         let proto_id = self.proto_id();
         self.inner
             .quick_send_message_to(self.session.id, proto_id, data)
+            .await
     }
 
     /// Protocol id

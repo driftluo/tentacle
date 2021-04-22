@@ -25,7 +25,7 @@ use crate::{
     service::{
         config::{Meta, SessionConfig},
         future_task::BoxedFutureTask,
-        ServiceControl, SessionType, RECEIVED_SIZE, SEND_SIZE,
+        ServiceAsyncControl, SessionType, RECEIVED_SIZE, SEND_SIZE,
     },
     substream::{ProtocolEvent, SubstreamBuilder, SubstreamWritePartBuilder},
     transports::MultiIncoming,
@@ -152,7 +152,7 @@ pub(crate) struct Session {
     state: SessionState,
 
     context: Arc<SessionContext>,
-    service_control: ServiceControl,
+    service_control: ServiceAsyncControl,
 
     next_stream: StreamId,
 
@@ -808,7 +808,7 @@ pub(crate) struct SessionMeta {
     service_proto_senders: IntMap<ProtocolId, Buffer<ServiceProtocolEvent>>,
     session_proto_senders: IntMap<ProtocolId, Buffer<SessionProtocolEvent>>,
     event_sender: priority_mpsc::Sender<SessionEvent>,
-    service_control: ServiceControl,
+    service_control: ServiceAsyncControl,
     session_proto_handles: Vec<(
         Option<futures::channel::oneshot::Sender<()>>,
         crate::runtime::JoinHandle<()>,
@@ -820,7 +820,7 @@ impl SessionMeta {
         timeout: Duration,
         context: Arc<SessionContext>,
         event_sender: priority_mpsc::Sender<SessionEvent>,
-        control: ServiceControl,
+        control: ServiceAsyncControl,
     ) -> Self {
         SessionMeta {
             config: SessionConfig::default(),

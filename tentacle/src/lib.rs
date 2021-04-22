@@ -107,6 +107,8 @@
     allow(dead_code, unused_variables, unused_imports)
 )]
 
+/// Re-pub async trait
+pub use async_trait::async_trait;
 /// Re-pub bytes crate
 pub use bytes;
 /// Re-pub multiaddr crate

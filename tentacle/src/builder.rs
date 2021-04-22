@@ -9,7 +9,7 @@ use crate::{
     protocol_select::SelectFn,
     secio::SecioKeyPair,
     service::{
-        config::{BlockingFlag, Meta, ServiceConfig},
+        config::{Meta, ServiceConfig},
         ProtocolHandle, ProtocolMeta, Service,
     },
     traits::{Codec, ProtocolSpawn, ServiceHandle, ServiceProtocol, SessionProtocol},
@@ -202,7 +202,6 @@ pub struct MetaBuilder {
     select_version: SelectVersionFn,
     before_send: Option<Box<dyn Fn(bytes::Bytes) -> bytes::Bytes + Send + 'static>>,
     before_receive: BeforeReceiveFn,
-    flag: BlockingFlag,
     spawn: Option<Box<dyn ProtocolSpawn + Send + Sync + 'static>>,
 }
 
@@ -313,12 +312,6 @@ impl MetaBuilder {
         self
     }
 
-    /// Set a flag to control function behavior
-    pub fn flag(mut self, flag: BlockingFlag) -> Self {
-        self.flag = flag;
-        self
-    }
-
     /// Combine the configuration of this builder to create a ProtocolMeta
     pub fn build(mut self) -> ProtocolMeta {
         if self.spawn.is_some() {
@@ -339,7 +332,6 @@ impl MetaBuilder {
             service_handle: self.service_handle,
             session_handle: self.session_handle,
             before_send: self.before_send,
-            flag: self.flag,
         }
     }
 }
@@ -356,7 +348,6 @@ impl Default for MetaBuilder {
             select_version: Box::new(|| None),
             before_send: None,
             before_receive: Box::new(|| None),
-            flag: BlockingFlag::default(),
             spawn: None,
         }
     }
