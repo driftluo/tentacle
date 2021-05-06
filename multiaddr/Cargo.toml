@@ -1,6 +1,6 @@
 [package]
 name = "tentacle-multiaddr"
-version = "0.2.0"
+version = "0.3.0"
 authors = ["driftluo <driftluo@foxmail.com>"]
 edition = "2018"
 
