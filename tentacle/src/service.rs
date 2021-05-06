@@ -4,6 +4,7 @@ use futures::{
     stream::{FusedStream, StreamExt},
 };
 use log::{debug, error, log_enabled, trace, warn};
+use nohash_hasher::IntMap;
 use std::{
     borrow::Cow,
     collections::{HashMap, HashSet},
@@ -68,9 +69,9 @@ type Result<T> = std::result::Result<T, TransportErrorKind>;
 
 /// An abstraction of p2p service, currently only supports TCP/websocket protocol
 pub struct Service<T> {
-    protocol_configs: HashMap<ProtocolId, ProtocolMeta>,
+    protocol_configs: IntMap<ProtocolId, ProtocolMeta>,
 
-    sessions: HashMap<SessionId, SessionController>,
+    sessions: IntMap<SessionId, SessionController>,
 
     multi_transport: MultiTransport,
 
@@ -86,7 +87,7 @@ pub struct Service<T> {
 
     next_session: SessionId,
 
-    before_sends: HashMap<ProtocolId, Box<dyn Fn(bytes::Bytes) -> bytes::Bytes + Send + 'static>>,
+    before_sends: IntMap<ProtocolId, Box<dyn Fn(bytes::Bytes) -> bytes::Bytes + Send + 'static>>,
 
     /// Can be upgrade to list service level protocols
     handle: T,
@@ -96,7 +97,7 @@ pub struct Service<T> {
     // To add a future task
     future_task_sender: Buffer<BoxedFutureTask>,
 
-    service_proto_handles: HashMap<ProtocolId, Buffer<ServiceProtocolEvent>>,
+    service_proto_handles: IntMap<ProtocolId, Buffer<ServiceProtocolEvent>>,
 
     session_proto_handles: HashMap<(SessionId, ProtocolId), Buffer<SessionProtocolEvent>>,
 
@@ -124,7 +125,7 @@ where
 {
     /// New a Service
     pub(crate) fn new(
-        protocol_configs: HashMap<ProtocolId, ProtocolMeta>,
+        protocol_configs: IntMap<ProtocolId, ProtocolMeta>,
         handle: T,
         key_pair: Option<SecioKeyPair>,
         forever: bool,
@@ -354,11 +355,6 @@ where
         self.future_task_sender.push(Box::pin(task));
         self.state.increase();
         Ok(())
-    }
-
-    /// Get service current protocol configure
-    pub fn protocol_configs(&self) -> &HashMap<ProtocolId, ProtocolMeta> {
-        &self.protocol_configs
     }
 
     /// Get service control, control can send tasks externally to the runtime inside
@@ -724,7 +720,8 @@ where
         let handles = self.session_handles_open(self.next_session);
 
         let mut by_name = HashMap::with_capacity(self.protocol_configs.len());
-        let mut by_id = HashMap::with_capacity(self.protocol_configs.len());
+        let mut by_id =
+            HashMap::with_capacity_and_hasher(self.protocol_configs.len(), Default::default());
         self.protocol_configs.iter().for_each(|(key, value)| {
             by_name.insert(value.name(), value.inner.clone());
             by_id.insert(*key, value.inner.clone());

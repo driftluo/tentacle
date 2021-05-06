@@ -1,5 +1,6 @@
 use futures::{channel::mpsc, SinkExt, Stream};
 use log::{debug, trace};
+use nohash_hasher::IntMap;
 use std::collections::HashMap;
 use std::{
     pin::Pin,
@@ -90,9 +91,9 @@ pub struct ServiceProtocolStream<T> {
     handle: T,
     /// External event is passed in from this
     handle_context: ProtocolContext,
-    sessions: HashMap<SessionId, Arc<SessionContext>>,
+    sessions: IntMap<SessionId, Arc<SessionContext>>,
     receiver: mpsc::Receiver<ServiceProtocolEvent>,
-    notify: HashMap<u64, Duration>,
+    notify: IntMap<u64, Duration>,
     notify_sender: mpsc::Sender<u64>,
     notify_receiver: mpsc::Receiver<u64>,
     panic_report: mpsc::Sender<SessionEvent>,
@@ -123,7 +124,7 @@ where
             receiver,
             notify_sender,
             notify_receiver,
-            notify: HashMap::new(),
+            notify: HashMap::default(),
             current_task: CurrentTask::Idle,
             shutdown,
             panic_report,
@@ -375,7 +376,7 @@ pub struct SessionProtocolStream<T> {
     handle_context: ProtocolContext,
     context: Arc<SessionContext>,
     receiver: mpsc::Receiver<SessionProtocolEvent>,
-    notify: HashMap<u64, Duration>,
+    notify: IntMap<u64, Duration>,
     notify_sender: mpsc::Sender<u64>,
     notify_receiver: mpsc::Receiver<u64>,
     current_task: bool,
@@ -406,7 +407,7 @@ where
             receiver,
             notify_sender,
             notify_receiver,
-            notify: HashMap::new(),
+            notify: HashMap::default(),
             context,
             panic_report,
             current_task: false,

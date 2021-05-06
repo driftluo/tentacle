@@ -1,5 +1,6 @@
 use futures::{channel::mpsc, prelude::*, stream::iter, SinkExt};
 use log::{debug, error, log_enabled, trace, warn};
+use nohash_hasher::IntMap;
 use std::{
     collections::HashMap,
     io::{self, ErrorKind},
@@ -140,7 +141,7 @@ pub(crate) struct Session {
     control: Control,
 
     protocol_configs_by_name: HashMap<String, Arc<Meta>>,
-    protocol_configs_by_id: HashMap<ProtocolId, Arc<Meta>>,
+    protocol_configs_by_id: IntMap<ProtocolId, Arc<Meta>>,
 
     config: SessionConfig,
 
@@ -156,8 +157,8 @@ pub(crate) struct Session {
     next_stream: StreamId,
 
     /// Sub streams maps a stream id to a sender of sub stream
-    substreams: HashMap<StreamId, PriorityBuffer<ProtocolEvent>>,
-    proto_streams: HashMap<ProtocolId, StreamId>,
+    substreams: IntMap<StreamId, PriorityBuffer<ProtocolEvent>>,
+    proto_streams: IntMap<ProtocolId, StreamId>,
 
     /// Clone to new sub stream
     proto_event_sender: mpsc::Sender<ProtocolEvent>,
@@ -169,8 +170,8 @@ pub(crate) struct Session {
     /// Receive event from service
     service_receiver: priority_mpsc::Receiver<SessionEvent>,
 
-    service_proto_senders: HashMap<ProtocolId, Buffer<ServiceProtocolEvent>>,
-    session_proto_senders: HashMap<ProtocolId, Buffer<SessionProtocolEvent>>,
+    service_proto_senders: IntMap<ProtocolId, Buffer<ServiceProtocolEvent>>,
+    session_proto_senders: IntMap<ProtocolId, Buffer<SessionProtocolEvent>>,
 
     future_task_sender: mpsc::Sender<BoxedFutureTask>,
     wait_handle: Vec<(
@@ -800,12 +801,12 @@ impl Stream for Session {
 pub(crate) struct SessionMeta {
     config: SessionConfig,
     protocol_configs_by_name: HashMap<String, Arc<Meta>>,
-    protocol_configs_by_id: HashMap<ProtocolId, Arc<Meta>>,
+    protocol_configs_by_id: IntMap<ProtocolId, Arc<Meta>>,
     context: Arc<SessionContext>,
     timeout: Duration,
     keep_buffer: bool,
-    service_proto_senders: HashMap<ProtocolId, Buffer<ServiceProtocolEvent>>,
-    session_proto_senders: HashMap<ProtocolId, Buffer<SessionProtocolEvent>>,
+    service_proto_senders: IntMap<ProtocolId, Buffer<ServiceProtocolEvent>>,
+    session_proto_senders: IntMap<ProtocolId, Buffer<SessionProtocolEvent>>,
     event_sender: priority_mpsc::Sender<SessionEvent>,
     service_control: ServiceControl,
     session_proto_handles: Vec<(
@@ -824,7 +825,7 @@ impl SessionMeta {
         SessionMeta {
             config: SessionConfig::default(),
             protocol_configs_by_name: HashMap::new(),
-            protocol_configs_by_id: HashMap::new(),
+            protocol_configs_by_id: HashMap::default(),
             context,
             timeout,
             keep_buffer: false,
@@ -841,7 +842,7 @@ impl SessionMeta {
         self
     }
 
-    pub fn protocol_by_id(mut self, config: HashMap<ProtocolId, Arc<Meta>>) -> Self {
+    pub fn protocol_by_id(mut self, config: IntMap<ProtocolId, Arc<Meta>>) -> Self {
         self.protocol_configs_by_id = config;
         self
     }
@@ -858,7 +859,7 @@ impl SessionMeta {
 
     pub fn service_proto_senders(
         mut self,
-        senders: HashMap<ProtocolId, Buffer<ServiceProtocolEvent>>,
+        senders: IntMap<ProtocolId, Buffer<ServiceProtocolEvent>>,
     ) -> Self {
         self.service_proto_senders = senders;
         self
@@ -866,7 +867,7 @@ impl SessionMeta {
 
     pub fn session_senders(
         mut self,
-        senders: HashMap<ProtocolId, Buffer<SessionProtocolEvent>>,
+        senders: IntMap<ProtocolId, Buffer<SessionProtocolEvent>>,
     ) -> Self {
         self.session_proto_senders = senders;
         self
