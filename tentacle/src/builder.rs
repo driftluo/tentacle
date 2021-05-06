@@ -1,5 +1,6 @@
 use std::{collections::HashMap, io, sync::Arc, time::Duration};
 
+use nohash_hasher::IntMap;
 use tokio_util::codec::LengthDelimitedCodec;
 
 use crate::{
@@ -17,7 +18,7 @@ use crate::{
 
 /// Builder for Service
 pub struct ServiceBuilder {
-    inner: HashMap<ProtocolId, ProtocolMeta>,
+    inner: IntMap<ProtocolId, ProtocolMeta>,
     key_pair: Option<SecioKeyPair>,
     forever: bool,
     config: ServiceConfig,
@@ -164,7 +165,7 @@ impl ServiceBuilder {
 impl Default for ServiceBuilder {
     fn default() -> Self {
         ServiceBuilder {
-            inner: HashMap::new(),
+            inner: HashMap::default(),
             key_pair: None,
             forever: false,
             config: ServiceConfig::default(),

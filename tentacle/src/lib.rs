@@ -136,7 +136,7 @@ pub use substream::SubstreamReadPart;
 /// Index of sub/protocol stream
 type StreamId = usize;
 /// Protocol id
-#[derive(Debug, Clone, Copy, Hash, Ord, PartialOrd, Eq, PartialEq, Default)]
+#[derive(Debug, Clone, Copy, Ord, PartialOrd, Eq, Default)]
 pub struct ProtocolId(usize);
 
 impl ProtocolId {
@@ -163,8 +163,22 @@ impl From<usize> for ProtocolId {
     }
 }
 
+impl std::hash::Hash for ProtocolId {
+    fn hash<H: std::hash::Hasher>(&self, hasher: &mut H) {
+        hasher.write_usize(self.0)
+    }
+}
+
+impl PartialEq for ProtocolId {
+    fn eq(&self, other: &ProtocolId) -> bool {
+        self.0.eq(&other.0)
+    }
+}
+
+impl nohash_hasher::IsEnabled for ProtocolId {}
+
 /// Index of session
-#[derive(Debug, Clone, Copy, Hash, Ord, PartialOrd, Eq, PartialEq, Default)]
+#[derive(Debug, Clone, Copy, Ord, PartialOrd, Eq, Default)]
 pub struct SessionId(usize);
 
 impl SessionId {
@@ -200,3 +214,17 @@ impl From<usize> for SessionId {
         SessionId(id)
     }
 }
+
+impl std::hash::Hash for SessionId {
+    fn hash<H: std::hash::Hasher>(&self, hasher: &mut H) {
+        hasher.write_usize(self.0)
+    }
+}
+
+impl PartialEq for SessionId {
+    fn eq(&self, other: &SessionId) -> bool {
+        self.0.eq(&other.0)
+    }
+}
+
+impl nohash_hasher::IsEnabled for SessionId {}

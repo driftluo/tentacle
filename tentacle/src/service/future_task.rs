@@ -3,6 +3,7 @@ use futures::{
     prelude::*,
 };
 use log::{debug, trace};
+use nohash_hasher::IntMap;
 use std::collections::{hash_map::Entry, HashMap};
 use std::{
     pin::Pin,
@@ -23,7 +24,7 @@ pub(crate) type BoxedFutureTask = Pin<Box<dyn Future<Output = ()> + 'static>>;
 
 /// A future task manager
 pub(crate) struct FutureTaskManager {
-    signals: HashMap<FutureTaskId, oneshot::Sender<()>>,
+    signals: IntMap<FutureTaskId, oneshot::Sender<()>>,
     next_id: FutureTaskId,
     id_sender: mpsc::Sender<FutureTaskId>,
     id_receiver: mpsc::Receiver<FutureTaskId>,
