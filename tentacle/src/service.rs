@@ -398,7 +398,7 @@ where
                     );
                     let (sender, receiver) = futures::channel::oneshot::channel();
                     let handle = crate::runtime::spawn(async move {
-                        future::select(Box::pin(stream.run()), receiver).await;
+                        stream.run(receiver).await;
                     });
                     handles.push((Some(sender), handle));
                 }
@@ -785,7 +785,7 @@ where
                 let (sender, receiver) = futures::channel::oneshot::channel();
                 let handle = crate::runtime::spawn(async move {
                     stream.handle_event(ServiceProtocolEvent::Init).await;
-                    future::select(Box::pin(stream.run()), receiver).await;
+                    stream.run(receiver).await;
                 });
                 self.wait_handle.push((Some(sender), handle));
             } else {

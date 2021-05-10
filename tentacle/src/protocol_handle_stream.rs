@@ -1,4 +1,7 @@
-use futures::{channel::mpsc, SinkExt, StreamExt};
+use futures::{
+    channel::{mpsc, oneshot},
+    SinkExt, StreamExt,
+};
 use log::{debug, trace};
 use nohash_hasher::IntMap;
 use std::collections::HashMap;
@@ -219,7 +222,7 @@ where
         }
     }
 
-    pub async fn run(&mut self) {
+    pub async fn run(&mut self, mut recv: oneshot::Receiver<()>) {
         loop {
             if self.shutdown.load(Ordering::SeqCst) {
                 debug!(
@@ -245,6 +248,7 @@ where
                     }
                 },
                 Some(_) = &mut self.handle.poll(&mut self.handle_context) => {},
+                _ = &mut recv => break,
                 else => break
             }
         }
@@ -435,7 +439,7 @@ where
         self.current_task = false;
     }
 
-    pub async fn run(&mut self) {
+    pub async fn run(&mut self, mut recv: oneshot::Receiver<()>) {
         loop {
             tokio::select! {
                 event = self.receiver.next() => {
@@ -453,6 +457,7 @@ where
                     }
                 }
                 Some(_) = self.handle.poll(self.handle_context.as_mut(&self.context)) => {},
+                _ = &mut recv => break,
                 else => break
             }
         }
