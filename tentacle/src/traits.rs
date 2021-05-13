@@ -243,6 +243,7 @@ impl SessionProtocol for Box<dyn SessionProtocol + Send + Sync + 'static + Unpin
 /// This trait implementation and the callback implementation are mutually exclusive, and will be
 /// checked during construction, if both exist, it will panic
 #[cfg_attr(not(feature = "unstable"), doc(hidden))]
+#[cfg_attr(docsrs, doc(cfg(feature = "unstable")))]
 pub trait ProtocolSpawn {
     /// Call on protocol opened
     fn spawn(
