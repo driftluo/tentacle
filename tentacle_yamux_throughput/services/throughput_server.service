@@ -1,0 +1,14 @@
+[Unit]
+Description=Tentacle throughput test server
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+Restart=no
+User=ubuntu
+Environment="RUST_LOG=info"
+ExecStart=/home/ubuntu/ckb-devops/jenkins/ci_home/workspace/tentacle_yamux_throughput/throughput_test server
+StandardOutput=file:/home/ubuntu/ckb-devops/jenkins/ci_home/workspace/tentacle_yamux_throughput/throughput_server.log
+
+[Install]
+WantedBy=multi-user.target

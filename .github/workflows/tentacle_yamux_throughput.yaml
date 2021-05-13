@@ -1,0 +1,61 @@
+name: Tentacle_yamux_throughput
+
+on:
+  schedule:
+    - cron: '0 23 * * *'
+jobs:
+  tentacle_yamux_throughput:
+    name: tentacle_yamux_throughput
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v2
+      - name: Build yamux throughput test.
+        run: |
+          cd yamux
+          cargo build --examples --release
+          cp "${CARGO_TARGET_DIR}/release/examples/throughput_test" "${{ github.workspace }}/throughput_test"
+      - name: Update ExecStart&StandardOutput
+        run: |
+          sed -i  "s#ExecStart=.*#ExecStart=${{github.workspace}}/throughput_test  server#g" ${{ github.workspace }}/tentacle_yamux_throughput/services/throughput_server.service
+          sed -i  "s#StandardOutput=.*#StandardOutput=file:${{github.workspace}}/throughput_server.log#g" ${{ github.workspace }}/tentacle_yamux_throughput/services/throughput_server.service
+          sed -i  "s#ExecStart=.*#ExecStart=${{github.workspace}}/throughput_test client 20#g" ${{ github.workspace }}/tentacle_yamux_throughput/services/throughput_client_20.service
+          sed -i  "s#StandardOutput=.*#StandardOutput=file:${{github.workspace}}/throughput_client_20.log#g" ${{ github.workspace }}/tentacle_yamux_throughput/services/throughput_client_20.service
+          sed -i  "s#ExecStart=.*#ExecStart=${{github.workspace}}/throughput_test client 2000#g" ${{ github.workspace }}/tentacle_yamux_throughput/services/throughput_client_2000.service
+          sed -i  "s#StandardOutput=.*#StandardOutput=file:${{github.workspace}}/throughput_client_2000.log#g" ${{ github.workspace }}/tentacle_yamux_throughput/services/throughput_client_2000.service
+          sed -i  "s/User=.*/User=${whoami}/g" ${{ github.workspace }}/tentacle_yamux_throughput/services/throughput_server.service ${{ github.workspace }}/tentacle_yamux_throughput/services/throughput_client_20.service ${{ github.workspace }}/tentacle_yamux_throughput/services/throughput_client_2000.service
+      - name: Start throughput server
+        run:  |
+         sudo cp ${{ github.workspace }}/tentacle_yamux_throughput/services/throughput_server.service /etc/systemd/system/throughput_server.service
+         sudo service throughput_server start
+      - name: Start throughput client with 20 streams.
+        run:  |
+         sudo cp ${{ github.workspace }}/tentacle_yamux_throughput/services/throughput_client_20.service /etc/systemd/system/throughput_client_20.service
+         sudo service throughput_client_20 start
+         sleep 300s
+         sudo service throughput_client_20 stop
+      - name: Start throughput client with 2000 streams.
+        run: |
+            sudo cp ${{ github.workspace }}/tentacle_yamux_throughput/services/throughput_client_2000.service /etc/systemd/system/throughput_client_2000.service
+            sudo service throughput_client_2000 start
+            sleep 300s
+            sudo service throughput_client_2000 stop
+      - name: Do sttistics
+        uses: actions/setup-python@v2
+        with:
+            python-version: 3.8 
+      - run: |
+          python3 ${{ github.workspace }}/tentacle_yamux_throughput/statistics.py > result.log
+      - name: Output result
+        run: cat result.log
+      - name: Send mail
+        if: failure()
+        uses: dawidd6/action-send-mail@v2
+        with:
+          server_address: smtp.163.com
+          server_port: 465
+          username: ${{secrets.MAIL_USERNAME}}
+          password: ${{secrets.MAIL_PASSWORD}}
+          subject: Github Actions job result
+          body: Build job of ${{github.repository}} Failed!
+          to: Liya@cryptape.com
+          from: xuliya_0116@126.com
