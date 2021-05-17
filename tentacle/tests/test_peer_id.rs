@@ -109,11 +109,7 @@ fn test_peer_id(fail: bool) {
 
             addr_sender.send(listen_addr).unwrap();
 
-            loop {
-                if service.run().await.is_none() {
-                    break;
-                }
-            }
+            service.run().await
         });
     });
 
@@ -125,13 +121,7 @@ fn test_peer_id(fail: bool) {
     let control: ServiceControl = service.control().clone().into();
     thread::spawn(move || {
         let rt = tokio::runtime::Runtime::new().unwrap();
-        rt.block_on(async move {
-            loop {
-                if service.run().await.is_none() {
-                    break;
-                }
-            }
-        });
+        rt.block_on(async move { service.run().await });
     });
 
     if fail {

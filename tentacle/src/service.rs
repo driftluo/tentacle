@@ -1207,7 +1207,7 @@ where
     }
 
     /// start service
-    pub async fn run(&mut self) -> Option<()> {
+    pub async fn run(&mut self) {
         if let Some(stream) = self.future_task_manager.take() {
             let (sender, receiver) = futures::channel::oneshot::channel();
             let handle = crate::runtime::spawn(async move {
@@ -1217,26 +1217,23 @@ where
             self.init_proto_handles();
         }
 
-        if self.listens.is_empty() && self.state.is_shutdown() && self.sessions.is_empty() {
-            debug!("shutdown because all state is empty head");
-            self.shutdown.store(true, Ordering::SeqCst);
-            self.wait_handle_poll().await;
-            return None;
-        }
-        #[cfg(not(target_arch = "wasm32"))]
-        self.try_update_listens().await;
-        tokio::select! {
-            event = self.session_event_receiver.next() => {
-                if let Some(event) = event {
+        loop {
+            if self.listens.is_empty() && self.state.is_shutdown() && self.sessions.is_empty() {
+                debug!("shutdown because all state is empty head");
+                self.shutdown.store(true, Ordering::SeqCst);
+                self.wait_handle_poll().await;
+                break;
+            }
+            #[cfg(not(target_arch = "wasm32"))]
+            self.try_update_listens().await;
+            tokio::select! {
+                Some(event) = self.session_event_receiver.next() => {
                     self.handle_session_event(event).await
-                }
-            },
-            event = self.service_task_receiver.next() => {
-                if let Some((priority, task)) = event {
+                },
+                Some((priority, task)) = self.service_task_receiver.next() => {
                     self.handle_service_task(task, priority).await
                 }
             }
         }
-        Some(())
     }
 }

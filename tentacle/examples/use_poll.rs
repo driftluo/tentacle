@@ -89,10 +89,6 @@ fn run() {
                 tx.send(()).await.unwrap();
             }
         });
-        loop {
-            if service.run().await.is_none() {
-                break;
-            }
-        }
+        service.run().await
     });
 }

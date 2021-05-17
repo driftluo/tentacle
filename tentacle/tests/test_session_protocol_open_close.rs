@@ -146,11 +146,7 @@ fn test_session_proto_open_close(secio: bool) {
 
             addr_sender.send(listen_addr).unwrap();
 
-            loop {
-                if service_2.run().await.is_none() {
-                    break;
-                }
-            }
+            service_2.run().await
         });
     });
 
@@ -164,11 +160,7 @@ fn test_session_proto_open_close(secio: bool) {
                 .await
                 .unwrap();
 
-            loop {
-                if service_1.run().await.is_none() {
-                    break;
-                }
-            }
+            service_1.run().await
         });
     });
 

@@ -148,11 +148,7 @@ fn test_block_send(secio: bool, session_protocol: bool) {
                 .await
                 .unwrap();
             let _res = addr_sender.send(listen_addr);
-            loop {
-                if service.run().await.is_none() {
-                    break;
-                }
-            }
+            service.run().await
         });
     });
 
@@ -167,11 +163,7 @@ fn test_block_send(secio: bool, session_protocol: bool) {
                 .dial(listen_addr, TargetProtocol::All)
                 .await
                 .unwrap();
-            loop {
-                if service.run().await.is_none() {
-                    break;
-                }
-            }
+            service.run().await
         });
     });
     handle_2.join().unwrap();

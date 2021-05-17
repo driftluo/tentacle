@@ -141,11 +141,7 @@ fn test(secio: bool, shutdown: bool) {
 
             addr_sender.send(listen_addr).unwrap();
 
-            loop {
-                if service_1.run().await.is_none() {
-                    break;
-                }
-            }
+            service_1.run().await
         });
     });
 
@@ -178,11 +174,7 @@ where
                 .await
                 .unwrap();
 
-            loop {
-                if service.run().await.is_none() {
-                    break;
-                }
-            }
+            service.run().await
         });
     })
 }

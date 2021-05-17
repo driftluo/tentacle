@@ -243,11 +243,7 @@ fn test_repeated_dial(secio: bool) {
                 .await
                 .unwrap();
             let _res = addr_sender.send(listen_addr);
-            loop {
-                if service.run().await.is_none() {
-                    break;
-                }
-            }
+            service.run().await
         });
     });
 
@@ -262,11 +258,7 @@ fn test_repeated_dial(secio: bool) {
                 .dial(listen_addr, TargetProtocol::All)
                 .await
                 .unwrap();
-            loop {
-                if service.run().await.is_none() {
-                    break;
-                }
-            }
+            service.run().await
         });
     });
 
@@ -296,13 +288,7 @@ fn test_dial_with_no_notify(secio: bool) {
     let control: ServiceControl = service.control().clone().into();
     thread::spawn(move || {
         let rt = tokio::runtime::Runtime::new().unwrap();
-        rt.block_on(async move {
-            loop {
-                if service.run().await.is_none() {
-                    break;
-                }
-            }
-        });
+        rt.block_on(async move { service.run().await });
     });
     // macOs can't dial 0 port
     for _ in 0..2 {

@@ -219,11 +219,7 @@ fn server() {
             .listen("/ip4/127.0.0.1/tcp/1338/ws".parse().unwrap())
             .await
             .unwrap();
-        loop {
-            if service.run().await.is_none() {
-                break;
-            }
-        }
+        service.run().await
     });
 }
 
@@ -239,10 +235,6 @@ fn client() {
             )
             .await
             .unwrap();
-        loop {
-            if service.run().await.is_none() {
-                break;
-            }
-        }
+        service.run().await
     });
 }

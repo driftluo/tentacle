@@ -120,11 +120,7 @@ fn test_kill(secio: bool) {
                 .await
                 .unwrap();
             let _res = addr_sender.send(listen_addr);
-            loop {
-                if service.run().await.is_none() {
-                    break;
-                }
-            }
+            service.run().await
         });
     });
     thread::sleep(Duration::from_millis(100));
@@ -159,11 +155,7 @@ fn test_kill(secio: bool) {
                     .dial(listen_addr, TargetProtocol::All)
                     .await
                     .unwrap();
-                loop {
-                    if service.run().await.is_none() {
-                        break;
-                    }
-                }
+                service.run().await
             });
         }
     }

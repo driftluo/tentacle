@@ -114,11 +114,7 @@ pub fn init() {
                     .await
                     .unwrap();
                 let _res = addr_sender.send(listen_addr);
-                loop {
-                    if service.run().await.is_none() {
-                        break;
-                    }
-                }
+                service.run().await
             });
         });
 
@@ -133,11 +129,7 @@ pub fn init() {
                     .dial(listen_addr, TargetProtocol::All)
                     .await
                     .unwrap();
-                loop {
-                    if service.run().await.is_none() {
-                        break;
-                    }
-                }
+                service.run().await
             });
         });
 
@@ -162,11 +154,7 @@ pub fn init() {
                     .await
                     .unwrap();
                 let _res = addr_sender.send(listen_addr);
-                loop {
-                    if service.run().await.is_none() {
-                        break;
-                    }
-                }
+                service.run().await
             });
         });
 
@@ -181,11 +169,7 @@ pub fn init() {
                     .dial(listen_addr, TargetProtocol::All)
                     .await
                     .unwrap();
-                loop {
-                    if service.run().await.is_none() {
-                        break;
-                    }
-                }
+                service.run().await
             });
         });
 

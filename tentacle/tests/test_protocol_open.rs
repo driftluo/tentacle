@@ -125,11 +125,7 @@ fn test_protocol_open(secio: bool) {
                 .await
                 .unwrap();
             let _res = addr_sender.send(listen_addr);
-            loop {
-                if service.run().await.is_none() {
-                    break;
-                }
-            }
+            service.run().await
         });
     });
 
@@ -144,11 +140,7 @@ fn test_protocol_open(secio: bool) {
                 .dial(listen_addr, TargetProtocol::All)
                 .await
                 .unwrap();
-            loop {
-                if service.run().await.is_none() {
-                    break;
-                }
-            }
+            service.run().await
         });
     });
     handle_2.join().unwrap();

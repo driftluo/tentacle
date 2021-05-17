@@ -102,11 +102,7 @@ fn main() {
                 .await
                 .unwrap();
             println!("listen_addr: {}", listen_addr);
-            loop {
-                if service.run().await.is_none() {
-                    break;
-                }
-            }
+            service.run().await
         });
     } else {
         rt.block_on(async move {
@@ -117,11 +113,7 @@ fn main() {
                 .dial(listen_addr, TargetProtocol::All)
                 .await
                 .unwrap();
-            loop {
-                if service.run().await.is_none() {
-                    break;
-                }
-            }
+            service.run().await
         });
     }
 }
