@@ -15,6 +15,10 @@ pub enum TransportErrorKind {
     /// Dns resolver error
     #[error("can not resolve `{0:?}`, io error: `{1:?}`")]
     DnsResolverError(Multiaddr, IOError),
+    /// Tls error
+    #[error("tls setting error: `{0:?}`")]
+    #[cfg(feature = "tls")]
+    TlsError(String),
 }
 
 #[derive(Error, Debug)]

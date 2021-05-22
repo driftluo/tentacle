@@ -1,3 +1,5 @@
+#[cfg(feature = "tls")]
+use crate::utils::multiaddr_to_socketaddr;
 use crate::{
     builder::{BeforeReceiveFn, CodecFn, NameFn, SelectVersionFn, SessionHandleFn},
     traits::{Codec, ProtocolSpawn, ServiceProtocol, SessionProtocol},
@@ -5,6 +7,8 @@ use crate::{
     ProtocolId, SessionId,
 };
 use std::{net::SocketAddr, sync::Arc, time::Duration};
+#[cfg(feature = "tls")]
+use tokio_rustls::rustls::{ClientConfig, ServerConfig};
 
 /// Default max buffer size
 const MAX_BUF_SIZE: usize = 24 * 1024 * 1024;
@@ -20,6 +24,8 @@ pub(crate) struct ServiceConfig {
     pub tcp_bind_addr: Option<SocketAddr>,
     #[cfg(feature = "ws")]
     pub ws_bind_addr: Option<SocketAddr>,
+    #[cfg(feature = "tls")]
+    pub tls_config: Option<TlsConfig>,
 }
 
 impl Default for ServiceConfig {
@@ -35,6 +41,8 @@ impl Default for ServiceConfig {
             tcp_bind_addr: None,
             #[cfg(feature = "ws")]
             ws_bind_addr: None,
+            #[cfg(feature = "tls")]
+            tls_config: None,
         }
     }
 }
@@ -69,6 +77,39 @@ impl Default for SessionConfig {
             send_buffer_size: MAX_BUF_SIZE,
             yamux_config: YamuxConfig::default(),
         }
+    }
+}
+
+/// tls config wrap for server setup
+#[derive(Clone, Default)]
+#[cfg(feature = "tls")]
+pub struct TlsConfig {
+    /// tls server end config
+    pub(crate) tls_server_config: Option<ServerConfig>,
+    /// tls client end config
+    pub(crate) tls_client_config: Option<ClientConfig>,
+    /// tls bind socket address
+    pub(crate) tls_bind: Option<SocketAddr>,
+}
+
+#[cfg(feature = "tls")]
+impl TlsConfig {
+    /// new TlsConfig
+    pub fn new(
+        tls_server_config: Option<ServerConfig>,
+        tls_client_config: Option<ClientConfig>,
+    ) -> Self {
+        TlsConfig {
+            tls_server_config,
+            tls_client_config,
+            tls_bind: None,
+        }
+    }
+
+    /// bind tls address
+    pub fn tls_bind(mut self, addr: multiaddr::Multiaddr) -> Self {
+        self.tls_bind = multiaddr_to_socketaddr(&addr);
+        self
     }
 }
 

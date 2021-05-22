@@ -15,6 +15,7 @@
 //! - DNS/IP: `/dns4/localhost/tcp/1337`
 //! - UDP: `/ip4/127.0.0.1/udp/1234`
 //! - Websocket: `/ip4/127.0.0.1/tcp/1337/ws`
+//! - Tls: `/ip4/127.0.0.1/tcp/1337/tls/domain_name.com`
 //!
 //! #### Protocol
 //!

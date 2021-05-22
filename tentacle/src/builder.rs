@@ -3,6 +3,8 @@ use std::{collections::HashMap, io, sync::Arc, time::Duration};
 use nohash_hasher::IntMap;
 use tokio_util::codec::LengthDelimitedCodec;
 
+#[cfg(feature = "tls")]
+use crate::service::config::TlsConfig;
 use crate::{
     protocol_select::SelectFn,
     secio::SecioKeyPair,
@@ -159,6 +161,13 @@ impl ServiceBuilder {
     /// Clear all protocols
     pub fn clear(&mut self) {
         self.inner.clear();
+    }
+
+    /// set rustls ServerConfig, default is NoClientAuth
+    #[cfg(feature = "tls")]
+    pub fn tls_config(mut self, config: TlsConfig) -> Self {
+        self.config.tls_config = Some(config);
+        self
     }
 }
 
