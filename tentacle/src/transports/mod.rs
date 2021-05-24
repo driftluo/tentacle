@@ -192,15 +192,15 @@ mod os {
                 },
                 TransportType::Wss => Err(TransportErrorKind::NotSupported(address)),
                 #[cfg(feature = "tls")]
-                TransportType::Tls(s) => {
-                    if s.is_empty() {
+                TransportType::Tls(domain_name) => {
+                    if domain_name.is_empty() {
                         Err(TransportErrorKind::NotSupported(address))
                     } else if self.tls_config.is_none() {
                         Err(TransportErrorKind::TlsError(
                             "tls config is not set".to_string(),
                         ))
                     } else {
-                        match TlsTransport::new(self.timeout, self.tls_config.unwrap(), s)
+                        match TlsTransport::new(self.timeout, self.tls_config.unwrap(), domain_name)
                             .listen(address)
                         {
                             Ok(future) => Ok(MultiListenFuture::Tls(future)),
@@ -236,15 +236,15 @@ mod os {
                 },
                 TransportType::Wss => Err(TransportErrorKind::NotSupported(address)),
                 #[cfg(feature = "tls")]
-                TransportType::Tls(s) => {
-                    if s.is_empty() {
+                TransportType::Tls(domain_name) => {
+                    if domain_name.is_empty() {
                         Err(TransportErrorKind::NotSupported(address))
                     } else if self.tls_config.is_none() {
                         Err(TransportErrorKind::TlsError(
                             "tls config is not set".to_string(),
                         ))
                     } else {
-                        match TlsTransport::new(self.timeout, self.tls_config.unwrap(), s)
+                        match TlsTransport::new(self.timeout, self.tls_config.unwrap(), domain_name)
                             .dial(address)
                         {
                             Ok(future) => Ok(MultiDialFuture::Tls(future)),

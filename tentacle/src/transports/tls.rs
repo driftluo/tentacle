@@ -12,7 +12,7 @@ use std::{
 
 use crate::runtime::TcpListener;
 use crate::service::TlsConfig;
-use crate::transports::{find_type, TransportFuture, TransportType};
+use crate::transports::TransportFuture;
 use crate::{
     error::TransportErrorKind,
     multiaddr::{Multiaddr, Protocol},
@@ -35,6 +35,7 @@ async fn bind(
     timeout: Duration,
     reuse: bool,
     tls_config: ServerConfig,
+    domain_name: String,
 ) -> Result<(Multiaddr, TlsListener)> {
     let addr = address.await?;
     match multiaddr_to_socketaddr(&addr) {
@@ -43,12 +44,9 @@ async fn bind(
 
             let mut listen_addr = socketaddr_to_multiaddr(local_addr);
 
-            if let TransportType::Tls(s) = find_type(&addr) {
-                listen_addr.push(Protocol::Tls(Cow::Borrowed(&s)));
-                Ok((listen_addr, TlsListener::new(timeout, tcp, tls_config)))
-            } else {
-                Err(TransportErrorKind::NotSupported(addr))
-            }
+            listen_addr.push(Protocol::Tls(Cow::Borrowed(domain_name.as_str())));
+
+            Ok((listen_addr, TlsListener::new(timeout, tcp, tls_config)))
         }
         None => Err(TransportErrorKind::NotSupported(addr)),
     }
@@ -90,7 +88,7 @@ pub struct TlsListener {
     timeout: Duration,
     sender: Sender<(Multiaddr, TlsStream)>,
     pending_stream: Receiver<(Multiaddr, TlsStream)>,
-    tls_config: Box<ServerConfig>,
+    tls_config: Arc<ServerConfig>,
 }
 
 impl TlsListener {
@@ -101,7 +99,7 @@ impl TlsListener {
             timeout,
             sender,
             pending_stream: rx,
-            tls_config: Box::new(tls_config),
+            tls_config: Arc::new(tls_config),
         }
     }
 
@@ -129,7 +127,7 @@ impl Stream for TlsListener {
                 Ok(remote_address) => {
                     let timeout = self.timeout;
                     let mut sender = self.sender.clone();
-                    let acceptor = TlsAcceptor::from(Arc::new(*self.tls_config.clone()));
+                    let acceptor = TlsAcceptor::from(Arc::clone(&self.tls_config));
                     crate::runtime::spawn(async move {
                         match crate::runtime::timeout(timeout, acceptor.accept(stream)).await {
                             Err(_) => warn!("accept tls server stream timeout"),
@@ -201,6 +199,7 @@ impl Transport for TlsTransport {
                     self.timeout,
                     self.config.tls_bind.is_some(),
                     self.config.tls_server_config.unwrap(),
+                    self.domain_name,
                 );
                 Ok(TransportFuture::new(Box::pin(task)))
             }
@@ -210,6 +209,7 @@ impl Transport for TlsTransport {
                     self.timeout,
                     self.config.tls_bind.is_some(),
                     self.config.tls_server_config.unwrap(),
+                    self.domain_name,
                 );
                 Ok(TransportFuture::new(Box::pin(task)))
             }
