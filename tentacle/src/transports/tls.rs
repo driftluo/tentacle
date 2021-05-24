@@ -29,7 +29,7 @@ use tokio_rustls::{TlsAcceptor, TlsConnector};
 
 pub type TlsStream = Box<dyn AsyncRw + Send + Unpin + 'static>;
 
-/// Tcp listen bind
+/// Tls listen bind
 async fn bind(
     address: impl Future<Output = Result<Multiaddr>>,
     timeout: Duration,
@@ -54,7 +54,7 @@ async fn bind(
     }
 }
 
-/// Tcp connect
+/// Tls connect
 async fn connect(
     address: impl Future<Output = Result<Multiaddr>>,
     timeout: Duration,
@@ -135,7 +135,8 @@ impl Stream for TlsListener {
                             Err(_) => warn!("accept tls server stream timeout"),
                             Ok(res) => match res {
                                 Ok(stream) => {
-                                    let addr = socketaddr_to_multiaddr(remote_address);
+                                    let mut addr = socketaddr_to_multiaddr(remote_address);
+                                    addr.push(Protocol::Tls(Cow::Borrowed("/")));
                                     if sender.send((addr, Box::new(stream))).await.is_err() {
                                         warn!("receiver closed unexpectedly")
                                     }

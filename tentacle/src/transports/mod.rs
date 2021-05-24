@@ -526,7 +526,7 @@ mod test {
 
         assert_eq!(find_type(&a), TransportType::Tcp);
 
-        a.push(Protocol::Tls(Cow::Owned("/".to_string())));
+        a.push(Protocol::Tls(Cow::Borrowed("/")));
 
         assert_eq!(find_type(&a), TransportType::Tls("/".to_string()));
     }
