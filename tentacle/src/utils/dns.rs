@@ -76,8 +76,7 @@ impl DnsResolver {
             Some(address) => {
                 let mut address = socketaddr_to_multiaddr(address);
                 match self.ty {
-                    TransportType::Tcp | TransportType::Memory => (),
-                    TransportType::Tls(ref s) => address.push(Protocol::Tls(Cow::Borrowed(s))),
+                    TransportType::Tcp | TransportType::Memory | TransportType::Tls => (),
                     TransportType::Ws => address.push(Protocol::Ws),
                     TransportType::Wss => address.push(Protocol::Wss),
                 }

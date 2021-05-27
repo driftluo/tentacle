@@ -4,7 +4,6 @@ use log::warn;
 use std::{
     borrow::Cow,
     future::Future,
-    net::SocketAddr,
     pin::Pin,
     task::{Context, Poll},
     time::Duration,
@@ -12,18 +11,17 @@ use std::{
 
 use crate::runtime::TcpListener;
 use crate::service::TlsConfig;
-use crate::transports::TransportFuture;
 use crate::{
     error::TransportErrorKind,
     multiaddr::{Multiaddr, Protocol},
     session::AsyncRw,
-    transports::{tcp_dial, tcp_listen, Transport},
+    transports::{tcp_dial, tcp_listen, Transport, TransportFuture},
     utils::{dns::DnsResolver, multiaddr_to_socketaddr, socketaddr_to_multiaddr},
 };
 use futures::channel::mpsc::{channel, Receiver, Sender};
 use std::sync::Arc;
 use tokio::io;
-use tokio_rustls::rustls::{ClientConfig, ServerConfig};
+use tokio_rustls::rustls::ServerConfig;
 use tokio_rustls::webpki::DNSNameRef;
 use tokio_rustls::{TlsAcceptor, TlsConnector};
 
@@ -33,20 +31,30 @@ pub type TlsStream = Box<dyn AsyncRw + Send + Unpin + 'static>;
 async fn bind(
     address: impl Future<Output = Result<Multiaddr>>,
     timeout: Duration,
-    reuse: bool,
-    tls_config: ServerConfig,
-    domain_name: String,
+    config: TlsConfig,
 ) -> Result<(Multiaddr, TlsListener)> {
     let addr = address.await?;
     match multiaddr_to_socketaddr(&addr) {
         Some(socket_address) => {
-            let (local_addr, tcp) = tcp_listen(socket_address, reuse).await?;
-
+            let (local_addr, tcp) = tcp_listen(socket_address, config.tls_bind.is_some()).await?;
+            let tls_server_config = match config.tls_server_config {
+                Some(tls_server_config) => tls_server_config,
+                None => {
+                    return Err(TransportErrorKind::TlsError(
+                        "server config not found".to_string(),
+                    ));
+                }
+            };
             let mut listen_addr = socketaddr_to_multiaddr(local_addr);
-
-            listen_addr.push(Protocol::Tls(Cow::Borrowed(domain_name.as_str())));
-
-            Ok((listen_addr, TlsListener::new(timeout, tcp, tls_config)))
+            if let Some(domain_name) = parse_tls_domain_name(&addr) {
+                listen_addr.push(Protocol::Tls(Cow::Owned(domain_name)));
+                Ok((
+                    listen_addr,
+                    TlsListener::new(timeout, tcp, tls_server_config),
+                ))
+            } else {
+                Err(TransportErrorKind::NotSupported(addr))
+            }
         }
         None => Err(TransportErrorKind::NotSupported(addr)),
     }
@@ -57,27 +65,38 @@ async fn connect(
     address: impl Future<Output = Result<Multiaddr>>,
     timeout: Duration,
     original: Option<Multiaddr>,
-    bind_addr: Option<SocketAddr>,
-    tls_client_config: ClientConfig,
-    domain_name: String,
+    config: TlsConfig,
 ) -> Result<(Multiaddr, TlsStream)> {
+    let tls_client_config = match config.tls_client_config {
+        Some(tls_client_config) => tls_client_config,
+        None => {
+            return Err(TransportErrorKind::TlsError(
+                "client config not found".to_string(),
+            ));
+        }
+    };
+
     let addr = address.await?;
-    let connector = TlsConnector::from(Arc::new(tls_client_config));
     match multiaddr_to_socketaddr(&addr) {
         Some(socket_address) => {
-            let stream = tcp_dial(socket_address, bind_addr, timeout).await?;
+            let stream = tcp_dial(socket_address, config.tls_bind, timeout).await?;
 
-            let domain_name = DNSNameRef::try_from_ascii_str(&domain_name)
-                .map_err(|_| TransportErrorKind::TlsError("invalid dnsname".to_string()))?;
-            Ok((
-                original.unwrap_or(addr),
-                Box::new(
-                    connector
-                        .connect(domain_name, stream)
-                        .await
-                        .map_err(TransportErrorKind::Io)?,
-                ),
-            ))
+            if let Some(domain_name) = parse_tls_domain_name(&addr) {
+                let domain_name = DNSNameRef::try_from_ascii_str(&domain_name)
+                    .map_err(|_| TransportErrorKind::TlsError("invalid dnsname".to_string()))?;
+                let connector = TlsConnector::from(Arc::new(tls_client_config));
+                Ok((
+                    original.unwrap_or(addr),
+                    Box::new(
+                        connector
+                            .connect(domain_name, stream)
+                            .await
+                            .map_err(TransportErrorKind::Io)?,
+                    ),
+                ))
+            } else {
+                Err(TransportErrorKind::NotSupported(original.unwrap_or(addr)))
+            }
         }
         None => Err(TransportErrorKind::NotSupported(original.unwrap_or(addr))),
     }
@@ -134,7 +153,7 @@ impl Stream for TlsListener {
                             Ok(res) => match res {
                                 Ok(stream) => {
                                     let mut addr = socketaddr_to_multiaddr(remote_address);
-                                    addr.push(Protocol::Tls(Cow::Borrowed("/")));
+                                    addr.push(Protocol::Tls(Cow::Borrowed("")));
                                     if sender.send((addr, Box::new(stream))).await.is_err() {
                                         warn!("receiver closed unexpectedly")
                                     }
@@ -157,21 +176,28 @@ impl Stream for TlsListener {
     }
 }
 
+fn parse_tls_domain_name(addr: &Multiaddr) -> Option<String> {
+    let mut iter = addr.iter();
+
+    iter.find_map(|proto| {
+        if let Protocol::Tls(s) = proto {
+            Some(s.to_string())
+        } else {
+            None
+        }
+    })
+}
+
 /// Tcp transport
 #[derive(Default)]
 pub struct TlsTransport {
     timeout: Duration,
     config: TlsConfig,
-    domain_name: String,
 }
 
 impl TlsTransport {
-    pub fn new(timeout: Duration, config: TlsConfig, domain_name: String) -> Self {
-        TlsTransport {
-            timeout,
-            config,
-            domain_name,
-        }
+    pub fn new(timeout: Duration, config: TlsConfig) -> Self {
+        TlsTransport { timeout, config }
     }
 }
 
@@ -197,20 +223,12 @@ impl Transport for TlsTransport {
                         TransportErrorKind::DnsResolverError(multiaddr, io_error)
                     }),
                     self.timeout,
-                    self.config.tls_bind.is_some(),
-                    self.config.tls_server_config.unwrap(),
-                    self.domain_name,
+                    self.config,
                 );
                 Ok(TransportFuture::new(Box::pin(task)))
             }
             None => {
-                let task = bind(
-                    ok(address),
-                    self.timeout,
-                    self.config.tls_bind.is_some(),
-                    self.config.tls_server_config.unwrap(),
-                    self.domain_name,
-                );
+                let task = bind(ok(address), self.timeout, self.config);
                 Ok(TransportFuture::new(Box::pin(task)))
             }
         }
@@ -232,21 +250,12 @@ impl Transport for TlsTransport {
                     }),
                     self.timeout,
                     Some(address),
-                    self.config.tls_bind,
-                    self.config.tls_client_config.unwrap(),
-                    self.domain_name,
+                    self.config,
                 );
                 Ok(TransportFuture::new(Box::pin(task)))
             }
             None => {
-                let dial = connect(
-                    ok(address),
-                    self.timeout,
-                    None,
-                    self.config.tls_bind,
-                    self.config.tls_client_config.unwrap(),
-                    self.domain_name,
-                );
+                let dial = connect(ok(address), self.timeout, None, self.config);
                 Ok(TransportFuture::new(Box::pin(dial)))
             }
         }

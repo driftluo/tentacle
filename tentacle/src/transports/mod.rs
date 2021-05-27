@@ -64,12 +64,12 @@ where
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum TransportType {
     Ws,
     Wss,
     Tcp,
-    Tls(String),
+    Tls,
     Memory,
 }
 
@@ -81,8 +81,8 @@ pub fn find_type(addr: &Multiaddr) -> TransportType {
             Some(TransportType::Ws)
         } else if let Protocol::Wss = proto {
             Some(TransportType::Wss)
-        } else if let Protocol::Tls(s) = proto {
-            Some(TransportType::Tls(s.to_string()))
+        } else if let Protocol::Tls(_) = proto {
+            Some(TransportType::Tls)
         } else if let Protocol::Memory(_) = proto {
             Some(TransportType::Memory)
         } else {
@@ -192,15 +192,13 @@ mod os {
                 },
                 TransportType::Wss => Err(TransportErrorKind::NotSupported(address)),
                 #[cfg(feature = "tls")]
-                TransportType::Tls(domain_name) => {
-                    if domain_name.is_empty() {
-                        Err(TransportErrorKind::NotSupported(address))
-                    } else if self.tls_config.is_none() {
+                TransportType::Tls => {
+                    if self.tls_config.is_none() {
                         Err(TransportErrorKind::TlsError(
                             "tls config is not set".to_string(),
                         ))
                     } else {
-                        match TlsTransport::new(self.timeout, self.tls_config.unwrap(), domain_name)
+                        match TlsTransport::new(self.timeout, self.tls_config.unwrap())
                             .listen(address)
                         {
                             Ok(future) => Ok(MultiListenFuture::Tls(future)),
@@ -209,7 +207,7 @@ mod os {
                     }
                 }
                 #[cfg(not(feature = "tls"))]
-                TransportType::Tls(_) => Err(TransportErrorKind::NotSupported(address)),
+                TransportType::Tls => Err(TransportErrorKind::NotSupported(address)),
             }
         }
 
@@ -236,15 +234,13 @@ mod os {
                 },
                 TransportType::Wss => Err(TransportErrorKind::NotSupported(address)),
                 #[cfg(feature = "tls")]
-                TransportType::Tls(domain_name) => {
-                    if domain_name.is_empty() {
-                        Err(TransportErrorKind::NotSupported(address))
-                    } else if self.tls_config.is_none() {
+                TransportType::Tls => {
+                    if self.tls_config.is_none() {
                         Err(TransportErrorKind::TlsError(
                             "tls config is not set".to_string(),
                         ))
                     } else {
-                        match TlsTransport::new(self.timeout, self.tls_config.unwrap(), domain_name)
+                        match TlsTransport::new(self.timeout, self.tls_config.unwrap())
                             .dial(address)
                         {
                             Ok(future) => Ok(MultiDialFuture::Tls(future)),
@@ -253,7 +249,7 @@ mod os {
                     }
                 }
                 #[cfg(not(feature = "tls"))]
-                TransportType::Tls(_) => Err(TransportErrorKind::NotSupported(address)),
+                TransportType::Tls => Err(TransportErrorKind::NotSupported(address)),
             }
         }
     }
@@ -526,8 +522,8 @@ mod test {
 
         assert_eq!(find_type(&a), TransportType::Tcp);
 
-        a.push(Protocol::Tls(Cow::Borrowed("/")));
+        a.push(Protocol::Tls(Cow::Borrowed("")));
 
-        assert_eq!(find_type(&a), TransportType::Tls("/".to_string()));
+        assert_eq!(find_type(&a), TransportType::Tls);
     }
 }
