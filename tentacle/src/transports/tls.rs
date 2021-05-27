@@ -1,5 +1,5 @@
 use super::Result;
-use futures::{future::ok, SinkExt, Stream, TryFutureExt};
+use futures::{future::ok, FutureExt, SinkExt, Stream, TryFutureExt};
 use log::warn;
 use std::{
     borrow::Cow,
@@ -81,7 +81,9 @@ async fn connect(
         Some(socket_address) => {
             let stream = tcp_dial(socket_address, config.tls_bind, timeout).await?;
 
-            if let Some(domain_name) = parse_tls_domain_name(&addr) {
+            if let Some(domain_name) =
+                parse_tls_domain_name(&original.clone().unwrap_or_else(|| addr.clone()))
+            {
                 let domain_name = DNSNameRef::try_from_ascii_str(&domain_name)
                     .map_err(|_| TransportErrorKind::TlsError("invalid dnsname".to_string()))?;
                 let connector = TlsConnector::from(Arc::new(tls_client_config));
@@ -219,8 +221,18 @@ impl Transport for TlsTransport {
         match DnsResolver::new(address.clone()) {
             Some(dns) => {
                 let task = bind(
-                    dns.map_err(|(multiaddr, io_error)| {
-                        TransportErrorKind::DnsResolverError(multiaddr, io_error)
+                    dns.map(move |addr| match addr {
+                        Ok(mut addr) => {
+                            if let Some(domain_name) = parse_tls_domain_name(&address) {
+                                addr.push(Protocol::Tls(Cow::Owned(domain_name)));
+                                Ok(addr)
+                            } else {
+                                Err(TransportErrorKind::NotSupported(addr))
+                            }
+                        }
+                        Err((multiaddr, io_error)) => {
+                            Err(TransportErrorKind::DnsResolverError(multiaddr, io_error))
+                        }
                     }),
                     self.timeout,
                     self.config,

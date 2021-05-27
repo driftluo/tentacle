@@ -383,7 +383,7 @@ fn test_tls_dial() {
 
     thread::spawn(move || {
         let multi_addr_1 = Multiaddr::from_str(
-            "/ip4/127.0.0.1/tcp/0/tls/0x09cbaa785348dabd54c61f5f9964474f7bfad7df",
+            "/dns4/127.0.0.1/tcp/0/tls/0x09cbaa785348dabd54c61f5f9964474f7bfad7df",
         )
         .unwrap();
         let rt = tokio::runtime::Runtime::new().unwrap();
