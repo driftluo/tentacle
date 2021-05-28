@@ -85,9 +85,9 @@ impl Default for SessionConfig {
 #[cfg(feature = "tls")]
 pub struct TlsConfig {
     /// tls server end config
-    pub(crate) tls_server_config: Option<ServerConfig>,
+    pub(crate) tls_server_config: Option<Arc<ServerConfig>>,
     /// tls client end config
-    pub(crate) tls_client_config: Option<ClientConfig>,
+    pub(crate) tls_client_config: Option<Arc<ClientConfig>>,
     /// tls bind socket address
     pub(crate) tls_bind: Option<SocketAddr>,
 }
@@ -95,10 +95,21 @@ pub struct TlsConfig {
 #[cfg(feature = "tls")]
 impl TlsConfig {
     /// new TlsConfig
-    pub fn new(
-        tls_server_config: Option<ServerConfig>,
-        tls_client_config: Option<ClientConfig>,
-    ) -> Self {
+    pub fn new(server_config: Option<ServerConfig>, client_config: Option<ClientConfig>) -> Self {
+        let tls_server_config = {
+            if let Some(server_config) = server_config {
+                Some(Arc::new(server_config))
+            } else {
+                None
+            }
+        };
+        let tls_client_config = {
+            if let Some(client_config) = client_config {
+                Some(Arc::new(client_config))
+            } else {
+                None
+            }
+        };
         TlsConfig {
             tls_server_config,
             tls_client_config,

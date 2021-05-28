@@ -86,7 +86,7 @@ async fn connect(
             {
                 let domain_name = DNSNameRef::try_from_ascii_str(&domain_name)
                     .map_err(|_| TransportErrorKind::TlsError("invalid dnsname".to_string()))?;
-                let connector = TlsConnector::from(Arc::new(tls_client_config));
+                let connector = TlsConnector::from(tls_client_config);
                 Ok((
                     original.unwrap_or(addr),
                     Box::new(
@@ -113,14 +113,14 @@ pub struct TlsListener {
 }
 
 impl TlsListener {
-    fn new(timeout: Duration, listen: TcpListener, tls_config: ServerConfig) -> Self {
+    fn new(timeout: Duration, listen: TcpListener, tls_config: Arc<ServerConfig>) -> Self {
         let (sender, rx) = channel(24);
         TlsListener {
             inner: listen,
             timeout,
             sender,
             pending_stream: rx,
-            tls_config: Arc::new(tls_config),
+            tls_config,
         }
     }
 
