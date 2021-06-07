@@ -193,18 +193,12 @@ mod os {
                 TransportType::Wss => Err(TransportErrorKind::NotSupported(address)),
                 #[cfg(feature = "tls")]
                 TransportType::Tls => {
-                    if self.tls_config.is_none() {
-                        Err(TransportErrorKind::TlsError(
-                            "tls config is not set".to_string(),
-                        ))
-                    } else {
-                        match TlsTransport::new(self.timeout, self.tls_config.unwrap())
-                            .listen(address)
-                        {
-                            Ok(future) => Ok(MultiListenFuture::Tls(future)),
-                            Err(e) => Err(e),
-                        }
-                    }
+                    let tls_config = self.tls_config.ok_or_else(|| {
+                        TransportErrorKind::TlsError("tls config is not set".to_string())
+                    })?;
+                    TlsTransport::new(self.timeout, tls_config)
+                        .listen(address)
+                        .map(MultiListenFuture::Tls)
                 }
                 #[cfg(not(feature = "tls"))]
                 TransportType::Tls => Err(TransportErrorKind::NotSupported(address)),
@@ -235,18 +229,12 @@ mod os {
                 TransportType::Wss => Err(TransportErrorKind::NotSupported(address)),
                 #[cfg(feature = "tls")]
                 TransportType::Tls => {
-                    if self.tls_config.is_none() {
-                        Err(TransportErrorKind::TlsError(
-                            "tls config is not set".to_string(),
-                        ))
-                    } else {
-                        match TlsTransport::new(self.timeout, self.tls_config.unwrap())
-                            .dial(address)
-                        {
-                            Ok(future) => Ok(MultiDialFuture::Tls(future)),
-                            Err(e) => Err(e),
-                        }
-                    }
+                    let tls_config = self.tls_config.ok_or_else(|| {
+                        TransportErrorKind::TlsError("tls config is not set".to_string())
+                    })?;
+                    TlsTransport::new(self.timeout, tls_config)
+                        .dial(address)
+                        .map(MultiDialFuture::Tls)
                 }
                 #[cfg(not(feature = "tls"))]
                 TransportType::Tls => Err(TransportErrorKind::NotSupported(address)),

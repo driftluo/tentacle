@@ -1,5 +1,5 @@
 use super::Result;
-use futures::{future::ok, FutureExt, SinkExt, Stream, TryFutureExt};
+use futures::{future::ok, SinkExt, Stream, TryFutureExt};
 use log::warn;
 use std::{
     borrow::Cow,
@@ -32,29 +32,21 @@ async fn bind(
     address: impl Future<Output = Result<Multiaddr>>,
     timeout: Duration,
     config: TlsConfig,
+    domain_name: String,
 ) -> Result<(Multiaddr, TlsListener)> {
     let addr = address.await?;
     match multiaddr_to_socketaddr(&addr) {
         Some(socket_address) => {
             let (local_addr, tcp) = tcp_listen(socket_address, config.tls_bind.is_some()).await?;
-            let tls_server_config = match config.tls_server_config {
-                Some(tls_server_config) => tls_server_config,
-                None => {
-                    return Err(TransportErrorKind::TlsError(
-                        "server config not found".to_string(),
-                    ));
-                }
-            };
+            let tls_server_config = config.tls_server_config.ok_or_else(|| {
+                TransportErrorKind::TlsError("server config not found".to_string())
+            })?;
             let mut listen_addr = socketaddr_to_multiaddr(local_addr);
-            if let Some(domain_name) = parse_tls_domain_name(&addr) {
-                listen_addr.push(Protocol::Tls(Cow::Owned(domain_name)));
-                Ok((
-                    listen_addr,
-                    TlsListener::new(timeout, tcp, tls_server_config),
-                ))
-            } else {
-                Err(TransportErrorKind::NotSupported(addr))
-            }
+            listen_addr.push(Protocol::Tls(Cow::Owned(domain_name)));
+            Ok((
+                listen_addr,
+                TlsListener::new(timeout, tcp, tls_server_config),
+            ))
         }
         None => Err(TransportErrorKind::NotSupported(addr)),
     }
@@ -66,39 +58,29 @@ async fn connect(
     timeout: Duration,
     original: Option<Multiaddr>,
     config: TlsConfig,
+    domain_name: String,
 ) -> Result<(Multiaddr, TlsStream)> {
-    let tls_client_config = match config.tls_client_config {
-        Some(tls_client_config) => tls_client_config,
-        None => {
-            return Err(TransportErrorKind::TlsError(
-                "client config not found".to_string(),
-            ));
-        }
-    };
+    let tls_client_config = config
+        .tls_client_config
+        .ok_or_else(|| TransportErrorKind::TlsError("client config not found".to_string()))?;
 
     let addr = address.await?;
     match multiaddr_to_socketaddr(&addr) {
         Some(socket_address) => {
             let stream = tcp_dial(socket_address, config.tls_bind, timeout).await?;
 
-            if let Some(domain_name) =
-                parse_tls_domain_name(&original.clone().unwrap_or_else(|| addr.clone()))
-            {
-                let domain_name = DNSNameRef::try_from_ascii_str(&domain_name)
-                    .map_err(|_| TransportErrorKind::TlsError("invalid dnsname".to_string()))?;
-                let connector = TlsConnector::from(tls_client_config);
-                Ok((
-                    original.unwrap_or(addr),
-                    Box::new(
-                        connector
-                            .connect(domain_name, stream)
-                            .await
-                            .map_err(TransportErrorKind::Io)?,
-                    ),
-                ))
-            } else {
-                Err(TransportErrorKind::NotSupported(original.unwrap_or(addr)))
-            }
+            let domain_name = DNSNameRef::try_from_ascii_str(&domain_name)
+                .map_err(|_| TransportErrorKind::TlsError("invalid dnsname".to_string()))?;
+            let connector = TlsConnector::from(tls_client_config);
+            Ok((
+                original.unwrap_or(addr),
+                Box::new(
+                    connector
+                        .connect(domain_name, stream)
+                        .await
+                        .map_err(TransportErrorKind::Io)?,
+                ),
+            ))
         }
         None => Err(TransportErrorKind::NotSupported(original.unwrap_or(addr))),
     }
@@ -213,63 +195,53 @@ impl Transport for TlsTransport {
     type DialFuture = TlsDialFuture;
 
     fn listen(self, address: Multiaddr) -> Result<Self::ListenFuture> {
-        if self.config.tls_server_config.is_none() {
-            return Err(TransportErrorKind::TlsError(
-                "server config not found".to_string(),
-            ));
-        }
-        match DnsResolver::new(address.clone()) {
-            Some(dns) => {
-                let task = bind(
-                    dns.map(move |addr| match addr {
-                        Ok(mut addr) => {
-                            if let Some(domain_name) = parse_tls_domain_name(&address) {
-                                addr.push(Protocol::Tls(Cow::Owned(domain_name)));
-                                Ok(addr)
-                            } else {
-                                Err(TransportErrorKind::NotSupported(addr))
-                            }
-                        }
-                        Err((multiaddr, io_error)) => {
-                            Err(TransportErrorKind::DnsResolverError(multiaddr, io_error))
-                        }
-                    }),
-                    self.timeout,
-                    self.config,
-                );
-                Ok(TransportFuture::new(Box::pin(task)))
+        if let Some(domain_name) = parse_tls_domain_name(&address) {
+            match DnsResolver::new(address.clone()) {
+                Some(dns) => {
+                    let task = bind(
+                        dns.map_err(|(multiaddr, io_error)| {
+                            TransportErrorKind::DnsResolverError(multiaddr, io_error)
+                        }),
+                        self.timeout,
+                        self.config,
+                        domain_name,
+                    );
+                    Ok(TransportFuture::new(Box::pin(task)))
+                }
+                None => {
+                    let task = bind(ok(address), self.timeout, self.config, domain_name);
+                    Ok(TransportFuture::new(Box::pin(task)))
+                }
             }
-            None => {
-                let task = bind(ok(address), self.timeout, self.config);
-                Ok(TransportFuture::new(Box::pin(task)))
-            }
+        } else {
+            Err(TransportErrorKind::NotSupported(address))
         }
     }
 
     fn dial(self, address: Multiaddr) -> Result<Self::DialFuture> {
-        if self.config.tls_client_config.is_none() {
-            return Err(TransportErrorKind::TlsError(
-                "client config not found".to_string(),
-            ));
-        }
-        match DnsResolver::new(address.clone()) {
-            Some(dns) => {
-                // Why do this?
-                // Because here need to save the original address as an index to open the specified protocol.
-                let task = connect(
-                    dns.map_err(|(multiaddr, io_error)| {
-                        TransportErrorKind::DnsResolverError(multiaddr, io_error)
-                    }),
-                    self.timeout,
-                    Some(address),
-                    self.config,
-                );
-                Ok(TransportFuture::new(Box::pin(task)))
+        if let Some(domain_name) = parse_tls_domain_name(&address) {
+            match DnsResolver::new(address.clone()) {
+                Some(dns) => {
+                    // Why do this?
+                    // Because here need to save the original address as an index to open the specified protocol.
+                    let task = connect(
+                        dns.map_err(|(multiaddr, io_error)| {
+                            TransportErrorKind::DnsResolverError(multiaddr, io_error)
+                        }),
+                        self.timeout,
+                        Some(address),
+                        self.config,
+                        domain_name,
+                    );
+                    Ok(TransportFuture::new(Box::pin(task)))
+                }
+                None => {
+                    let dial = connect(ok(address), self.timeout, None, self.config, domain_name);
+                    Ok(TransportFuture::new(Box::pin(dial)))
+                }
             }
-            None => {
-                let dial = connect(ok(address), self.timeout, None, self.config);
-                Ok(TransportFuture::new(Box::pin(dial)))
-            }
+        } else {
+            Err(TransportErrorKind::NotSupported(address))
         }
     }
 }

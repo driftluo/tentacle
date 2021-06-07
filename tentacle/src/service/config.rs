@@ -96,20 +96,8 @@ pub struct TlsConfig {
 impl TlsConfig {
     /// new TlsConfig
     pub fn new(server_config: Option<ServerConfig>, client_config: Option<ClientConfig>) -> Self {
-        let tls_server_config = {
-            if let Some(server_config) = server_config {
-                Some(Arc::new(server_config))
-            } else {
-                None
-            }
-        };
-        let tls_client_config = {
-            if let Some(client_config) = client_config {
-                Some(Arc::new(client_config))
-            } else {
-                None
-            }
-        };
+        let tls_server_config = server_config.map(Arc::new);
+        let tls_client_config = client_config.map(Arc::new);
         TlsConfig {
             tls_server_config,
             tls_client_config,
