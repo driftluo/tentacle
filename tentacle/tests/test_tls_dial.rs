@@ -1,10 +1,11 @@
 #![cfg(feature = "tls")]
-use futures::{channel, StreamExt};
+use futures::channel;
 use std::io::BufReader;
 use std::str::FromStr;
 use std::sync::Arc;
 use std::{fs, thread};
 use tentacle::{
+    async_trait,
     builder::{MetaBuilder, ServiceBuilder},
     context::{ProtocolContext, ProtocolContextMutRef, ServiceContext},
     error::{DialerErrorKind, ListenErrorKind},
@@ -53,8 +54,9 @@ pub struct SHandle {
     kind: SessionType,
 }
 
+#[async_trait]
 impl ServiceHandle for SHandle {
-    fn handle_error(&mut self, _env: &mut ServiceContext, error: ServiceError) {
+    async fn handle_error(&mut self, _env: &mut ServiceContext, error: ServiceError) {
         let error_type = match error {
             ServiceError::DialerError { error, .. } => {
                 match error {
@@ -83,7 +85,7 @@ impl ServiceHandle for SHandle {
         let _res = self.sender.try_send(error_type);
     }
 
-    fn handle_event(&mut self, _env: &mut ServiceContext, event: ServiceEvent) {
+    async fn handle_event(&mut self, _env: &mut ServiceContext, event: ServiceEvent) {
         if let ServiceEvent::SessionOpen { session_context } = event {
             self.session_id = session_context.id;
             self.kind = session_context.ty;
@@ -95,16 +97,18 @@ struct PHandle {
     sender: crossbeam_channel::Sender<bytes::Bytes>,
 }
 
+#[async_trait]
 impl ServiceProtocol for PHandle {
-    fn init(&mut self, _context: &mut ProtocolContext) {}
+    async fn init(&mut self, _context: &mut ProtocolContext) {}
 
-    fn connected(&mut self, context: ProtocolContextMutRef, _version: &str) {
+    async fn connected(&mut self, context: ProtocolContextMutRef<'_>, _version: &str) {
         context
             .send_message(bytes::Bytes::from("hello world"))
+            .await
             .unwrap();
     }
 
-    fn received(&mut self, _context: ProtocolContextMutRef, data: bytes::Bytes) {
+    async fn received(&mut self, _context: ProtocolContextMutRef<'_>, data: bytes::Bytes) {
         self.sender.try_send(data).unwrap();
     }
 }
@@ -391,11 +395,7 @@ fn test_tls_dial() {
         rt.block_on(async move {
             let listen_addr = service.listen(multi_addr_1).await.unwrap();
             let _res = addr_sender.send(listen_addr);
-            loop {
-                if service.next().await.is_none() {
-                    break;
-                }
-            }
+            service.run().await
         });
     });
 
@@ -414,11 +414,7 @@ fn test_tls_dial() {
                 .dial(listen_addr, TargetProtocol::All)
                 .await
                 .unwrap();
-            loop {
-                if service.next().await.is_none() {
-                    break;
-                }
-            }
+            service.run().await
         });
     });
 

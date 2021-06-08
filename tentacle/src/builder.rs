@@ -167,6 +167,7 @@ impl ServiceBuilder {
 
     /// set rustls ServerConfig, default is NoClientAuth
     #[cfg(feature = "tls")]
+    #[cfg_attr(docsrs, doc(cfg(feature = "tls")))]
     pub fn tls_config(mut self, config: TlsConfig) -> Self {
         self.config.tls_config = Some(config);
         self

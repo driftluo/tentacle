@@ -83,6 +83,7 @@ impl Default for SessionConfig {
 /// tls config wrap for server setup
 #[derive(Clone, Default)]
 #[cfg(feature = "tls")]
+#[cfg_attr(docsrs, doc(cfg(feature = "tls")))]
 pub struct TlsConfig {
     /// tls server end config
     pub(crate) tls_server_config: Option<Arc<ServerConfig>>,
@@ -93,6 +94,7 @@ pub struct TlsConfig {
 }
 
 #[cfg(feature = "tls")]
+#[cfg_attr(docsrs, doc(cfg(feature = "tls")))]
 impl TlsConfig {
     /// new TlsConfig
     pub fn new(server_config: Option<ServerConfig>, client_config: Option<ClientConfig>) -> Self {
