@@ -13,10 +13,10 @@ fmt:
 	cargo fmt --all -- --check
 
 clippy:
-	$(Change_Work_Path) && RUSTFLAGS='-W warnings' cargo clippy --all --tests --features ws,unstable -- -D clippy::let_underscore_must_use
+	$(Change_Work_Path) && RUSTFLAGS='-W warnings' cargo clippy --all --tests --features ws,unstable,tls -- -D clippy::let_underscore_must_use
 
 test:
-	$(Change_Work_Path) && RUSTFLAGS='-W warnings' RUST_BACKTRACE=full cargo test --all --features ws,unstable
+	$(Change_Work_Path) && RUSTFLAGS='-W warnings' RUST_BACKTRACE=full cargo test --all --features ws,unstable,tls
 
 fuzz:
 	cargo +nightly fuzz run secio_crypto_decrypt_cipher -- -max_total_time=60
@@ -25,12 +25,14 @@ fuzz:
 
 build:
 	$(Change_Work_Path) && RUSTFLAGS='-W warnings' cargo build --all --features ws
+	$(Change_Work_Path) && RUSTFLAGS='-W warnings' cargo build --all --features tls
 	$(Change_Work_Path) && RUSTFLAGS='-W warnings' cargo build --all --features ws,unstable
 
 examples:
 	$(Change_Work_Path) && cargo build --examples --all --features unstable
 
 features-check:
+	$(Change_Work_Path) && cargo build --features tls
 	$(Change_Work_Path) && cargo build --features parking_lot
 	$(Change_Work_Path) && cargo build --features unstable
 	$(Change_Work_Path) && cargo build --features tokio-runtime,generic-timer,unstable --no-default-features

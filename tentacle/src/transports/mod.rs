@@ -15,6 +15,8 @@ mod browser;
 mod memory;
 #[cfg(not(target_arch = "wasm32"))]
 mod tcp;
+#[cfg(all(feature = "tls", not(target_arch = "wasm32")))]
+mod tls;
 #[cfg(all(feature = "ws", not(target_arch = "wasm32")))]
 mod ws;
 
@@ -116,15 +118,21 @@ mod os {
         MemoryDialFuture, MemoryListenFuture, MemoryListener, MemorySocket, MemoryTransport,
     };
     use self::tcp::{TcpDialFuture, TcpListenFuture, TcpTransport};
+    #[cfg(feature = "tls")]
+    use self::tls::{TlsDialFuture, TlsListenFuture, TlsListener, TlsStream, TlsTransport};
     #[cfg(feature = "ws")]
     use self::ws::{WebsocketListener, WsDialFuture, WsListenFuture, WsStream, WsTransport};
+    #[cfg(feature = "tls")]
+    use crate::service::config::TlsConfig;
 
-    #[derive(Clone, Copy)]
+    #[derive(Clone)]
     pub struct MultiTransport {
         timeout: Duration,
         tcp_bind: Option<SocketAddr>,
         #[cfg(feature = "ws")]
         ws_bind: Option<SocketAddr>,
+        #[cfg(feature = "tls")]
+        tls_config: Option<TlsConfig>,
     }
 
     impl MultiTransport {
@@ -134,6 +142,8 @@ mod os {
                 tcp_bind: None,
                 #[cfg(feature = "ws")]
                 ws_bind: None,
+                #[cfg(feature = "tls")]
+                tls_config: None,
             }
         }
 
@@ -145,6 +155,12 @@ mod os {
         #[cfg(feature = "ws")]
         pub fn ws_bind(mut self, bind_addr: Option<SocketAddr>) -> Self {
             self.ws_bind = bind_addr;
+            self
+        }
+
+        #[cfg(feature = "tls")]
+        pub fn tls_config(mut self, tls_config: Option<TlsConfig>) -> Self {
+            self.tls_config = tls_config;
             self
         }
     }
@@ -175,6 +191,16 @@ mod os {
                     Err(e) => Err(e),
                 },
                 TransportType::Wss => Err(TransportErrorKind::NotSupported(address)),
+                #[cfg(feature = "tls")]
+                TransportType::Tls => {
+                    let tls_config = self.tls_config.ok_or_else(|| {
+                        TransportErrorKind::TlsError("tls config is not set".to_string())
+                    })?;
+                    TlsTransport::new(self.timeout, tls_config)
+                        .listen(address)
+                        .map(MultiListenFuture::Tls)
+                }
+                #[cfg(not(feature = "tls"))]
                 TransportType::Tls => Err(TransportErrorKind::NotSupported(address)),
             }
         }
@@ -201,6 +227,16 @@ mod os {
                     Err(e) => Err(e),
                 },
                 TransportType::Wss => Err(TransportErrorKind::NotSupported(address)),
+                #[cfg(feature = "tls")]
+                TransportType::Tls => {
+                    let tls_config = self.tls_config.ok_or_else(|| {
+                        TransportErrorKind::TlsError("tls config is not set".to_string())
+                    })?;
+                    TlsTransport::new(self.timeout, tls_config)
+                        .dial(address)
+                        .map(MultiDialFuture::Tls)
+                }
+                #[cfg(not(feature = "tls"))]
                 TransportType::Tls => Err(TransportErrorKind::NotSupported(address)),
             }
         }
@@ -211,6 +247,8 @@ mod os {
         Memory(MemoryListenFuture),
         #[cfg(feature = "ws")]
         Ws(WsListenFuture),
+        #[cfg(feature = "tls")]
+        Tls(TlsListenFuture),
     }
 
     impl Future for MultiListenFuture {
@@ -231,6 +269,11 @@ mod os {
                     Pin::new(&mut inner.map(|res| res.map(|res| (res.0, MultiIncoming::Ws(res.1)))))
                         .poll(cx)
                 }
+                #[cfg(feature = "tls")]
+                MultiListenFuture::Tls(inner) => Pin::new(
+                    &mut inner.map(|res| res.map(|res| (res.0, MultiIncoming::Tls(res.1)))),
+                )
+                .poll(cx),
             }
         }
     }
@@ -240,6 +283,8 @@ mod os {
         Memory(MemoryDialFuture),
         #[cfg(feature = "ws")]
         Ws(WsDialFuture),
+        #[cfg(feature = "tls")]
+        Tls(TlsDialFuture),
     }
 
     impl Future for MultiDialFuture {
@@ -260,6 +305,11 @@ mod os {
                     &mut inner.map(|res| res.map(|res| (res.0, MultiStream::Ws(Box::new(res.1))))),
                 )
                 .poll(cx),
+                #[cfg(feature = "tls")]
+                MultiDialFuture::Tls(inner) => {
+                    Pin::new(&mut inner.map(|res| res.map(|res| (res.0, MultiStream::Tls(res.1)))))
+                        .poll(cx)
+                }
             }
         }
     }
@@ -269,6 +319,8 @@ mod os {
         Memory(MemorySocket),
         #[cfg(feature = "ws")]
         Ws(Box<WsStream>),
+        #[cfg(feature = "tls")]
+        Tls(TlsStream),
     }
 
     impl fmt::Debug for MultiStream {
@@ -278,6 +330,8 @@ mod os {
                 MultiStream::Memory(_) => write!(f, "Memory stream"),
                 #[cfg(feature = "ws")]
                 MultiStream::Ws(_) => write!(f, "Websocket stream"),
+                #[cfg(feature = "tls")]
+                MultiStream::Tls(_) => write!(f, "Tls stream"),
             }
         }
     }
@@ -293,6 +347,8 @@ mod os {
                 MultiStream::Memory(inner) => Pin::new(inner).poll_read(cx, buf),
                 #[cfg(feature = "ws")]
                 MultiStream::Ws(inner) => Pin::new(inner).poll_read(cx, buf),
+                #[cfg(feature = "tls")]
+                MultiStream::Tls(inner) => Pin::new(inner).poll_read(cx, buf),
             }
         }
     }
@@ -308,6 +364,8 @@ mod os {
                 MultiStream::Memory(inner) => Pin::new(inner).poll_write(cx, buf),
                 #[cfg(feature = "ws")]
                 MultiStream::Ws(inner) => Pin::new(inner).poll_write(cx, buf),
+                #[cfg(feature = "tls")]
+                MultiStream::Tls(inner) => Pin::new(inner).poll_write(cx, buf),
             }
         }
 
@@ -317,6 +375,8 @@ mod os {
                 MultiStream::Memory(inner) => Pin::new(inner).poll_flush(cx),
                 #[cfg(feature = "ws")]
                 MultiStream::Ws(inner) => Pin::new(inner).poll_flush(cx),
+                #[cfg(feature = "tls")]
+                MultiStream::Tls(inner) => Pin::new(inner).poll_flush(cx),
             }
         }
 
@@ -327,16 +387,19 @@ mod os {
                 MultiStream::Memory(inner) => Pin::new(inner).poll_shutdown(cx),
                 #[cfg(feature = "ws")]
                 MultiStream::Ws(inner) => Pin::new(inner).poll_shutdown(cx),
+                #[cfg(feature = "tls")]
+                MultiStream::Tls(inner) => Pin::new(inner).poll_shutdown(cx),
             }
         }
     }
 
-    #[derive(Debug)]
     pub enum MultiIncoming {
         Tcp(TcpListener),
         Memory(MemoryListener),
         #[cfg(feature = "ws")]
         Ws(WebsocketListener),
+        #[cfg(feature = "tls")]
+        Tls(TlsListener),
     }
 
     impl Stream for MultiIncoming {
@@ -371,6 +434,14 @@ mod os {
                 MultiIncoming::Ws(inner) => match inner.poll_next_unpin(cx)? {
                     Poll::Ready(Some((addr, stream))) => {
                         Poll::Ready(Some(Ok((addr, MultiStream::Ws(Box::new(stream))))))
+                    }
+                    Poll::Ready(None) => Poll::Ready(None),
+                    Poll::Pending => Poll::Pending,
+                },
+                #[cfg(feature = "tls")]
+                MultiIncoming::Tls(inner) => match inner.poll_next_unpin(cx)? {
+                    Poll::Ready(Some((addr, stream))) => {
+                        Poll::Ready(Some(Ok((addr, MultiStream::Tls(stream)))))
                     }
                     Poll::Ready(None) => Poll::Ready(None),
                     Poll::Pending => Poll::Pending,
@@ -439,7 +510,7 @@ mod test {
 
         assert_eq!(find_type(&a), TransportType::Tcp);
 
-        a.push(Protocol::Tls(Cow::Owned("/".to_string())));
+        a.push(Protocol::Tls(Cow::Borrowed("")));
 
         assert_eq!(find_type(&a), TransportType::Tls);
     }
