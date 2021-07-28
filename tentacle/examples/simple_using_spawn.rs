@@ -7,12 +7,13 @@ use futures::StreamExt;
 use log::info;
 use std::{str, sync::Arc, time::Duration};
 use tentacle::{
+    async_trait,
     builder::{MetaBuilder, ServiceBuilder},
     context::{ServiceContext, SessionContext},
     secio::SecioKeyPair,
     service::{
-        ProtocolMeta, Service, ServiceAsyncControl, ServiceControl, ServiceError, ServiceEvent,
-        TargetProtocol, TargetSession,
+        ProtocolMeta, Service, ServiceAsyncControl, ServiceError, ServiceEvent, TargetProtocol,
+        TargetSession,
     },
     traits::{ProtocolSpawn, ServiceHandle},
     ProtocolId, SubstreamReadPart,
@@ -24,10 +25,10 @@ impl ProtocolSpawn for ProtocolStream {
     fn spawn(
         &self,
         context: Arc<SessionContext>,
-        control: &ServiceControl,
+        control: &ServiceAsyncControl,
         mut read_part: SubstreamReadPart,
     ) {
-        let mut control = Into::<ServiceAsyncControl>::into(control.clone());
+        let control = control.clone();
         tokio::spawn(async move {
             info!(
                 "{}, {:?}, {}, opened",
@@ -36,7 +37,7 @@ impl ProtocolSpawn for ProtocolStream {
                 read_part.protocol_id()
             );
             if read_part.protocol_id() == 1.into() {
-                let mut c = control.clone();
+                let c = control.clone();
                 let pid = read_part.protocol_id();
                 let mut interval =
                     tokio::time::interval_at(tokio::time::Instant::now(), Duration::from_secs(5));
@@ -88,24 +89,27 @@ fn create_meta(id: ProtocolId) -> ProtocolMeta {
 
 struct SHandle;
 
+#[async_trait]
 impl ServiceHandle for SHandle {
-    fn handle_error(&mut self, _context: &mut ServiceContext, error: ServiceError) {
+    async fn handle_error(&mut self, _context: &mut ServiceContext, error: ServiceError) {
         info!("service error: {:?}", error);
     }
-    fn handle_event(&mut self, context: &mut ServiceContext, event: ServiceEvent) {
+    async fn handle_event(&mut self, context: &mut ServiceContext, event: ServiceEvent) {
         info!("service event: {:?}", event);
         if let ServiceEvent::SessionOpen { .. } = event {
             let delay_sender = context.control().clone();
 
-            let _ = context.future_task(async move {
-                tokio::time::sleep_until(tokio::time::Instant::now() + Duration::from_secs(3))
-                    .await;
-                let _ = delay_sender.filter_broadcast(
-                    TargetSession::All,
-                    0.into(),
-                    Bytes::from("I am a delayed message"),
-                );
-            });
+            let _ = context
+                .future_task(async move {
+                    tokio::time::sleep_until(tokio::time::Instant::now() + Duration::from_secs(3))
+                        .await;
+                    let _ = delay_sender.filter_broadcast(
+                        TargetSession::All,
+                        0.into(),
+                        Bytes::from("I am a delayed message"),
+                    );
+                })
+                .await;
         }
     }
 }
@@ -157,11 +161,7 @@ fn server() {
             .listen("/ip4/127.0.0.1/tcp/1338/ws".parse().unwrap())
             .await
             .unwrap();
-        loop {
-            if service.next().await.is_none() {
-                break;
-            }
-        }
+        service.run().await
     });
 }
 
@@ -177,10 +177,6 @@ fn client() {
             )
             .await
             .unwrap();
-        loop {
-            if service.next().await.is_none() {
-                break;
-            }
-        }
+        service.run().await
     });
 }

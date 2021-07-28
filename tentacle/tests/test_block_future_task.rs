@@ -1,6 +1,7 @@
-use futures::{future::pending, StreamExt};
+use futures::future::pending;
 use std::time::Duration;
 use tentacle::{
+    async_trait,
     builder::{MetaBuilder, ServiceBuilder},
     context::ProtocolContext,
     service::{ProtocolHandle, ProtocolMeta, Service},
@@ -23,21 +24,24 @@ struct PHandle {
     count: u8,
 }
 
+#[async_trait]
 impl ServiceProtocol for PHandle {
-    fn init(&mut self, context: &mut ProtocolContext) {
+    async fn init(&mut self, context: &mut ProtocolContext) {
         let proto_id = context.proto_id;
 
-        let _rse = context.set_service_notify(proto_id, Duration::from_millis(100), 1);
+        let _rse = context
+            .set_service_notify(proto_id, Duration::from_millis(100), 1)
+            .await;
 
         for _ in 0..4096 {
-            let _res = context.future_task(pending());
+            let _res = context.future_task(pending()).await;
         }
     }
 
-    fn notify(&mut self, context: &mut ProtocolContext, _token: u64) {
+    async fn notify(&mut self, context: &mut ProtocolContext, _token: u64) {
         self.count += 1;
         if self.count > 3 {
-            let _res = context.shutdown();
+            let _res = context.shutdown().await;
         }
     }
 }
@@ -57,11 +61,5 @@ fn test_block_future_task() {
     let mut service = create(create_meta(1.into()), ());
 
     let rt = tokio::runtime::Runtime::new().unwrap();
-    rt.block_on(async move {
-        loop {
-            if service.next().await.is_none() {
-                break;
-            }
-        }
-    });
+    rt.block_on(async move { service.run().await });
 }

@@ -1,5 +1,5 @@
 use bytes::Bytes;
-use futures::{channel, StreamExt};
+use futures::channel;
 use std::{
     sync::{
         atomic::{AtomicBool, Ordering},
@@ -8,6 +8,7 @@ use std::{
     thread,
 };
 use tentacle::{
+    async_trait,
     builder::{MetaBuilder, ServiceBuilder},
     context::{ProtocolContext, ProtocolContextMutRef},
     multiaddr::Multiaddr,
@@ -39,21 +40,22 @@ struct PHandle {
     test_result: Arc<AtomicBool>,
 }
 
+#[async_trait]
 impl ServiceProtocol for PHandle {
-    fn init(&mut self, _context: &mut ProtocolContext) {}
+    async fn init(&mut self, _context: &mut ProtocolContext) {}
 
-    fn connected(&mut self, context: ProtocolContextMutRef, _version: &str) {
+    async fn connected(&mut self, context: ProtocolContextMutRef<'_>, _version: &str) {
         if context.session.ty.is_inbound() {
             for i in 0..1024 {
                 if i == 254 {
-                    let _res = context.quick_send_message(Bytes::from("high"));
+                    let _res = context.quick_send_message(Bytes::from("high")).await;
                 }
-                let _res = context.send_message(Bytes::from("normal"));
+                let _res = context.send_message(Bytes::from("normal")).await;
             }
         }
     }
 
-    fn received(&mut self, context: ProtocolContextMutRef, data: bytes::Bytes) {
+    async fn received(&mut self, context: ProtocolContextMutRef<'_>, data: bytes::Bytes) {
         self.count += 1;
         if data == Bytes::from("high") {
             // We are not sure that the message was sent in the first few,
@@ -61,7 +63,7 @@ impl ServiceProtocol for PHandle {
             if self.count <= 255 {
                 self.test_result.store(true, Ordering::SeqCst);
             }
-            let _res = context.close();
+            let _res = context.close().await;
         }
     }
 }
@@ -98,11 +100,7 @@ fn test_priority(secio: bool, addr: &'static str) {
         rt.block_on(async move {
             let listen_addr = service.listen(addr.parse().unwrap()).await.unwrap();
             let _res = addr_sender.send(listen_addr);
-            loop {
-                if service.next().await.is_none() {
-                    break;
-                }
-            }
+            service.run().await
         });
     });
 
@@ -117,11 +115,7 @@ fn test_priority(secio: bool, addr: &'static str) {
                 .dial(listen_addr, TargetProtocol::All)
                 .await
                 .unwrap();
-            loop {
-                if service.next().await.is_none() {
-                    break;
-                }
-            }
+            service.run().await
         });
     });
     handle_1.join().unwrap();

@@ -5,6 +5,7 @@ use crate::channel::{
 use crate::lock::Mutex;
 
 use futures::{
+    future::poll_fn,
     stream::{FusedStream, Stream},
     task::{AtomicWaker, Waker},
 };
@@ -433,6 +434,38 @@ impl<T> Sender<T> {
                 val: msg,
             })
         }
+    }
+
+    // Send a message on the channel with async fn, doesn't use Sink trait
+    pub async fn async_send(&self, msg: T) -> Result<(), SendError> {
+        let mut msg = Some(msg);
+        poll_fn(|cx| {
+            let item = msg.take().unwrap();
+            match self.poll_ready(cx)? {
+                Poll::Ready(()) => Poll::Ready(self.start_send(item)),
+                Poll::Pending => {
+                    msg = Some(item);
+                    Poll::Pending
+                }
+            }
+        })
+        .await
+    }
+
+    // Send a message on the channel with async fn, doesn't use Sink trait
+    pub async fn async_quick_send(&self, msg: T) -> Result<(), SendError> {
+        let mut msg = Some(msg);
+        poll_fn(|cx| {
+            let item = msg.take().unwrap();
+            match self.poll_ready(cx)? {
+                Poll::Ready(()) => Poll::Ready(self.start_quick_send(item)),
+                Poll::Pending => {
+                    msg = Some(item);
+                    Poll::Pending
+                }
+            }
+        })
+        .await
     }
 
     /// Send a message on the channel.

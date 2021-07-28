@@ -25,7 +25,7 @@ use crate::{
     service::{
         config::{Meta, SessionConfig},
         future_task::BoxedFutureTask,
-        ServiceControl, SessionType, RECEIVED_SIZE, SEND_SIZE,
+        ServiceAsyncControl, SessionType, RECEIVED_SIZE, SEND_SIZE,
     },
     substream::{ProtocolEvent, SubstreamBuilder, SubstreamWritePartBuilder},
     transports::MultiIncoming,
@@ -101,6 +101,7 @@ pub(crate) enum SessionEvent {
         stream: StreamHandle,
     },
     ChangeState {
+        id: SessionId,
         state: SessionState,
         error: Option<io::Error>,
     },
@@ -152,7 +153,7 @@ pub(crate) struct Session {
     state: SessionState,
 
     context: Arc<SessionContext>,
-    service_control: ServiceControl,
+    service_control: ServiceAsyncControl,
 
     next_stream: StreamId,
 
@@ -210,8 +211,9 @@ impl Session {
             }
         });
         // background inner socket
+        let sid = meta.context.id;
         crate::runtime::spawn(
-            InnerSocket::new(socket, meta.event_sender).for_each(|_| future::ready(())),
+            InnerSocket::new(socket, meta.event_sender, sid).for_each(|_| future::ready(())),
         );
 
         Session {
@@ -356,6 +358,14 @@ impl Session {
                         self.context.pending_data_size()
                     );
                     buffer.clear();
+                    self.event_output(
+                        cx,
+                        SessionEvent::ChangeState {
+                            id: self.context.id,
+                            state: SessionState::Abnormal,
+                            error: None,
+                        },
+                    );
                 }
                 break;
             }
@@ -590,20 +600,14 @@ impl Session {
                 }
             }
             SessionEvent::StreamStart { stream } => self.handle_substream(stream),
-            SessionEvent::ChangeState { state, error } => {
+            SessionEvent::ChangeState { state, error, id } => {
                 if self.state == SessionState::Normal {
                     self.state = state;
                     if let Some(err) = error {
                         if !self.keep_buffer {
                             self.service_sender.clear()
                         }
-                        self.event_output(
-                            cx,
-                            SessionEvent::MuxerError {
-                                id: self.context.id,
-                                error: err,
-                            },
-                        )
+                        self.event_output(cx, SessionEvent::MuxerError { id, error: err })
                     }
                 }
             }
@@ -808,7 +812,7 @@ pub(crate) struct SessionMeta {
     service_proto_senders: IntMap<ProtocolId, Buffer<ServiceProtocolEvent>>,
     session_proto_senders: IntMap<ProtocolId, Buffer<SessionProtocolEvent>>,
     event_sender: priority_mpsc::Sender<SessionEvent>,
-    service_control: ServiceControl,
+    service_control: ServiceAsyncControl,
     session_proto_handles: Vec<(
         Option<futures::channel::oneshot::Sender<()>>,
         crate::runtime::JoinHandle<()>,
@@ -820,7 +824,7 @@ impl SessionMeta {
         timeout: Duration,
         context: Arc<SessionContext>,
         event_sender: priority_mpsc::Sender<SessionEvent>,
-        control: ServiceControl,
+        control: ServiceAsyncControl,
     ) -> Self {
         SessionMeta {
             config: SessionConfig::default(),
@@ -913,14 +917,19 @@ impl SessionState {
 struct InnerSocket<T> {
     socket: YamuxSession<T>,
     sender: priority_mpsc::Sender<SessionEvent>,
+    id: SessionId,
 }
 
 impl<T> InnerSocket<T>
 where
     T: AsyncRead + AsyncWrite + Unpin + Send,
 {
-    fn new(socket: YamuxSession<T>, sender: priority_mpsc::Sender<SessionEvent>) -> Self {
-        InnerSocket { socket, sender }
+    fn new(
+        socket: YamuxSession<T>,
+        sender: priority_mpsc::Sender<SessionEvent>,
+        id: SessionId,
+    ) -> Self {
+        InnerSocket { socket, sender, id }
     }
 }
 
@@ -945,12 +954,14 @@ where
             }
             Poll::Ready(None) => {
                 let mut sender = self.sender.clone();
+                let id = self.id;
 
                 crate::runtime::spawn(async move {
                     let _ignore = sender
                         .quick_send(SessionEvent::ChangeState {
                             state: SessionState::RemoteClose,
                             error: None,
+                            id,
                         })
                         .await;
                 });
@@ -968,6 +979,7 @@ where
                     | ErrorKind::UnexpectedEof => SessionEvent::ChangeState {
                         state: SessionState::RemoteClose,
                         error: None,
+                        id: self.id,
                     },
                     _ => {
                         debug!("MuxerError: {:?}", err);
@@ -975,6 +987,7 @@ where
                         SessionEvent::ChangeState {
                             state: SessionState::Abnormal,
                             error: Some(err),
+                            id: self.id,
                         }
                     }
                 };

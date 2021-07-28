@@ -174,10 +174,6 @@ impl<T> Buffer<T> {
         (self.sender.clone(), ::std::mem::take(&mut self.buffer))
     }
 
-    pub fn clone_sender(&self) -> Sender<T> {
-        self.sender.clone()
-    }
-
     pub fn clear(&mut self) {
         self.buffer.clear()
     }

@@ -1,26 +1,20 @@
-use futures::{
-    channel::mpsc,
-    prelude::*,
-    stream::{FusedStream, StreamExt},
-};
-use log::{debug, error, log_enabled, trace, warn};
+use futures::{channel::mpsc, prelude::*, stream::StreamExt};
+use log::{debug, error, trace};
 use nohash_hasher::IntMap;
 use std::{
     borrow::Cow,
     collections::{HashMap, HashSet},
-    pin::Pin,
     sync::{
         atomic::{AtomicBool, AtomicUsize, Ordering},
         Arc,
     },
-    task::{Context, Poll},
 };
-use tokio::io::{AsyncRead, AsyncWrite};
+use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt};
 
 #[cfg(not(target_arch = "wasm32"))]
 use crate::service::helper::Listener;
 use crate::{
-    buffer::{Buffer, SendResult},
+    buffer::Buffer,
     channel::{mpsc as priority_mpsc, mpsc::Priority},
     context::{ServiceContext, SessionContext, SessionController},
     error::{DialerErrorKind, ListenErrorKind, ProtocolHandleErrorKind, TransportErrorKind},
@@ -51,7 +45,7 @@ pub(crate) mod future_task;
 mod helper;
 
 pub use crate::service::{
-    config::{BlockingFlag, ProtocolHandle, ProtocolMeta, TargetProtocol, TargetSession},
+    config::{ProtocolHandle, ProtocolMeta, TargetProtocol, TargetSession},
     control::{ServiceAsyncControl, ServiceControl},
     event::{ServiceError, ServiceEvent},
     helper::SessionType,
@@ -98,11 +92,11 @@ pub struct Service<T> {
     // Future task manager
     future_task_manager: Option<FutureTaskManager>,
     // To add a future task
-    future_task_sender: Buffer<BoxedFutureTask>,
+    future_task_sender: mpsc::Sender<BoxedFutureTask>,
 
-    service_proto_handles: IntMap<ProtocolId, Buffer<ServiceProtocolEvent>>,
+    service_proto_handles: IntMap<ProtocolId, mpsc::Sender<ServiceProtocolEvent>>,
 
-    session_proto_handles: HashMap<(SessionId, ProtocolId), Buffer<SessionProtocolEvent>>,
+    session_proto_handles: HashMap<(SessionId, ProtocolId), mpsc::Sender<SessionProtocolEvent>>,
 
     /// Send events to service, clone to session
     session_event_sender: mpsc::Sender<SessionEvent>,
@@ -165,7 +159,7 @@ where
                 let transport = transport.tls_config(config.tls_config.clone());
                 transport
             },
-            future_task_sender: Buffer::new(future_task_sender),
+            future_task_sender,
             future_task_manager: Some(FutureTaskManager::new(
                 future_task_receiver,
                 shutdown.clone(),
@@ -234,12 +228,14 @@ where
             Ok((addr, incoming)) => {
                 let listen_address = addr.clone();
 
-                self.handle.handle_event(
-                    &mut self.service_context,
-                    ServiceEvent::ListenStarted {
-                        address: listen_address.clone(),
-                    },
-                );
+                self.handle
+                    .handle_event(
+                        &mut self.service_context,
+                        ServiceEvent::ListenStarted {
+                            address: listen_address.clone(),
+                        },
+                    )
+                    .await;
                 #[cfg(feature = "upnp")]
                 if let Some(client) = self.igd_client.as_mut() {
                     client.register(&listen_address)
@@ -263,9 +259,9 @@ where
             max_frame_length: self.config.max_frame_length,
             timeout: self.config.timeout,
             listen_addr: listen_address,
-            future_task_sender: self.future_task_sender.clone_sender(),
+            future_task_sender: self.future_task_sender.clone(),
         };
-        let mut sender = self.future_task_sender.clone_sender();
+        let mut sender = self.future_task_sender.clone();
         crate::runtime::spawn(async move {
             let res = sender
                 .send(Box::pin(listener.for_each(|_| future::ready(()))))
@@ -296,7 +292,11 @@ where
                     error!("Listen address result send back error: {:?}", err);
                 }
             };
-            self.future_task_sender.push(Box::pin(task));
+            let mut sender = self.future_task_sender.clone();
+            crate::runtime::spawn(async move {
+                let _ignore = sender.send(Box::pin(task)).await;
+            });
+
             self.state.increase();
         }
 
@@ -357,128 +357,17 @@ where
             };
         };
 
-        self.future_task_sender.push(Box::pin(task));
+        let mut sender = self.future_task_sender.clone();
+        crate::runtime::spawn(async move {
+            let _ignore = sender.send(Box::pin(task)).await;
+        });
         self.state.increase();
         Ok(())
     }
 
     /// Get service control, control can send tasks externally to the runtime inside
-    pub fn control(&self) -> &ServiceControl {
+    pub fn control(&self) -> &ServiceAsyncControl {
         self.service_context.control()
-    }
-
-    /// Distribute event to sessions
-    #[inline]
-    fn distribute_to_session(&mut self, cx: &mut Context) {
-        if self.shutdown.load(Ordering::SeqCst) {
-            return;
-        }
-
-        for control in self
-            .sessions
-            .values_mut()
-            .filter(|control| !control.buffer.is_empty())
-        {
-            if let SendResult::Pending = control.try_send(cx) {
-                if control.inner.pending_data_size() > self.config.session_config.send_buffer_size {
-                    self.handle.handle_error(
-                        &mut self.service_context,
-                        ServiceError::SessionBlocked {
-                            session_context: control.inner.clone(),
-                        },
-                    );
-
-                    warn!(
-                        "session {:?} unable to send message, \
-                         user allow buffer size: {}, \
-                         current buffer size: {}, so kill it",
-                        control.inner,
-                        self.config.session_config.send_buffer_size,
-                        control.inner.pending_data_size()
-                    );
-
-                    // clean message and try to close this session
-                    control.buffer.clear();
-                    let id = control.inner.id;
-                    control.push(Priority::High, SessionEvent::SessionClose { id });
-                    control.try_send(cx);
-                }
-            }
-        }
-    }
-
-    /// Distribute event to user level
-    #[inline(always)]
-    fn distribute_to_user_level(&mut self, cx: &mut Context) {
-        if self.shutdown.load(Ordering::SeqCst) {
-            return;
-        }
-        let mut error = false;
-
-        for (proto_id, buffer) in self
-            .service_proto_handles
-            .iter_mut()
-            .filter(|(_, buffer)| !buffer.is_empty())
-        {
-            match buffer.try_send(cx) {
-                SendResult::Pending => {
-                    let error = ProtocolHandleErrorKind::Block(None);
-                    self.handle.handle_error(
-                        &mut self.service_context,
-                        ServiceError::ProtocolHandleError {
-                            proto_id: *proto_id,
-                            error,
-                        },
-                    );
-                }
-                SendResult::Ok => (),
-                SendResult::Disconnect => {
-                    error = true;
-                    self.handle.handle_error(
-                        &mut self.service_context,
-                        ServiceError::ProtocolHandleError {
-                            proto_id: *proto_id,
-                            error: ProtocolHandleErrorKind::AbnormallyClosed(None),
-                        },
-                    );
-                }
-            }
-        }
-
-        for ((session_id, proto_id), ref mut buffer) in self
-            .session_proto_handles
-            .iter_mut()
-            .filter(|(_, buffer)| !buffer.is_empty())
-        {
-            match buffer.try_send(cx) {
-                SendResult::Pending => {
-                    let error = ProtocolHandleErrorKind::Block(Some(*session_id));
-                    self.handle.handle_error(
-                        &mut self.service_context,
-                        ServiceError::ProtocolHandleError {
-                            proto_id: *proto_id,
-                            error,
-                        },
-                    );
-                }
-                SendResult::Ok => (),
-                SendResult::Disconnect => {
-                    error = true;
-                    self.handle.handle_error(
-                        &mut self.service_context,
-                        ServiceError::ProtocolHandleError {
-                            proto_id: *proto_id,
-                            error: ProtocolHandleErrorKind::AbnormallyClosed(Some(*session_id)),
-                        },
-                    )
-                }
-            }
-        }
-
-        if error {
-            // if handle panic, close service
-            self.handle_service_task(cx, ServiceTask::Shutdown(false), Priority::High);
-        }
     }
 
     /// Spawn protocol handle
@@ -496,24 +385,20 @@ where
                 if let Some(session_control) = self.sessions.get(&id) {
                     debug!("init session [{}] level proto [{}] handle", id, proto_id);
                     let (sender, receiver) = mpsc::channel(RECEIVED_SIZE);
-                    self.session_proto_handles
-                        .insert((id, *proto_id), Buffer::new(sender));
+                    self.session_proto_handles.insert((id, *proto_id), sender);
 
-                    let stream = SessionProtocolStream::new(
+                    let mut stream = SessionProtocolStream::new(
                         handle,
                         self.service_context.clone_self(),
                         Arc::clone(&session_control.inner),
                         receiver,
-                        (*proto_id, meta.blocking_flag()),
+                        *proto_id,
                         self.session_event_sender.clone(),
-                        (
-                            self.shutdown.clone(),
-                            self.future_task_sender.clone_sender(),
-                        ),
+                        (self.shutdown.clone(), self.future_task_sender.clone()),
                     );
                     let (sender, receiver) = futures::channel::oneshot::channel();
                     let handle = crate::runtime::spawn(async move {
-                        future::select(stream.for_each(|_| future::ready(())), receiver).await;
+                        stream.run(receiver).await;
                     });
                     handles.push((Some(sender), handle));
                 }
@@ -524,9 +409,8 @@ where
         handles
     }
 
-    fn handle_message(
+    async fn handle_message(
         &mut self,
-        cx: &mut Context,
         target: TargetSession,
         proto_id: ProtocolId,
         priority: Priority,
@@ -541,25 +425,33 @@ where
             // Send data to the specified protocol for the specified session.
             TargetSession::Single(id) => {
                 if let Some(control) = self.sessions.get_mut(&id) {
-                    control.push_message(proto_id, priority, data);
-                    control.try_send(cx);
+                    control.inner.incr_pending_data_size(data.len());
+                    let _ignore = control
+                        .send(priority, SessionEvent::ProtocolMessage { proto_id, data })
+                        .await;
                 }
             }
             // Send data to the specified protocol for the specified sessions.
-            TargetSession::Filter(filter) => self
-                .sessions
-                .iter_mut()
-                .filter(|(id, _)| filter(id))
-                .for_each(|(id, control)| {
+            TargetSession::Filter(filter) => {
+                for (id, control) in self.sessions.iter_mut().filter(|(id, _)| filter(id)) {
                     debug!(
                         "send message to session [{}], proto [{}], data len: {}",
                         id,
                         proto_id,
                         data.len()
                     );
-                    control.push_message(proto_id, priority, data.clone());
-                    control.try_send(cx);
-                }),
+                    control.inner.incr_pending_data_size(data.len());
+                    let _ignore = control
+                        .send(
+                            priority,
+                            SessionEvent::ProtocolMessage {
+                                proto_id,
+                                data: data.clone(),
+                            },
+                        )
+                        .await;
+                }
+            }
             // Broadcast data for a specified protocol.
             TargetSession::All => {
                 debug!(
@@ -569,8 +461,16 @@ where
                     data.len()
                 );
                 for control in self.sessions.values_mut() {
-                    control.push_message(proto_id, priority, data.clone());
-                    control.try_send(cx);
+                    control.inner.incr_pending_data_size(data.len());
+                    let _ignore = control
+                        .send(
+                            priority,
+                            SessionEvent::ProtocolMessage {
+                                proto_id,
+                                data: data.clone(),
+                            },
+                        )
+                        .await;
                 }
             }
         }
@@ -598,7 +498,7 @@ where
         }
         .handshake(socket);
 
-        let mut future_task_sender = self.future_task_sender.clone_sender();
+        let mut future_task_sender = self.future_task_sender.clone();
 
         crate::runtime::spawn(async move {
             if future_task_sender
@@ -630,9 +530,8 @@ where
 
     /// Session open
     #[inline]
-    fn session_open<H>(
+    async fn session_open<H>(
         &mut self,
-        cx: &mut Context,
         mut handle: H,
         remote_pubkey: Option<PublicKey>,
         mut address: Multiaddr,
@@ -655,25 +554,29 @@ where
             {
                 Some(context) => {
                     trace!("Connected to the connected node");
-                    if let Poll::Ready(Err(e)) = Pin::new(&mut handle).poll_shutdown(cx) {
-                        trace!("handle poll shutdown err {}", e)
-                    }
+                    crate::runtime::spawn(async move {
+                        let _ignore = handle.shutdown().await;
+                    });
                     if ty.is_outbound() {
-                        self.handle.handle_error(
-                            &mut self.service_context,
-                            ServiceError::DialerError {
-                                error: DialerErrorKind::RepeatedConnection(context.inner.id),
-                                address,
-                            },
-                        );
+                        self.handle
+                            .handle_error(
+                                &mut self.service_context,
+                                ServiceError::DialerError {
+                                    error: DialerErrorKind::RepeatedConnection(context.inner.id),
+                                    address,
+                                },
+                            )
+                            .await;
                     } else {
-                        self.handle.handle_error(
-                            &mut self.service_context,
-                            ServiceError::ListenError {
-                                error: ListenErrorKind::RepeatedConnection(context.inner.id),
-                                address: listen_addr.expect("listen address must exist"),
-                            },
-                        );
+                        self.handle
+                            .handle_error(
+                                &mut self.service_context,
+                                ServiceError::ListenError {
+                                    error: ListenErrorKind::RepeatedConnection(context.inner.id),
+                                    address: listen_addr.expect("listen address must exist"),
+                                },
+                            )
+                            .await;
                     }
                     return;
                 }
@@ -682,13 +585,15 @@ where
                     if let Some(peer_id) = extract_peer_id(&address) {
                         if key.peer_id() != peer_id {
                             trace!("Peer id not match");
-                            self.handle.handle_error(
-                                &mut self.service_context,
-                                ServiceError::DialerError {
-                                    error: DialerErrorKind::PeerIdNotMatch,
-                                    address,
-                                },
-                            );
+                            self.handle
+                                .handle_error(
+                                    &mut self.service_context,
+                                    ServiceError::DialerError {
+                                        error: DialerErrorKind::PeerIdNotMatch,
+                                        address,
+                                    },
+                                )
+                                .await;
                             return;
                         }
                     } else {
@@ -742,13 +647,19 @@ where
         .protocol_by_id(by_id)
         .config(self.config.session_config)
         .keep_buffer(self.config.keep_buffer)
-        .service_proto_senders(self.service_proto_handles.clone())
+        .service_proto_senders(
+            self.service_proto_handles
+                .clone()
+                .into_iter()
+                .map(|(k, v)| (k, Buffer::new(v)))
+                .collect(),
+        )
         .session_senders(
             self.session_proto_handles
                 .iter()
                 .filter_map(|((session_id, key), value)| {
                     if *session_id == self.next_session {
-                        Some((*key, value.clone()))
+                        Some((*key, Buffer::new(value.clone())))
                     } else {
                         None
                     }
@@ -762,7 +673,7 @@ where
             self.session_event_sender.clone(),
             service_event_receiver,
             meta,
-            self.future_task_sender.clone_sender(),
+            self.future_task_sender.clone(),
         );
 
         if ty.is_outbound() {
@@ -787,20 +698,23 @@ where
 
         crate::runtime::spawn(session.for_each(|_| future::ready(())));
 
-        self.handle.handle_event(
-            &mut self.service_context,
-            ServiceEvent::SessionOpen { session_context },
-        );
+        self.handle
+            .handle_event(
+                &mut self.service_context,
+                ServiceEvent::SessionOpen { session_context },
+            )
+            .await;
     }
 
     /// Close the specified session, clean up the handle
     #[inline]
-    fn session_close(&mut self, cx: &mut Context, id: SessionId, source: Source) {
+    async fn session_close(&mut self, id: SessionId, source: Source) {
         if source == Source::External {
             if let Some(control) = self.sessions.get_mut(&id) {
-                control.push(Priority::High, SessionEvent::SessionClose { id });
                 debug!("try close service session [{}] ", id);
-                control.try_send(cx);
+                let _ignore = control
+                    .send(Priority::High, SessionEvent::SessionClose { id })
+                    .await;
             }
             return;
         }
@@ -812,43 +726,45 @@ where
 
         if let Some(session_control) = self.sessions.remove(&id) {
             // Service handle processing flow
-            self.handle.handle_event(
-                &mut self.service_context,
-                ServiceEvent::SessionClose {
-                    session_context: session_control.inner,
-                },
-            );
+            self.handle
+                .handle_event(
+                    &mut self.service_context,
+                    ServiceEvent::SessionClose {
+                        session_context: session_control.inner,
+                    },
+                )
+                .await;
         }
     }
 
     /// Open the handle corresponding to the protocol
     #[inline]
-    fn protocol_open(&mut self, cx: &mut Context, id: SessionId, proto_id: ProtocolId) {
+    async fn protocol_open(&mut self, id: SessionId, proto_id: ProtocolId) {
         if let Some(control) = self.sessions.get_mut(&id) {
-            control.push(Priority::High, SessionEvent::ProtocolOpen { proto_id });
             debug!("try open session [{}] proto [{}]", id, proto_id);
-            control.try_send(cx);
+            let _ignore = control
+                .send(Priority::High, SessionEvent::ProtocolOpen { proto_id })
+                .await;
         }
     }
 
     /// Protocol stream is closed, clean up data
     #[inline]
-    fn protocol_close(&mut self, cx: &mut Context, session_id: SessionId, proto_id: ProtocolId) {
+    async fn protocol_close(&mut self, session_id: SessionId, proto_id: ProtocolId) {
         if let Some(control) = self.sessions.get_mut(&session_id) {
-            control.push(Priority::High, SessionEvent::ProtocolClose { proto_id });
             debug!("try close session [{}] proto [{}]", session_id, proto_id);
-            control.try_send(cx);
+            let _ignore = control
+                .send(Priority::High, SessionEvent::ProtocolClose { proto_id })
+                .await;
         }
     }
 
-    fn send_pending_task(&mut self, cx: &mut Context) {
-        self.future_task_sender.try_send(cx);
-    }
-
     #[inline]
-    fn send_future_task(&mut self, cx: &mut Context, task: BoxedFutureTask) {
-        self.future_task_sender.push(task);
-        self.send_pending_task(cx)
+    fn send_future_task(&mut self, task: BoxedFutureTask) {
+        let mut sender = self.future_task_sender.clone();
+        crate::runtime::spawn(async move {
+            let _ignore = sender.send(task).await;
+        });
     }
 
     fn init_proto_handles(&mut self) {
@@ -856,24 +772,20 @@ where
             if let ProtocolHandle::Callback(handle) = meta.service_handle() {
                 debug!("init service level [{}] proto handle", proto_id);
                 let (sender, receiver) = mpsc::channel(RECEIVED_SIZE);
-                self.service_proto_handles
-                    .insert(*proto_id, Buffer::new(sender));
+                self.service_proto_handles.insert(*proto_id, sender);
 
                 let mut stream = ServiceProtocolStream::new(
                     handle,
                     self.service_context.clone_self(),
                     receiver,
-                    (*proto_id, meta.blocking_flag()),
+                    *proto_id,
                     self.session_event_sender.clone(),
-                    (
-                        self.shutdown.clone(),
-                        self.future_task_sender.clone_sender(),
-                    ),
+                    (self.shutdown.clone(), self.future_task_sender.clone()),
                 );
-                stream.handle_event(ServiceProtocolEvent::Init);
                 let (sender, receiver) = futures::channel::oneshot::channel();
                 let handle = crate::runtime::spawn(async move {
-                    future::select(stream.for_each(|_| future::ready(())), receiver).await;
+                    stream.handle_event(ServiceProtocolEvent::Init).await;
+                    stream.run(receiver).await;
                 });
                 self.wait_handle.push((Some(sender), handle));
             } else {
@@ -888,7 +800,7 @@ where
     /// When listen update, call here
     #[cfg(not(target_arch = "wasm32"))]
     #[inline]
-    fn try_update_listens(&mut self, cx: &mut Context) {
+    async fn try_update_listens(&mut self) {
         #[cfg(feature = "upnp")]
         if let Some(client) = self.igd_client.as_mut() {
             client.process_only_leases_support()
@@ -899,25 +811,61 @@ where
         let new_listens = self.listens.iter().cloned().collect::<Vec<Multiaddr>>();
         self.service_context.update_listens(new_listens.clone());
 
-        for buffer in self.service_proto_handles.values_mut() {
-            buffer.push(ServiceProtocolEvent::Update {
-                listen_addrs: new_listens.clone(),
-            });
+        let mut error = false;
+
+        for (proto_id, sender) in self.service_proto_handles.iter_mut() {
+            if sender
+                .send(ServiceProtocolEvent::Update {
+                    listen_addrs: new_listens.clone(),
+                })
+                .await
+                .is_err()
+            {
+                self.handle
+                    .handle_error(
+                        &mut self.service_context,
+                        ServiceError::ProtocolHandleError {
+                            proto_id: *proto_id,
+                            error: ProtocolHandleErrorKind::AbnormallyClosed(None),
+                        },
+                    )
+                    .await;
+                error = true;
+            }
         }
 
-        for buffer in self.session_proto_handles.values_mut() {
-            buffer.push(SessionProtocolEvent::Update {
-                listen_addrs: new_listens.clone(),
-            });
+        for ((session_id, proto_id), sender) in self.session_proto_handles.iter_mut() {
+            if sender
+                .send(SessionProtocolEvent::Update {
+                    listen_addrs: new_listens.clone(),
+                })
+                .await
+                .is_err()
+            {
+                error = true;
+                self.handle
+                    .handle_error(
+                        &mut self.service_context,
+                        ServiceError::ProtocolHandleError {
+                            proto_id: *proto_id,
+                            error: ProtocolHandleErrorKind::AbnormallyClosed(Some(*session_id)),
+                        },
+                    )
+                    .await;
+            }
         }
 
-        self.distribute_to_user_level(cx);
+        if error {
+            // if handle panic, close service
+            self.handle_service_task(ServiceTask::Shutdown(false), Priority::High)
+                .await;
+        }
     }
 
     /// Handling various events uploaded by the session
-    fn handle_session_event(&mut self, cx: &mut Context, event: SessionEvent) {
+    async fn handle_session_event(&mut self, event: SessionEvent) {
         match event {
-            SessionEvent::SessionClose { id } => self.session_close(cx, id, Source::Internal),
+            SessionEvent::SessionClose { id } => self.session_close(id, Source::Internal).await,
             SessionEvent::HandshakeSuccess {
                 handle,
                 public_key,
@@ -929,20 +877,23 @@ where
                     self.state.decrease();
                 }
                 if !self.reached_max_connection_limit() {
-                    self.session_open(cx, handle, public_key, address, ty, listen_address);
+                    self.session_open(handle, public_key, address, ty, listen_address)
+                        .await;
                 }
             }
             SessionEvent::HandshakeError { ty, error, address } => {
                 if ty.is_outbound() {
                     self.state.decrease();
                     self.dial_protocols.remove(&address);
-                    self.handle.handle_error(
-                        &mut self.service_context,
-                        ServiceError::DialerError {
-                            address,
-                            error: DialerErrorKind::HandshakeError(error),
-                        },
-                    )
+                    self.handle
+                        .handle_error(
+                            &mut self.service_context,
+                            ServiceError::DialerError {
+                                address,
+                                error: DialerErrorKind::HandshakeError(error),
+                            },
+                        )
+                        .await
                 }
             }
             SessionEvent::ProtocolMessage { .. }
@@ -950,57 +901,69 @@ where
             | SessionEvent::ProtocolClose { .. } => unreachable!(),
             SessionEvent::ProtocolSelectError { id, proto_name } => {
                 if let Some(session_control) = self.sessions.get(&id) {
-                    self.handle.handle_error(
-                        &mut self.service_context,
-                        ServiceError::ProtocolSelectError {
-                            proto_name,
-                            session_context: Arc::clone(&session_control.inner),
-                        },
-                    )
+                    self.handle
+                        .handle_error(
+                            &mut self.service_context,
+                            ServiceError::ProtocolSelectError {
+                                proto_name,
+                                session_context: Arc::clone(&session_control.inner),
+                            },
+                        )
+                        .await
                 }
             }
             SessionEvent::ProtocolError {
                 id,
                 proto_id,
                 error,
-            } => self.handle.handle_error(
-                &mut self.service_context,
-                ServiceError::ProtocolError {
-                    id,
-                    proto_id,
-                    error,
-                },
-            ),
+            } => {
+                self.handle
+                    .handle_error(
+                        &mut self.service_context,
+                        ServiceError::ProtocolError {
+                            id,
+                            proto_id,
+                            error,
+                        },
+                    )
+                    .await
+            }
             SessionEvent::DialError { address, error } => {
                 self.state.decrease();
                 self.dial_protocols.remove(&address);
-                self.handle.handle_error(
-                    &mut self.service_context,
-                    ServiceError::DialerError {
-                        address,
-                        error: DialerErrorKind::TransportError(error),
-                    },
-                )
+                self.handle
+                    .handle_error(
+                        &mut self.service_context,
+                        ServiceError::DialerError {
+                            address,
+                            error: DialerErrorKind::TransportError(error),
+                        },
+                    )
+                    .await
             }
             #[cfg(not(target_arch = "wasm32"))]
             SessionEvent::ListenError { address, error } => {
-                self.handle.handle_error(
-                    &mut self.service_context,
-                    ServiceError::ListenError {
-                        address: address.clone(),
-                        error: ListenErrorKind::TransportError(error),
-                    },
-                );
+                self.handle
+                    .handle_error(
+                        &mut self.service_context,
+                        ServiceError::ListenError {
+                            address: address.clone(),
+                            error: ListenErrorKind::TransportError(error),
+                        },
+                    )
+                    .await;
                 if self.listens.remove(&address) {
                     #[cfg(feature = "upnp")]
                     if let Some(ref mut client) = self.igd_client {
                         client.remove(&address);
                     }
 
-                    self.handle.handle_event(
-                        &mut self.service_context,
-                        ServiceEvent::ListenClose { address },
-                    )
+                    self.handle
+                        .handle_event(
+                            &mut self.service_context,
+                            ServiceEvent::ListenClose { address },
+                        )
+                        .await
                 } else {
                     // try start listen error
                     self.state.decrease();
@@ -1008,23 +971,27 @@ where
             }
             SessionEvent::SessionTimeout { id } => {
                 if let Some(session_control) = self.sessions.get(&id) {
-                    self.handle.handle_error(
-                        &mut self.service_context,
-                        ServiceError::SessionTimeout {
-                            session_context: Arc::clone(&session_control.inner),
-                        },
-                    )
+                    self.handle
+                        .handle_error(
+                            &mut self.service_context,
+                            ServiceError::SessionTimeout {
+                                session_context: Arc::clone(&session_control.inner),
+                            },
+                        )
+                        .await
                 }
             }
             SessionEvent::MuxerError { id, error } => {
                 if let Some(session_control) = self.sessions.get(&id) {
-                    self.handle.handle_error(
-                        &mut self.service_context,
-                        ServiceError::MuxerError {
-                            session_context: Arc::clone(&session_control.inner),
-                            error,
-                        },
-                    )
+                    self.handle
+                        .handle_error(
+                            &mut self.service_context,
+                            ServiceError::MuxerError {
+                                session_context: Arc::clone(&session_control.inner),
+                                error,
+                            },
+                        )
+                        .await
                 }
             }
             #[cfg(not(target_arch = "wasm32"))]
@@ -1032,15 +999,17 @@ where
                 listen_address,
                 incoming,
             } => {
-                self.handle.handle_event(
-                    &mut self.service_context,
-                    ServiceEvent::ListenStarted {
-                        address: listen_address.clone(),
-                    },
-                );
+                self.handle
+                    .handle_event(
+                        &mut self.service_context,
+                        ServiceEvent::ListenStarted {
+                            address: listen_address.clone(),
+                        },
+                    )
+                    .await;
                 self.listens.insert(listen_address.clone());
                 self.state.decrease();
-                self.try_update_listens(cx);
+                self.try_update_listens().await;
                 #[cfg(feature = "upnp")]
                 if let Some(client) = self.igd_client.as_mut() {
                     client.register(&listen_address)
@@ -1048,12 +1017,27 @@ where
                 self.spawn_listener(incoming, listen_address);
             }
             SessionEvent::ProtocolHandleError { error, proto_id } => {
-                self.handle.handle_error(
-                    &mut self.service_context,
-                    ServiceError::ProtocolHandleError { error, proto_id },
-                );
+                self.handle
+                    .handle_error(
+                        &mut self.service_context,
+                        ServiceError::ProtocolHandleError { error, proto_id },
+                    )
+                    .await;
                 // if handle panic, close service
-                self.handle_service_task(cx, ServiceTask::Shutdown(false), Priority::High);
+                self.handle_service_task(ServiceTask::Shutdown(false), Priority::High)
+                    .await;
+            }
+            SessionEvent::ChangeState { id, .. } => {
+                if let Some(session) = self.sessions.get(&id) {
+                    self.handle
+                        .handle_error(
+                            &mut self.service_context,
+                            ServiceError::SessionBlocked {
+                                session_context: session.inner.clone(),
+                            },
+                        )
+                        .await
+                }
             }
             _ => (),
         }
@@ -1061,46 +1045,50 @@ where
 
     /// Handling various tasks sent externally
     #[allow(clippy::needless_collect)]
-    fn handle_service_task(&mut self, cx: &mut Context, event: ServiceTask, priority: Priority) {
+    async fn handle_service_task(&mut self, event: ServiceTask, priority: Priority) {
         match event {
             ServiceTask::ProtocolMessage {
                 target,
                 proto_id,
                 data,
             } => {
-                self.handle_message(cx, target, proto_id, priority, data);
+                self.handle_message(target, proto_id, priority, data).await;
             }
             ServiceTask::Dial { address, target } => {
                 if !self.dial_protocols.contains_key(&address) {
                     if let Err(e) = self.dial_inner(address.clone(), target) {
-                        self.handle.handle_error(
-                            &mut self.service_context,
-                            ServiceError::DialerError {
-                                address,
-                                error: DialerErrorKind::TransportError(e),
-                            },
-                        );
+                        self.handle
+                            .handle_error(
+                                &mut self.service_context,
+                                ServiceError::DialerError {
+                                    address,
+                                    error: DialerErrorKind::TransportError(e),
+                                },
+                            )
+                            .await;
                     }
                 }
             }
             ServiceTask::Listen { address } => {
                 if !self.listens.contains(&address) {
                     if let Err(e) = self.listen_inner(address.clone()) {
-                        self.handle.handle_error(
-                            &mut self.service_context,
-                            ServiceError::ListenError {
-                                address,
-                                error: ListenErrorKind::TransportError(e),
-                            },
-                        );
+                        self.handle
+                            .handle_error(
+                                &mut self.service_context,
+                                ServiceError::ListenError {
+                                    address,
+                                    error: ListenErrorKind::TransportError(e),
+                                },
+                            )
+                            .await;
                     }
                 }
             }
             ServiceTask::Disconnect { session_id } => {
-                self.session_close(cx, session_id, Source::External)
+                self.session_close(session_id, Source::External).await
             }
             ServiceTask::FutureTask { task } => {
-                self.send_future_task(cx, task);
+                self.send_future_task(task);
             }
             ServiceTask::SetProtocolNotify {
                 proto_id,
@@ -1108,15 +1096,17 @@ where
                 token,
             } => {
                 // TODO: if not contains should call handle_error let user know
-                if let Some(buffer) = self.service_proto_handles.get_mut(&proto_id) {
-                    buffer.push(ServiceProtocolEvent::SetNotify { interval, token });
-                    buffer.try_send(cx);
+                if let Some(sender) = self.service_proto_handles.get_mut(&proto_id) {
+                    let _ignore = sender
+                        .send(ServiceProtocolEvent::SetNotify { interval, token })
+                        .await;
                 }
             }
             ServiceTask::RemoveProtocolNotify { proto_id, token } => {
-                if let Some(buffer) = self.service_proto_handles.get_mut(&proto_id) {
-                    buffer.push(ServiceProtocolEvent::RemoveNotify { token });
-                    buffer.try_send(cx);
+                if let Some(sender) = self.service_proto_handles.get_mut(&proto_id) {
+                    let _ignore = sender
+                        .send(ServiceProtocolEvent::RemoveNotify { token })
+                        .await;
                 }
             }
             ServiceTask::SetProtocolSessionNotify {
@@ -1126,9 +1116,10 @@ where
                 token,
             } => {
                 // TODO: if not contains should call handle_error let user know
-                if let Some(buffer) = self.session_proto_handles.get_mut(&(session_id, proto_id)) {
-                    buffer.push(SessionProtocolEvent::SetNotify { interval, token });
-                    buffer.try_send(cx);
+                if let Some(sender) = self.session_proto_handles.get_mut(&(session_id, proto_id)) {
+                    let _ignore = sender
+                        .send(SessionProtocolEvent::SetNotify { interval, token })
+                        .await;
                 }
             }
             ServiceTask::RemoveProtocolSessionNotify {
@@ -1136,9 +1127,10 @@ where
                 proto_id,
                 token,
             } => {
-                if let Some(buffer) = self.session_proto_handles.get_mut(&(session_id, proto_id)) {
-                    buffer.push(SessionProtocolEvent::RemoveNotify { token });
-                    buffer.try_send(cx);
+                if let Some(sender) = self.session_proto_handles.get_mut(&(session_id, proto_id)) {
+                    let _ignore = sender
+                        .send(SessionProtocolEvent::RemoveNotify { token })
+                        .await;
                 }
             }
             ServiceTask::ProtocolOpen { session_id, target } => match target {
@@ -1147,37 +1139,39 @@ where
                     #[allow(clippy::needless_collect)]
                     {
                         let ids = self.protocol_configs.keys().copied().collect::<Vec<_>>();
-                        ids.into_iter()
-                            .for_each(|id| self.protocol_open(cx, session_id, id));
+                        for id in ids {
+                            self.protocol_open(session_id, id).await
+                        }
                     }
                 }
-                TargetProtocol::Single(id) => self.protocol_open(cx, session_id, id),
+                TargetProtocol::Single(id) => self.protocol_open(session_id, id).await,
                 TargetProtocol::Filter(filter) => {
                     let ids = self.protocol_configs.keys().copied().collect::<Vec<_>>();
-                    ids.into_iter()
-                        .filter(filter)
-                        .for_each(|id| self.protocol_open(cx, session_id, id))
+                    for id in ids.into_iter().filter(filter) {
+                        self.protocol_open(session_id, id).await
+                    }
                 }
             },
             ServiceTask::ProtocolClose {
                 session_id,
                 proto_id,
-            } => self.protocol_close(cx, session_id, proto_id),
+            } => self.protocol_close(session_id, proto_id).await,
             ServiceTask::Shutdown(quick) => {
                 self.state.pre_shutdown();
 
                 for address in self.listens.drain() {
-                    self.handle.handle_event(
-                        &mut self.service_context,
-                        ServiceEvent::ListenClose { address },
-                    )
+                    self.handle
+                        .handle_event(
+                            &mut self.service_context,
+                            ServiceEvent::ListenClose { address },
+                        )
+                        .await
                 }
                 // clear upnp register
                 #[cfg(all(not(target_arch = "wasm32"), feature = "upnp"))]
                 if let Some(client) = self.igd_client.as_mut() {
                     client.clear()
                 };
-                self.future_task_sender.clear();
 
                 let sessions = self.sessions.keys().cloned().collect::<Vec<SessionId>>();
 
@@ -1189,101 +1183,31 @@ where
                     self.session_proto_handles.clear();
 
                     // don't care about any session action
-                    sessions
-                        .into_iter()
-                        .for_each(|i| self.session_close(cx, i, Source::Internal));
+                    for i in sessions {
+                        self.session_close(i, Source::Internal).await
+                    }
                 } else {
-                    sessions
-                        .into_iter()
-                        .for_each(|i| self.session_close(cx, i, Source::External));
+                    for i in sessions {
+                        self.session_close(i, Source::External).await
+                    }
                 }
             }
         }
     }
 
-    #[inline]
-    fn user_task_poll(&mut self, cx: &mut Context) -> Poll<Option<()>> {
-        if self.service_task_receiver.is_terminated() {
-            return Poll::Ready(None);
-        }
-
-        match Pin::new(&mut self.service_task_receiver)
-            .as_mut()
-            .poll_next(cx)
-        {
-            Poll::Ready(Some((priority, task))) => {
-                self.handle_service_task(cx, task, priority);
-                Poll::Ready(Some(()))
-            }
-            Poll::Ready(None) => Poll::Ready(None),
-            Poll::Pending => Poll::Pending,
-        }
-    }
-
-    fn session_poll(&mut self, cx: &mut Context) -> Poll<Option<()>> {
-        if self.session_event_receiver.is_terminated() {
-            return Poll::Ready(None);
-        }
-
-        match Pin::new(&mut self.session_event_receiver)
-            .as_mut()
-            .poll_next(cx)
-        {
-            Poll::Ready(Some(event)) => {
-                self.handle_session_event(cx, event);
-                Poll::Ready(Some(()))
-            }
-            Poll::Ready(None) => unreachable!(),
-            Poll::Pending => Poll::Pending,
-        }
-    }
-
-    fn flush_buffer(&mut self, cx: &mut Context) {
-        self.distribute_to_session(cx);
-
-        self.distribute_to_user_level(cx);
-    }
-
     #[cold]
-    fn wait_handle_poll(&mut self, cx: &mut Context) -> Poll<Option<()>> {
-        for (sender, mut handle) in self.wait_handle.split_off(0) {
+    async fn wait_handle_poll(&mut self) {
+        for (sender, handle) in self.wait_handle.split_off(0) {
             if let Some(sender) = sender {
                 // don't care about it
                 let _ignore = sender.send(());
             }
-            match handle.poll_unpin(cx) {
-                Poll::Pending => {
-                    self.wait_handle.push((None, handle));
-                }
-                Poll::Ready(_) => (),
-            }
-        }
-
-        if self.wait_handle.is_empty() {
-            Poll::Ready(None)
-        } else {
-            Poll::Pending
+            let _ignore = handle.await;
         }
     }
-}
 
-impl<T> Stream for Service<T>
-where
-    T: ServiceHandle + Unpin,
-{
-    type Item = ();
-
-    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Option<Self::Item>> {
-        if self.listens.is_empty()
-            && self.state.is_shutdown()
-            && self.sessions.is_empty()
-            && self.future_task_sender.is_empty()
-        {
-            debug!("shutdown because all state is empty head");
-            self.shutdown.store(true, Ordering::SeqCst);
-            return self.wait_handle_poll(cx);
-        }
-
+    /// start service
+    pub async fn run(&mut self) {
         if let Some(stream) = self.future_task_manager.take() {
             let (sender, receiver) = futures::channel::oneshot::channel();
             let handle = crate::runtime::spawn(async move {
@@ -1293,57 +1217,23 @@ where
             self.init_proto_handles();
         }
 
-        self.flush_buffer(cx);
-
-        #[cfg(not(target_arch = "wasm32"))]
-        self.try_update_listens(cx);
-
-        let mut is_pending = self.session_poll(cx).is_pending();
-
-        // receive user task
-        is_pending &= self.user_task_poll(cx).is_pending();
-
-        // process any task buffer
-        self.send_pending_task(cx);
-
-        // Double check service state
-        if self.listens.is_empty()
-            && self.state.is_shutdown()
-            && self.sessions.is_empty()
-            && self.future_task_sender.is_empty()
-        {
-            debug!("shutdown because all state is empty tail");
-            self.shutdown.store(true, Ordering::SeqCst);
-            return self.wait_handle_poll(cx);
-        }
-
-        if log_enabled!(target: "tentacle", log::Level::Debug) {
-            debug!(
-                "listens count: {}, state: {:?}, sessions count: {}, \
-             pending task: {}, write_buf: {}, read_service_buf: {}, read_session_buf: {}",
-                self.listens.len(),
-                self.state,
-                self.sessions.len(),
-                self.future_task_sender.len(),
-                self.sessions
-                    .values()
-                    .map(|item| item.buffer.len())
-                    .sum::<usize>(),
-                self.service_proto_handles
-                    .values()
-                    .map(Buffer::len)
-                    .sum::<usize>(),
-                self.session_proto_handles
-                    .values()
-                    .map(Buffer::len)
-                    .sum::<usize>(),
-            );
-        }
-
-        if is_pending {
-            Poll::Pending
-        } else {
-            Poll::Ready(Some(()))
+        loop {
+            if self.listens.is_empty() && self.state.is_shutdown() && self.sessions.is_empty() {
+                debug!("shutdown because all state is empty head");
+                self.shutdown.store(true, Ordering::SeqCst);
+                self.wait_handle_poll().await;
+                break;
+            }
+            #[cfg(not(target_arch = "wasm32"))]
+            self.try_update_listens().await;
+            tokio::select! {
+                Some(event) = self.session_event_receiver.next() => {
+                    self.handle_session_event(event).await
+                },
+                Some((priority, task)) = self.service_task_receiver.next() => {
+                    self.handle_service_task(task, priority).await
+                }
+            }
         }
     }
 }

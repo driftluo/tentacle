@@ -1,10 +1,10 @@
 use bytes::Bytes;
-use futures::StreamExt;
 use std::sync::{
     atomic::{AtomicUsize, Ordering},
     Arc,
 };
 use tentacle::{
+    async_trait,
     builder::{MetaBuilder, ServiceBuilder},
     context::{ProtocolContext, ProtocolContextMutRef},
     secio::SecioKeyPair,
@@ -32,35 +32,40 @@ struct PHandle {
     count: Arc<AtomicUsize>,
 }
 
+#[async_trait]
 impl ServiceProtocol for PHandle {
-    fn init(&mut self, _context: &mut ProtocolContext) {}
+    async fn init(&mut self, _context: &mut ProtocolContext) {}
 
-    fn connected(&mut self, context: ProtocolContextMutRef, _version: &str) {
+    async fn connected(&mut self, context: ProtocolContextMutRef<'_>, _version: &str) {
         if context.session.ty.is_inbound() {
             let prefix = "abcde".repeat(800);
             // NOTE: 256 is the send channel buffer size
             let length = 1024;
             for i in 0..length {
                 println!("> [Server] send {}", i);
-                let _ = context.send_message(Bytes::from(format!(
-                    "{}-000000000000000000000{}",
-                    prefix, i
-                )));
+                let _ = context
+                    .send_message(Bytes::from(format!(
+                        "{}-000000000000000000000{}",
+                        prefix, i
+                    )))
+                    .await;
             }
         }
     }
 
-    fn received(&mut self, context: ProtocolContextMutRef, data: Bytes) {
+    async fn received(&mut self, context: ProtocolContextMutRef<'_>, data: Bytes) {
         let count_now = self.count.load(Ordering::SeqCst);
         if context.session.ty.is_outbound() {
             println!("> [Client] received {}", count_now);
-            let _ = context.send_message(format!("xx-{}", count_now).into());
+            let _ = context
+                .send_message(format!("xx-{}", count_now).into())
+                .await;
             self.count.fetch_add(1, Ordering::SeqCst);
         } else {
             println!("> [Server] received {}", String::from_utf8_lossy(&data));
         }
         if count_now + 1 == 1024 {
-            let _ = context.close();
+            let _ = context.close().await;
         }
     }
 }
@@ -97,11 +102,7 @@ fn main() {
                 .await
                 .unwrap();
             println!("listen_addr: {}", listen_addr);
-            loop {
-                if service.next().await.is_none() {
-                    break;
-                }
-            }
+            service.run().await
         });
     } else {
         rt.block_on(async move {
@@ -112,11 +113,7 @@ fn main() {
                 .dial(listen_addr, TargetProtocol::All)
                 .await
                 .unwrap();
-            loop {
-                if service.next().await.is_none() {
-                    break;
-                }
-            }
+            service.run().await
         });
     }
 }

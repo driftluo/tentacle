@@ -1,4 +1,4 @@
-use futures::{channel, StreamExt};
+use futures::channel;
 use std::{
     sync::{
         atomic::{AtomicUsize, Ordering},
@@ -8,6 +8,7 @@ use std::{
     time::Duration,
 };
 use tentacle::{
+    async_trait,
     builder::{MetaBuilder, ServiceBuilder},
     context::ProtocolContextMutRef,
     multiaddr::Multiaddr,
@@ -37,37 +38,44 @@ struct PHandle {
     count: Arc<AtomicUsize>,
 }
 
+#[async_trait]
 impl SessionProtocol for PHandle {
-    fn connected(&mut self, context: ProtocolContextMutRef, _version: &str) {
-        let _res = context.set_session_notify(
-            context.session.id,
-            context.proto_id,
-            Duration::from_millis(300),
-            1,
-        );
+    async fn connected(&mut self, context: ProtocolContextMutRef<'_>, _version: &str) {
+        let _res = context
+            .set_session_notify(
+                context.session.id,
+                context.proto_id,
+                Duration::from_millis(300),
+                1,
+            )
+            .await;
     }
 
-    fn disconnected(&mut self, context: ProtocolContextMutRef) {
-        let _res = context.shutdown();
+    async fn disconnected(&mut self, context: ProtocolContextMutRef<'_>) {
+        let _res = context.shutdown().await;
     }
 
-    fn notify(&mut self, context: ProtocolContextMutRef, token: u64) {
+    async fn notify(&mut self, context: ProtocolContextMutRef<'_>, token: u64) {
         match token {
             1 => {
                 self.count_close += 1;
                 if self.count_close > 10 {
-                    let _res = context.shutdown();
+                    let _res = context.shutdown().await;
                 } else if self.count_close > 3 {
                     // 1. open protocol
                     // 2. set another notify
                     // 3. must notify same session protocol handle
-                    let _res = context.open_protocol(context.session.id, context.proto_id);
-                    let _res = context.set_session_notify(
-                        context.session.id,
-                        context.proto_id,
-                        Duration::from_millis(300),
-                        2,
-                    );
+                    let _res = context
+                        .open_protocol(context.session.id, context.proto_id)
+                        .await;
+                    let _res = context
+                        .set_session_notify(
+                            context.session.id,
+                            context.proto_id,
+                            Duration::from_millis(300),
+                            2,
+                        )
+                        .await;
                 }
             }
             2 => {
@@ -117,11 +125,7 @@ fn test_protocol_open(secio: bool) {
                 .await
                 .unwrap();
             let _res = addr_sender.send(listen_addr);
-            loop {
-                if service.next().await.is_none() {
-                    break;
-                }
-            }
+            service.run().await
         });
     });
 
@@ -136,11 +140,7 @@ fn test_protocol_open(secio: bool) {
                 .dial(listen_addr, TargetProtocol::All)
                 .await
                 .unwrap();
-            loop {
-                if service.next().await.is_none() {
-                    break;
-                }
-            }
+            service.run().await
         });
     });
     handle_2.join().unwrap();

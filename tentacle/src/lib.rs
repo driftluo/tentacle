@@ -106,7 +106,10 @@
     target_arch = "wasm32",
     allow(dead_code, unused_variables, unused_imports)
 )]
+#![cfg_attr(docsrs, feature(doc_cfg))]
 
+/// Re-pub async trait
+pub use async_trait::async_trait;
 /// Re-pub bytes crate
 pub use bytes;
 /// Re-pub multiaddr crate
@@ -144,6 +147,7 @@ pub mod utils;
 
 mod channel;
 #[cfg_attr(not(feature = "unstable"), doc(hidden))]
+#[cfg_attr(docsrs, doc(cfg(feature = "unstable")))]
 #[allow(missing_docs)]
 pub mod runtime;
 

@@ -1,5 +1,5 @@
 use bytes::Bytes;
-use futures::{channel, StreamExt};
+use futures::channel;
 use std::{
     sync::{
         atomic::{AtomicUsize, Ordering},
@@ -8,6 +8,7 @@ use std::{
     thread,
 };
 use tentacle::{
+    async_trait,
     builder::{MetaBuilder, ServiceBuilder},
     context::{ProtocolContext, ProtocolContextMutRef},
     multiaddr::Multiaddr,
@@ -34,23 +35,24 @@ where
 
 struct PHandle;
 
+#[async_trait]
 impl ServiceProtocol for PHandle {
-    fn init(&mut self, _context: &mut ProtocolContext) {}
+    async fn init(&mut self, _context: &mut ProtocolContext) {}
 
-    fn connected(&mut self, context: ProtocolContextMutRef, _version: &str) {
+    async fn connected(&mut self, context: ProtocolContextMutRef<'_>, _version: &str) {
         if context.session.ty.is_inbound() {
             let prefix = "x".repeat(10);
-            let _res = context.send_message(Bytes::from(prefix));
+            let _res = context.send_message(Bytes::from(prefix)).await;
         }
     }
 
-    fn disconnected(&mut self, context: ProtocolContextMutRef) {
-        let _res = context.shutdown();
+    async fn disconnected(&mut self, context: ProtocolContextMutRef<'_>) {
+        let _res = context.shutdown().await;
     }
 
-    fn received(&mut self, context: ProtocolContextMutRef, _data: Bytes) {
+    async fn received(&mut self, context: ProtocolContextMutRef<'_>, _data: Bytes) {
         if context.session.ty.is_outbound() {
-            let _res = context.shutdown();
+            let _res = context.shutdown().await;
         }
     }
 }
@@ -100,11 +102,7 @@ fn test_before_handle(secio: bool) {
                 .await
                 .unwrap();
             let _res = addr_sender.send(listen_addr);
-            loop {
-                if service.next().await.is_none() {
-                    break;
-                }
-            }
+            service.run().await
         });
     });
 
@@ -119,11 +117,7 @@ fn test_before_handle(secio: bool) {
                 .dial(listen_addr, TargetProtocol::All)
                 .await
                 .unwrap();
-            loop {
-                if service.next().await.is_none() {
-                    break;
-                }
-            }
+            service.run().await
         });
     });
     handle_2.join().unwrap();

@@ -1,4 +1,3 @@
-use futures::prelude::*;
 use log::{error, info};
 use std::{str, time::Duration};
 use tentacle::{
@@ -11,7 +10,7 @@ use tentacle::{
         TargetSession,
     },
     traits::{ServiceHandle, ServiceProtocol},
-    ProtocolId, SessionId,
+    ProtocolId, SessionId, async_trait
 };
 
 fn create_meta(id: ProtocolId) -> ProtocolMeta {
@@ -35,14 +34,15 @@ struct PHandle {
     connected_session_ids: Vec<SessionId>,
 }
 
+#[async_trait(?Send)]
 impl ServiceProtocol for PHandle {
-    fn init(&mut self, context: &mut ProtocolContext) {
+    async fn init(&mut self, context: &mut ProtocolContext) {
         if context.proto_id == 0.into() {
-            let _ = context.set_service_notify(0.into(), Duration::from_secs(5), 3);
+            let _ = context.set_service_notify(0.into(), Duration::from_secs(5), 3).await;
         }
     }
 
-    fn connected(&mut self, context: ProtocolContextMutRef, version: &str) {
+    async fn connected(&mut self, context: ProtocolContextMutRef<'_>, version: &str) {
         let session = context.session;
         self.connected_session_ids.push(session.id);
         info!(
@@ -51,7 +51,7 @@ impl ServiceProtocol for PHandle {
         );
     }
 
-    fn disconnected(&mut self, context: ProtocolContextMutRef) {
+    async fn disconnected(&mut self, context: ProtocolContextMutRef<'_>) {
         let new_list = self
             .connected_session_ids
             .iter()
@@ -66,7 +66,7 @@ impl ServiceProtocol for PHandle {
         );
     }
 
-    fn received(&mut self, context: ProtocolContextMutRef, data: bytes::Bytes) {
+    async fn received(&mut self, context: ProtocolContextMutRef<'_>, data: bytes::Bytes) {
         self.count += 1;
         info!(
             "received from [{}]: proto [{}] data {:?}, message count: {}",
@@ -77,7 +77,7 @@ impl ServiceProtocol for PHandle {
         );
     }
 
-    fn notify(&mut self, context: &mut ProtocolContext, token: u64) {
+    async fn notify(&mut self, context: &mut ProtocolContext, token: u64) {
         info!(
             "proto [{}] received notify token: {}",
             context.proto_id, token
@@ -87,17 +87,18 @@ impl ServiceProtocol for PHandle {
             TargetSession::All,
             1.into(),
             Bytes::from("I am a interval message"),
-        );
+        ).await;
     }
 }
 
 struct SHandle;
 
+#[async_trait(?Send)]
 impl ServiceHandle for SHandle {
-    fn handle_error(&mut self, _context: &mut ServiceContext, error: ServiceError) {
+    async fn handle_error(&mut self, _context: &mut ServiceContext, error: ServiceError) {
         error!("service error: {:?}", error);
     }
-    fn handle_event(&mut self, _context: &mut ServiceContext, event: ServiceEvent) {
+    async fn handle_event(&mut self, _context: &mut ServiceContext, event: ServiceEvent) {
         info!("service event: {:?}", event);
     }
 }
@@ -126,10 +127,6 @@ pub fn client() {
             )
             .await
             .unwrap();
-        loop {
-            if service.next().await.is_none() {
-                break;
-            }
-        }
+        service.run().await
     });
 }

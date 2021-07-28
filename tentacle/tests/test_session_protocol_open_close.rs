@@ -1,6 +1,6 @@
-use futures::StreamExt;
 use std::{sync::mpsc::channel, thread, time::Duration};
 use tentacle::{
+    async_trait,
     builder::{MetaBuilder, ServiceBuilder},
     context::ProtocolContextMutRef,
     multiaddr::Multiaddr,
@@ -18,10 +18,14 @@ use tentacle::{
 #[derive(Clone)]
 struct Dummy;
 
+#[async_trait]
 impl SessionProtocol for Dummy {
-    fn connected(&mut self, context: ProtocolContextMutRef, _version: &str) {
+    async fn connected(&mut self, context: ProtocolContextMutRef<'_>, _version: &str) {
         // dummy open the test protocol
-        context.open_protocol(context.session.id, 1.into()).unwrap();
+        context
+            .open_protocol(context.session.id, 1.into())
+            .await
+            .unwrap();
     }
 }
 
@@ -30,12 +34,14 @@ struct PHandle {
     count: usize,
 }
 
+#[async_trait]
 impl SessionProtocol for PHandle {
-    fn connected(&mut self, context: ProtocolContextMutRef, _version: &str) {
+    async fn connected(&mut self, context: ProtocolContextMutRef<'_>, _version: &str) {
         if context.session.ty.is_outbound() {
             // close self protocol
             context
                 .close_protocol(context.session.id, context.proto_id)
+                .await
                 .unwrap();
             // set a timer to open self protocol
             // because service state may not clean
@@ -46,24 +52,26 @@ impl SessionProtocol for PHandle {
                     Duration::from_millis(100),
                     1,
                 )
+                .await
                 .unwrap();
         }
     }
 
-    fn disconnected(&mut self, context: ProtocolContextMutRef) {
+    async fn disconnected(&mut self, context: ProtocolContextMutRef<'_>) {
         if context.session.ty.is_outbound() {
             // each close add one
             self.count += 1;
             if self.count >= 10 {
-                let _ignore = context.shutdown();
+                let _ignore = context.shutdown().await;
             }
         }
     }
 
-    fn notify(&mut self, context: ProtocolContextMutRef, _token: u64) {
+    async fn notify(&mut self, context: ProtocolContextMutRef<'_>, _token: u64) {
         // try open self with remote
         context
             .open_protocol(context.session.id, context.proto_id)
+            .await
             .unwrap();
     }
 }
@@ -138,11 +146,7 @@ fn test_session_proto_open_close(secio: bool) {
 
             addr_sender.send(listen_addr).unwrap();
 
-            loop {
-                if service_2.next().await.is_none() {
-                    break;
-                }
-            }
+            service_2.run().await
         });
     });
 
@@ -156,11 +160,7 @@ fn test_session_proto_open_close(secio: bool) {
                 .await
                 .unwrap();
 
-            loop {
-                if service_1.next().await.is_none() {
-                    break;
-                }
-            }
+            service_1.run().await
         });
     });
 

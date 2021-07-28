@@ -1,11 +1,12 @@
-use futures::{channel, StreamExt};
+use futures::channel;
 use std::{thread, time::Duration};
 use tentacle::{
+    async_trait,
     builder::{MetaBuilder, ServiceBuilder},
     context::{ProtocolContext, ProtocolContextMutRef},
     multiaddr::Multiaddr,
     secio::SecioKeyPair,
-    service::{ProtocolHandle, ProtocolMeta, Service, TargetProtocol},
+    service::{ProtocolHandle, ProtocolMeta, Service, ServiceControl, TargetProtocol},
     traits::{ServiceHandle, ServiceProtocol},
     ProtocolId,
 };
@@ -29,14 +30,15 @@ struct PHandle {
     connected_count: usize,
 }
 
+#[async_trait]
 impl ServiceProtocol for PHandle {
-    fn init(&mut self, _context: &mut ProtocolContext) {}
+    async fn init(&mut self, _context: &mut ProtocolContext) {}
 
-    fn connected(&mut self, _context: ProtocolContextMutRef, _version: &str) {
+    async fn connected(&mut self, _context: ProtocolContextMutRef<'_>, _version: &str) {
         self.connected_count += 1;
     }
 
-    fn disconnected(&mut self, _context: ProtocolContextMutRef) {
+    async fn disconnected(&mut self, _context: ProtocolContextMutRef<'_>) {
         self.connected_count -= 1;
     }
 }
@@ -67,16 +69,12 @@ fn test_disconnect(secio: bool) {
                 .await
                 .unwrap();
             let _res = addr_sender.send(listen_addr);
-            loop {
-                if service.next().await.is_none() {
-                    break;
-                }
-            }
+            service.run().await
         });
     });
 
     let mut service = create(secio, create_meta(1), ());
-    let control = service.control().clone();
+    let control: ServiceControl = service.control().clone().into();
     let handle = thread::spawn(move || {
         let rt = tokio::runtime::Runtime::new().unwrap();
         rt.block_on(async move {
@@ -85,11 +83,7 @@ fn test_disconnect(secio: bool) {
                 .dial(listen_addr, TargetProtocol::All)
                 .await
                 .unwrap();
-            loop {
-                if service.next().await.is_none() {
-                    break;
-                }
-            }
+            service.run().await
         });
     });
     thread::sleep(Duration::from_secs(5));

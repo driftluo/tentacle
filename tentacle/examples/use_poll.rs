@@ -1,4 +1,5 @@
 use tentacle::{
+    async_trait,
     builder::{MetaBuilder, ServiceBuilder},
     context::{ProtocolContext, ServiceContext},
     secio::SecioKeyPair,
@@ -13,11 +14,7 @@ use futures::{
     StreamExt,
 };
 use log::info;
-use std::{
-    pin::Pin,
-    task::{Context, Poll},
-    time::Duration,
-};
+use std::time::Duration;
 
 /// This example is used to illustrate how to implement the poll interface
 /// and use it for inner loop notification
@@ -28,11 +25,12 @@ fn main() {
 
 struct SHandle;
 
+#[async_trait]
 impl ServiceHandle for SHandle {
-    fn handle_error(&mut self, _context: &mut ServiceContext, error: ServiceError) {
+    async fn handle_error(&mut self, _context: &mut ServiceContext, error: ServiceError) {
         info!("service error: {:?}", error);
     }
-    fn handle_event(&mut self, _context: &mut ServiceContext, event: ServiceEvent) {
+    async fn handle_event(&mut self, _context: &mut ServiceContext, event: ServiceEvent) {
         info!("service event: {:?}", event);
     }
 }
@@ -41,21 +39,17 @@ struct PHandle {
     poll_recv: Receiver<()>,
 }
 
+#[async_trait]
 impl ServiceProtocol for PHandle {
-    fn init(&mut self, _context: &mut ProtocolContext) {}
+    async fn init(&mut self, _context: &mut ProtocolContext) {}
 
-    fn poll(
-        mut self: Pin<&mut Self>,
-        cx: &mut Context,
-        _context: &mut ProtocolContext,
-    ) -> Poll<Option<()>> {
-        match self.poll_recv.poll_next_unpin(cx) {
-            Poll::Ready(Some(_)) => {
+    async fn poll(&mut self, _context: &mut ProtocolContext) -> Option<()> {
+        match self.poll_recv.next().await {
+            Some(_) => {
                 info!("get a trick");
-                Poll::Ready(Some(()))
+                Some(())
             }
-            Poll::Ready(None) => Poll::Ready(None),
-            Poll::Pending => Poll::Pending,
+            None => None,
         }
     }
 }
@@ -95,10 +89,6 @@ fn run() {
                 tx.send(()).await.unwrap();
             }
         });
-        loop {
-            if service.next().await.is_none() {
-                break;
-            }
-        }
+        service.run().await
     });
 }

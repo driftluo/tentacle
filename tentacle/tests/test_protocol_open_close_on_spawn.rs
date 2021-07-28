@@ -32,11 +32,12 @@ impl ProtocolSpawn for Dummy {
     fn spawn(
         &self,
         context: Arc<SessionContext>,
-        control: &ServiceControl,
+        control: &ServiceAsyncControl,
         _read_part: SubstreamReadPart,
     ) {
         // dummy open the test protocol
-        control.open_protocol(context.id, 1.into()).unwrap()
+        let c: ServiceControl = control.clone().into();
+        c.open_protocol(context.id, 1.into()).unwrap()
         // protocol close here
     }
 }
@@ -50,7 +51,7 @@ impl ProtocolSpawn for PHandle {
     fn spawn(
         &self,
         context: Arc<SessionContext>,
-        control: &ServiceControl,
+        control: &ServiceAsyncControl,
         mut read_part: SubstreamReadPart,
     ) {
         let id = context.id;
@@ -59,7 +60,7 @@ impl ProtocolSpawn for PHandle {
 
         if is_outbound && self.once.load(Ordering::Relaxed) {
             self.once.store(false, Ordering::Relaxed);
-            let mut control = Into::<ServiceAsyncControl>::into(control.clone());
+            let control = control.clone();
 
             tokio::spawn(async move {
                 let mut interval = tokio::time::interval_at(
@@ -74,7 +75,7 @@ impl ProtocolSpawn for PHandle {
         }
 
         if is_outbound {
-            let mut control = Into::<ServiceAsyncControl>::into(control.clone());
+            let control = control.clone();
 
             tokio::spawn(async move {
                 control.close_protocol(id, pid).await.unwrap();
@@ -82,7 +83,7 @@ impl ProtocolSpawn for PHandle {
         }
 
         let count = self.count.clone();
-        let mut control = Into::<ServiceAsyncControl>::into(control.clone());
+        let control = control.clone();
         tokio::spawn(async move {
             while let Some(Ok(_)) = read_part.next().await {}
             if is_outbound {
@@ -159,11 +160,7 @@ fn test_session_proto_open_close(secio: bool) {
 
             addr_sender.send(listen_addr).unwrap();
 
-            loop {
-                if service_2.next().await.is_none() {
-                    break;
-                }
-            }
+            service_2.run().await
         });
     });
 
@@ -177,11 +174,7 @@ fn test_session_proto_open_close(secio: bool) {
                 .await
                 .unwrap();
 
-            loop {
-                if service_1.next().await.is_none() {
-                    break;
-                }
-            }
+            service_1.run().await
         });
     });
 

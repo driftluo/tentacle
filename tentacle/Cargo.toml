@@ -14,14 +14,16 @@ edition = "2018"
 features = [ "tokio-runtime", "tokio-timer", "upnp", "ws", "unstable", "tls" ]
 all-features = false
 no-default-features = true
+rustc-args = ["--cfg", "docsrs"]
 
 [dependencies]
 yamux = { path = "../yamux", version = "0.3.0", default-features = false, package = "tokio-yamux"}
 secio = { path = "../secio", version = "0.5.0", package = "tentacle-secio" }
 
 futures = { version = "0.3.0" }
-tokio = { version = "1.0.0" }
+tokio = { version = "1.0.0", features = ["macros"] }
 tokio-util = { version = "0.6.0", features = ["codec"] }
+async-trait = "0.1"
 log = "0.4"
 bytes = "1.0.0"
 thiserror = "1.0"

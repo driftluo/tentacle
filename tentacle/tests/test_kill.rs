@@ -1,6 +1,6 @@
 #![cfg(target_os = "linux")]
 use bytes::Bytes;
-use futures::{channel, StreamExt};
+use futures::channel;
 use nix::{
     sys::signal::{kill, Signal},
     unistd::{fork, ForkResult},
@@ -8,11 +8,14 @@ use nix::{
 use std::{thread, time::Duration};
 use systemstat::{Platform, System};
 use tentacle::{
+    async_trait,
     builder::{MetaBuilder, ServiceBuilder},
     context::{ProtocolContext, ProtocolContextMutRef},
     multiaddr::Multiaddr,
     secio::SecioKeyPair,
-    service::{ProtocolHandle, ProtocolMeta, Service, TargetProtocol, TargetSession},
+    service::{
+        ProtocolHandle, ProtocolMeta, Service, ServiceControl, TargetProtocol, TargetSession,
+    },
     traits::{ServiceHandle, ServiceProtocol},
     ProtocolId,
 };
@@ -60,22 +63,24 @@ struct PHandle {
     sender: crossbeam_channel::Sender<()>,
 }
 
+#[async_trait]
 impl ServiceProtocol for PHandle {
-    fn init(&mut self, _context: &mut ProtocolContext) {}
+    async fn init(&mut self, _context: &mut ProtocolContext) {}
 
-    fn connected(&mut self, _context: ProtocolContextMutRef, _version: &str) {
+    async fn connected(&mut self, _context: ProtocolContextMutRef<'_>, _version: &str) {
         self.connected_count += 1;
         assert_eq!(self.sender.send(()), Ok(()));
     }
 
-    fn disconnected(&mut self, _context: ProtocolContextMutRef) {
+    async fn disconnected(&mut self, _context: ProtocolContextMutRef<'_>) {
         self.connected_count -= 1;
         assert_eq!(self.sender.send(()), Ok(()));
     }
 
-    fn received(&mut self, context: ProtocolContextMutRef, data: bytes::Bytes) {
-        let proto_id = context.proto_id;
-        let _res = context.filter_broadcast(TargetSession::All, proto_id, data);
+    async fn received(&mut self, context: ProtocolContextMutRef<'_>, data: bytes::Bytes) {
+        let _res = context
+            .filter_broadcast(TargetSession::All, context.proto_id, data)
+            .await;
     }
 }
 
@@ -106,7 +111,7 @@ fn test_kill(secio: bool) {
     let (meta, receiver) = create_meta(1.into());
     let (addr_sender, addr_receiver) = channel::oneshot::channel::<Multiaddr>();
     let mut service = create(secio, meta, ());
-    let control = service.control().clone();
+    let control: ServiceControl = service.control().clone().into();
     thread::spawn(move || {
         let rt = tokio::runtime::Runtime::new().unwrap();
         rt.block_on(async move {
@@ -115,11 +120,7 @@ fn test_kill(secio: bool) {
                 .await
                 .unwrap();
             let _res = addr_sender.send(listen_addr);
-            loop {
-                if service.next().await.is_none() {
-                    break;
-                }
-            }
+            service.run().await
         });
     });
     thread::sleep(Duration::from_millis(100));
@@ -154,11 +155,7 @@ fn test_kill(secio: bool) {
                     .dial(listen_addr, TargetProtocol::All)
                     .await
                     .unwrap();
-                loop {
-                    if service.next().await.is_none() {
-                        break;
-                    }
-                }
+                service.run().await
             });
         }
     }

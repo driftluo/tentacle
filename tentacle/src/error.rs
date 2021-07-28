@@ -24,9 +24,6 @@ pub enum TransportErrorKind {
 #[derive(Error, Debug)]
 /// Protocol handle error
 pub enum ProtocolHandleErrorKind {
-    /// protocol handle block, may be user's protocol handle implementation problem
-    #[error("protocol handle block, session id: `{0:?}`")]
-    Block(Option<SessionId>),
     /// protocol handle abnormally closed, may be user's protocol handle implementation problem
     #[error("protocol handle abnormally closed, session id: `{0:?}`")]
     AbnormallyClosed(Option<SessionId>),

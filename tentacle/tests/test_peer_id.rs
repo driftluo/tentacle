@@ -1,13 +1,16 @@
-use futures::StreamExt;
 use std::{borrow::Cow, sync::mpsc::channel, thread};
 use tentacle::{
+    async_trait,
     builder::{MetaBuilder, ServiceBuilder},
     context::{ProtocolContext, ServiceContext},
     error::DialerErrorKind,
     multiaddr::Multiaddr,
     multiaddr::Protocol as MultiProtocol,
     secio::SecioKeyPair,
-    service::{ProtocolHandle, ProtocolMeta, Service, ServiceError, ServiceEvent, TargetProtocol},
+    service::{
+        ProtocolHandle, ProtocolMeta, Service, ServiceControl, ServiceError, ServiceEvent,
+        TargetProtocol,
+    },
     traits::{ServiceHandle, ServiceProtocol},
     ProtocolId,
 };
@@ -25,8 +28,9 @@ where
 
 struct PHandle;
 
+#[async_trait]
 impl ServiceProtocol for PHandle {
-    fn init(&mut self, _control: &mut ProtocolContext) {}
+    async fn init(&mut self, _control: &mut ProtocolContext) {}
 }
 
 #[derive(Clone)]
@@ -35,8 +39,9 @@ struct EmptySHandle {
     error_count: usize,
 }
 
+#[async_trait]
 impl ServiceHandle for EmptySHandle {
-    fn handle_error(&mut self, _env: &mut ServiceContext, error: ServiceError) {
+    async fn handle_error(&mut self, _env: &mut ServiceContext, error: ServiceError) {
         self.error_count += 1;
 
         if let ServiceError::DialerError { error, .. } = error {
@@ -56,7 +61,7 @@ impl ServiceHandle for EmptySHandle {
         }
     }
 
-    fn handle_event(&mut self, _control: &mut ServiceContext, event: ServiceEvent) {
+    async fn handle_event(&mut self, _control: &mut ServiceContext, event: ServiceEvent) {
         if let ServiceEvent::SessionOpen { .. } = event {
             let _res = self.sender.try_send(self.error_count);
         }
@@ -104,11 +109,7 @@ fn test_peer_id(fail: bool) {
 
             addr_sender.send(listen_addr).unwrap();
 
-            loop {
-                if service.next().await.is_none() {
-                    break;
-                }
-            }
+            service.run().await
         });
     });
 
@@ -117,16 +118,10 @@ fn test_peer_id(fail: bool) {
     let (shandle, error_receiver) = create_shandle();
     let meta = create_meta(1.into());
     let mut service = create(SecioKeyPair::secp256k1_generated(), meta, shandle);
-    let control = service.control().clone();
+    let control: ServiceControl = service.control().clone().into();
     thread::spawn(move || {
         let rt = tokio::runtime::Runtime::new().unwrap();
-        rt.block_on(async move {
-            loop {
-                if service.next().await.is_none() {
-                    break;
-                }
-            }
-        });
+        rt.block_on(async move { service.run().await });
     });
 
     if fail {

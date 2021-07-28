@@ -9,7 +9,7 @@ use crate::{
     protocol_select::SelectFn,
     secio::SecioKeyPair,
     service::{
-        config::{BlockingFlag, Meta, ServiceConfig},
+        config::{Meta, ServiceConfig},
         ProtocolHandle, ProtocolMeta, Service,
     },
     traits::{Codec, ProtocolSpawn, ServiceHandle, ServiceProtocol, SessionProtocol},
@@ -124,6 +124,7 @@ impl ServiceBuilder {
     /// receive the access request of the external network, and if the external ip of the route is not the public network,
     /// Then do nothing
     #[cfg(all(not(target_arch = "wasm32"), feature = "upnp"))]
+    #[cfg_attr(docsrs, doc(cfg(feature = "upnp")))]
     pub fn upnp(mut self, enable: bool) -> Self {
         self.config.upnp = enable;
         self
@@ -153,6 +154,7 @@ impl ServiceBuilder {
 
     /// The same as tcp bind, but use on ws transport
     #[cfg(feature = "ws")]
+    #[cfg_attr(docsrs, doc(cfg(feature = "ws")))]
     pub fn ws_bind(mut self, addr: multiaddr::Multiaddr) -> Self {
         self.config.ws_bind_addr = multiaddr_to_socketaddr(&addr);
         self
@@ -165,6 +167,7 @@ impl ServiceBuilder {
 
     /// set rustls ServerConfig, default is NoClientAuth
     #[cfg(feature = "tls")]
+    #[cfg_attr(docsrs, doc(cfg(feature = "tls")))]
     pub fn tls_config(mut self, config: TlsConfig) -> Self {
         self.config.tls_config = Some(config);
         self
@@ -202,7 +205,6 @@ pub struct MetaBuilder {
     select_version: SelectVersionFn,
     before_send: Option<Box<dyn Fn(bytes::Bytes) -> bytes::Bytes + Send + 'static>>,
     before_receive: BeforeReceiveFn,
-    flag: BlockingFlag,
     spawn: Option<Box<dyn ProtocolSpawn + Send + Sync + 'static>>,
 }
 
@@ -281,6 +283,7 @@ impl MetaBuilder {
     ///
     /// Mutually exclusive with protocol handle
     #[cfg(feature = "unstable")]
+    #[cfg_attr(docsrs, doc(cfg(feature = "unstable")))]
     pub fn protocol_spawn<T: ProtocolSpawn + Send + Sync + 'static>(mut self, spawn: T) -> Self {
         self.spawn = Some(Box::new(spawn));
         self
@@ -313,12 +316,6 @@ impl MetaBuilder {
         self
     }
 
-    /// Set a flag to control function behavior
-    pub fn flag(mut self, flag: BlockingFlag) -> Self {
-        self.flag = flag;
-        self
-    }
-
     /// Combine the configuration of this builder to create a ProtocolMeta
     pub fn build(mut self) -> ProtocolMeta {
         if self.spawn.is_some() {
@@ -339,7 +336,6 @@ impl MetaBuilder {
             service_handle: self.service_handle,
             session_handle: self.session_handle,
             before_send: self.before_send,
-            flag: self.flag,
         }
     }
 }
@@ -356,7 +352,6 @@ impl Default for MetaBuilder {
             select_version: Box::new(|| None),
             before_send: None,
             before_receive: Box::new(|| None),
-            flag: BlockingFlag::default(),
             spawn: None,
         }
     }

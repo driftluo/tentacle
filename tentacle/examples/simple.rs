@@ -9,6 +9,7 @@ use log::info;
 use std::collections::HashMap;
 use std::{str, time::Duration};
 use tentacle::{
+    async_trait,
     builder::{MetaBuilder, ServiceBuilder},
     context::{ProtocolContext, ProtocolContextMutRef, ServiceContext},
     secio::SecioKeyPair,
@@ -45,14 +46,17 @@ struct PHandle {
     clear_handle: HashMap<SessionId, Sender<()>>,
 }
 
+#[async_trait]
 impl ServiceProtocol for PHandle {
-    fn init(&mut self, context: &mut ProtocolContext) {
+    async fn init(&mut self, context: &mut ProtocolContext) {
         if context.proto_id == 0.into() {
-            let _ = context.set_service_notify(0.into(), Duration::from_secs(5), 3);
+            let _ = context
+                .set_service_notify(0.into(), Duration::from_secs(5), 3)
+                .await;
         }
     }
 
-    fn connected(&mut self, context: ProtocolContextMutRef, version: &str) {
+    async fn connected(&mut self, context: ProtocolContextMutRef<'_>, version: &str) {
         let session = context.session;
         self.connected_session_ids.push(session.id);
         info!(
@@ -77,22 +81,22 @@ impl ServiceProtocol for PHandle {
                 tokio::time::interval_at(tokio::time::Instant::now(), Duration::from_secs(5));
             loop {
                 interval.tick().await;
-                let _ = interval_sender.send_message_to(
-                    session_id,
-                    1.into(),
-                    Bytes::from("I am a interval message"),
-                );
+                let _ = interval_sender
+                    .send_message_to(session_id, 1.into(), Bytes::from("I am a interval message"))
+                    .await;
             }
         };
 
         let task = select(receiver, interval_send_task.boxed());
 
-        let _ = context.future_task(async move {
-            task.await;
-        });
+        let _ = context
+            .future_task(async move {
+                task.await;
+            })
+            .await;
     }
 
-    fn disconnected(&mut self, context: ProtocolContextMutRef) {
+    async fn disconnected(&mut self, context: ProtocolContextMutRef<'_>) {
         let new_list = self
             .connected_session_ids
             .iter()
@@ -111,7 +115,7 @@ impl ServiceProtocol for PHandle {
         );
     }
 
-    fn received(&mut self, context: ProtocolContextMutRef, data: bytes::Bytes) {
+    async fn received(&mut self, context: ProtocolContextMutRef<'_>, data: bytes::Bytes) {
         self.count += 1;
         info!(
             "received from [{}]: proto [{}] data {:?}, message count: {}",
@@ -122,7 +126,7 @@ impl ServiceProtocol for PHandle {
         );
     }
 
-    fn notify(&mut self, context: &mut ProtocolContext, token: u64) {
+    async fn notify(&mut self, context: &mut ProtocolContext, token: u64) {
         info!(
             "proto [{}] received notify token: {}",
             context.proto_id, token
@@ -132,26 +136,31 @@ impl ServiceProtocol for PHandle {
 
 struct SHandle;
 
+#[async_trait]
 impl ServiceHandle for SHandle {
     // A lot of internal error events will be output here, but not all errors need to close the service,
     // some just tell users that they need to pay attention
-    fn handle_error(&mut self, _context: &mut ServiceContext, error: ServiceError) {
+    async fn handle_error(&mut self, _context: &mut ServiceContext, error: ServiceError) {
         info!("service error: {:?}", error);
     }
-    fn handle_event(&mut self, context: &mut ServiceContext, event: ServiceEvent) {
+    async fn handle_event(&mut self, context: &mut ServiceContext, event: ServiceEvent) {
         info!("service event: {:?}", event);
         if let ServiceEvent::SessionOpen { .. } = event {
             let delay_sender = context.control().clone();
 
-            let _ = context.future_task(async move {
-                tokio::time::sleep_until(tokio::time::Instant::now() + Duration::from_secs(3))
-                    .await;
-                let _ = delay_sender.filter_broadcast(
-                    TargetSession::All,
-                    0.into(),
-                    Bytes::from("I am a delayed message"),
-                );
-            });
+            let _ = context
+                .future_task(async move {
+                    tokio::time::sleep_until(tokio::time::Instant::now() + Duration::from_secs(3))
+                        .await;
+                    let _ = delay_sender
+                        .filter_broadcast(
+                            TargetSession::All,
+                            0.into(),
+                            Bytes::from("I am a delayed message"),
+                        )
+                        .await;
+                })
+                .await;
         }
     }
 }
@@ -210,11 +219,7 @@ fn server() {
             .listen("/ip4/127.0.0.1/tcp/1338/ws".parse().unwrap())
             .await
             .unwrap();
-        loop {
-            if service.next().await.is_none() {
-                break;
-            }
-        }
+        service.run().await
     });
 }
 
@@ -230,10 +235,6 @@ fn client() {
             )
             .await
             .unwrap();
-        loop {
-            if service.next().await.is_none() {
-                break;
-            }
-        }
+        service.run().await
     });
 }

@@ -1,14 +1,15 @@
-use futures::{channel::mpsc, SinkExt, Stream};
+use futures::{
+    channel::{mpsc, oneshot},
+    SinkExt, StreamExt,
+};
 use log::{debug, trace};
 use nohash_hasher::IntMap;
 use std::collections::HashMap;
 use std::{
-    pin::Pin,
     sync::{
         atomic::{AtomicBool, Ordering},
         Arc,
     },
-    task::{Context, Poll},
     time::Duration,
 };
 
@@ -16,23 +17,11 @@ use crate::{
     context::{ProtocolContext, ServiceContext, SessionContext},
     error::ProtocolHandleErrorKind,
     multiaddr::Multiaddr,
-    service::{config::BlockingFlag, future_task::BoxedFutureTask},
+    service::future_task::BoxedFutureTask,
     session::SessionEvent,
     traits::{ServiceProtocol, SessionProtocol},
     ProtocolId, SessionId,
 };
-
-#[inline]
-fn block_in_place<F, R>(flag: bool, f: F) -> R
-where
-    F: FnOnce() -> R,
-{
-    if flag {
-        crate::runtime::block_in_place(f)
-    } else {
-        f()
-    }
-}
 
 #[derive(Clone)]
 pub enum ServiceProtocolEvent {
@@ -100,8 +89,6 @@ pub struct ServiceProtocolStream<T> {
     current_task: CurrentTask,
     shutdown: Arc<AtomicBool>,
     future_task_sender: mpsc::Sender<BoxedFutureTask>,
-    flag: BlockingFlag,
-    need_poll: bool,
 }
 
 impl<T> ServiceProtocolStream<T>
@@ -112,7 +99,7 @@ where
         handle: T,
         service_context: ServiceContext,
         receiver: mpsc::Receiver<ServiceProtocolEvent>,
-        (proto_id, flag): (ProtocolId, BlockingFlag),
+        proto_id: ProtocolId,
         panic_report: mpsc::Sender<SessionEvent>,
         (shutdown, future_task_sender): (Arc<AtomicBool>, mpsc::Sender<BoxedFutureTask>),
     ) -> Self {
@@ -129,13 +116,11 @@ where
             shutdown,
             panic_report,
             future_task_sender,
-            flag,
-            need_poll: true,
         }
     }
 
     #[inline]
-    pub fn handle_event(&mut self, event: ServiceProtocolEvent) {
+    pub async fn handle_event(&mut self, event: ServiceProtocolEvent) {
         use self::ServiceProtocolEvent::*;
 
         let shutdown = self.shutdown.load(Ordering::SeqCst);
@@ -158,30 +143,29 @@ where
         for session_id in closed_sessions {
             if let Some(session) = self.sessions.remove(&session_id) {
                 self.handle
-                    .disconnected(self.handle_context.as_mut(&session));
+                    .disconnected(self.handle_context.as_mut(&session))
+                    .await;
             }
         }
 
         match event {
             Init => {
                 self.current_task.run();
-                self.handle.init(&mut self.handle_context)
+                self.handle.init(&mut self.handle_context).await
             }
             Connected { session, version } => {
                 self.current_task.run_with_id(session.id);
-                block_in_place(self.flag.connected(), || {
-                    self.handle
-                        .connected(self.handle_context.as_mut(&session), &version)
-                });
+                self.handle
+                    .connected(self.handle_context.as_mut(&session), &version)
+                    .await;
                 self.sessions.insert(session.id, session);
             }
             Disconnected { id } => {
                 self.current_task.run_with_id(id);
                 if let Some(session) = self.sessions.remove(&id) {
-                    block_in_place(self.flag.disconnected(), || {
-                        self.handle
-                            .disconnected(self.handle_context.as_mut(&session))
-                    })
+                    self.handle
+                        .disconnected(self.handle_context.as_mut(&session))
+                        .await
                 }
             }
             Received { id, data } => {
@@ -190,18 +174,15 @@ where
                     if !session.closed.load(Ordering::SeqCst)
                         && !self.shutdown.load(Ordering::SeqCst)
                     {
-                        block_in_place(self.flag.received(), || {
-                            self.handle
-                                .received(self.handle_context.as_mut(&session), data)
-                        });
+                        self.handle
+                            .received(self.handle_context.as_mut(&session), data)
+                            .await
                     }
                 }
             }
             Notify { token } => {
                 self.current_task.run();
-                block_in_place(self.flag.notify(), || {
-                    self.handle.notify(&mut self.handle_context, token)
-                });
+                self.handle.notify(&mut self.handle_context, token).await;
                 self.set_notify(token);
             }
             SetNotify { interval, token } => {
@@ -221,17 +202,6 @@ where
         self.current_task.idle();
     }
 
-    fn handle_poll(&mut self, cx: &mut Context) -> bool {
-        match Pin::new(&mut self.handle).poll(cx, &mut self.handle_context) {
-            Poll::Ready(None) => {
-                self.need_poll = false;
-                true
-            }
-            Poll::Ready(Some(())) => false,
-            Poll::Pending => true,
-        }
-    }
-
     fn set_notify(&mut self, token: u64) {
         if let Some(&interval) = self.notify.get(&token) {
             let mut sender = self.notify_sender.clone();
@@ -249,6 +219,38 @@ where
                     trace!("service notify task send err")
                 }
             });
+        }
+    }
+
+    pub async fn run(&mut self, mut recv: oneshot::Receiver<()>) {
+        loop {
+            if self.shutdown.load(Ordering::SeqCst) {
+                debug!(
+                    "ServiceProtocolStream({:?}) finished, shutdown",
+                    self.handle_context.proto_id
+                );
+                self.current_task.idle();
+                break;
+            }
+            tokio::select! {
+                event = self.receiver.next() => {
+                    match event {
+                        Some(event) => self.handle_event(event).await,
+                        None => {
+                            self.current_task.idle();
+                            break
+                        }
+                    }
+                },
+                token = self.notify_receiver.next()  => {
+                    if let Some(token) = token {
+                        self.handle_event(ServiceProtocolEvent::Notify { token }).await;
+                    }
+                },
+                Some(_) = &mut self.handle.poll(&mut self.handle_context) => {},
+                _ = &mut recv => break,
+                else => break
+            }
         }
     }
 }
@@ -275,68 +277,6 @@ impl<T> Drop for ServiceProtocolStream<T> {
                     }
                 });
             }
-        }
-    }
-}
-
-impl<T> Stream for ServiceProtocolStream<T>
-where
-    T: ServiceProtocol + Send + Unpin,
-{
-    type Item = ();
-
-    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Option<Self::Item>> {
-        if self.shutdown.load(Ordering::SeqCst) {
-            debug!(
-                "ServiceProtocolStream({:?}) finished, shutdown",
-                self.handle_context.proto_id
-            );
-            self.current_task.idle();
-            return Poll::Ready(None);
-        }
-
-        let mut is_pending = match Pin::new(&mut self.receiver).as_mut().poll_next(cx) {
-            Poll::Ready(Some(event)) => {
-                self.handle_event(event);
-                false
-            }
-            Poll::Ready(None) => {
-                debug!(
-                    "ServiceProtocolStream({:?}) finished",
-                    self.handle_context.proto_id
-                );
-                self.current_task.idle();
-                return Poll::Ready(None);
-            }
-            Poll::Pending => true,
-        };
-
-        match Pin::new(&mut self.notify_receiver).as_mut().poll_next(cx) {
-            Poll::Ready(Some(token)) => {
-                self.handle_event(ServiceProtocolEvent::Notify { token });
-                is_pending &= false
-            }
-            Poll::Ready(None) => unreachable!(),
-            Poll::Pending => is_pending &= true,
-        }
-
-        if self.need_poll {
-            is_pending &= self.handle_poll(cx);
-        }
-
-        if self.shutdown.load(Ordering::SeqCst) {
-            debug!(
-                "ServiceProtocolStream({:?}) finished, shutdown",
-                self.handle_context.proto_id
-            );
-            self.current_task.idle();
-            return Poll::Ready(None);
-        }
-
-        if is_pending {
-            Poll::Pending
-        } else {
-            Poll::Ready(Some(()))
         }
     }
 }
@@ -383,8 +323,6 @@ pub struct SessionProtocolStream<T> {
     panic_report: mpsc::Sender<SessionEvent>,
     shutdown: Arc<AtomicBool>,
     future_task_sender: mpsc::Sender<BoxedFutureTask>,
-    flag: BlockingFlag,
-    need_poll: bool,
 }
 
 impl<T> SessionProtocolStream<T>
@@ -396,7 +334,7 @@ where
         service_context: ServiceContext,
         context: Arc<SessionContext>,
         receiver: mpsc::Receiver<SessionProtocolEvent>,
-        (proto_id, flag): (ProtocolId, BlockingFlag),
+        proto_id: ProtocolId,
         panic_report: mpsc::Sender<SessionEvent>,
         (shutdown, future_task_sender): (Arc<AtomicBool>, mpsc::Sender<BoxedFutureTask>),
     ) -> Self {
@@ -413,13 +351,11 @@ where
             current_task: false,
             shutdown,
             future_task_sender,
-            flag,
-            need_poll: true,
         }
     }
 
     #[inline]
-    fn handle_event(&mut self, mut event: SessionProtocolEvent) {
+    async fn handle_event(&mut self, mut event: SessionProtocolEvent) {
         use self::SessionProtocolEvent::*;
 
         self.current_task = true;
@@ -439,28 +375,28 @@ where
         }
 
         match event {
-            Opened { version } => block_in_place(self.flag.connected(), || {
+            Opened { version } => {
                 self.handle
                     .connected(self.handle_context.as_mut(&self.context), &version)
-            }),
+                    .await
+            }
             Closed => {
-                block_in_place(self.flag.disconnected(), || {
-                    self.handle
-                        .disconnected(self.handle_context.as_mut(&self.context))
-                });
+                self.handle
+                    .disconnected(self.handle_context.as_mut(&self.context))
+                    .await
             }
             Disconnected => {
                 self.close();
             }
-            Received { data } => block_in_place(self.flag.received(), || {
+            Received { data } => {
                 self.handle
                     .received(self.handle_context.as_mut(&self.context), data)
-            }),
+                    .await
+            }
             Notify { token } => {
-                block_in_place(self.flag.notify(), || {
-                    self.handle
-                        .notify(self.handle_context.as_mut(&self.context), token)
-                });
+                self.handle
+                    .notify(self.handle_context.as_mut(&self.context), token)
+                    .await;
                 self.set_notify(token);
             }
             SetNotify { token, interval } => {
@@ -475,17 +411,6 @@ where
             }
         }
         self.current_task = false;
-    }
-
-    fn handle_poll(&mut self, cx: &mut Context) -> bool {
-        match Pin::new(&mut self.handle).poll(cx, self.handle_context.as_mut(&self.context)) {
-            Poll::Ready(None) => {
-                self.need_poll = false;
-                true
-            }
-            Poll::Ready(Some(())) => false,
-            Poll::Pending => true,
-        }
     }
 
     fn set_notify(&mut self, token: u64) {
@@ -513,6 +438,30 @@ where
         self.receiver.close();
         self.current_task = false;
     }
+
+    pub async fn run(&mut self, mut recv: oneshot::Receiver<()>) {
+        loop {
+            tokio::select! {
+                event = self.receiver.next() => {
+                    match event {
+                        Some(event) => self.handle_event(event).await,
+                        None => {
+                            self.close();
+                            break
+                        }
+                    }
+                }
+                token = self.notify_receiver.next() => {
+                    if let Some(token) = token {
+                        self.handle_event(SessionProtocolEvent::Notify { token }).await;
+                    }
+                }
+                Some(_) = self.handle.poll(self.handle_context.as_mut(&self.context)) => {},
+                _ = &mut recv => break,
+                else => break
+            }
+        }
+    }
 }
 
 impl<T> Drop for SessionProtocolStream<T> {
@@ -528,46 +477,6 @@ impl<T> Drop for SessionProtocolStream<T> {
                     trace!("session panic message send err")
                 }
             });
-        }
-    }
-}
-
-impl<T> Stream for SessionProtocolStream<T>
-where
-    T: SessionProtocol + Send + Unpin,
-{
-    type Item = ();
-
-    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Option<Self::Item>> {
-        let mut is_pending = match Pin::new(&mut self.receiver).as_mut().poll_next(cx) {
-            Poll::Ready(Some(event)) => {
-                self.handle_event(event);
-                false
-            }
-            Poll::Ready(None) => {
-                self.close();
-                return Poll::Ready(None);
-            }
-            Poll::Pending => true,
-        };
-
-        match Pin::new(&mut self.notify_receiver).as_mut().poll_next(cx) {
-            Poll::Ready(Some(token)) => {
-                self.handle_event(SessionProtocolEvent::Notify { token });
-                is_pending &= false
-            }
-            Poll::Ready(None) => unreachable!(),
-            Poll::Pending => is_pending &= true,
-        }
-
-        if self.need_poll {
-            is_pending &= self.handle_poll(cx);
-        }
-
-        if is_pending {
-            Poll::Pending
-        } else {
-            Poll::Ready(Some(()))
         }
     }
 }

@@ -1,7 +1,8 @@
 use bench::Bench;
 use bytes::Bytes;
-use futures::{channel, StreamExt};
+use futures::channel;
 use p2p::{
+    async_trait,
     builder::{MetaBuilder, ServiceBuilder},
     context::{ProtocolContext, ProtocolContextMutRef},
     multiaddr::Multiaddr,
@@ -52,19 +53,20 @@ struct PHandle {
     sender: crossbeam_channel::Sender<Notify>,
 }
 
+#[async_trait]
 impl ServiceProtocol for PHandle {
-    fn init(&mut self, _control: &mut ProtocolContext) {}
+    async fn init(&mut self, _control: &mut ProtocolContext) {}
 
-    fn connected(&mut self, _control: ProtocolContextMutRef, _version: &str) {
+    async fn connected(&mut self, _control: ProtocolContextMutRef<'_>, _version: &str) {
         self.connected_count += 1;
         let _res = self.sender.send(Notify::Connected);
     }
 
-    fn disconnected(&mut self, _control: ProtocolContextMutRef) {
+    async fn disconnected(&mut self, _control: ProtocolContextMutRef<'_>) {
         self.connected_count -= 1;
     }
 
-    fn received(&mut self, _env: ProtocolContextMutRef, data: bytes::Bytes) {
+    async fn received(&mut self, _env: ProtocolContextMutRef<'_>, data: bytes::Bytes) {
         let _res = self.sender.send(Notify::Message(data));
     }
 }
@@ -112,11 +114,7 @@ pub fn init() {
                     .await
                     .unwrap();
                 let _res = addr_sender.send(listen_addr);
-                loop {
-                    if service.next().await.is_none() {
-                        break;
-                    }
-                }
+                service.run().await
             });
         });
 
@@ -131,17 +129,13 @@ pub fn init() {
                     .dial(listen_addr, TargetProtocol::All)
                     .await
                     .unwrap();
-                loop {
-                    if service.next().await.is_none() {
-                        break;
-                    }
-                }
+                service.run().await
             });
         });
 
         assert_eq!(client_receiver.recv(), Ok(Notify::Connected));
         unsafe {
-            SECIO_CONTROL = Some(control);
+            SECIO_CONTROL = Some(control.into());
             SECIO_RECV = Some(client_receiver);
         }
     });
@@ -160,11 +154,7 @@ pub fn init() {
                     .await
                     .unwrap();
                 let _res = addr_sender.send(listen_addr);
-                loop {
-                    if service.next().await.is_none() {
-                        break;
-                    }
-                }
+                service.run().await
             });
         });
 
@@ -179,17 +169,13 @@ pub fn init() {
                     .dial(listen_addr, TargetProtocol::All)
                     .await
                     .unwrap();
-                loop {
-                    if service.next().await.is_none() {
-                        break;
-                    }
-                }
+                service.run().await
             });
         });
 
         assert_eq!(client_receiver.recv(), Ok(Notify::Connected));
         unsafe {
-            NO_SECIO_CONTROL = Some(control);
+            NO_SECIO_CONTROL = Some(control.into());
             NO_SECIO_RECV = Some(client_receiver);
         }
     });

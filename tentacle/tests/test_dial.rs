@@ -1,17 +1,18 @@
-use futures::{channel, StreamExt};
+use futures::channel;
 use std::{
     thread,
     time::{Duration, Instant},
 };
 use tentacle::{
+    async_trait,
     builder::{MetaBuilder, ServiceBuilder},
     context::{ProtocolContext, ProtocolContextMutRef, ServiceContext},
     error::{DialerErrorKind, ListenErrorKind, TransportErrorKind},
     multiaddr::Multiaddr,
     secio::SecioKeyPair,
     service::{
-        ProtocolHandle, ProtocolMeta, Service, ServiceError, ServiceEvent, SessionType,
-        TargetProtocol,
+        ProtocolHandle, ProtocolMeta, Service, ServiceControl, ServiceError, ServiceEvent,
+        SessionType, TargetProtocol,
     },
     traits::{ServiceHandle, ServiceProtocol},
     ProtocolId, SessionId,
@@ -46,8 +47,9 @@ struct EmptySHandle {
     secio: bool,
 }
 
+#[async_trait]
 impl ServiceHandle for EmptySHandle {
-    fn handle_error(&mut self, _env: &mut ServiceContext, error: ServiceError) {
+    async fn handle_error(&mut self, _env: &mut ServiceContext, error: ServiceError) {
         use std::io;
 
         let error_type = if let ServiceError::DialerError { error, .. } = error {
@@ -71,8 +73,9 @@ pub struct SHandle {
     kind: SessionType,
 }
 
+#[async_trait]
 impl ServiceHandle for SHandle {
-    fn handle_error(&mut self, _env: &mut ServiceContext, error: ServiceError) {
+    async fn handle_error(&mut self, _env: &mut ServiceContext, error: ServiceError) {
         let error_type = match error {
             ServiceError::DialerError { error, .. } => {
                 match error {
@@ -101,7 +104,7 @@ impl ServiceHandle for SHandle {
         let _res = self.sender.try_send(error_type);
     }
 
-    fn handle_event(&mut self, _env: &mut ServiceContext, event: ServiceEvent) {
+    async fn handle_event(&mut self, _env: &mut ServiceContext, event: ServiceEvent) {
         if let ServiceEvent::SessionOpen { session_context } = event {
             self.session_id = session_context.id;
             self.kind = session_context.ty;
@@ -116,13 +119,16 @@ struct PHandle {
     dial_addr: Option<Multiaddr>,
 }
 
+#[async_trait]
 impl ServiceProtocol for PHandle {
-    fn init(&mut self, context: &mut ProtocolContext) {
+    async fn init(&mut self, context: &mut ProtocolContext) {
         let proto_id = context.proto_id;
-        let _res = context.set_service_notify(proto_id, Duration::from_millis(100), 3);
+        let _res = context
+            .set_service_notify(proto_id, Duration::from_millis(100), 3)
+            .await;
     }
 
-    fn connected(&mut self, context: ProtocolContextMutRef, _version: &str) {
+    async fn connected(&mut self, context: ProtocolContextMutRef<'_>, _version: &str) {
         if context.session.ty.is_inbound() {
             // if server, dial itself
             self.dial_addr = Some(context.listens()[0].clone());
@@ -133,16 +139,18 @@ impl ServiceProtocol for PHandle {
         self.connected_count += 1;
     }
 
-    fn disconnected(&mut self, _context: ProtocolContextMutRef) {
+    async fn disconnected(&mut self, _context: ProtocolContextMutRef<'_>) {
         self.connected_count -= 1;
     }
 
-    fn notify(&mut self, context: &mut ProtocolContext, _token: u64) {
+    async fn notify(&mut self, context: &mut ProtocolContext, _token: u64) {
         if self.dial_addr.is_some() {
-            let _res = context.dial(
-                self.dial_addr.as_ref().unwrap().clone(),
-                TargetProtocol::All,
-            );
+            let _res = context
+                .dial(
+                    self.dial_addr.as_ref().unwrap().clone(),
+                    TargetProtocol::All,
+                )
+                .await;
             self.dial_count += 1;
             if self.dial_count == 10 {
                 self.sender.try_send(self.connected_count).unwrap();
@@ -235,11 +243,7 @@ fn test_repeated_dial(secio: bool) {
                 .await
                 .unwrap();
             let _res = addr_sender.send(listen_addr);
-            loop {
-                if service.next().await.is_none() {
-                    break;
-                }
-            }
+            service.run().await
         });
     });
 
@@ -254,11 +258,7 @@ fn test_repeated_dial(secio: bool) {
                 .dial(listen_addr, TargetProtocol::All)
                 .await
                 .unwrap();
-            loop {
-                if service.next().await.is_none() {
-                    break;
-                }
-            }
+            service.run().await
         });
     });
 
@@ -285,16 +285,10 @@ fn test_dial_with_no_notify(secio: bool) {
     let (meta, _receiver) = create_meta(0.into());
     let (shandle, error_receiver) = create_shandle(secio, true);
     let mut service = create(secio, meta, shandle);
-    let control = service.control().clone();
+    let control: ServiceControl = service.control().clone().into();
     thread::spawn(move || {
         let rt = tokio::runtime::Runtime::new().unwrap();
-        rt.block_on(async move {
-            loop {
-                if service.next().await.is_none() {
-                    break;
-                }
-            }
-        });
+        rt.block_on(async move { service.run().await });
     });
     // macOs can't dial 0 port
     for _ in 0..2 {

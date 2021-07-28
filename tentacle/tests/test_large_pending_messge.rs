@@ -1,7 +1,8 @@
 use bytes::Bytes;
-use futures::{channel, StreamExt};
+use futures::channel;
 use std::thread;
 use tentacle::{
+    async_trait,
     builder::{MetaBuilder, ServiceBuilder},
     context::{ProtocolContext, ProtocolContextMutRef, ServiceContext},
     multiaddr::Multiaddr,
@@ -31,19 +32,20 @@ where
 
 struct PHandle;
 
+#[async_trait]
 impl ServiceProtocol for PHandle {
-    fn init(&mut self, _context: &mut ProtocolContext) {}
+    async fn init(&mut self, _context: &mut ProtocolContext) {}
 
-    fn connected(&mut self, context: ProtocolContextMutRef, _version: &str) {
+    async fn connected(&mut self, context: ProtocolContextMutRef<'_>, _version: &str) {
         if context.session.ty.is_inbound() {
             let data = Bytes::from(vec![0; 1024 * 1024 * 8]);
             loop {
-                let _res = context.send_message(data.clone());
+                let _res = context.send_message(data.clone()).await;
             }
         }
     }
 
-    fn received(&mut self, _context: ProtocolContextMutRef, _data: bytes::Bytes) {
+    async fn received(&mut self, _context: ProtocolContextMutRef<'_>, _data: bytes::Bytes) {
         thread::sleep(::std::time::Duration::from_secs(10));
     }
 }
@@ -65,8 +67,9 @@ fn create_meta(id: ProtocolId) -> ProtocolMeta {
 #[derive(Clone)]
 pub struct SHandle;
 
+#[async_trait]
 impl ServiceHandle for SHandle {
-    fn handle_error(&mut self, _control: &mut ServiceContext, error: ServiceError) {
+    async fn handle_error(&mut self, _control: &mut ServiceContext, error: ServiceError) {
         match error {
             ServiceError::SessionBlocked { .. } => (),
             e => panic!("Unexpected error: {:?}", e),
@@ -87,11 +90,7 @@ fn test_large_message(secio: bool) {
                 .await
                 .unwrap();
             let _res = addr_sender.send(listen_addr);
-            loop {
-                if service.next().await.is_none() {
-                    break;
-                }
-            }
+            service.run().await
         });
     });
 
@@ -104,11 +103,7 @@ fn test_large_message(secio: bool) {
             .dial(listen_addr, TargetProtocol::All)
             .await
             .unwrap();
-        loop {
-            if service.next().await.is_none() {
-                break;
-            }
-        }
+        service.run().await
     });
 }
 

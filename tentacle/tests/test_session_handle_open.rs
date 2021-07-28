@@ -1,6 +1,6 @@
-use futures::StreamExt;
 use std::{sync::mpsc::channel, thread};
 use tentacle::{
+    async_trait,
     builder::{MetaBuilder, ServiceBuilder},
     context::{ProtocolContext, ProtocolContextMutRef, ServiceContext},
     multiaddr::Multiaddr,
@@ -20,19 +20,21 @@ use tentacle::{
 #[derive(Clone)]
 struct PHandle;
 
+#[async_trait]
 impl SessionProtocol for PHandle {
-    fn connected(&mut self, context: ProtocolContextMutRef, _version: &str) {
+    async fn connected(&mut self, context: ProtocolContextMutRef<'_>, _version: &str) {
         if context.session.ty.is_inbound() {
             // Close the session after opening the protocol correctly
-            let _res = context.disconnect(context.session.id);
+            let _res = context.disconnect(context.session.id).await;
         }
     }
 }
 
 struct Dummy;
 
+#[async_trait]
 impl ServiceProtocol for Dummy {
-    fn init(&mut self, _context: &mut ProtocolContext) {}
+    async fn init(&mut self, _context: &mut ProtocolContext) {}
 }
 
 struct SHandle {
@@ -40,22 +42,27 @@ struct SHandle {
     addr: Option<Multiaddr>,
 }
 
+#[async_trait]
 impl ServiceHandle for SHandle {
-    fn handle_event(&mut self, control: &mut ServiceContext, event: ServiceEvent) {
+    async fn handle_event(&mut self, control: &mut ServiceContext, event: ServiceEvent) {
         if let ServiceEvent::SessionOpen { session_context } = event {
             self.addr = Some(session_context.address.clone());
             if session_context.ty.is_outbound() {
-                control.open_protocol(session_context.id, 1.into()).unwrap();
+                control
+                    .open_protocol(session_context.id, 1.into())
+                    .await
+                    .unwrap();
             }
         } else if let ServiceEvent::SessionClose { session_context } = event {
             // Test ends after 10 connections and opening session protocol
             if session_context.ty.is_outbound() {
                 self.count += 1;
                 if self.count >= 10 {
-                    control.shutdown().unwrap();
+                    control.shutdown().await.unwrap();
                 } else {
-                    let _res =
-                        control.dial(self.addr.clone().unwrap(), TargetProtocol::Single(0.into()));
+                    let _res = control
+                        .dial(self.addr.clone().unwrap(), TargetProtocol::Single(0.into()))
+                        .await;
                 }
             }
         }
@@ -140,11 +147,7 @@ fn test_session_handle_open(secio: bool) {
 
             addr_sender.send(listen_addr).unwrap();
 
-            loop {
-                if service_2.next().await.is_none() {
-                    break;
-                }
-            }
+            service_2.run().await
         });
     });
 
@@ -158,11 +161,7 @@ fn test_session_handle_open(secio: bool) {
                 .await
                 .unwrap();
 
-            loop {
-                if service_1.next().await.is_none() {
-                    break;
-                }
-            }
+            service_1.run().await
         });
     });
 

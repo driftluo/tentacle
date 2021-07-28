@@ -1,5 +1,5 @@
-use futures::StreamExt;
 use tentacle::{
+    async_trait,
     builder::{MetaBuilder, ServiceBuilder},
     context::{ProtocolContext, ProtocolContextMutRef},
     multiaddr::Multiaddr,
@@ -35,31 +35,33 @@ struct PHandle {
     shutdown: bool,
 }
 
+#[async_trait]
 impl ServiceProtocol for PHandle {
-    fn init(&mut self, _context: &mut ProtocolContext) {}
+    async fn init(&mut self, _context: &mut ProtocolContext) {}
 
-    fn connected(&mut self, context: ProtocolContextMutRef, _version: &str) {
-        let _res = context.send_message(bytes::Bytes::from("hello"));
+    async fn connected(&mut self, context: ProtocolContextMutRef<'_>, _version: &str) {
+        let _res = context.send_message(bytes::Bytes::from("hello")).await;
         if context.session.ty.is_inbound() && context.proto_id == 1.into() {
             self.count += 1;
             if self.count >= 4 {
-                let proto_id = context.proto_id;
-                let _res = context.set_service_notify(proto_id, Duration::from_millis(200), 0);
+                let _res = context
+                    .set_service_notify(context.proto_id, Duration::from_millis(200), 0)
+                    .await;
             }
         }
     }
 
-    fn received(&mut self, context: ProtocolContextMutRef, data: bytes::Bytes) {
-        let _res = context.send_message(data);
+    async fn received(&mut self, context: ProtocolContextMutRef<'_>, data: bytes::Bytes) {
+        let _res = context.send_message(data).await;
     }
 
-    fn notify(&mut self, context: &mut ProtocolContext, _token: u64) {
+    async fn notify(&mut self, context: &mut ProtocolContext, _token: u64) {
         self.count += 1;
         if self.count > 6 {
             if self.shutdown {
-                let _res = context.shutdown();
+                let _res = context.shutdown().await;
             } else {
-                let _res = context.close();
+                let _res = context.close().await;
             }
         }
     }
@@ -139,11 +141,7 @@ fn test(secio: bool, shutdown: bool) {
 
             addr_sender.send(listen_addr).unwrap();
 
-            loop {
-                if service_1.next().await.is_none() {
-                    break;
-                }
-            }
+            service_1.run().await
         });
     });
 
@@ -176,11 +174,7 @@ where
                 .await
                 .unwrap();
 
-            loop {
-                if service.next().await.is_none() {
-                    break;
-                }
-            }
+            service.run().await
         });
     })
 }

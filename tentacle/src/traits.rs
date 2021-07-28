@@ -1,14 +1,10 @@
-use std::{
-    io,
-    pin::Pin,
-    sync::Arc,
-    task::{Context, Poll},
-};
+use std::{io, sync::Arc};
 use tokio_util::codec::{Decoder, Encoder};
 
+use crate::service::ServiceAsyncControl;
 use crate::{
     context::{ProtocolContext, ProtocolContextMutRef, ServiceContext, SessionContext},
-    service::{ServiceControl, ServiceError, ServiceEvent},
+    service::{ServiceError, ServiceEvent},
     substream::SubstreamReadPart,
 };
 
@@ -26,11 +22,13 @@ use crate::{
 /// Mainly handle some Service-level errors thrown at runtime, such as listening errors.
 ///
 /// At the same time, the session establishment and disconnection messages will also be perceived here.
-pub trait ServiceHandle {
+#[cfg_attr(target_arch = "wasm32", async_trait::async_trait(?Send))]
+#[cfg_attr(not(target_arch = "wasm32"), async_trait::async_trait)]
+pub trait ServiceHandle: Send {
     /// Handling runtime errors
-    fn handle_error(&mut self, _control: &mut ServiceContext, _error: ServiceError) {}
+    async fn handle_error(&mut self, _control: &mut ServiceContext, _error: ServiceError) {}
     /// Handling session establishment and disconnection events
-    fn handle_event(&mut self, _control: &mut ServiceContext, _event: ServiceEvent) {}
+    async fn handle_event(&mut self, _control: &mut ServiceContext, _event: ServiceEvent) {}
 }
 
 /// Service level protocol handle
@@ -54,52 +52,184 @@ pub trait ServiceHandle {
 /// The opening and closing of the protocol will create and clean up the handle exclusive
 /// to the session, but the service handle will remain in the state until the service is closed.
 ///
-pub trait ServiceProtocol {
+#[cfg_attr(target_arch = "wasm32", async_trait::async_trait(?Send))]
+#[cfg_attr(not(target_arch = "wasm32"), async_trait::async_trait)]
+pub trait ServiceProtocol: Send {
     /// This function is called when the service start.
     ///
     /// The service handle will only be called once
-    fn init(&mut self, context: &mut ProtocolContext);
+    async fn init(&mut self, context: &mut ProtocolContext);
     /// Called when opening protocol
-    fn connected(&mut self, _context: ProtocolContextMutRef, _version: &str) {}
+    async fn connected(&mut self, _context: ProtocolContextMutRef<'_>, _version: &str) {}
     /// Called when closing protocol
-    fn disconnected(&mut self, _context: ProtocolContextMutRef) {}
+    async fn disconnected(&mut self, _context: ProtocolContextMutRef<'_>) {}
     /// Called when the corresponding protocol message is received
-    fn received(&mut self, _context: ProtocolContextMutRef, _data: bytes::Bytes) {}
+    async fn received(&mut self, _context: ProtocolContextMutRef<'_>, _data: bytes::Bytes) {}
     /// Called when the Service receives the notify task
-    fn notify(&mut self, _context: &mut ProtocolContext, _token: u64) {}
+    async fn notify(&mut self, _context: &mut ProtocolContext, _token: u64) {}
     /// Behave like `Stream::poll_next`, but nothing output
     /// if ready with Some, it will continue poll immediately
     /// if ready with None, it will don't try to call the function again
     #[inline]
-    fn poll(
-        self: Pin<&mut Self>,
-        _cx: &mut Context,
-        _context: &mut ProtocolContext,
-    ) -> Poll<Option<()>> {
-        Poll::Ready(None)
+    async fn poll(&mut self, _context: &mut ProtocolContext) -> Option<()> {
+        None
     }
 }
 
 /// Session level protocol handle
-pub trait SessionProtocol {
+#[cfg_attr(target_arch = "wasm32", async_trait::async_trait(?Send))]
+#[cfg_attr(not(target_arch = "wasm32"), async_trait::async_trait)]
+pub trait SessionProtocol: Send {
     /// Called when opening protocol
-    fn connected(&mut self, _context: ProtocolContextMutRef, _version: &str) {}
+    async fn connected(&mut self, _context: ProtocolContextMutRef<'_>, _version: &str) {}
     /// Called when closing protocol
-    fn disconnected(&mut self, _context: ProtocolContextMutRef) {}
+    async fn disconnected(&mut self, _context: ProtocolContextMutRef<'_>) {}
     /// Called when the corresponding protocol message is received
-    fn received(&mut self, _context: ProtocolContextMutRef, _data: bytes::Bytes) {}
+    async fn received(&mut self, _context: ProtocolContextMutRef<'_>, _data: bytes::Bytes) {}
     /// Called when the session receives the notify task
-    fn notify(&mut self, _context: ProtocolContextMutRef, _token: u64) {}
+    async fn notify(&mut self, _context: ProtocolContextMutRef<'_>, _token: u64) {}
     /// Behave like `Stream::poll_next`, but nothing output
     /// if ready with Some, it will continue poll immediately
     /// if ready with None, it will don't try to call the function again
     #[inline]
-    fn poll(
-        self: Pin<&mut Self>,
-        _cx: &mut Context,
-        _context: ProtocolContextMutRef,
-    ) -> Poll<Option<()>> {
-        Poll::Ready(None)
+    async fn poll(&mut self, _context: ProtocolContextMutRef<'_>) -> Option<()> {
+        None
+    }
+}
+
+#[cfg_attr(target_arch = "wasm32", async_trait::async_trait(?Send))]
+#[cfg_attr(not(target_arch = "wasm32"), async_trait::async_trait)]
+impl ServiceHandle for Box<dyn ServiceHandle + Send + 'static> {
+    async fn handle_error(&mut self, control: &mut ServiceContext, error: ServiceError) {
+        (&mut **self).handle_error(control, error).await
+    }
+
+    async fn handle_event(&mut self, control: &mut ServiceContext, event: ServiceEvent) {
+        (&mut **self).handle_event(control, event).await
+    }
+}
+
+#[cfg_attr(target_arch = "wasm32", async_trait::async_trait(?Send))]
+#[cfg_attr(not(target_arch = "wasm32"), async_trait::async_trait)]
+impl ServiceHandle for Box<dyn ServiceHandle + Send + Sync + 'static> {
+    async fn handle_error(&mut self, control: &mut ServiceContext, error: ServiceError) {
+        (&mut **self).handle_error(control, error).await
+    }
+
+    async fn handle_event(&mut self, control: &mut ServiceContext, event: ServiceEvent) {
+        (&mut **self).handle_event(control, event).await
+    }
+}
+
+#[cfg_attr(target_arch = "wasm32", async_trait::async_trait(?Send))]
+#[cfg_attr(not(target_arch = "wasm32"), async_trait::async_trait)]
+impl ServiceHandle for () {}
+
+#[cfg_attr(target_arch = "wasm32", async_trait::async_trait(?Send))]
+#[cfg_attr(not(target_arch = "wasm32"), async_trait::async_trait)]
+impl ServiceProtocol for Box<dyn ServiceProtocol + Send + 'static + Unpin> {
+    async fn init(&mut self, context: &mut ProtocolContext) {
+        (&mut **self).init(context).await
+    }
+
+    async fn connected(&mut self, context: ProtocolContextMutRef<'_>, version: &str) {
+        (&mut **self).connected(context, version).await
+    }
+
+    async fn disconnected(&mut self, context: ProtocolContextMutRef<'_>) {
+        (&mut **self).disconnected(context).await
+    }
+
+    async fn received(&mut self, context: ProtocolContextMutRef<'_>, data: bytes::Bytes) {
+        (&mut **self).received(context, data).await
+    }
+
+    async fn notify(&mut self, context: &mut ProtocolContext, token: u64) {
+        (&mut **self).notify(context, token).await
+    }
+
+    #[inline]
+    async fn poll(&mut self, context: &mut ProtocolContext) -> Option<()> {
+        (&mut **self).poll(context).await
+    }
+}
+
+#[cfg_attr(target_arch = "wasm32", async_trait::async_trait(?Send))]
+#[cfg_attr(not(target_arch = "wasm32"), async_trait::async_trait)]
+impl ServiceProtocol for Box<dyn ServiceProtocol + Send + Sync + 'static + Unpin> {
+    async fn init(&mut self, context: &mut ProtocolContext) {
+        (&mut **self).init(context).await
+    }
+
+    async fn connected(&mut self, context: ProtocolContextMutRef<'_>, version: &str) {
+        (&mut **self).connected(context, version).await
+    }
+
+    async fn disconnected(&mut self, context: ProtocolContextMutRef<'_>) {
+        (&mut **self).disconnected(context).await
+    }
+
+    async fn received(&mut self, context: ProtocolContextMutRef<'_>, data: bytes::Bytes) {
+        (&mut **self).received(context, data).await
+    }
+
+    async fn notify(&mut self, context: &mut ProtocolContext, token: u64) {
+        (&mut **self).notify(context, token).await
+    }
+
+    #[inline]
+    async fn poll(&mut self, context: &mut ProtocolContext) -> Option<()> {
+        (&mut **self).poll(context).await
+    }
+}
+
+#[cfg_attr(target_arch = "wasm32", async_trait::async_trait(?Send))]
+#[cfg_attr(not(target_arch = "wasm32"), async_trait::async_trait)]
+impl SessionProtocol for Box<dyn SessionProtocol + Send + 'static + Unpin> {
+    async fn connected(&mut self, context: ProtocolContextMutRef<'_>, version: &str) {
+        (&mut **self).connected(context, version).await
+    }
+
+    async fn disconnected(&mut self, context: ProtocolContextMutRef<'_>) {
+        (&mut **self).disconnected(context).await
+    }
+
+    async fn received(&mut self, context: ProtocolContextMutRef<'_>, data: bytes::Bytes) {
+        (&mut **self).received(context, data).await
+    }
+
+    async fn notify(&mut self, context: ProtocolContextMutRef<'_>, token: u64) {
+        (&mut **self).notify(context, token).await
+    }
+
+    #[inline]
+    async fn poll(&mut self, context: ProtocolContextMutRef<'_>) -> Option<()> {
+        (&mut **self).poll(context).await
+    }
+}
+
+#[cfg_attr(target_arch = "wasm32", async_trait::async_trait(?Send))]
+#[cfg_attr(not(target_arch = "wasm32"), async_trait::async_trait)]
+impl SessionProtocol for Box<dyn SessionProtocol + Send + Sync + 'static + Unpin> {
+    async fn connected(&mut self, context: ProtocolContextMutRef<'_>, version: &str) {
+        (&mut **self).connected(context, version).await
+    }
+
+    async fn disconnected(&mut self, context: ProtocolContextMutRef<'_>) {
+        (&mut **self).disconnected(context).await
+    }
+
+    async fn received(&mut self, context: ProtocolContextMutRef<'_>, data: bytes::Bytes) {
+        (&mut **self).received(context, data).await
+    }
+
+    async fn notify(&mut self, context: ProtocolContextMutRef<'_>, token: u64) {
+        (&mut **self).notify(context, token).await
+    }
+
+    #[inline]
+    async fn poll(&mut self, context: ProtocolContextMutRef<'_>) -> Option<()> {
+        (&mut **self).poll(context).await
     }
 }
 
@@ -113,12 +243,13 @@ pub trait SessionProtocol {
 /// This trait implementation and the callback implementation are mutually exclusive, and will be
 /// checked during construction, if both exist, it will panic
 #[cfg_attr(not(feature = "unstable"), doc(hidden))]
+#[cfg_attr(docsrs, doc(cfg(feature = "unstable")))]
 pub trait ProtocolSpawn {
     /// Call on protocol opened
     fn spawn(
         &self,
         context: Arc<SessionContext>,
-        control: &ServiceControl,
+        control: &ServiceAsyncControl,
         read_part: SubstreamReadPart,
     );
 }
@@ -149,143 +280,5 @@ impl Encoder<bytes::Bytes> for Box<dyn Codec + Send + 'static> {
 
     fn encode(&mut self, item: bytes::Bytes, dst: &mut bytes::BytesMut) -> Result<(), Self::Error> {
         Encoder::encode(&mut **self, item, dst)
-    }
-}
-
-impl ServiceHandle for Box<dyn ServiceHandle + Send + 'static> {
-    fn handle_error(&mut self, control: &mut ServiceContext, error: ServiceError) {
-        (&mut **self).handle_error(control, error)
-    }
-
-    fn handle_event(&mut self, control: &mut ServiceContext, event: ServiceEvent) {
-        (&mut **self).handle_event(control, event)
-    }
-}
-
-impl ServiceHandle for Box<dyn ServiceHandle + Send + Sync + 'static> {
-    fn handle_error(&mut self, control: &mut ServiceContext, error: ServiceError) {
-        (&mut **self).handle_error(control, error)
-    }
-
-    fn handle_event(&mut self, control: &mut ServiceContext, event: ServiceEvent) {
-        (&mut **self).handle_event(control, event)
-    }
-}
-
-impl ServiceHandle for () {}
-
-impl ServiceProtocol for Box<dyn ServiceProtocol + Send + 'static + Unpin> {
-    fn init(&mut self, context: &mut ProtocolContext) {
-        (&mut **self).init(context)
-    }
-
-    fn connected(&mut self, context: ProtocolContextMutRef, version: &str) {
-        (&mut **self).connected(context, version)
-    }
-
-    fn disconnected(&mut self, context: ProtocolContextMutRef) {
-        (&mut **self).disconnected(context)
-    }
-
-    fn received(&mut self, context: ProtocolContextMutRef, data: bytes::Bytes) {
-        (&mut **self).received(context, data)
-    }
-
-    fn notify(&mut self, context: &mut ProtocolContext, token: u64) {
-        (&mut **self).notify(context, token)
-    }
-
-    #[inline]
-    fn poll(
-        mut self: Pin<&mut Self>,
-        cx: &mut Context,
-        context: &mut ProtocolContext,
-    ) -> Poll<Option<()>> {
-        Pin::new(&mut **self).poll(cx, context)
-    }
-}
-
-impl ServiceProtocol for Box<dyn ServiceProtocol + Send + Sync + 'static + Unpin> {
-    fn init(&mut self, context: &mut ProtocolContext) {
-        (&mut **self).init(context)
-    }
-
-    fn connected(&mut self, context: ProtocolContextMutRef, version: &str) {
-        (&mut **self).connected(context, version)
-    }
-
-    fn disconnected(&mut self, context: ProtocolContextMutRef) {
-        (&mut **self).disconnected(context)
-    }
-
-    fn received(&mut self, context: ProtocolContextMutRef, data: bytes::Bytes) {
-        (&mut **self).received(context, data)
-    }
-
-    fn notify(&mut self, context: &mut ProtocolContext, token: u64) {
-        (&mut **self).notify(context, token)
-    }
-
-    #[inline]
-    fn poll(
-        mut self: Pin<&mut Self>,
-        cx: &mut Context,
-        context: &mut ProtocolContext,
-    ) -> Poll<Option<()>> {
-        Pin::new(&mut **self).poll(cx, context)
-    }
-}
-
-impl SessionProtocol for Box<dyn SessionProtocol + Send + 'static + Unpin> {
-    fn connected(&mut self, context: ProtocolContextMutRef, version: &str) {
-        (&mut **self).connected(context, version)
-    }
-
-    fn disconnected(&mut self, context: ProtocolContextMutRef) {
-        (&mut **self).disconnected(context)
-    }
-
-    fn received(&mut self, context: ProtocolContextMutRef, data: bytes::Bytes) {
-        (&mut **self).received(context, data)
-    }
-
-    fn notify(&mut self, context: ProtocolContextMutRef, token: u64) {
-        (&mut **self).notify(context, token)
-    }
-
-    #[inline]
-    fn poll(
-        mut self: Pin<&mut Self>,
-        cx: &mut Context,
-        context: ProtocolContextMutRef,
-    ) -> Poll<Option<()>> {
-        Pin::new(&mut **self).as_mut().poll(cx, context)
-    }
-}
-
-impl SessionProtocol for Box<dyn SessionProtocol + Send + Sync + 'static + Unpin> {
-    fn connected(&mut self, context: ProtocolContextMutRef, version: &str) {
-        (&mut **self).connected(context, version)
-    }
-
-    fn disconnected(&mut self, context: ProtocolContextMutRef) {
-        (&mut **self).disconnected(context)
-    }
-
-    fn received(&mut self, context: ProtocolContextMutRef, data: bytes::Bytes) {
-        (&mut **self).received(context, data)
-    }
-
-    fn notify(&mut self, context: ProtocolContextMutRef, token: u64) {
-        (&mut **self).notify(context, token)
-    }
-
-    #[inline]
-    fn poll(
-        mut self: Pin<&mut Self>,
-        cx: &mut Context,
-        context: ProtocolContextMutRef,
-    ) -> Poll<Option<()>> {
-        Pin::new(&mut **self).as_mut().poll(cx, context)
     }
 }

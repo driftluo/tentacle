@@ -1,10 +1,10 @@
 use bytes::Bytes;
-use futures::StreamExt;
 use log::info;
 use std::collections::HashMap;
 use std::thread;
 use std::time::{Duration, Instant};
 use tentacle::{
+    async_trait,
     builder::{MetaBuilder, ServiceBuilder},
     context::{ProtocolContext, ProtocolContextMutRef, ServiceContext},
     secio::SecioKeyPair,
@@ -21,14 +21,19 @@ struct PHandle {
     count: usize,
 }
 
+#[async_trait]
 impl ServiceProtocol for PHandle {
-    fn init(&mut self, context: &mut ProtocolContext) {
+    async fn init(&mut self, context: &mut ProtocolContext) {
         let proto_id = context.proto_id;
-        let _ = context.set_service_notify(proto_id, Duration::from_millis(10), 0);
-        let _ = context.set_service_notify(proto_id, Duration::from_millis(40), 1);
+        let _ = context
+            .set_service_notify(proto_id, Duration::from_millis(10), 0)
+            .await;
+        let _ = context
+            .set_service_notify(proto_id, Duration::from_millis(40), 1)
+            .await;
     }
 
-    fn connected(&mut self, context: ProtocolContextMutRef, _version: &str) {
+    async fn connected(&mut self, context: ProtocolContextMutRef<'_>, _version: &str) {
         info!(
             "Session open: {:?} {}",
             context.session.id, context.session.address
@@ -36,7 +41,7 @@ impl ServiceProtocol for PHandle {
         self.sessions.insert(context.session.id, context.session.ty);
     }
 
-    fn disconnected(&mut self, context: ProtocolContextMutRef) {
+    async fn disconnected(&mut self, context: ProtocolContextMutRef<'_>) {
         log::warn!(
             "Session close: {:?} {}",
             context.session.id,
@@ -45,7 +50,7 @@ impl ServiceProtocol for PHandle {
         self.sessions.remove(&context.session.id);
     }
 
-    fn received(&mut self, context: ProtocolContextMutRef, _data: Bytes) {
+    async fn received(&mut self, context: ProtocolContextMutRef<'_>, _data: Bytes) {
         let session_type = context.session.ty;
         let session_id = context.session.id;
         if session_type.is_outbound() {
@@ -53,7 +58,7 @@ impl ServiceProtocol for PHandle {
             info!("> [Client] received {}", self.count);
             self.count += 1;
             if self.count + 1 == 512 {
-                let _ = context.shutdown();
+                let _ = context.shutdown().await;
             }
         } else {
             // thread::sleep(Duration::from_millis(20));
@@ -61,7 +66,7 @@ impl ServiceProtocol for PHandle {
         }
     }
 
-    fn notify(&mut self, context: &mut ProtocolContext, token: u64) {
+    async fn notify(&mut self, context: &mut ProtocolContext, token: u64) {
         let proto_id = context.proto_id;
         match token {
             0 => {
@@ -75,7 +80,7 @@ impl ServiceProtocol for PHandle {
                     let prefix = "abcde".repeat(80000);
                     let now = Instant::now();
                     let data = Bytes::from(format!("{:?} - {}", now, prefix));
-                    let _ = context.send_message_to(*session_id, proto_id, data);
+                    let _ = context.send_message_to(*session_id, proto_id, data).await;
                 }
             }
             1 => {
@@ -89,7 +94,7 @@ impl ServiceProtocol for PHandle {
                     let prefix = "xxxx".repeat(20000);
                     let now = Instant::now();
                     let data = Bytes::from(format!("{:?} - {}", now, prefix));
-                    let _ = context.send_message_to(*session_id, proto_id, data);
+                    let _ = context.send_message_to(*session_id, proto_id, data).await;
                 }
             }
             _ => {}
@@ -99,11 +104,12 @@ impl ServiceProtocol for PHandle {
 
 struct SHandle;
 
+#[async_trait]
 impl ServiceHandle for SHandle {
-    fn handle_error(&mut self, _context: &mut ServiceContext, error: ServiceError) {
+    async fn handle_error(&mut self, _context: &mut ServiceContext, error: ServiceError) {
         info!("service error: {:?}", error);
     }
-    fn handle_event(&mut self, _context: &mut ServiceContext, event: ServiceEvent) {
+    async fn handle_event(&mut self, _context: &mut ServiceContext, event: ServiceEvent) {
         info!("service event: {:?}", event);
     }
 }
@@ -153,11 +159,7 @@ fn main() {
                 .await
                 .unwrap();
             info!("listen_addr: {}", listen_addr);
-            loop {
-                if service.next().await.is_none() {
-                    break;
-                }
-            }
+            service.run().await
         });
     } else {
         rt.block_on(async move {
@@ -168,11 +170,7 @@ fn main() {
                 .dial(listen_addr, TargetProtocol::All)
                 .await
                 .unwrap();
-            loop {
-                if service.next().await.is_none() {
-                    break;
-                }
-            }
+            service.run().await
         });
     }
 }

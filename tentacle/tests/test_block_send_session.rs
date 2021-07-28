@@ -1,5 +1,5 @@
 use bytes::Bytes;
-use futures::{channel, StreamExt};
+use futures::channel;
 use std::{
     sync::{
         atomic::{AtomicUsize, Ordering},
@@ -8,6 +8,7 @@ use std::{
     thread,
 };
 use tentacle::{
+    async_trait,
     builder::{MetaBuilder, ServiceBuilder},
     context::{ProtocolContext, ProtocolContextMutRef},
     multiaddr::Multiaddr,
@@ -36,59 +37,65 @@ struct PHandle {
     count: Arc<AtomicUsize>,
 }
 
+#[async_trait]
 impl ServiceProtocol for PHandle {
-    fn init(&mut self, _context: &mut ProtocolContext) {}
+    async fn init(&mut self, _context: &mut ProtocolContext) {}
 
-    fn connected(&mut self, context: ProtocolContextMutRef, _version: &str) {
+    async fn connected(&mut self, context: ProtocolContextMutRef<'_>, _version: &str) {
         if context.session.ty.is_inbound() {
             let prefix = "x".repeat(10);
             // NOTE: 256 is the send channel buffer size
             let length = 1024;
             for i in 0..length {
-                let _res = context.send_message(Bytes::from(format!("{}-{}", prefix, i)));
+                let _res = context
+                    .send_message(Bytes::from(format!("{}-{}", prefix, i)))
+                    .await;
             }
         }
     }
 
-    fn disconnected(&mut self, context: ProtocolContextMutRef) {
-        let _res = context.shutdown();
+    async fn disconnected(&mut self, context: ProtocolContextMutRef<'_>) {
+        let _res = context.shutdown().await;
     }
 
-    fn received(&mut self, context: ProtocolContextMutRef, _data: Bytes) {
+    async fn received(&mut self, context: ProtocolContextMutRef<'_>, _data: Bytes) {
         if context.session.ty.is_outbound() {
             self.count.fetch_add(1, Ordering::SeqCst);
         }
         let count_now = self.count.load(Ordering::SeqCst);
         if count_now == 1024 {
-            let _res = context.shutdown();
+            let _res = context.shutdown().await;
         }
     }
 }
 
+#[async_trait]
 impl SessionProtocol for PHandle {
-    fn connected(&mut self, context: ProtocolContextMutRef, _version: &str) {
+    async fn connected(&mut self, context: ProtocolContextMutRef<'_>, _version: &str) {
         if context.session.ty.is_inbound() {
             let prefix = "x".repeat(10);
             // NOTE: 256 is the send channel buffer size
             let length = 1024;
             for i in 0..length {
-                let _res = context.send_message(Bytes::from(format!("{}-{}", prefix, i)));
+                let _res = context
+                    .send_message(Bytes::from(format!("{}-{}", prefix, i)))
+                    .await;
             }
         }
     }
 
-    fn disconnected(&mut self, context: ProtocolContextMutRef) {
-        let _res = context.shutdown();
+    async fn disconnected(&mut self, context: ProtocolContextMutRef<'_>) {
+        let _res = context.shutdown().await;
     }
 
-    fn received(&mut self, context: ProtocolContextMutRef, _data: bytes::Bytes) {
+    async fn received(&mut self, context: ProtocolContextMutRef<'_>, _data: bytes::Bytes) {
         if context.session.ty.is_outbound() {
             self.count.fetch_add(1, Ordering::SeqCst);
         }
         let count_now = self.count.load(Ordering::SeqCst);
         log::warn!("count_now: {}", count_now);
         if count_now == 1024 {
-            let _res = context.shutdown();
+            let _res = context.shutdown().await;
         }
     }
 }
@@ -141,11 +148,7 @@ fn test_block_send(secio: bool, session_protocol: bool) {
                 .await
                 .unwrap();
             let _res = addr_sender.send(listen_addr);
-            loop {
-                if service.next().await.is_none() {
-                    break;
-                }
-            }
+            service.run().await
         });
     });
 
@@ -160,11 +163,7 @@ fn test_block_send(secio: bool, session_protocol: bool) {
                 .dial(listen_addr, TargetProtocol::All)
                 .await
                 .unwrap();
-            loop {
-                if service.next().await.is_none() {
-                    break;
-                }
-            }
+            service.run().await
         });
     });
     handle_2.join().unwrap();
