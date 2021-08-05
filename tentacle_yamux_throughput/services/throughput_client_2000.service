@@ -1,0 +1,14 @@
+[Unit]
+Description=Tentacle throughput test client with 2000 streams
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+Restart=no
+User=ubuntu
+Environment="RUST_LOG=info"
+ExecStart=~/tentacle_yamux_throughput/throughput_test client 2000
+StandardOutput=~/tentacle_yamux_throughput/throughput_client.log
+
+[Install]
+WantedBy=multi-user.target
