@@ -3,6 +3,9 @@ name: Tentacle_yamux_throughput
 on:
   schedule:
     - cron: '0 23 * * *'
+  push:
+    branches:
+       - fix_tentacle_ci_failed
 jobs:
   tentacle_yamux_throughput:
     name: tentacle_yamux_throughput
@@ -13,7 +16,7 @@ jobs:
         run: |
           cd yamux
           cargo build --examples --release
-          cp "${CARGO_TARGET_DIR}/release/examples/throughput_test" "${{ github.workspace }}/throughput_test"
+          cp "${{ github.workspace }}/release/examples/throughput_test" "${{ github.workspace }}/throughput_test"
       - name: Update ExecStart&StandardOutput
         run: |
           sed -i  "s#ExecStart=.*#ExecStart=${{github.workspace}}/throughput_test  server#g" ${{ github.workspace }}/tentacle_yamux_throughput/services/throughput_server.service
