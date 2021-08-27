@@ -45,7 +45,6 @@ use std::{
     cell::UnsafeCell,
     ptr,
     sync::atomic::{AtomicPtr, Ordering},
-    thread,
 };
 
 /// A result of the `pop` function.
@@ -146,7 +145,6 @@ impl<T> Queue<T> {
     ///
     /// This function is unsafe because only one thread can call it at a time.
     pub(super) unsafe fn pop_spin(&self) -> Option<T> {
-        let mut inconsistent_spin_number = 10;
         loop {
             match self.pop() {
                 PopResult::Empty => return None,
@@ -160,14 +158,23 @@ impl<T> Queue<T> {
                 // 2) thread::yield_now()
                 // 3) task::current().unwrap() & return Pending
                 //
-                // For now, thread::yield_now() is used, but it would
-                // probably be better to spin a few times then yield.
+                // Use spin_loop() on supported platforms and
+                // use thread::yield_now() on unsupported platforms
                 PopResult::Inconsistent => {
-                    if inconsistent_spin_number == 0 {
-                        thread::yield_now();
-                    } else {
-                        inconsistent_spin_number -= 1
-                    }
+                    #[cfg(any(
+                        target_arch = "x86",
+                        target_arch = "x86_64",
+                        target_arch = "aarch64",
+                        target_arch = "arm"
+                    ))]
+                    std::hint::spin_loop();
+                    #[cfg(not(any(
+                        target_arch = "x86",
+                        target_arch = "x86_64",
+                        target_arch = "aarch64",
+                        target_arch = "arm"
+                    )))]
+                    std::thread::yield_now();
                 }
             }
         }
