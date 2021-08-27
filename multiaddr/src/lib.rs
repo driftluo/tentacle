@@ -452,7 +452,7 @@ mod test {
         let p_2 = address_2.pop().unwrap();
 
         match (p_1, p_2) {
-            (Protocol::P2P(s_1), OtherProtocol::P2p(s_2)) => assert_eq!(s_1, s_2.as_bytes()),
+            (Protocol::P2P(s_1), OtherProtocol::P2p(s_2)) => assert_eq!(s_1, s_2.to_bytes()),
             e => panic!("not expect protocol: {:?}", e),
         }
     }
