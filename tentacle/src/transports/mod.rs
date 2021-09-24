@@ -407,22 +407,27 @@ mod os {
 
         fn poll_next(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Option<Self::Item>> {
             match self.get_mut() {
-                MultiIncoming::Tcp(inner) => match inner.poll_accept(cx)? {
-                    // Why can't get the peer address of the connected stream ?
-                    // Error will be "Transport endpoint is not connected",
-                    // so why incoming will appear unconnected stream ?
-                    Poll::Ready((stream, _)) => match stream.peer_addr() {
-                        Ok(remote_address) => Poll::Ready(Some(Ok((
-                            socketaddr_to_multiaddr(remote_address),
-                            MultiStream::Tcp(stream),
-                        )))),
-                        Err(err) => {
-                            debug!("stream get peer address error: {:?}", err);
-                            Poll::Pending
+                MultiIncoming::Tcp(inner) => {
+                    loop {
+                        match inner.poll_accept(cx)? {
+                            // Why can't get the peer address of the connected stream ?
+                            // Error will be "Transport endpoint is not connected",
+                            // so why incoming will appear unconnected stream ?
+                            Poll::Ready((stream, _)) => match stream.peer_addr() {
+                                Ok(remote_address) => {
+                                    break Poll::Ready(Some(Ok((
+                                        socketaddr_to_multiaddr(remote_address),
+                                        MultiStream::Tcp(stream),
+                                    ))))
+                                }
+                                Err(err) => {
+                                    debug!("stream get peer address error: {:?}", err);
+                                }
+                            },
+                            Poll::Pending => break Poll::Pending,
                         }
-                    },
-                    Poll::Pending => Poll::Pending,
-                },
+                    }
+                }
                 MultiIncoming::Memory(inner) => match inner.poll_next_unpin(cx)? {
                     Poll::Ready(Some((addr, stream))) => {
                         Poll::Ready(Some(Ok((addr, MultiStream::Memory(stream)))))
