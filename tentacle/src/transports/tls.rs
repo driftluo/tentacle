@@ -106,13 +106,46 @@ impl TlsListener {
         }
     }
 
-    fn poll_pending(
-        &mut self,
-        cx: &mut Context,
-    ) -> Poll<Option<std::result::Result<(Multiaddr, TlsStream), io::Error>>> {
+    fn poll_pending(&mut self, cx: &mut Context) -> Poll<(Multiaddr, TlsStream)> {
         match Pin::new(&mut self.pending_stream).as_mut().poll_next(cx) {
-            Poll::Ready(Some(res)) => Poll::Ready(Some(Ok(res))),
+            Poll::Ready(Some(res)) => Poll::Ready(res),
             Poll::Ready(None) | Poll::Pending => Poll::Pending,
+        }
+    }
+
+    fn poll_listen(&mut self, cx: &mut Context) -> Poll<std::result::Result<(), io::Error>> {
+        match self.inner.poll_accept(cx)? {
+            Poll::Ready((stream, _)) => {
+                match stream.peer_addr() {
+                    Ok(remote_address) => {
+                        let timeout = self.timeout;
+                        let mut sender = self.sender.clone();
+                        let acceptor = TlsAcceptor::from(Arc::clone(&self.tls_config));
+                        crate::runtime::spawn(async move {
+                            match crate::runtime::timeout(timeout, acceptor.accept(stream)).await {
+                                Err(_) => warn!("accept tls server stream timeout"),
+                                Ok(res) => match res {
+                                    Ok(stream) => {
+                                        let mut addr = socketaddr_to_multiaddr(remote_address);
+                                        addr.push(Protocol::Tls(Cow::Borrowed("")));
+                                        if sender.send((addr, Box::new(stream))).await.is_err() {
+                                            warn!("receiver closed unexpectedly")
+                                        }
+                                    }
+                                    Err(err) => {
+                                        warn!("accept tls server stream err: {:?}", err);
+                                    }
+                                },
+                            }
+                        });
+                    }
+                    Err(err) => {
+                        warn!("stream get peer address error: {:?}", err);
+                    }
+                }
+                Poll::Ready(Ok(()))
+            }
+            Poll::Pending => Poll::Pending,
         }
     }
 }
@@ -122,41 +155,21 @@ impl Stream for TlsListener {
 
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Option<Self::Item>> {
         if let Poll::Ready(res) = self.poll_pending(cx) {
-            return Poll::Ready(res);
+            return Poll::Ready(Some(Ok(res)));
         }
 
-        match self.inner.poll_accept(cx)? {
-            Poll::Ready((stream, _)) => match stream.peer_addr() {
-                Ok(remote_address) => {
-                    let timeout = self.timeout;
-                    let mut sender = self.sender.clone();
-                    let acceptor = TlsAcceptor::from(Arc::clone(&self.tls_config));
-                    crate::runtime::spawn(async move {
-                        match crate::runtime::timeout(timeout, acceptor.accept(stream)).await {
-                            Err(_) => warn!("accept tls server stream timeout"),
-                            Ok(res) => match res {
-                                Ok(stream) => {
-                                    let mut addr = socketaddr_to_multiaddr(remote_address);
-                                    addr.push(Protocol::Tls(Cow::Borrowed("")));
-                                    if sender.send((addr, Box::new(stream))).await.is_err() {
-                                        warn!("receiver closed unexpectedly")
-                                    }
-                                }
-                                Err(err) => {
-                                    warn!("accept tls server stream err: {:?}", err);
-                                }
-                            },
-                        }
-                    });
-                    self.poll_pending(cx)
+        loop {
+            let is_pending = self.poll_listen(cx)?.is_pending();
+            match self.poll_pending(cx) {
+                Poll::Ready(res) => return Poll::Ready(Some(Ok(res))),
+                Poll::Pending => {
+                    if is_pending {
+                        break;
+                    }
                 }
-                Err(err) => {
-                    warn!("stream get peer address error: {:?}", err);
-                    Poll::Pending
-                }
-            },
-            Poll::Pending => Poll::Pending,
+            }
         }
+        Poll::Pending
     }
 }
 

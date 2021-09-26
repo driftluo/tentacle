@@ -131,9 +131,11 @@ fn test(secio: bool, shutdown: bool) {
 
     let (addr_sender, addr_receiver) = channel::<Multiaddr>();
 
-    let handle = thread::spawn(|| {
-        let rt = tokio::runtime::Runtime::new().unwrap();
-        rt.block_on(async move {
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    let async_handle = rt.handle().clone();
+
+    let handle = thread::spawn(move || {
+        async_handle.block_on(async move {
             let listen_addr = service_1
                 .listen("/ip4/127.0.0.1/tcp/0".parse().unwrap())
                 .await
@@ -151,10 +153,11 @@ fn test(secio: bool, shutdown: bool) {
     let listen_addr_3 = listen_addr.clone();
     let listen_addr_4 = listen_addr.clone();
 
-    start_service(service_2, listen_addr_2);
-    start_service(service_3, listen_addr_3);
-    start_service(service_4, listen_addr_4);
-    start_service(service_5, listen_addr);
+    let async_handle = rt.handle();
+    start_service(service_2, listen_addr_2, async_handle);
+    start_service(service_3, listen_addr_3, async_handle);
+    start_service(service_4, listen_addr_4, async_handle);
+    start_service(service_5, listen_addr, async_handle);
 
     handle.join().expect("test fail");
 }
@@ -162,21 +165,18 @@ fn test(secio: bool, shutdown: bool) {
 fn start_service<F>(
     mut service: Service<F>,
     listen_addr: Multiaddr,
-) -> ::std::thread::JoinHandle<()>
-where
+    handle: &tokio::runtime::Handle,
+) where
     F: ServiceHandle + Unpin + Send + 'static,
 {
-    thread::spawn(move || {
-        let rt = tokio::runtime::Runtime::new().unwrap();
-        rt.block_on(async move {
-            service
-                .dial(listen_addr, TargetProtocol::All)
-                .await
-                .unwrap();
+    handle.spawn(async move {
+        service
+            .dial(listen_addr, TargetProtocol::All)
+            .await
+            .unwrap();
 
-            service.run().await
-        });
-    })
+        service.run().await;
+    });
 }
 
 #[test]

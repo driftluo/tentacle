@@ -121,7 +121,7 @@ pub enum TargetProtocol {
     /// Try open one protocol
     Single(ProtocolId),
     /// Try open some protocol, if return true, open it
-    Filter(Box<dyn Fn(&ProtocolId) -> bool + Send>),
+    Filter(Box<dyn Fn(&ProtocolId) -> bool + Sync + Send + 'static>),
 }
 
 impl From<ProtocolId> for TargetProtocol {
@@ -143,7 +143,7 @@ pub enum TargetSession {
     /// Try send to only one
     Single(SessionId),
     /// Try send to some session, if return true, send to it
-    Filter(Box<dyn Fn(&SessionId) -> bool + Send>),
+    Filter(Box<dyn Fn(&SessionId) -> bool + Sync + Send + 'static>),
 }
 
 impl From<SessionId> for TargetSession {
