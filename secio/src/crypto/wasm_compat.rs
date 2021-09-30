@@ -1,7 +1,7 @@
 #![allow(dead_code)]
 
 use chacha20poly1305::{
-    aead::{Aead, Buffer, Error, NewAead},
+    aead::{Aead, AeadInPlace, Buffer, Error, NewAead},
     ChaCha20Poly1305, Key, Nonce,
 };
 
@@ -11,7 +11,6 @@ use crate::{
 };
 
 use bytes::BytesMut;
-use chacha20poly1305::aead::AeadInPlace;
 
 pub(crate) struct WasmCrypt {
     cipher: ChaCha20Poly1305,

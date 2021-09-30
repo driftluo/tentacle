@@ -447,11 +447,9 @@ impl Drop for StreamHandle {
     fn drop(&mut self) {
         if !self.unbound_event_sender.is_closed() && self.state != StreamState::Closed {
             let event = StreamEvent::Closed(self.id);
-            if self.state == StreamState::LocalClosing {
-                // LocalClosing means that local have sent Fin to the remote and waiting for a response.
-                // So, here only need to send a cleanup message
-                let _ignore = self.unbound_event_sender.unbounded_send(event);
-            } else {
+            // LocalClosing means that local have sent Fin to the remote and waiting for a response.
+            // if not, we should send Rst first
+            if self.state != StreamState::LocalClosing {
                 let mut flags = self.get_flags();
                 flags.add(Flag::Rst);
                 let frame = Frame::new_window_update(flags, self.id, 0);
@@ -459,8 +457,8 @@ impl Drop for StreamHandle {
 
                 // Always successful unless the session is dropped
                 let _ignore = self.unbound_event_sender.unbounded_send(rst_event);
-                let _ignore = self.unbound_event_sender.unbounded_send(event);
             }
+            let _ignore = self.unbound_event_sender.unbounded_send(event);
         }
     }
 }

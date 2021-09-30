@@ -57,7 +57,7 @@ impl ServiceProtocol for PHandle {
 
     async fn received(&mut self, context: ProtocolContextMutRef<'_>, data: bytes::Bytes) {
         self.count += 1;
-        if data == Bytes::from("high") {
+        if data == *"high" {
             // We are not sure that the message was sent in the first few,
             // but it will definitely be far ahead of the sending order.
             if self.count <= 255 {

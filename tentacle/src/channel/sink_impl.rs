@@ -98,7 +98,7 @@ impl<T> QuickSinkExt<T> for Sender<T> {
 
 impl<T> QuickSinkExt<T> for UnboundedSender<T> {
     fn start_quick_send(&mut self, msg: T) -> Result<(), Self::Error> {
-        UnboundedSender::start_quick_send(&self, msg)
+        UnboundedSender::start_quick_send(self, msg)
     }
 }
 

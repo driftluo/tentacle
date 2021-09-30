@@ -14,5 +14,5 @@ impl Context {
 }
 
 pub fn sha256(data: &[u8]) -> ring::digest::Digest {
-    ring::digest::digest(&ring::digest::SHA256, &data)
+    ring::digest::digest(&ring::digest::SHA256, data)
 }

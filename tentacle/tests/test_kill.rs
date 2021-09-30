@@ -125,7 +125,7 @@ fn test_kill(secio: bool) {
     });
     thread::sleep(Duration::from_millis(100));
 
-    match fork() {
+    match unsafe { fork() } {
         Err(e) => panic!("Fork failed, {}", e),
         Ok(ForkResult::Parent { child }) => {
             // wait connected

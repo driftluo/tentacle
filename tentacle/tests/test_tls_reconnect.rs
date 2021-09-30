@@ -248,7 +248,7 @@ pub fn make_server_config(config: &NetConfig) -> ServerConfig {
 
     if config.cypher_suits.is_some() {
         server_config.ciphersuites = lookup_suites(
-            &config
+            config
                 .cypher_suits
                 .as_ref()
                 .expect("cypher_suits option error"),
