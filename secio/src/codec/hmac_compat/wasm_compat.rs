@@ -27,10 +27,10 @@ impl Hmac {
     pub fn from_key(algorithm: Digest, key: &[u8]) -> Self {
         match algorithm {
             Digest::Sha256 => Hmac::Sha256(Box::new(
-                hmac::Hmac::new_varkey(key).expect("Hmac::new_varkey accepts any key length"),
+                hmac::Hmac::new_from_slice(key).expect("Hmac::new_varkey accepts any key length"),
             )),
             Digest::Sha512 => Hmac::Sha512(Box::new(
-                hmac::Hmac::new_varkey(key).expect("Hmac::new_varkey accepts any key length"),
+                hmac::Hmac::new_from_slice(key).expect("Hmac::new_varkey accepts any key length"),
             )),
         }
     }
