@@ -1,3 +1,11 @@
+## 0.4.0-alpha.2
+
+### Features
+- Use spin loop instead of thread yield(#331)
+
+### Bug Fix
+- Fix listener poll(#333)
+
 ## 0.4.0-alpha.1
 
 ### Features
