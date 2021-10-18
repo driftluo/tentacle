@@ -249,7 +249,7 @@ impl ServiceContext {
     /// Get service protocol message, Map(ID, Name), but can't modify
     #[inline]
     pub fn protocols(&self) -> &Arc<HashMap<ProtocolId, ProtocolInfo>> {
-        &self.inner.protocols()
+        self.inner.protocols()
     }
 
     /// Get the key pair of self
@@ -421,7 +421,7 @@ impl<'a> Deref for ProtocolContextMutRef<'a> {
 
     #[inline]
     fn deref(&self) -> &Self::Target {
-        &self.inner
+        self.inner
     }
 }
 

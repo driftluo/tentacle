@@ -306,7 +306,7 @@ impl Session {
         let versions = self.protocol_configs_by_name[proto_name]
             .support_versions
             .clone();
-        let proto_info = ProtocolInfo::new(&proto_name, versions);
+        let proto_info = ProtocolInfo::new(proto_name, versions);
         let mut control = self.control.clone();
         let id = self.context.id;
 

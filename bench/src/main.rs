@@ -237,15 +237,15 @@ fn main() {
         .collect::<Vec<_>>();
 
     bench.bench_function_with_init("10kb_benchmark_with_secio", &kb, move |data| {
-        secio_and_send_data(&data)
+        secio_and_send_data(data)
     });
     bench.bench_function_with_init("10kb_benchmark_with_no_secio", &kb, move |data| {
-        no_secio_and_send_data(&data)
+        no_secio_and_send_data(data)
     });
     bench.bench_function_with_init("10mb_benchmark_with_secio", &mb, move |data| {
-        secio_and_send_data(&data)
+        secio_and_send_data(data)
     });
     bench.bench_function_with_init("10mb_benchmark_with_no_secio", &mb, move |data| {
-        no_secio_and_send_data(&data)
+        no_secio_and_send_data(data)
     });
 }

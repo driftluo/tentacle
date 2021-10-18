@@ -1,6 +1,6 @@
 use super::KeyAgreement;
 use crate::error::SecioError;
-use rand::rngs::OsRng;
+use rand_core::OsRng;
 pub use x25519_dalek::EphemeralSecret as EphemeralPrivateKey;
 use x25519_dalek::PublicKey;
 

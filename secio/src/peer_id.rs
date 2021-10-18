@@ -22,7 +22,7 @@ impl PeerId {
     #[inline]
     pub fn from_public_key(public_key: &PublicKey) -> Self {
         let key_inner = public_key.inner_ref();
-        Self::from_seed(&key_inner)
+        Self::from_seed(key_inner)
     }
 
     /// If data is a valid `PeerId`, return `PeerId`, else return error
@@ -162,7 +162,7 @@ mod tests {
     fn peer_id_is_public_key() {
         let pub_key = SecioKeyPair::secp256k1_generated().public_key();
         let peer_id = PeerId::from_public_key(&pub_key);
-        assert_eq!(peer_id.is_public_key(&pub_key), true);
+        assert!(peer_id.is_public_key(&pub_key));
     }
 
     #[test]

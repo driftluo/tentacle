@@ -173,7 +173,7 @@ impl HandshakeContext<Local> {
                 ctx.finish()
             };
 
-            AsRef::<[u8]>::as_ref(&oh1).cmp(&AsRef::<[u8]>::as_ref(&oh2))
+            AsRef::<[u8]>::as_ref(&oh1).cmp(AsRef::<[u8]>::as_ref(&oh2))
         };
 
         let chosen_exchange = {

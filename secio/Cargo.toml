@@ -33,24 +33,26 @@ openssl = "0.10.25"
 openssl-sys = "0.9"
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-rand = "0.7"
+rand = "0.8"
 ring = "0.16.5"
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
+rand_core = { version = "0.5" }
 rand = { version = "0.7", features = ["wasm-bindgen"] }
 sha2 = "0.9.0"
-hmac = "0.9.0"
+hmac = "0.11.0"
 x25519-dalek = "1.1"
-chacha20poly1305 = "0.7"
+chacha20poly1305 = "0.9"
 
 [dev-dependencies]
 env_logger = "0.6"
 criterion = "0.3"
 tokio = { version = "1.0.0", features = ["net", "rt", "rt-multi-thread"] }
 sha2 = "0.9.0"
-hmac = "0.9.0"
+hmac = "0.11.0"
 x25519-dalek = "1.1"
-chacha20poly1305 = "0.7"
+chacha20poly1305 = "0.9"
+rand_core = { version = "0.5" }
 
 [[bench]]
 name = "bench"

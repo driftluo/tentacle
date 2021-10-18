@@ -276,7 +276,7 @@ impl<'a> From<Ipv6Addr> for Protocol<'a> {
 }
 
 fn check_p2p(data: &[u8]) -> Result<(), Error> {
-    let (code, bytes) = unsigned_varint::decode::u16(&data)?;
+    let (code, bytes) = unsigned_varint::decode::u16(data)?;
 
     if code != SHA256_CODE {
         return Err(Error::UnknownHash);
