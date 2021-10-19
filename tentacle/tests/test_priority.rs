@@ -134,11 +134,13 @@ fn test_priority_with_no_secio_tcp() {
 }
 
 #[test]
+#[cfg(feature = "ws")]
 fn test_priority_with_secio_ws() {
     test_priority(true, "/ip4/127.0.0.1/tcp/0/ws")
 }
 
 #[test]
+#[cfg(feature = "ws")]
 fn test_priority_with_no_secio_ws() {
     test_priority(false, "/ip4/127.0.0.1/tcp/0/ws")
 }
