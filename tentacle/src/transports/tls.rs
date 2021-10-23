@@ -19,7 +19,6 @@ use crate::{
     utils::{dns::DnsResolver, multiaddr_to_socketaddr, socketaddr_to_multiaddr},
 };
 use futures::channel::mpsc::{channel, Receiver, Sender};
-use std::convert::TryFrom;
 use std::sync::Arc;
 use tokio::io;
 use tokio_rustls::rustls::{ServerConfig, ServerName};

@@ -121,7 +121,7 @@ fn find_suite(name: &str) -> Option<SupportedCipherSuite> {
         let cs_name = format!("{:?}", suite.suite()).to_lowercase();
 
         if cs_name == name.to_string().to_lowercase() {
-            return Some(suite.clone());
+            return Some(*suite);
         }
     }
 

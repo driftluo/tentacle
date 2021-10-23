@@ -14,7 +14,6 @@ use futures::{
 use once_cell::sync::Lazy;
 use std::{
     collections::{hash_map::Entry, HashMap},
-    convert::TryFrom,
     future::Future,
     io,
     num::NonZeroU64,

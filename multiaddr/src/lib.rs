@@ -10,7 +10,6 @@ use serde::{
     Deserialize, Deserializer, Serialize, Serializer,
 };
 use std::{
-    convert::TryFrom,
     fmt,
     iter::FromIterator,
     net::{IpAddr, Ipv4Addr, Ipv6Addr},

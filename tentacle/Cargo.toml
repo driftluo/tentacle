@@ -8,7 +8,7 @@ repository = "https://github.com/nervosnetwork/tentacle"
 readme = "README.md"
 keywords = ["network", "peer-to-peer"]
 categories = ["network-programming", "asynchronous"]
-edition = "2018"
+edition = "2021"
 
 [package.metadata.docs.rs]
 features = [ "tokio-runtime", "tokio-timer", "upnp", "ws", "unstable", "tls" ]
