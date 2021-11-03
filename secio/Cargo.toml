@@ -7,7 +7,7 @@ authors = ["piaoliu <driftluo@foxmail.com>", "Nervos Core Dev <dev@nervos.org>"]
 repository = "https://github.com/nervosnetwork/tentacle"
 keywords = ["network", "peer-to-peer"]
 categories = ["network-programming", "asynchronous"]
-edition = "2018"
+edition = "2021"
 build = "build.rs"
 
 [package.metadata.docs.rs]

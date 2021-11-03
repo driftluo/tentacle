@@ -5,7 +5,7 @@ license = "MIT"
 repository = "https://github.com/nervosnetwork/tentacle"
 description = "Rust implementation of Yamux"
 authors = ["Linfeng Qian <thewawar@gmail.com>", "Nervos Core Dev <dev@nervos.org>"]
-edition = "2018"
+edition = "2021"
 
 [dependencies]
 bytes = "1.0.0"
@@ -19,7 +19,7 @@ futures-timer = { version = "3.0.2", optional = true }
 
 [dev-dependencies]
 env_logger = "0.6"
-rand = "0.7"
+rand = "0.8"
 bytesize = "1"
 tokio = { version = "1.0.0", features = ["time", "net", "io-util", "rt", "rt-multi-thread"] }
 
