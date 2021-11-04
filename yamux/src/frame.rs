@@ -353,7 +353,7 @@ impl Encoder<Frame> for FrameCodec {
 #[cfg(test)]
 mod test {
     use super::{Flags, Frame, FrameCodec, Type, HEADER_SIZE, INITIAL_STREAM_WINDOW};
-    use bytes::BytesMut;
+    use bytes::{BufMut, BytesMut};
     use tokio_util::codec::{Decoder, Encoder};
 
     #[test]
@@ -384,5 +384,78 @@ mod test {
         let (_, data) = decode_frame.into_parts();
 
         assert_eq!(data.unwrap(), rand_data)
+    }
+
+    #[should_panic]
+    #[test]
+    fn test_decode_too_large() {
+        let rand_data = BytesMut::from(
+            (0..512)
+                .map(|_| rand::random::<u8>())
+                .collect::<Vec<_>>()
+                .as_slice(),
+        );
+        let frame = Frame::new_data(Flags(1), 1, rand_data);
+        let mut data = BytesMut::default();
+
+        let mut codec = FrameCodec {
+            unused_data_header: None,
+            max_frame_size: INITIAL_STREAM_WINDOW,
+        };
+
+        codec.encode(frame, &mut data).unwrap();
+
+        let mut codec_2 = FrameCodec {
+            unused_data_header: None,
+            max_frame_size: 256,
+        };
+
+        codec_2.decode(&mut data).unwrap().unwrap();
+    }
+
+    #[test]
+    fn test_invalid_frame() {
+        let rand_data = BytesMut::from(
+            (0..512)
+                .map(|_| rand::random::<u8>())
+                .collect::<Vec<_>>()
+                .as_slice(),
+        );
+
+        let mut frame = Frame::new_data(Flags(1), 1, rand_data.clone());
+        frame.header.version = 9;
+        let mut data = BytesMut::default();
+
+        let mut codec = FrameCodec {
+            unused_data_header: None,
+            max_frame_size: INITIAL_STREAM_WINDOW,
+        };
+
+        codec.encode(frame, &mut data).unwrap();
+
+        assert!(codec.decode(&mut data).is_err());
+
+        let frame = Frame::new_data(Flags(1), 1, rand_data);
+
+        data.clear();
+
+        data.reserve(frame.size());
+        let (header, body) = frame.into_parts();
+        data.put_u8(header.version);
+        // wrong type set
+        data.put_u8(6);
+        data.put_u16(header.flags.value());
+        data.put_u32(header.stream_id);
+        data.put_u32(header.length);
+        if let Some(b) = body {
+            data.put(b);
+        }
+
+        let mut codec = FrameCodec {
+            unused_data_header: None,
+            max_frame_size: INITIAL_STREAM_WINDOW,
+        };
+
+        assert!(codec.decode(&mut data).is_err());
     }
 }

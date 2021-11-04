@@ -240,6 +240,12 @@ mod tests {
     };
     use tokio_util::codec::{length_delimited::LengthDelimitedCodec, Framed};
 
+    fn rt() -> &'static tokio::runtime::Runtime {
+        static RT: once_cell::sync::OnceCell<tokio::runtime::Runtime> =
+            once_cell::sync::OnceCell::new();
+        RT.get_or_init(|| tokio::runtime::Runtime::new().unwrap())
+    }
+
     fn test_decode_encode(cipher: CipherType) {
         let cipher_key = (0..cipher.key_size())
             .map(|_| rand::random::<u8>())
@@ -269,7 +275,7 @@ mod tests {
 
         let (sender, receiver) = channel::oneshot::channel::<bytes::BytesMut>();
         let (addr_sender, addr_receiver) = channel::oneshot::channel::<::std::net::SocketAddr>();
-        let rt = tokio::runtime::Runtime::new().unwrap();
+        let rt = rt();
 
         rt.spawn(async move {
             let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
