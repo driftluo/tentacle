@@ -354,6 +354,7 @@ impl Encoder<Frame> for FrameCodec {
 mod test {
     use super::{Flags, Frame, FrameCodec, Type, HEADER_SIZE, INITIAL_STREAM_WINDOW};
     use bytes::{BufMut, BytesMut};
+    use std::io;
     use tokio_util::codec::{Decoder, Encoder};
 
     #[test]
@@ -386,7 +387,6 @@ mod test {
         assert_eq!(data.unwrap(), rand_data)
     }
 
-    #[should_panic]
     #[test]
     fn test_decode_too_large() {
         let rand_data = BytesMut::from(
@@ -410,7 +410,14 @@ mod test {
             max_frame_size: 256,
         };
 
-        codec_2.decode(&mut data).unwrap().unwrap();
+        assert_eq!(
+            codec_2.decode(&mut data).unwrap_err().to_string(),
+            "yamux.length=512"
+        );
+        assert_eq!(
+            codec_2.decode(&mut data).unwrap_err().kind(),
+            io::ErrorKind::InvalidData
+        );
     }
 
     #[test]
@@ -433,7 +440,14 @@ mod test {
 
         codec.encode(frame, &mut data).unwrap();
 
-        assert!(codec.decode(&mut data).is_err());
+        assert_eq!(
+            codec.decode(&mut data).unwrap_err().to_string(),
+            "yamux.version=9"
+        );
+        assert_eq!(
+            codec.decode(&mut data).unwrap_err().kind(),
+            io::ErrorKind::InvalidData
+        );
 
         let frame = Frame::new_data(Flags(1), 1, rand_data);
 
@@ -456,6 +470,13 @@ mod test {
             max_frame_size: INITIAL_STREAM_WINDOW,
         };
 
-        assert!(codec.decode(&mut data).is_err());
+        assert_eq!(
+            codec.decode(&mut data).unwrap_err().to_string(),
+            "yamux.type=6"
+        );
+        assert_eq!(
+            codec.decode(&mut data).unwrap_err().kind(),
+            io::ErrorKind::InvalidData
+        );
     }
 }
