@@ -878,8 +878,15 @@ mod timer {
 }
 
 #[cfg(test)]
+pub(crate) fn rt() -> &'static tokio::runtime::Runtime {
+    static RT: once_cell::sync::OnceCell<tokio::runtime::Runtime> =
+        once_cell::sync::OnceCell::new();
+    RT.get_or_init(|| tokio::runtime::Runtime::new().unwrap())
+}
+
+#[cfg(test)]
 mod test {
-    use super::Session;
+    use super::{rt, Session};
     use crate::{
         config::Config,
         frame::{Flag, Flags, Frame, FrameCodec, GoAwayCode, Type},
@@ -990,7 +997,7 @@ mod test {
 
     #[test]
     fn test_open_exist_stream() {
-        let rt = tokio::runtime::Runtime::new().unwrap();
+        let rt = rt();
 
         rt.block_on(async {
             let (remote, local) = MockSocket::new();
@@ -1048,7 +1055,7 @@ mod test {
     // the test will remain stuck and cannot be finished.
     #[test]
     fn test_close_session_on_stream_opened() {
-        let rt = tokio::runtime::Runtime::new().unwrap();
+        let rt = rt();
 
         rt.block_on(async {
             let (remote, local) = MockSocket::new();
@@ -1094,7 +1101,7 @@ mod test {
 
     #[test]
     fn test_open_too_many_stream() {
-        let rt = tokio::runtime::Runtime::new().unwrap();
+        let rt = rt();
 
         rt.block_on(async {
             let (remote, local) = MockSocket::new();
@@ -1146,7 +1153,7 @@ mod test {
 
     #[test]
     fn test_remote_does_not_respond_go_away() {
-        let rt = tokio::runtime::Runtime::new().unwrap();
+        let rt = rt();
 
         rt.block_on(async {
             let (_remote, local) = MockSocket::new();

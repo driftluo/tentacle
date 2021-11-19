@@ -240,15 +240,21 @@ mod tests {
     };
     use tokio_util::codec::{length_delimited::LengthDelimitedCodec, Framed};
 
-    fn test_decode_encode(cipher: CipherType) {
-        let cipher_key = (0..cipher.key_size())
+    fn rt() -> &'static tokio::runtime::Runtime {
+        static RT: once_cell::sync::OnceCell<tokio::runtime::Runtime> =
+            once_cell::sync::OnceCell::new();
+        RT.get_or_init(|| tokio::runtime::Runtime::new().unwrap())
+    }
+
+    fn test_decode_encode(cipher1: CipherType, cipher2: CipherType) {
+        let cipher_key = (0..cipher1.key_size())
             .map(|_| rand::random::<u8>())
             .collect::<Vec<_>>();
 
         let data = b"hello world";
 
-        let mut encode_cipher = new_stream(cipher, &cipher_key, CryptoMode::Encrypt);
-        let mut decode_cipher = new_stream(cipher, &cipher_key, CryptoMode::Decrypt);
+        let mut encode_cipher = new_stream(cipher1, &cipher_key, CryptoMode::Encrypt);
+        let mut decode_cipher = new_stream(cipher2, &cipher_key, CryptoMode::Decrypt);
 
         let encode_data = encode_cipher.encrypt(&data[..]).unwrap();
 
@@ -257,7 +263,7 @@ mod tests {
         assert_eq!(&decode_data[..], &data[..]);
     }
 
-    fn secure_codec_encode_then_decode(cipher: CipherType) {
+    fn secure_codec_encode_then_decode(cipher: CipherType, send_nonce: bool) {
         let cipher_key: [u8; 32] = rand::random();
         let cipher_key_clone = cipher_key;
         let key_size = cipher.key_size();
@@ -266,17 +272,17 @@ mod tests {
         let data = b"hello world";
         let data_clone = &*data;
         let nonce = vec![0, 1, 2, 3, 4, 5, 6, 7, 8, 9];
+        let nonce2 = nonce.clone();
 
         let (sender, receiver) = channel::oneshot::channel::<bytes::BytesMut>();
         let (addr_sender, addr_receiver) = channel::oneshot::channel::<::std::net::SocketAddr>();
-        let rt = tokio::runtime::Runtime::new().unwrap();
+        let rt = rt();
 
         rt.spawn(async move {
             let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
             let listener_addr = listener.local_addr().unwrap();
             let _res = addr_sender.send(listener_addr);
             let (socket, _) = listener.accept().await.unwrap();
-            let nonce2 = nonce.clone();
 
             let mut handle = SecureStream::new(
                 Framed::new(socket, LengthDelimitedCodec::new()),
@@ -284,6 +290,8 @@ mod tests {
                 new_stream(cipher, &cipher_key_clone[..key_size], CryptoMode::Encrypt),
                 nonce2,
             );
+
+            handle.verify_nonce().await.unwrap();
 
             let mut data = [0u8; 11];
             handle.read_exact(&mut data).await.unwrap();
@@ -300,6 +308,12 @@ mod tests {
                 Vec::new(),
             );
 
+            // if not send nonce to remote, handshake will unable to complete the final confirmation
+            // it will return error and shutdown this session
+            if send_nonce {
+                let _ = handle.write_all(&nonce).await;
+            }
+
             let _res = handle.write_all(&data_clone[..]).await;
         });
 
@@ -311,31 +325,85 @@ mod tests {
 
     #[test]
     fn test_encode_decode_aes128gcm() {
-        test_decode_encode(CipherType::Aes128Gcm);
+        test_decode_encode(CipherType::Aes128Gcm, CipherType::Aes128Gcm);
     }
 
     #[test]
     fn test_encode_decode_aes256gcm() {
-        test_decode_encode(CipherType::Aes256Gcm);
+        test_decode_encode(CipherType::Aes256Gcm, CipherType::Aes256Gcm);
     }
 
     #[test]
     fn test_encode_decode_chacha20poly1305() {
-        test_decode_encode(CipherType::ChaCha20Poly1305);
+        test_decode_encode(CipherType::ChaCha20Poly1305, CipherType::ChaCha20Poly1305);
+    }
+
+    #[should_panic]
+    #[test]
+    fn test_encode_decode_diff_cipher_1() {
+        test_decode_encode(CipherType::Aes128Gcm, CipherType::Aes256Gcm);
+    }
+
+    #[should_panic]
+    #[test]
+    fn test_encode_decode_diff_cipher_2() {
+        test_decode_encode(CipherType::Aes128Gcm, CipherType::ChaCha20Poly1305);
+    }
+
+    #[should_panic]
+    #[test]
+    fn test_encode_decode_diff_cipher_3() {
+        test_decode_encode(CipherType::Aes256Gcm, CipherType::Aes128Gcm);
+    }
+
+    #[should_panic]
+    #[test]
+    fn test_encode_decode_diff_cipher_4() {
+        test_decode_encode(CipherType::Aes256Gcm, CipherType::ChaCha20Poly1305);
+    }
+
+    #[should_panic]
+    #[test]
+    fn test_encode_decode_diff_cipher_5() {
+        test_decode_encode(CipherType::ChaCha20Poly1305, CipherType::Aes128Gcm);
+    }
+
+    #[should_panic]
+    #[test]
+    fn test_encode_decode_diff_cipher_6() {
+        test_decode_encode(CipherType::ChaCha20Poly1305, CipherType::Aes256Gcm);
     }
 
     #[test]
     fn secure_codec_encode_then_decode_aes128gcm() {
-        secure_codec_encode_then_decode(CipherType::Aes128Gcm);
+        secure_codec_encode_then_decode(CipherType::Aes128Gcm, true);
     }
 
     #[test]
     fn secure_codec_encode_then_decode_aes256gcm() {
-        secure_codec_encode_then_decode(CipherType::Aes256Gcm);
+        secure_codec_encode_then_decode(CipherType::Aes256Gcm, true);
     }
 
     #[test]
     fn secure_codec_encode_then_decode_chacha20poly1305() {
-        secure_codec_encode_then_decode(CipherType::ChaCha20Poly1305);
+        secure_codec_encode_then_decode(CipherType::ChaCha20Poly1305, true);
+    }
+
+    #[should_panic]
+    #[test]
+    fn secure_codec_encode_then_decode_do_not_send_nonce_aes128gcm() {
+        secure_codec_encode_then_decode(CipherType::Aes128Gcm, false);
+    }
+
+    #[should_panic]
+    #[test]
+    fn secure_codec_encode_then_decode_do_not_send_nonce_aes256gcm() {
+        secure_codec_encode_then_decode(CipherType::Aes256Gcm, false);
+    }
+
+    #[should_panic]
+    #[test]
+    fn secure_codec_encode_then_decode_do_not_send_nonce_chacha20poly1305() {
+        secure_codec_encode_then_decode(CipherType::ChaCha20Poly1305, false);
     }
 }

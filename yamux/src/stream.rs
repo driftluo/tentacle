@@ -499,6 +499,7 @@ mod test {
     use crate::{
         config::INITIAL_STREAM_WINDOW,
         frame::{Flag, Flags, Frame, Type},
+        session::rt,
     };
     use bytes::BytesMut;
     use futures::{
@@ -510,7 +511,7 @@ mod test {
 
     #[test]
     fn test_drop() {
-        let rt = tokio::runtime::Runtime::new().unwrap();
+        let rt = rt();
         rt.block_on(async {
             let (_frame_sender, frame_receiver) = channel(2);
             let (unbound_sender, mut unbound_receiver) = unbounded();
@@ -539,7 +540,7 @@ mod test {
 
     #[test]
     fn test_drop_with_state_reset() {
-        let rt = tokio::runtime::Runtime::new().unwrap();
+        let rt = rt();
         rt.block_on(async {
             let (mut frame_sender, frame_receiver) = channel(2);
             let (unbound_sender, mut unbound_receiver) = unbounded();
@@ -575,7 +576,7 @@ mod test {
 
     #[test]
     fn test_drop_with_state_local_close() {
-        let rt = tokio::runtime::Runtime::new().unwrap();
+        let rt = rt();
         rt.block_on(async {
             let (_frame_sender, frame_receiver) = channel(2);
             let (unbound_sender, mut unbound_receiver) = unbounded();
@@ -610,7 +611,7 @@ mod test {
 
     #[test]
     fn test_data_large_than_recv_window() {
-        let rt = tokio::runtime::Runtime::new().unwrap();
+        let rt = rt();
         rt.block_on(async {
             let (mut frame_sender, frame_receiver) = channel(2);
             let (unbound_sender, mut unbound_receiver) = unbounded();
@@ -652,7 +653,7 @@ mod test {
     // the protocol cannot be opened
     #[test]
     fn test_open_stream_with_data() {
-        let rt = tokio::runtime::Runtime::new().unwrap();
+        let rt = rt();
         rt.block_on(async {
             let (_frame_sender, frame_receiver) = channel(2);
             let (unbound_sender, mut unbound_receiver) = unbounded();
