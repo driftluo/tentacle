@@ -13,7 +13,7 @@ pub use os::*;
 
 #[cfg(not(target_arch = "wasm32"))]
 mod os {
-    use crate::runtime::CompatStream2;
+    use crate::{runtime::CompatStream2, service::TcpSocket};
     use async_io::Async;
     use async_std::net::{TcpListener as AsyncListener, TcpStream as AsyncStream, ToSocketAddrs};
     use futures::{
@@ -137,14 +137,17 @@ mod os {
     use socket2::{Domain, Protocol as SocketProtocol, Socket, Type};
     use std::{io, net::SocketAddr};
 
-    pub(crate) fn reuse_listen(addr: SocketAddr) -> io::Result<TcpListener> {
+    pub(crate) fn listen(
+        addr: SocketAddr,
+        tcp_config: &impl Fn(TcpSocket) -> Result<TcpSocket, std::io::Error>,
+    ) -> io::Result<TcpListener> {
         let domain = Domain::for_address(addr);
         let socket = Socket::new(domain, Type::STREAM, Some(SocketProtocol::TCP))?;
 
-        #[cfg(all(unix, not(target_os = "solaris"), not(target_os = "illumos")))]
-        socket.set_reuse_port(true)?;
-
-        socket.set_reuse_address(true)?;
+        let socket = {
+            let t = tcp_config(socket.into())?;
+            t.inner
+        };
         socket.bind(&addr.into())?;
         socket.listen(1024)?;
 
@@ -155,17 +158,15 @@ mod os {
 
     pub(crate) async fn connect(
         addr: SocketAddr,
-        bind_addr: Option<SocketAddr>,
+        tcp_config: &impl Fn(TcpSocket) -> Result<TcpSocket, std::io::Error>,
     ) -> io::Result<TcpStream> {
         let domain = Domain::for_address(addr);
         let socket = Socket::new(domain, Type::STREAM, Some(SocketProtocol::TCP))?;
 
-        if let Some(addr) = bind_addr {
-            #[cfg(all(unix, not(target_os = "solaris"), not(target_os = "illumos")))]
-            socket.set_reuse_port(true)?;
-            socket.set_reuse_address(true)?;
-            socket.bind(&addr.into())?;
-        }
+        let socket = {
+            let t = tcp_config(socket.into())?;
+            t.inner
+        };
 
         // Begin async connect and ignore the inevitable "in progress" error.
         socket.set_nonblocking(true)?;

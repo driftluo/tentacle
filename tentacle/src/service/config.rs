@@ -1,12 +1,14 @@
-#[cfg(feature = "tls")]
-use crate::utils::multiaddr_to_socketaddr;
 use crate::{
     builder::{BeforeReceiveFn, CodecFn, NameFn, SelectVersionFn, SessionHandleFn},
     traits::{Codec, ProtocolSpawn, ServiceProtocol, SessionProtocol},
     yamux::config::Config as YamuxConfig,
     ProtocolId, SessionId,
 };
-use std::{net::SocketAddr, sync::Arc, time::Duration};
+#[cfg(unix)]
+use std::os::unix::io::{AsRawFd, FromRawFd, IntoRawFd, RawFd};
+#[cfg(windows)]
+use std::os::windows::io::{AsRawSocket, FromRawSocket, IntoRawSocket, RawSocket};
+use std::{sync::Arc, time::Duration};
 #[cfg(feature = "tls")]
 use tokio_rustls::rustls::{ClientConfig, ServerConfig};
 
@@ -21,9 +23,7 @@ pub(crate) struct ServiceConfig {
     #[cfg(all(not(target_arch = "wasm32"), feature = "upnp"))]
     pub upnp: bool,
     pub max_connection_number: usize,
-    pub tcp_bind_addr: Option<SocketAddr>,
-    #[cfg(feature = "ws")]
-    pub ws_bind_addr: Option<SocketAddr>,
+    pub tcp_config: TcpConfig,
     #[cfg(feature = "tls")]
     pub tls_config: Option<TlsConfig>,
 }
@@ -38,9 +38,7 @@ impl Default for ServiceConfig {
             #[cfg(all(not(target_arch = "wasm32"), feature = "upnp"))]
             upnp: false,
             max_connection_number: 65535,
-            tcp_bind_addr: None,
-            #[cfg(feature = "ws")]
-            ws_bind_addr: None,
+            tcp_config: Default::default(),
             #[cfg(feature = "tls")]
             tls_config: None,
         }
@@ -80,6 +78,99 @@ impl Default for SessionConfig {
     }
 }
 
+pub(crate) type TcpSocketConfig =
+    Arc<Box<dyn Fn(TcpSocket) -> Result<TcpSocket, std::io::Error> + Send + Sync + 'static>>;
+
+/// This config Allow users to set various underlying parameters of TCP
+#[derive(Clone)]
+pub(crate) struct TcpConfig {
+    /// When dial/listen on tcp, tentacle will call it allow user to set all tcp socket config
+    pub tcp: TcpSocketConfig,
+    /// When dial/listen on ws, tentacle will call it allow user to set all tcp socket config
+    #[cfg(feature = "ws")]
+    pub ws: TcpSocketConfig,
+    /// When dial/listen on tls, tentacle will call it allow user to set all tcp socket config
+    #[cfg(feature = "tls")]
+    pub tls: TcpSocketConfig,
+}
+
+impl Default for TcpConfig {
+    fn default() -> Self {
+        TcpConfig {
+            tcp: Arc::new(Box::new(Ok)),
+            #[cfg(feature = "ws")]
+            ws: Arc::new(Box::new(Ok)),
+            #[cfg(feature = "tls")]
+            tls: Arc::new(Box::new(Ok)),
+        }
+    }
+}
+
+/// A TCP socket that has not yet been converted to a `TcpStream` or
+/// `TcpListener`.
+///
+/// `TcpSocket` wraps an operating system socket and enables the caller to
+/// configure the socket before establishing a TCP connection or accepting
+/// inbound connections. The caller is able to set socket option and explicitly
+/// bind the socket with a socket address.
+pub struct TcpSocket {
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) inner: socket2::Socket,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl From<socket2::Socket> for TcpSocket {
+    fn from(s: socket2::Socket) -> TcpSocket {
+        TcpSocket { inner: s }
+    }
+}
+
+#[cfg(unix)]
+impl AsRawFd for TcpSocket {
+    fn as_raw_fd(&self) -> RawFd {
+        self.inner.as_raw_fd()
+    }
+}
+
+#[cfg(unix)]
+impl FromRawFd for TcpSocket {
+    /// Converts a `RawFd` to a `TcpSocket`.
+    unsafe fn from_raw_fd(fd: RawFd) -> TcpSocket {
+        let inner = socket2::Socket::from_raw_fd(fd);
+        TcpSocket { inner }
+    }
+}
+
+#[cfg(unix)]
+impl IntoRawFd for TcpSocket {
+    fn into_raw_fd(self) -> RawFd {
+        self.inner.into_raw_fd()
+    }
+}
+
+#[cfg(windows)]
+impl IntoRawSocket for TcpSocket {
+    fn into_raw_socket(self) -> RawSocket {
+        self.inner.into_raw_socket()
+    }
+}
+
+#[cfg(windows)]
+impl AsRawSocket for TcpSocket {
+    fn as_raw_socket(&self) -> RawSocket {
+        self.inner.as_raw_socket()
+    }
+}
+
+#[cfg(windows)]
+impl FromRawSocket for TcpSocket {
+    /// Converts a `RawSocket` to a `TcpStream`.
+    unsafe fn from_raw_socket(socket: RawSocket) -> TcpSocket {
+        let inner = socket2::Socket::from_raw_socket(socket);
+        TcpSocket { inner }
+    }
+}
+
 /// tls config wrap for server setup
 #[derive(Clone, Default)]
 #[cfg(feature = "tls")]
@@ -89,8 +180,6 @@ pub struct TlsConfig {
     pub(crate) tls_server_config: Option<Arc<ServerConfig>>,
     /// tls client end config
     pub(crate) tls_client_config: Option<Arc<ClientConfig>>,
-    /// tls bind socket address
-    pub(crate) tls_bind: Option<SocketAddr>,
 }
 
 #[cfg(feature = "tls")]
@@ -103,14 +192,7 @@ impl TlsConfig {
         TlsConfig {
             tls_server_config,
             tls_client_config,
-            tls_bind: None,
         }
-    }
-
-    /// bind tls address
-    pub fn tls_bind(mut self, addr: multiaddr::Multiaddr) -> Self {
-        self.tls_bind = multiaddr_to_socketaddr(&addr);
-        self
     }
 }
 

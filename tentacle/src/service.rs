@@ -45,7 +45,7 @@ pub(crate) mod future_task;
 mod helper;
 
 pub use crate::service::{
-    config::{ProtocolHandle, ProtocolMeta, TargetProtocol, TargetSession},
+    config::{ProtocolHandle, ProtocolMeta, TargetProtocol, TargetSession, TcpSocket},
     control::{ServiceAsyncControl, ServiceControl},
     event::{ServiceError, ServiceEvent},
     helper::SessionType,
@@ -151,10 +151,11 @@ where
             before_sends: HashMap::default(),
             handle,
             multi_transport: {
+                #[cfg(target_arch = "wasm32")]
+                let transport = MultiTransport::new(config.timeout);
                 #[allow(clippy::let_and_return)]
-                let transport = MultiTransport::new(config.timeout).tcp_bind(config.tcp_bind_addr);
-                #[cfg(feature = "ws")]
-                let transport = transport.ws_bind(config.ws_bind_addr);
+                #[cfg(not(target_arch = "wasm32"))]
+                let transport = MultiTransport::new(config.timeout, config.tcp_config.clone());
                 #[cfg(feature = "tls")]
                 let transport = transport.tls_config(config.tls_config.clone());
                 transport

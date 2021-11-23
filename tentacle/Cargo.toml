@@ -48,6 +48,7 @@ tokio-rustls = { version = "0.23.0", optional = true }
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 # rand 0.8 not support wasm32
 rand = "0.8"
+socket2 = { version = "0.4.0", features = ["all"] }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 js-sys = "0.3"
@@ -56,11 +57,9 @@ wasm-bindgen-futures = "0.4"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
-socket2 = { version = "0.4.0", features = ["all"], optional = true }
 
 [target.'cfg(windows)'.dependencies]
 winapi = { version = "0.3.7", features = ["minwindef", "ws2def", "winerror", "heapapi"]}
-socket2 = { version = "0.4.0", optional = true  }
 
 [dev-dependencies]
 env_logger = "0.6.0"
@@ -85,7 +84,7 @@ tokio-timer = ["yamux/tokio-timer", "tokio/time", "tokio-runtime"]
 tokio-runtime = ["tokio/io-util", "tokio/net", "tokio/rt-multi-thread"]
 
 async-timer = ["async-runtime"]
-async-runtime = ["async-std", "async-io", "yamux/generic-timer", "socket2"]
+async-runtime = ["async-std", "async-io", "yamux/generic-timer"]
 
 generic-timer = ["futures-timer", "yamux/generic-timer"]
 wasm-timer = ["futures-timer", "yamux/wasm", "futures-timer/wasm-bindgen"]

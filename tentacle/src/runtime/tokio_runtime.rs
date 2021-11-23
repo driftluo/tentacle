@@ -4,11 +4,17 @@ pub use tokio::{
     task::{block_in_place, spawn_blocking, JoinHandle},
 };
 
+use crate::service::TcpSocket;
+use socket2::{Domain, Protocol as SocketProtocol, Socket, Type};
+#[cfg(unix)]
+use std::os::unix::io::{FromRawFd, IntoRawFd};
+#[cfg(windows)]
+use std::os::windows::io::{FromRawSocket, IntoRawSocket};
 use std::{io, net::SocketAddr};
+use tokio::net::TcpSocket as TokioTcp;
 
 #[cfg(feature = "tokio-timer")]
 pub use time::{interval, Interval};
-use tokio::net::TcpSocket;
 #[cfg(feature = "tokio-timer")]
 pub use tokio::time::{sleep as delay_for, timeout, Sleep as Delay, Timeout};
 
@@ -50,37 +56,51 @@ mod time {
     }
 }
 
-pub(crate) fn reuse_listen(addr: SocketAddr) -> io::Result<TcpListener> {
-    let socket = match addr {
-        SocketAddr::V4(_) => TcpSocket::new_v4(),
-        SocketAddr::V6(_) => TcpSocket::new_v6(),
-    }?;
+pub(crate) fn listen(
+    addr: SocketAddr,
+    tcp_config: &impl Fn(TcpSocket) -> Result<TcpSocket, std::io::Error>,
+) -> io::Result<TcpListener> {
+    let domain = Domain::for_address(addr);
+    let socket = Socket::new(domain, Type::STREAM, Some(SocketProtocol::TCP))?;
 
     // reuse addr and reuse port's situation on each platform
     // https://stackoverflow.com/questions/14388706/how-do-so-reuseaddr-and-so-reuseport-differ
-    #[cfg(all(unix, not(target_os = "solaris"), not(target_os = "illumos")))]
-    socket.set_reuseport(true)?;
 
-    socket.set_reuseaddr(true)?;
+    let socket = {
+        let t = tcp_config(socket.into())?;
+        t.inner.set_nonblocking(true)?;
+        // safety: fd convert by socket2
+        unsafe {
+            #[cfg(unix)]
+            let socket = TokioTcp::from_raw_fd(t.into_raw_fd());
+            #[cfg(windows)]
+            let socket = TokioTcp::from_raw_socket(t.into_raw_socket());
+            socket
+        }
+    };
     socket.bind(addr)?;
     socket.listen(1024)
 }
 
 pub(crate) async fn connect(
     addr: SocketAddr,
-    bind_addr: Option<SocketAddr>,
+    tcp_config: &impl Fn(TcpSocket) -> Result<TcpSocket, std::io::Error>,
 ) -> io::Result<TcpStream> {
-    let socket = match addr {
-        SocketAddr::V4(_) => TcpSocket::new_v4(),
-        SocketAddr::V6(_) => TcpSocket::new_v6(),
-    }?;
+    let domain = Domain::for_address(addr);
+    let socket = Socket::new(domain, Type::STREAM, Some(SocketProtocol::TCP))?;
 
-    if let Some(addr) = bind_addr {
-        #[cfg(all(unix, not(target_os = "solaris"), not(target_os = "illumos")))]
-        socket.set_reuseport(true)?;
-        socket.set_reuseaddr(true)?;
-        socket.bind(addr)?;
-    }
+    let socket = {
+        let t = tcp_config(socket.into())?;
+        t.inner.set_nonblocking(true)?;
+        // safety: fd convert by socket2
+        unsafe {
+            #[cfg(unix)]
+            let socket = TokioTcp::from_raw_fd(t.into_raw_fd());
+            #[cfg(windows)]
+            let socket = TokioTcp::from_raw_socket(t.into_raw_socket());
+            socket
+        }
+    };
 
     socket.connect(addr).await
 }

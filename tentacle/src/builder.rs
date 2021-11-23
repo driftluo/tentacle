@@ -10,10 +10,9 @@ use crate::{
     secio::SecioKeyPair,
     service::{
         config::{Meta, ServiceConfig},
-        ProtocolHandle, ProtocolMeta, Service,
+        ProtocolHandle, ProtocolMeta, Service, TcpSocket,
     },
     traits::{Codec, ProtocolSpawn, ServiceHandle, ServiceProtocol, SessionProtocol},
-    utils::multiaddr_to_socketaddr,
     yamux::Config,
     ProtocolId,
 };
@@ -140,23 +139,61 @@ impl ServiceBuilder {
         self
     }
 
-    /// Bind all the outbound connections to the local listening address.
+    /// Users can make their own custom configuration for all tcp socket at the bottom of Tentacle according to their own needs,
+    /// for example, use reuse port to try to build nat penetration
     ///
     /// In this way, any actively connected outbound connection is potentially connectable. Through this setting,
     /// the device after NAT can have the opportunity to be connected to the public network.
     ///
     /// TCP Hole Punching: http://bford.info/pub/net/p2pnat/
     /// STUN: https://tools.ietf.org/html/rfc5389
-    pub fn tcp_bind(mut self, addr: multiaddr::Multiaddr) -> Self {
-        self.config.tcp_bind_addr = multiaddr_to_socketaddr(&addr);
+    ///
+    /// for example, set all tcp bind to `127.0.0.1:1080`, set keepalive:
+    ///
+    /// ```rust
+    ///  use socket2;
+    ///  use tentacle::{service::TcpSocket, builder::ServiceBuilder};
+    ///  #[cfg(unix)]
+    ///  use std::os::unix::io::{FromRawFd, IntoRawFd};
+    ///  #[cfg(windows)]
+    ///  use std::os::windows::io::{FromRawSocket, IntoRawSocket};
+    ///  use std::net::SocketAddr;
+    ///
+    ///  let mut server = ServiceBuilder::new();
+    ///  server.tcp_config(|socket: TcpSocket| {
+    ///      let socket = unsafe {
+    ///         #[cfg(unix)]
+    ///         let socket = socket2::Socket::from_raw_fd(socket.into_raw_fd());
+    ///         #[cfg(windows)]
+    ///         let socket = socket2::Socket::from_raw_socket(socket.into_raw_socket());
+    ///         socket
+    ///      };
+    ///      #[cfg(all(unix, not(target_os = "solaris"), not(target_os = "illumos")))]
+    ///      socket.set_reuse_port(true)?;
+    ///
+    ///      socket.set_reuse_address(true)?;
+    ///      socket.bind(&"127.0.0.1:1080".parse::<SocketAddr>().unwrap().into())?;
+    ///      socket.set_keepalive(true)?;
+    ///      Ok(socket.into())
+    /// });
+    /// ```
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn tcp_config<F>(mut self, f: F) -> Self
+    where
+        F: Fn(TcpSocket) -> Result<TcpSocket, std::io::Error> + Send + Sync + 'static,
+    {
+        self.config.tcp_config.tcp = Arc::new(Box::new(f));
         self
     }
 
-    /// The same as tcp bind, but use on ws transport
+    /// The same as tcp config, but use on ws transport
     #[cfg(feature = "ws")]
     #[cfg_attr(docsrs, doc(cfg(feature = "ws")))]
-    pub fn ws_bind(mut self, addr: multiaddr::Multiaddr) -> Self {
-        self.config.ws_bind_addr = multiaddr_to_socketaddr(&addr);
+    pub fn tcp_config_on_ws<F>(mut self, f: F) -> Self
+    where
+        F: Fn(TcpSocket) -> Result<TcpSocket, std::io::Error> + Send + Sync + 'static,
+    {
+        self.config.tcp_config.ws = Arc::new(Box::new(f));
         self
     }
 
@@ -170,6 +207,17 @@ impl ServiceBuilder {
     #[cfg_attr(docsrs, doc(cfg(feature = "tls")))]
     pub fn tls_config(mut self, config: TlsConfig) -> Self {
         self.config.tls_config = Some(config);
+        self
+    }
+
+    /// The same as tcp config, but use on tls transport
+    #[cfg(feature = "tls")]
+    #[cfg_attr(docsrs, doc(cfg(feature = "tls")))]
+    pub fn tcp_config_on_tls<F>(mut self, f: F) -> Self
+    where
+        F: Fn(TcpSocket) -> Result<TcpSocket, std::io::Error> + Send + Sync + 'static,
+    {
+        self.config.tcp_config.tls = Arc::new(Box::new(f));
         self
     }
 }

@@ -7,7 +7,6 @@ use log::debug;
 use std::{
     future::Future,
     io,
-    net::SocketAddr,
     pin::Pin,
     task::{Context, Poll},
     time::Duration,
@@ -23,6 +22,7 @@ use crate::{
     error::TransportErrorKind,
     multiaddr::{Multiaddr, Protocol},
     runtime::{TcpListener, TcpStream},
+    service::config::TcpSocketConfig,
     transports::{tcp_dial, tcp_listen, Result, Transport, TransportFuture},
     utils::{dns::DnsResolver, multiaddr_to_socketaddr, socketaddr_to_multiaddr},
 };
@@ -31,12 +31,12 @@ use crate::{
 async fn bind(
     address: impl Future<Output = Result<Multiaddr>>,
     timeout: Duration,
-    reuse: bool,
+    tcp_config: TcpSocketConfig,
 ) -> Result<(Multiaddr, WebsocketListener)> {
     let addr = address.await?;
     match multiaddr_to_socketaddr(&addr) {
         Some(socket_address) => {
-            let (addr, tcp) = tcp_listen(socket_address, reuse).await?;
+            let (addr, tcp) = tcp_listen(socket_address, &*tcp_config).await?;
             let mut listen_addr = socketaddr_to_multiaddr(addr);
             listen_addr.push(Protocol::Ws);
 
@@ -51,13 +51,13 @@ async fn connect(
     address: impl Future<Output = Result<Multiaddr>>,
     timeout: Duration,
     original: Option<Multiaddr>,
-    bind_addr: Option<SocketAddr>,
+    tcp_config: TcpSocketConfig,
 ) -> Result<(Multiaddr, WsStream)> {
     let addr = address.await?;
     match multiaddr_to_socketaddr(&addr) {
         Some(socket_address) => {
             let url = format!("ws://{}:{}", socket_address.ip(), socket_address.port());
-            let tcp = tcp_dial(socket_address, bind_addr, timeout).await?;
+            let tcp = tcp_dial(socket_address, &*tcp_config, timeout).await?;
 
             match crate::runtime::timeout(timeout, client_async_with_config(url, tcp, None)).await {
                 Err(_) => Err(TransportErrorKind::Io(io::ErrorKind::TimedOut.into())),
@@ -79,12 +79,15 @@ async fn connect(
 
 pub struct WsTransport {
     timeout: Duration,
-    bind_addr: Option<SocketAddr>,
+    tcp_config: TcpSocketConfig,
 }
 
 impl WsTransport {
-    pub fn new(timeout: Duration, bind_addr: Option<SocketAddr>) -> Self {
-        WsTransport { timeout, bind_addr }
+    pub fn new(timeout: Duration, tcp_config: TcpSocketConfig) -> Self {
+        WsTransport {
+            timeout,
+            tcp_config,
+        }
     }
 }
 
@@ -105,12 +108,12 @@ impl Transport for WsTransport {
                         TransportErrorKind::DnsResolverError(multiaddr, io_error)
                     }),
                     self.timeout,
-                    self.bind_addr.is_some(),
+                    self.tcp_config,
                 );
                 Ok(TransportFuture::new(Box::pin(task)))
             }
             None => {
-                let task = bind(ok(address), self.timeout, self.bind_addr.is_some());
+                let task = bind(ok(address), self.timeout, self.tcp_config);
                 Ok(TransportFuture::new(Box::pin(task)))
             }
         }
@@ -127,12 +130,12 @@ impl Transport for WsTransport {
                     }),
                     self.timeout,
                     Some(address),
-                    self.bind_addr,
+                    self.tcp_config,
                 );
                 Ok(TransportFuture::new(Box::pin(task)))
             }
             None => {
-                let dial = connect(ok(address), self.timeout, None, self.bind_addr);
+                let dial = connect(ok(address), self.timeout, None, self.tcp_config);
                 Ok(TransportFuture::new(Box::pin(dial)))
             }
         }
