@@ -98,6 +98,7 @@ mod os {
 
     use crate::{
         runtime::{TcpListener, TcpStream},
+        service::{config::TcpConfig, TcpSocket},
         utils::socketaddr_to_multiaddr,
     };
 
@@ -126,36 +127,21 @@ mod os {
     use crate::service::config::TlsConfig;
 
     #[derive(Clone)]
-    pub struct MultiTransport {
+    pub(crate) struct MultiTransport {
         timeout: Duration,
-        tcp_bind: Option<SocketAddr>,
-        #[cfg(feature = "ws")]
-        ws_bind: Option<SocketAddr>,
+        tcp_config: TcpConfig,
         #[cfg(feature = "tls")]
         tls_config: Option<TlsConfig>,
     }
 
     impl MultiTransport {
-        pub fn new(timeout: Duration) -> Self {
+        pub fn new(timeout: Duration, tcp_config: TcpConfig) -> Self {
             MultiTransport {
                 timeout,
-                tcp_bind: None,
-                #[cfg(feature = "ws")]
-                ws_bind: None,
+                tcp_config,
                 #[cfg(feature = "tls")]
                 tls_config: None,
             }
-        }
-
-        pub fn tcp_bind(mut self, bind_addr: Option<SocketAddr>) -> Self {
-            self.tcp_bind = bind_addr;
-            self
-        }
-
-        #[cfg(feature = "ws")]
-        pub fn ws_bind(mut self, bind_addr: Option<SocketAddr>) -> Self {
-            self.ws_bind = bind_addr;
-            self
         }
 
         #[cfg(feature = "tls")]
@@ -172,14 +158,14 @@ mod os {
         fn listen(self, address: Multiaddr) -> Result<Self::ListenFuture> {
             match find_type(&address) {
                 TransportType::Tcp => {
-                    match TcpTransport::new(self.timeout, self.tcp_bind).listen(address) {
+                    match TcpTransport::new(self.timeout, self.tcp_config.tcp).listen(address) {
                         Ok(future) => Ok(MultiListenFuture::Tcp(future)),
                         Err(e) => Err(e),
                     }
                 }
                 #[cfg(feature = "ws")]
                 TransportType::Ws => {
-                    match WsTransport::new(self.timeout, self.ws_bind).listen(address) {
+                    match WsTransport::new(self.timeout, self.tcp_config.ws).listen(address) {
                         Ok(future) => Ok(MultiListenFuture::Ws(future)),
                         Err(e) => Err(e),
                     }
@@ -196,7 +182,7 @@ mod os {
                     let tls_config = self.tls_config.ok_or_else(|| {
                         TransportErrorKind::TlsError("tls config is not set".to_string())
                     })?;
-                    TlsTransport::new(self.timeout, tls_config)
+                    TlsTransport::new(self.timeout, tls_config, self.tcp_config.tls)
                         .listen(address)
                         .map(MultiListenFuture::Tls)
                 }
@@ -208,14 +194,14 @@ mod os {
         fn dial(self, address: Multiaddr) -> Result<Self::DialFuture> {
             match find_type(&address) {
                 TransportType::Tcp => {
-                    match TcpTransport::new(self.timeout, self.tcp_bind).dial(address) {
+                    match TcpTransport::new(self.timeout, self.tcp_config.tcp).dial(address) {
                         Ok(res) => Ok(MultiDialFuture::Tcp(res)),
                         Err(e) => Err(e),
                     }
                 }
                 #[cfg(feature = "ws")]
                 TransportType::Ws => {
-                    match WsTransport::new(self.timeout, self.ws_bind).dial(address) {
+                    match WsTransport::new(self.timeout, self.tcp_config.ws).dial(address) {
                         Ok(future) => Ok(MultiDialFuture::Ws(future)),
                         Err(e) => Err(e),
                     }
@@ -232,7 +218,7 @@ mod os {
                     let tls_config = self.tls_config.ok_or_else(|| {
                         TransportErrorKind::TlsError("tls config is not set".to_string())
                     })?;
-                    TlsTransport::new(self.timeout, tls_config)
+                    TlsTransport::new(self.timeout, tls_config, self.tcp_config.tls)
                         .dial(address)
                         .map(MultiDialFuture::Tls)
                 }
@@ -457,14 +443,11 @@ mod os {
 
     /// ws/tcp common listen realization
     #[inline(always)]
-    pub async fn tcp_listen(addr: SocketAddr, reuse: bool) -> Result<(SocketAddr, TcpListener)> {
-        let tcp = if reuse {
-            crate::runtime::reuse_listen(addr).unwrap()
-        } else {
-            TcpListener::bind(&addr)
-                .await
-                .map_err(TransportErrorKind::Io)?
-        };
+    pub async fn tcp_listen(
+        addr: SocketAddr,
+        tcp_config: &impl Fn(TcpSocket) -> std::io::Result<TcpSocket>,
+    ) -> Result<(SocketAddr, TcpListener)> {
+        let tcp = crate::runtime::listen(addr, tcp_config)?;
 
         Ok((tcp.local_addr()?, tcp))
     }
@@ -473,12 +456,12 @@ mod os {
     #[inline(always)]
     pub async fn tcp_dial(
         addr: SocketAddr,
-        bind_addr: Option<SocketAddr>,
+        tcp_config: &impl Fn(TcpSocket) -> std::io::Result<TcpSocket>,
         timeout: Duration,
     ) -> Result<TcpStream> {
-        match crate::runtime::timeout(timeout, crate::runtime::connect(addr, bind_addr)).await {
+        match crate::runtime::timeout(timeout, crate::runtime::connect(addr, tcp_config)).await {
             Err(_) => Err(TransportErrorKind::Io(io::ErrorKind::TimedOut.into())),
-            Ok(res) => Ok(res?),
+            Ok(res) => res.map_err(Into::into),
         }
     }
 }
