@@ -38,6 +38,7 @@ pub struct Config {
 
     /// MaxStreamWindowSize is used to control the maximum
     /// window size that we allow for a stream.
+    /// Must be greater than or equal to 256 * 1024
     pub max_stream_window_size: u32,
 }
 
