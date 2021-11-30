@@ -1,4 +1,7 @@
-## yamux 0.3.1 secio 0.5.1
+## yamux 0.3.1-0.3.3 secio 0.5.1
+
+yamux 0.3.2: edition 2018
+yamux 0.3.3 and 0.3.1: edition 2021
 
 ### Bug Fix
 - Fix yamux window update(#340)
