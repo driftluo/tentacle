@@ -1,3 +1,8 @@
+## yamux 0.3.1 secio 0.5.1
+
+### Bug Fix
+- Fix yamux window update(#340)
+
 ## 0.4.0-alpha.1
 
 ### Features
