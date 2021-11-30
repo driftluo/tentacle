@@ -293,7 +293,7 @@ impl Decoder for FrameCodec {
                 let flags = Flags(header_data.get_u16());
                 let stream_id = header_data.get_u32();
                 let length = header_data.get_u32();
-                if length > self.max_frame_size {
+                if ty == Type::Data && length > self.max_frame_size {
                     let err = io::Error::new(
                         io::ErrorKind::InvalidData,
                         format!("yamux.length={}", length),

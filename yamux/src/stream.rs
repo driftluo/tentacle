@@ -18,6 +18,7 @@ use log::{debug, trace};
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 
 use crate::{
+    config::INITIAL_STREAM_WINDOW,
     error::Error,
     frame::{Flag, Flags, Frame, Type},
     StreamId,
@@ -30,7 +31,7 @@ pub struct StreamHandle {
     state: StreamState,
 
     max_recv_window: u32,
-    recv_window: u32,
+    pub(crate) recv_window: u32,
     send_window: u32,
     read_buf: BytesMut,
 
@@ -52,16 +53,15 @@ impl StreamHandle {
         unbound_event_sender: UnboundedSender<StreamEvent>,
         frame_receiver: Receiver<Frame>,
         state: StreamState,
-        recv_window_size: u32,
-        send_window_size: u32,
+        max_window_size: u32,
     ) -> StreamHandle {
         assert!(state == StreamState::Init || state == StreamState::SynReceived);
         StreamHandle {
             id,
             state,
-            max_recv_window: recv_window_size,
-            recv_window: recv_window_size,
-            send_window: send_window_size,
+            max_recv_window: max_window_size,
+            recv_window: INITIAL_STREAM_WINDOW,
+            send_window: INITIAL_STREAM_WINDOW,
             read_buf: BytesMut::default(),
             unbound_event_sender,
             frame_receiver,
@@ -521,7 +521,6 @@ mod test {
                 frame_receiver,
                 StreamState::Init,
                 INITIAL_STREAM_WINDOW,
-                INITIAL_STREAM_WINDOW,
             );
 
             drop(stream);
@@ -549,7 +548,6 @@ mod test {
                 unbound_sender,
                 frame_receiver,
                 StreamState::Init,
-                INITIAL_STREAM_WINDOW,
                 INITIAL_STREAM_WINDOW,
             );
 
@@ -586,7 +584,6 @@ mod test {
                 frame_receiver,
                 StreamState::Init,
                 INITIAL_STREAM_WINDOW,
-                INITIAL_STREAM_WINDOW,
             );
 
             let _ignore = stream.shutdown().await;
@@ -620,9 +617,10 @@ mod test {
                 unbound_sender,
                 frame_receiver,
                 StreamState::Init,
-                2,
                 INITIAL_STREAM_WINDOW,
             );
+
+            stream.recv_window = 2;
 
             let flags = Flags::from(Flag::Syn);
             let frame = Frame::new_data(flags, 0, BytesMut::from("1234"));
@@ -662,7 +660,6 @@ mod test {
                 unbound_sender,
                 frame_receiver,
                 StreamState::Init,
-                2,
                 INITIAL_STREAM_WINDOW,
             );
 

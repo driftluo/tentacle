@@ -138,6 +138,7 @@ where
 {
     /// Create a new session from a low level stream
     pub fn new(raw_stream: T, config: Config, ty: SessionType) -> Session<T> {
+        assert!(config.max_stream_window_size >= crate::config::INITIAL_STREAM_WINDOW);
         let next_stream_id = match ty {
             SessionType::Client => 1,
             SessionType::Server => 2,
@@ -309,7 +310,6 @@ where
             self.event_sender.clone(),
             frame_receiver,
             state,
-            self.config.max_stream_window_size,
             self.config.max_stream_window_size,
         );
         if let Err(err) = stream.send_window_update() {
@@ -902,7 +902,7 @@ mod test {
         task::{Context, Poll},
         time::Duration,
     };
-    use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, ReadBuf};
+    use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, ReadBuf};
     use tokio_util::codec::Framed;
 
     struct MockSocket {
@@ -1180,5 +1180,67 @@ mod test {
                 });
             }
         });
+    }
+
+    #[test]
+    fn test_dynamically_config_the_window_size() {
+        let rt = rt();
+        rt.block_on(async {
+            let (remote, local) = MockSocket::new();
+
+            let config = Config::default();
+
+            let mut session = Session::new_server(local, config);
+
+            tokio::spawn(async move {
+                while let Some(Ok(mut stream)) = session.next().await {
+                    tokio::spawn(async move {
+                        let _ignore = stream.read_exact(&mut [0]).await;
+                        assert!(stream.send_window() == 1024 * 1024);
+                        assert!(stream.recv_window() == 256 * 1024 - 1);
+                        let mut buf = vec![1; 1024 * 1024];
+                        let _ignore = stream.write_all(&buf).await;
+                        let _ignore = stream.read(&mut buf).await;
+                    });
+                }
+            });
+
+            let config = Config {
+                max_stream_window_size: 1024 * 1024,
+                ..Default::default()
+            };
+
+            let mut client = Session::new_client(remote, config);
+
+            let mut control = client.control();
+
+            let mut stream = client.open_stream().unwrap();
+
+            tokio::spawn(async move {
+                loop {
+                    match client.next().await {
+                        Some(Ok(_)) => (),
+                        Some(Err(_)) => {
+                            break;
+                        }
+                        None => {
+                            break;
+                        }
+                    }
+                }
+            });
+
+            let _ignore = stream.write_all(&[1]).await;
+            assert!(stream.send_window() == 256 * 1024 - 1);
+            assert!(stream.recv_window() == 1024 * 1024);
+            let mut buf = vec![0; 1024 * 1024];
+            let _ignore = stream.read_exact(&mut buf).await;
+
+            tokio::spawn(async move {
+                control.close().await;
+            });
+
+            assert_eq!(vec![1; 1024 * 1024], buf)
+        })
     }
 }
