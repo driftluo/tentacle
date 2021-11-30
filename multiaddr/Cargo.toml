@@ -1,6 +1,6 @@
 [package]
 name = "tentacle-multiaddr"
-version = "0.3.0"
+version = "0.3.1"
 authors = ["driftluo <driftluo@foxmail.com>"]
 edition = "2021"
 
@@ -9,7 +9,7 @@ edition = "2021"
 [dependencies]
 unsigned-varint = "0.6"
 bytes = "1.0"
-bs58 = "0.3.0"
+bs58 = "0.4.0"
 sha2 = "0.9.0"
 serde = "1"
 
