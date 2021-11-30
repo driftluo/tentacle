@@ -1,6 +1,6 @@
 [package]
 name = "tentacle-secio"
-version = "0.5.0"
+version = "0.5.1"
 license = "MIT"
 description = "Secio encryption protocol for p2p"
 authors = ["piaoliu <driftluo@foxmail.com>", "Nervos Core Dev <dev@nervos.org>"]
@@ -25,7 +25,7 @@ log = "0.4.1"
 molecule = "0.7.0"
 
 unsigned-varint = "0.6"
-bs58 = "0.3.0"
+bs58 = "0.4.0"
 secp256k1 = "0.19"
 
 [target.'cfg(unix)'.dependencies]
