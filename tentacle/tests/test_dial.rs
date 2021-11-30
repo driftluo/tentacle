@@ -44,7 +44,6 @@ enum ServiceErrorType {
 #[derive(Clone)]
 struct EmptySHandle {
     sender: crossbeam_channel::Sender<ServiceErrorType>,
-    secio: bool,
 }
 
 #[async_trait]
@@ -194,7 +193,7 @@ fn create_shandle(
     let (sender, receiver) = crossbeam_channel::unbounded();
 
     if empty {
-        (Box::new(EmptySHandle { sender, secio }), receiver)
+        (Box::new(EmptySHandle { sender }), receiver)
     } else {
         (
             Box::new(SHandle {

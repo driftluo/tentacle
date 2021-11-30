@@ -50,7 +50,6 @@ enum ServiceErrorType {
 #[derive(Clone)]
 pub struct SHandle {
     sender: crossbeam_channel::Sender<ServiceErrorType>,
-    tls: bool,
     session_id: SessionId,
     kind: SessionType,
 }
@@ -157,9 +156,7 @@ fn create_meta(id: ProtocolId) -> (ProtocolMeta, crossbeam_channel::Receiver<byt
     (meta, receiver)
 }
 
-fn create_shandle(
-    tls: bool,
-) -> (
+fn create_shandle() -> (
     Box<dyn ServiceHandle + Send>,
     crossbeam_channel::Receiver<ServiceErrorType>,
 ) {
@@ -169,7 +166,6 @@ fn create_shandle(
     (
         Box::new(SHandle {
             sender,
-            tls,
             session_id: 0.into(),
             kind: SessionType::Inbound,
         }),
@@ -362,7 +358,7 @@ pub fn make_client_config(config: &NetConfig) -> ClientConfig {
 fn test_tls_dial() {
     let (meta_1, receiver_1) = create_meta(1.into());
     let (meta_2, receiver_2) = create_meta(1.into());
-    let (shandle, _error_receiver_1) = create_shandle(true);
+    let (shandle, _error_receiver_1) = create_shandle();
     let (addr_sender, addr_receiver) = channel::oneshot::channel::<Multiaddr>();
 
     thread::spawn(move || {
@@ -379,7 +375,7 @@ fn test_tls_dial() {
         });
     });
 
-    let (shandle, _error_receiver_2) = create_shandle(true);
+    let (shandle, _error_receiver_2) = create_shandle();
 
     thread::spawn(move || {
         let _multi_addr_2 = Multiaddr::from_str(

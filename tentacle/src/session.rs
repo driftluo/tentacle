@@ -548,11 +548,7 @@ impl Session {
             SessionEvent::ProtocolMessage { proto_id, data, .. } => {
                 if let Some(stream_id) = self.proto_streams.get(&proto_id) {
                     if let Some(buffer) = self.substreams.get_mut(stream_id) {
-                        let event = ProtocolEvent::Message {
-                            id: *stream_id,
-                            proto_id,
-                            data,
-                        };
+                        let event = ProtocolEvent::Message { data };
                         if priority.is_high() {
                             buffer.push_high(event)
                         } else {

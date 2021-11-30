@@ -43,10 +43,6 @@ pub(crate) enum ProtocolEvent {
     },
     /// Protocol data outbound and inbound
     Message {
-        /// Stream id
-        id: StreamId,
-        /// Protocol id
-        proto_id: ProtocolId,
         /// Data
         data: bytes::Bytes,
     },
@@ -55,8 +51,6 @@ pub(crate) enum ProtocolEvent {
     },
     /// Codec error
     Error {
-        /// Stream id
-        id: StreamId,
         /// Protocol id
         proto_id: ProtocolId,
         /// Codec error
@@ -249,7 +243,6 @@ where
             _ => (),
         }
         self.event_sender.push(ProtocolEvent::Error {
-            id: self.id,
             proto_id: self.proto_id,
             error,
         });
@@ -259,7 +252,7 @@ where
     /// Handling commands send by session
     fn handle_proto_event(&mut self, cx: &mut Context, event: ProtocolEvent, priority: Priority) {
         match event {
-            ProtocolEvent::Message { data, .. } => {
+            ProtocolEvent::Message { data } => {
                 self.push_back(priority, data);
 
                 if let Err(err) = self.send_data(cx) {
@@ -273,7 +266,6 @@ where
                     self.output_event(
                         cx,
                         ProtocolEvent::Error {
-                            id: self.id,
                             proto_id: self.proto_id,
                             error: err,
                         },
@@ -708,7 +700,7 @@ where
     /// Handling commands send by session
     fn handle_proto_event(&mut self, cx: &mut Context, event: ProtocolEvent, priority: Priority) {
         match event {
-            ProtocolEvent::Message { data, .. } => {
+            ProtocolEvent::Message { data } => {
                 self.push_back(priority, data);
 
                 if let Err(err) = self.send_data(cx) {
@@ -722,7 +714,6 @@ where
                     self.output_event(
                         cx,
                         ProtocolEvent::Error {
-                            id: self.id,
                             proto_id: self.proto_id,
                             error: err,
                         },
@@ -776,7 +767,6 @@ where
             _ => (),
         }
         self.event_sender.push(ProtocolEvent::Error {
-            id: self.id,
             proto_id: self.proto_id,
             error,
         });
