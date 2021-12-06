@@ -9,3 +9,4 @@ Cargo.lock
 **/pkg/
 **/**/www/node_modules/
 **/**/www/package-lock.json
+tentacle-cov/

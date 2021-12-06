@@ -9,6 +9,10 @@ MOL_RUST_FILES := $(patsubst %.mol,%_mol.rs,${MOL_FILES})
 
 Change_Work_Path := cd tentacle
 
+GRCOV_EXCL_START = ^\s*(((log)::)?(trace|debug|info|warn|error)|(debug_)?assert(_eq|_ne|_error_eq))!\($$
+GRCOV_EXCL_STOP  = ^\s*\)(;)?$$
+GRCOV_EXCL_LINE = \s*(((log)::)?(trace|debug|info|warn|error)|(debug_)?assert(_eq|_ne|_error_eq))!\(.*\)(;)?$$
+
 fmt:
 	cargo fmt --all -- --check
 
@@ -58,5 +62,21 @@ gen-mol: $(MOL_RUST_FILES)
 clean-mol:
 	rm -f $(MOL_RUST_FILES)
 
+cov-install-tools:
+	rustup component add llvm-tools-preview --toolchain nightly
+	grcov --version || cargo +nightly install grcov
 
-.PHONY: fmt clippy test fuzz build examples ci check-moleculec-version gen-mol clean-mol
+cov: cov-install-tools
+	rm -f "tentacle-cov/*.profraw"; mkdir -p tentacle-cov
+	RUSTFLAGS="-Zinstrument-coverage" LLVM_PROFILE_FILE="tentacle-cov/tentacle-cov-%p-%m.profraw" cargo +nightly test --all --features ws,tls,unstable
+	RUSTUP_TOOLCHAIN=nightly grcov . -s . --binary-path ./target/debug/ -t html --branch --ignore-not-existing -o ./tentacle-cov \
+	--ignore "*/*_mol.rs" \
+	--ignore "bench/*" \
+	--ignore "multiaddr/*" \
+	--excl-br-start "${GRCOV_EXCL_START}" --excl-br-stop "${GRCOV_EXCL_STOP}" \
+	--excl-start    "${GRCOV_EXCL_START}" --excl-stop    "${GRCOV_EXCL_STOP}" \
+	--excl-br-line  "${GRCOV_EXCL_LINE}" \
+	--excl-line     "${GRCOV_EXCL_LINE}" 
+
+
+.PHONY: fmt clippy test fuzz build examples ci check-moleculec-version gen-mol clean-mol cov cov-install-tools
