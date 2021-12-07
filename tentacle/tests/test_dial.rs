@@ -67,7 +67,6 @@ impl ServiceHandle for EmptySHandle {
 #[derive(Clone)]
 pub struct SHandle {
     sender: crossbeam_channel::Sender<ServiceErrorType>,
-    secio: bool,
     session_id: SessionId,
     kind: SessionType,
 }
@@ -183,7 +182,6 @@ fn create_meta(id: ProtocolId) -> (ProtocolMeta, crossbeam_channel::Receiver<usi
 }
 
 fn create_shandle(
-    secio: bool,
     empty: bool,
 ) -> (
     Box<dyn ServiceHandle + Send>,
@@ -198,7 +196,6 @@ fn create_shandle(
         (
             Box::new(SHandle {
                 sender,
-                secio,
                 session_id: 0.into(),
                 kind: SessionType::Inbound,
             }),
@@ -230,7 +227,7 @@ fn check_dial_errors(
 fn test_repeated_dial(secio: bool) {
     let (meta_1, receiver_1) = create_meta(1.into());
     let (meta_2, receiver_2) = create_meta(1.into());
-    let (shandle, error_receiver_1) = create_shandle(secio, false);
+    let (shandle, error_receiver_1) = create_shandle(false);
     let (addr_sender, addr_receiver) = channel::oneshot::channel::<Multiaddr>();
 
     thread::spawn(move || {
@@ -246,7 +243,7 @@ fn test_repeated_dial(secio: bool) {
         });
     });
 
-    let (shandle, error_receiver_2) = create_shandle(secio, false);
+    let (shandle, error_receiver_2) = create_shandle(false);
 
     thread::spawn(move || {
         let rt = tokio::runtime::Runtime::new().unwrap();
@@ -282,7 +279,7 @@ fn test_repeated_dial(secio: bool) {
 
 fn test_dial_with_no_notify(secio: bool) {
     let (meta, _receiver) = create_meta(0.into());
-    let (shandle, error_receiver) = create_shandle(secio, true);
+    let (shandle, error_receiver) = create_shandle(true);
     let mut service = create(secio, meta, shandle);
     let control: ServiceControl = service.control().clone().into();
     thread::spawn(move || {
