@@ -20,7 +20,7 @@ clippy:
 	$(Change_Work_Path) && RUSTFLAGS='-W warnings' cargo clippy --all --tests --features ws,unstable,tls -- -D clippy::let_underscore_must_use
 
 test:
-	$(Change_Work_Path) && RUSTFLAGS='-W warnings' RUST_BACKTRACE=full cargo test --all --features ws,unstable,tls
+	$(Change_Work_Path) && RUSTFLAGS='-W warnings' RUST_BACKTRACE=full cargo test --all --features ws,unstable,tls,upnp
 
 fuzz:
 	cargo +nightly fuzz run secio_crypto_decrypt_cipher -- -max_total_time=60

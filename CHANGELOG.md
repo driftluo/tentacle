@@ -1,3 +1,14 @@
+## 0.4.0-beta.1
+
+### Bug Fix
+- Fix listener poll(#333, also patch to 0.4.0-alpha.2)
+
+### Features
+- Change to async trait(#323)
+- Use spin loop instead of thread yield(#331, also patch to 0.4.0-alpha.2)
+- Support tls(#322)
+- Enable use config Tcp socket(#339, #345)
+
 ## yamux 0.3.1-0.3.3 secio 0.5.1
 
 yamux 0.3.2: edition 2018

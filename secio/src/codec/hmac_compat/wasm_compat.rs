@@ -1,7 +1,7 @@
 #![allow(dead_code)]
 
 use crate::Digest;
-use hmac::{self, Mac, NewMac};
+use hmac::{self, Mac};
 use sha2::{Sha256, Sha512};
 
 /// Hash-based Message Authentication Code (HMAC).
@@ -57,12 +57,12 @@ impl Hmac {
             Hmac::Sha256(ref hmac) => {
                 let mut hmac = hmac.clone();
                 hmac.update(crypted_data);
-                hmac.verify(expected_hash).is_ok()
+                hmac.verify_slice(expected_hash).is_ok()
             }
             Hmac::Sha512(ref hmac) => {
                 let mut hmac = hmac.clone();
                 hmac.update(crypted_data);
-                hmac.verify(expected_hash).is_ok()
+                hmac.verify_slice(expected_hash).is_ok()
             }
         }
     }
