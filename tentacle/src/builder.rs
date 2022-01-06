@@ -182,7 +182,7 @@ impl ServiceBuilder {
     where
         F: Fn(TcpSocket) -> Result<TcpSocket, std::io::Error> + Send + Sync + 'static,
     {
-        self.config.tcp_config.tcp = Arc::new(Box::new(f));
+        self.config.tcp_config.tcp = Arc::new(f);
         self
     }
 
@@ -193,7 +193,7 @@ impl ServiceBuilder {
     where
         F: Fn(TcpSocket) -> Result<TcpSocket, std::io::Error> + Send + Sync + 'static,
     {
-        self.config.tcp_config.ws = Arc::new(Box::new(f));
+        self.config.tcp_config.ws = Arc::new(f);
         self
     }
 
@@ -217,7 +217,7 @@ impl ServiceBuilder {
     where
         F: Fn(TcpSocket) -> Result<TcpSocket, std::io::Error> + Send + Sync + 'static,
     {
-        self.config.tcp_config.tls = Arc::new(Box::new(f));
+        self.config.tcp_config.tls = Arc::new(f);
         self
     }
 }

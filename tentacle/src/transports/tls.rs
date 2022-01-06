@@ -38,7 +38,7 @@ async fn bind(
     let addr = address.await?;
     match multiaddr_to_socketaddr(&addr) {
         Some(socket_address) => {
-            let (local_addr, tcp) = tcp_listen(socket_address, &*tcp_config).await?;
+            let (local_addr, tcp) = tcp_listen(socket_address, tcp_config).await?;
             let tls_server_config = config.tls_server_config.ok_or_else(|| {
                 TransportErrorKind::TlsError("server config not found".to_string())
             })?;
@@ -69,7 +69,7 @@ async fn connect(
     let addr = address.await?;
     match multiaddr_to_socketaddr(&addr) {
         Some(socket_address) => {
-            let stream = tcp_dial(socket_address, &*tcp_config, timeout).await?;
+            let stream = tcp_dial(socket_address, tcp_config, timeout).await?;
 
             let domain_name = ServerName::try_from(domain_name.as_str())
                 .map_err(|_| TransportErrorKind::TlsError("invalid dnsname".to_string()))?;

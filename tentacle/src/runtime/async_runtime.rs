@@ -13,7 +13,7 @@ pub use os::*;
 
 #[cfg(not(target_arch = "wasm32"))]
 mod os {
-    use crate::{runtime::CompatStream2, service::TcpSocket};
+    use crate::{runtime::CompatStream2, service::config::TcpSocketConfig};
     use async_io::Async;
     use async_std::net::{TcpListener as AsyncListener, TcpStream as AsyncStream, ToSocketAddrs};
     use futures::{
@@ -137,10 +137,7 @@ mod os {
     use socket2::{Domain, Protocol as SocketProtocol, Socket, Type};
     use std::{io, net::SocketAddr};
 
-    pub(crate) fn listen(
-        addr: SocketAddr,
-        tcp_config: &impl Fn(TcpSocket) -> Result<TcpSocket, std::io::Error>,
-    ) -> io::Result<TcpListener> {
+    pub(crate) fn listen(addr: SocketAddr, tcp_config: TcpSocketConfig) -> io::Result<TcpListener> {
         let domain = Domain::for_address(addr);
         let socket = Socket::new(domain, Type::STREAM, Some(SocketProtocol::TCP))?;
 
@@ -158,7 +155,7 @@ mod os {
 
     pub(crate) async fn connect(
         addr: SocketAddr,
-        tcp_config: &impl Fn(TcpSocket) -> Result<TcpSocket, std::io::Error>,
+        tcp_config: TcpSocketConfig,
     ) -> io::Result<TcpStream> {
         let domain = Domain::for_address(addr);
         let socket = Socket::new(domain, Type::STREAM, Some(SocketProtocol::TCP))?;

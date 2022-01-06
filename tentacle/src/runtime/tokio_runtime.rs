@@ -4,7 +4,7 @@ pub use tokio::{
     task::{block_in_place, spawn_blocking, JoinHandle},
 };
 
-use crate::service::TcpSocket;
+use crate::service::config::TcpSocketConfig;
 use socket2::{Domain, Protocol as SocketProtocol, Socket, Type};
 #[cfg(unix)]
 use std::os::unix::io::{FromRawFd, IntoRawFd};
@@ -56,10 +56,7 @@ mod time {
     }
 }
 
-pub(crate) fn listen(
-    addr: SocketAddr,
-    tcp_config: &impl Fn(TcpSocket) -> Result<TcpSocket, std::io::Error>,
-) -> io::Result<TcpListener> {
+pub(crate) fn listen(addr: SocketAddr, tcp_config: TcpSocketConfig) -> io::Result<TcpListener> {
     let domain = Domain::for_address(addr);
     let socket = Socket::new(domain, Type::STREAM, Some(SocketProtocol::TCP))?;
 
@@ -84,7 +81,7 @@ pub(crate) fn listen(
 
 pub(crate) async fn connect(
     addr: SocketAddr,
-    tcp_config: &impl Fn(TcpSocket) -> Result<TcpSocket, std::io::Error>,
+    tcp_config: TcpSocketConfig,
 ) -> io::Result<TcpStream> {
     let domain = Domain::for_address(addr);
     let socket = Socket::new(domain, Type::STREAM, Some(SocketProtocol::TCP))?;

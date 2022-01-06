@@ -79,7 +79,7 @@ impl Default for SessionConfig {
 }
 
 pub(crate) type TcpSocketConfig =
-    Arc<Box<dyn Fn(TcpSocket) -> Result<TcpSocket, std::io::Error> + Send + Sync + 'static>>;
+    Arc<dyn Fn(TcpSocket) -> Result<TcpSocket, std::io::Error> + Send + Sync + 'static>;
 
 /// This config Allow users to set various underlying parameters of TCP
 #[derive(Clone)]
@@ -97,11 +97,11 @@ pub(crate) struct TcpConfig {
 impl Default for TcpConfig {
     fn default() -> Self {
         TcpConfig {
-            tcp: Arc::new(Box::new(Ok)),
+            tcp: Arc::new(Ok),
             #[cfg(feature = "ws")]
-            ws: Arc::new(Box::new(Ok)),
+            ws: Arc::new(Ok),
             #[cfg(feature = "tls")]
-            tls: Arc::new(Box::new(Ok)),
+            tls: Arc::new(Ok),
         }
     }
 }

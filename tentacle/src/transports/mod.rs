@@ -1,6 +1,7 @@
 use crate::{
     error::TransportErrorKind,
     multiaddr::{Multiaddr, Protocol},
+    service::config::TcpSocketConfig,
 };
 
 use std::{
@@ -98,7 +99,7 @@ mod os {
 
     use crate::{
         runtime::{TcpListener, TcpStream},
-        service::{config::TcpConfig, TcpSocket},
+        service::config::TcpConfig,
         utils::socketaddr_to_multiaddr,
     };
 
@@ -445,7 +446,7 @@ mod os {
     #[inline(always)]
     pub async fn tcp_listen(
         addr: SocketAddr,
-        tcp_config: &impl Fn(TcpSocket) -> std::io::Result<TcpSocket>,
+        tcp_config: TcpSocketConfig,
     ) -> Result<(SocketAddr, TcpListener)> {
         let tcp = crate::runtime::listen(addr, tcp_config)?;
 
@@ -456,7 +457,7 @@ mod os {
     #[inline(always)]
     pub async fn tcp_dial(
         addr: SocketAddr,
-        tcp_config: &impl Fn(TcpSocket) -> std::io::Result<TcpSocket>,
+        tcp_config: TcpSocketConfig,
         timeout: Duration,
     ) -> Result<TcpStream> {
         match crate::runtime::timeout(timeout, crate::runtime::connect(addr, tcp_config)).await {
