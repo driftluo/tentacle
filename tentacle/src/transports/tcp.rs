@@ -19,7 +19,7 @@ async fn bind(
     let addr = address.await?;
     match multiaddr_to_socketaddr(&addr) {
         Some(socket_address) => {
-            let (local_addr, tcp) = tcp_listen(socket_address, &*tcp_config).await?;
+            let (local_addr, tcp) = tcp_listen(socket_address, tcp_config).await?;
 
             let listen_addr = socketaddr_to_multiaddr(local_addr);
 
@@ -39,7 +39,7 @@ async fn connect(
     let addr = address.await?;
     match multiaddr_to_socketaddr(&addr) {
         Some(socket_address) => {
-            let stream = tcp_dial(socket_address, &*tcp_config, timeout).await?;
+            let stream = tcp_dial(socket_address, tcp_config, timeout).await?;
             Ok((original.unwrap_or(addr), stream))
         }
         None => Err(TransportErrorKind::NotSupported(original.unwrap_or(addr))),

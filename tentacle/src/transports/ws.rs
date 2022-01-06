@@ -36,7 +36,7 @@ async fn bind(
     let addr = address.await?;
     match multiaddr_to_socketaddr(&addr) {
         Some(socket_address) => {
-            let (addr, tcp) = tcp_listen(socket_address, &*tcp_config).await?;
+            let (addr, tcp) = tcp_listen(socket_address, tcp_config).await?;
             let mut listen_addr = socketaddr_to_multiaddr(addr);
             listen_addr.push(Protocol::Ws);
 
@@ -57,7 +57,7 @@ async fn connect(
     match multiaddr_to_socketaddr(&addr) {
         Some(socket_address) => {
             let url = format!("ws://{}:{}", socket_address.ip(), socket_address.port());
-            let tcp = tcp_dial(socket_address, &*tcp_config, timeout).await?;
+            let tcp = tcp_dial(socket_address, tcp_config, timeout).await?;
 
             match crate::runtime::timeout(timeout, client_async_with_config(url, tcp, None)).await {
                 Err(_) => Err(TransportErrorKind::Io(io::ErrorKind::TimedOut.into())),
