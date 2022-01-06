@@ -529,7 +529,7 @@ where
 
     // Receive frames from low level stream
     fn recv_frames(&mut self, cx: &mut Context) -> Poll<Option<Result<(), io::Error>>> {
-        debug!("[{:?}] poll from framed_stream", self.ty);
+        trace!("[{:?}] poll from framed_stream", self.ty);
         match Pin::new(&mut self.framed_stream).as_mut().poll_next(cx) {
             Poll::Ready(Some(Ok(frame))) => {
                 self.handle_frame(cx, frame)?;
@@ -540,7 +540,7 @@ where
                 Poll::Ready(None)
             }
             Poll::Pending => {
-                debug!("[{:?}] poll framed_stream NotReady", self.ty);
+                trace!("[{:?}] poll framed_stream NotReady", self.ty);
                 Poll::Pending
             }
             Poll::Ready(Some(Err(err))) => {
