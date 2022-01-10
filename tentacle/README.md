@@ -1,7 +1,7 @@
 # Tentacle
 
-[![Build Status](https://api.travis-ci.org/nervosnetwork/tentacle.svg?branch=master)](https://travis-ci.org/nervosnetwork/tentacle)
-![image](https://img.shields.io/badge/rustc-1.51-blue.svg)
+[![Build Status](https://travis-ci.com/nervosnetwork/tentacle.svg?branch=master)](https://travis-ci.com/nervosnetwork/tentacle)
+![image](https://img.shields.io/badge/rustc-1.56.1-blue.svg)
 
 ## Overview
 
@@ -32,15 +32,13 @@ The API of this project is basically usable. However we still need more tests. P
 
 The codes in the `protocols/` directory are no longer maintained and only used as reference
 
-Feature `flatc` is not recommended and will be removed in the next version.
-
 ## Usage
 
 ### From cargo
 
 ```toml
 [dependencies]
-tentacle = { version = "0.3", features = ["molc"] }
+tentacle = { version = "0.4.0-beta.1" }
 ```
 
 ### Example
@@ -55,13 +53,13 @@ $ git clone https://github.com/nervosnetwork/tentacle.git
 
 Listen on 127.0.0.1:1337
 ```bash
-$ RUST_LOG=simple=info,tentacle=debug cargo run --example simple --features molc,ws -- server
+$ RUST_LOG=simple=info,tentacle=debug cargo run --example simple --features ws -- server
 ```
 
 3. On another terminal:
 
 ```bash
-$ RUST_LOG=simple=info,tentacle=debug cargo run --example simple --features molc
+$ RUST_LOG=simple=info,tentacle=debug cargo run --example simple
 ```
 
 4. Now you can see some data interaction information on the terminal.
@@ -71,13 +69,14 @@ You can see more detailed example in these three repos:
 - [p2p-message](https://github.com/doitian/tentacle-p2p-message)
 - [ckb](https://github.com/nervosnetwork/ckb)
 - [cita](https://github.com/cryptape/cita)
-- [muta](https://github.com/nervosnetwork/muta).
+- [muta](https://github.com/nervosnetwork/muta)
+- [axon](https://github.com/nervosnetwork/axon)
 
 ### Run on browser and test
 
 1. setup a ws server:
 ```
-$ cd tentacle && RUST_LOG=info cargo run --example simple --features molc,ws -- server
+$ cd tentacle && RUST_LOG=info cargo run --example simple --features ws -- server
 ```
 
 2. setup a browser client

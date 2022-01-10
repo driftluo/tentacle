@@ -1,6 +1,6 @@
 [package]
 name = "tentacle-secio"
-version = "0.5.1"
+version = "0.5.2"
 license = "MIT"
 description = "Secio encryption protocol for p2p"
 authors = ["piaoliu <driftluo@foxmail.com>", "Nervos Core Dev <dev@nervos.org>"]
@@ -24,7 +24,7 @@ log = "0.4.1"
 
 molecule = "0.7.0"
 
-unsigned-varint = "0.6"
+unsigned-varint = "0.7"
 bs58 = "0.4.0"
 secp256k1 = "0.20"
 
@@ -39,8 +39,8 @@ ring = "0.16.5"
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 rand_core = { version = "0.5" }
 rand = { version = "0.7", features = ["wasm-bindgen"] }
-sha2 = "0.9.0"
-hmac = "0.11.0"
+sha2 = "0.10.0"
+hmac = "0.12.0"
 x25519-dalek = "1.1"
 chacha20poly1305 = "0.9"
 
@@ -48,8 +48,8 @@ chacha20poly1305 = "0.9"
 env_logger = "0.6"
 criterion = "0.3"
 tokio = { version = "1.0.0", features = ["net", "rt", "rt-multi-thread"] }
-sha2 = "0.9.0"
-hmac = "0.11.0"
+sha2 = "0.10.0"
+hmac = "0.12.0"
 x25519-dalek = "1.1"
 chacha20poly1305 = "0.9"
 rand_core = { version = "0.5" }
