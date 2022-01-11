@@ -75,7 +75,17 @@ pub(crate) fn listen(addr: SocketAddr, tcp_config: TcpSocketConfig) -> io::Resul
             socket
         }
     };
-    socket.bind(addr)?;
+    // `bind` twice will return error
+    //
+    // code 22 means:
+    // EINVAL The socket is already bound to an address.
+    // ref: https://man7.org/linux/man-pages/man2/bind.2.html
+    if let Err(e) = socket.bind(addr) {
+        if Some(22) != e.raw_os_error() {
+            return Err(e);
+        }
+    }
+
     socket.listen(1024)
 }
 

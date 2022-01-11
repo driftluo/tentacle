@@ -1,4 +1,4 @@
-use std::{collections::HashMap, io, sync::Arc, time::Duration};
+use std::{io, sync::Arc, time::Duration};
 
 use nohash_hasher::IntMap;
 use tokio_util::codec::LengthDelimitedCodec;
@@ -18,6 +18,7 @@ use crate::{
 };
 
 /// Builder for Service
+#[derive(Default)]
 pub struct ServiceBuilder {
     inner: IntMap<ProtocolId, ProtocolMeta>,
     key_pair: Option<SecioKeyPair>,
@@ -177,6 +178,10 @@ impl ServiceBuilder {
     ///      Ok(socket.into())
     /// });
     /// ```
+    ///
+    /// ## Note
+    ///
+    /// User use `listen(2)` or `connect(2)` on this closure will cause abnormal behavior
     #[cfg(not(target_arch = "wasm32"))]
     pub fn tcp_config<F>(mut self, f: F) -> Self
     where
@@ -219,17 +224,6 @@ impl ServiceBuilder {
     {
         self.config.tcp_config.tls = Arc::new(f);
         self
-    }
-}
-
-impl Default for ServiceBuilder {
-    fn default() -> Self {
-        ServiceBuilder {
-            inner: HashMap::default(),
-            key_pair: None,
-            forever: false,
-            config: ServiceConfig::default(),
-        }
     }
 }
 

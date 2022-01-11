@@ -428,6 +428,6 @@ impl<'a> Deref for ProtocolContextMutRef<'a> {
 impl<'a> DerefMut for ProtocolContextMutRef<'a> {
     #[inline]
     fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.inner
+        self.inner
     }
 }

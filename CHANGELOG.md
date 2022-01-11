@@ -1,3 +1,8 @@
+## 0.4.0-beta.2
+
+### Bug Fix
+- Fix `bind` on listen can't return Error(#347)
+
 ## 0.4.0-beta.1
 
 ### Bug Fix
