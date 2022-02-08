@@ -1,3 +1,8 @@
+## 0.4.0-beta.3
+
+### Features
+- Make inner bound channel size configurable(#348, also patch to 0.4.0-alpha.3)
+
 ## 0.4.0-beta.2
 
 ### Bug Fix

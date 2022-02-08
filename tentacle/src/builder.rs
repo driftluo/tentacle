@@ -94,6 +94,12 @@ impl ServiceBuilder {
         self
     }
 
+    /// Tentacle use lots of bound channel, default channel size is 128
+    pub fn set_channel_size(mut self, size: usize) -> Self {
+        self.config.session_config.channel_size = size;
+        self
+    }
+
     /// Set send buffer size, default is 24Mb
     pub fn set_send_buffer_size(mut self, size: usize) -> Self {
         self.config.session_config.send_buffer_size = size;
