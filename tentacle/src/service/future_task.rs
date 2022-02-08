@@ -14,8 +14,6 @@ use std::{
     task::{Context, Poll},
 };
 
-use crate::service::SEND_SIZE;
-
 pub(crate) type FutureTaskId = u64;
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) type BoxedFutureTask = Pin<Box<dyn Future<Output = ()> + 'static + Send>>;
@@ -37,7 +35,7 @@ impl FutureTaskManager {
         task_receiver: mpsc::Receiver<BoxedFutureTask>,
         shutdown: Arc<AtomicBool>,
     ) -> FutureTaskManager {
-        let (id_sender, id_receiver) = mpsc::channel(SEND_SIZE);
+        let (id_sender, id_receiver) = mpsc::channel(32);
         FutureTaskManager {
             signals: HashMap::default(),
             next_id: 0,

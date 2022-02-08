@@ -55,13 +55,6 @@ use bytes::Bytes;
 #[cfg(feature = "tls")]
 pub use crate::service::config::TlsConfig;
 
-/// Received from user, aggregate mode
-pub(crate) const RECEIVED_BUFFER_SIZE: usize = 2048;
-/// Use to receive open/close event, no need too large
-pub(crate) const RECEIVED_SIZE: usize = 512;
-/// Send to remote, distribute mode
-pub(crate) const SEND_SIZE: usize = 512;
-
 type Result<T> = std::result::Result<T, TransportErrorKind>;
 
 /// An abstraction of p2p service, currently only supports TCP/websocket protocol
@@ -128,8 +121,10 @@ where
         forever: bool,
         config: ServiceConfig,
     ) -> Self {
-        let (session_event_sender, session_event_receiver) = mpsc::channel(RECEIVED_SIZE);
-        let (task_sender, task_receiver) = priority_mpsc::channel(RECEIVED_BUFFER_SIZE);
+        let (session_event_sender, session_event_receiver) =
+            mpsc::channel(config.session_config.channel_size);
+        let (task_sender, task_receiver) =
+            priority_mpsc::channel(config.session_config.channel_size);
         let proto_infos = protocol_configs
             .values()
             .map(|meta| {
@@ -137,7 +132,8 @@ where
                 (meta.id(), proto_info)
             })
             .collect();
-        let (future_task_sender, future_task_receiver) = mpsc::channel(SEND_SIZE);
+        let (future_task_sender, future_task_receiver) =
+            mpsc::channel(config.session_config.channel_size);
         let shutdown = Arc::new(AtomicBool::new(false));
         #[cfg(all(not(target_arch = "wasm32"), feature = "upnp"))]
         let igd_client = if config.upnp {
@@ -385,7 +381,7 @@ where
             if let ProtocolHandle::Callback(handle) = meta.session_handle() {
                 if let Some(session_control) = self.sessions.get(&id) {
                     debug!("init session [{}] level proto [{}] handle", id, proto_id);
-                    let (sender, receiver) = mpsc::channel(RECEIVED_SIZE);
+                    let (sender, receiver) = mpsc::channel(self.config.session_config.channel_size);
                     self.session_proto_handles.insert((id, *proto_id), sender);
 
                     let mut stream = SessionProtocolStream::new(
@@ -608,7 +604,8 @@ where
 
         let session_closed = Arc::new(AtomicBool::new(false));
         let pending_data_size = Arc::new(AtomicUsize::new(0));
-        let (service_event_sender, service_event_receiver) = priority_mpsc::channel(SEND_SIZE);
+        let (service_event_sender, service_event_receiver) =
+            priority_mpsc::channel(self.config.session_config.channel_size);
         let session_control = SessionController::new(
             service_event_sender.clone(),
             Arc::new(SessionContext::new(
@@ -772,7 +769,7 @@ where
         for (proto_id, meta) in self.protocol_configs.iter_mut() {
             if let ProtocolHandle::Callback(handle) = meta.service_handle() {
                 debug!("init service level [{}] proto handle", proto_id);
-                let (sender, receiver) = mpsc::channel(RECEIVED_SIZE);
+                let (sender, receiver) = mpsc::channel(self.config.session_config.channel_size);
                 self.service_proto_handles.insert(*proto_id, sender);
 
                 let mut stream = ServiceProtocolStream::new(
