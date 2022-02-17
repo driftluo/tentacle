@@ -40,7 +40,7 @@ const TIMEOUT: Duration = Duration::from_secs(30);
 /// So, I implemented a global time dependent on `futures-timer`,
 /// Because in the browser environment, it is always single-threaded, so feel free to be unsafe
 #[cfg(target_arch = "wasm32")]
-static mut TIME: Instant = Instant::from_f64(0.0);
+static mut TIME: Instant = Instant::from_u64(0);
 
 /// The session
 pub struct Session<T> {
@@ -276,7 +276,7 @@ where
         if self
             .pings
             .iter()
-            .any(|(_id, time)| time.elapsed() > TIMEOUT)
+            .any(|(_id, time)| Instant::now().saturating_duration_since(*time) > TIMEOUT)
         {
             return Err(io::ErrorKind::TimedOut.into());
         }
@@ -794,7 +794,7 @@ mod timer {
         #[derive(Debug, Copy, Clone)]
         pub struct Instant {
             /// mock
-            inner: f64,
+            inner: u64,
         }
 
         impl PartialEq for Instant {
@@ -820,7 +820,7 @@ mod timer {
         }
 
         impl Instant {
-            pub const fn from_f64(val: f64) -> Self {
+            pub const fn from_u64(val: u64) -> Self {
                 Instant { inner: val }
             }
 
@@ -829,6 +829,10 @@ mod timer {
             }
 
             pub fn duration_since(&self, earlier: Instant) -> Duration {
+                *self - earlier
+            }
+
+            pub fn saturating_duration_since(&self, earlier: Instant) -> Duration {
                 *self - earlier
             }
 
@@ -841,10 +845,8 @@ mod timer {
             type Output = Instant;
 
             fn add(self, other: Duration) -> Instant {
-                let new_val = self.inner + other.as_millis() as f64;
-                Instant {
-                    inner: new_val as f64,
-                }
+                let new_val = self.inner + other.as_millis() as u64;
+                Instant { inner: new_val }
             }
         }
 
@@ -852,10 +854,11 @@ mod timer {
             type Output = Instant;
 
             fn sub(self, other: Duration) -> Instant {
-                let new_val = self.inner - other.as_millis() as f64;
-                Instant {
-                    inner: new_val as f64,
-                }
+                let new_val = self
+                    .inner
+                    .checked_sub(other.as_millis() as u64)
+                    .unwrap_or_default();
+                Instant { inner: new_val }
             }
         }
 
@@ -863,9 +866,8 @@ mod timer {
             type Output = Duration;
 
             fn sub(self, other: Instant) -> Duration {
-                let ms = self.inner - other.inner;
-                assert!(ms >= 0.0);
-                Duration::from_millis(ms as u64)
+                let ms = self.inner.checked_sub(other.inner).unwrap_or_default();
+                Duration::from_millis(ms)
             }
         }
 

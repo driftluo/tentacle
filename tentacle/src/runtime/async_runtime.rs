@@ -45,7 +45,7 @@ mod os {
         /// this will force users to ensure that they are used in an async environment
         recv: Receiver<io::Result<(AsyncStream, SocketAddr)>>,
         local_addr: SocketAddr,
-        close_sender: Sender<()>,
+        _close_sender: Sender<()>,
     }
 
     impl TcpListener {
@@ -63,7 +63,7 @@ mod os {
             TcpListener {
                 recv: rx,
                 local_addr,
-                close_sender: tx_c,
+                _close_sender: tx_c,
             }
         }
 

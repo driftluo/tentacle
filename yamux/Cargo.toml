@@ -11,7 +11,7 @@ edition = "2021"
 bytes = "1.0.0"
 futures = { version = "0.3.0" }
 tokio = { version = "1.0.0" }
-tokio-util = { version = "0.6.0", features = ["codec"] }
+tokio-util = { version = "0.7.0", features = ["codec"] }
 log = "0.4"
 nohash-hasher = "0.2"
 
