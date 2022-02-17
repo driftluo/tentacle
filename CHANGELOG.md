@@ -1,3 +1,8 @@
+## 0.4.0-beta.4
+
+### Bug Fix
+- Fix `Instant` may panic on `duration_since, elapsed, sub`(#349, also patch to 0.4.0-alpha.3)
+
 ## 0.4.0-beta.3
 
 ### Features
