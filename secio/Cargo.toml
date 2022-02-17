@@ -1,6 +1,6 @@
 [package]
 name = "tentacle-secio"
-version = "0.5.2"
+version = "0.5.3"
 license = "MIT"
 description = "Secio encryption protocol for p2p"
 authors = ["piaoliu <driftluo@foxmail.com>", "Nervos Core Dev <dev@nervos.org>"]
@@ -19,7 +19,7 @@ no-default-features = true
 bytes = "1.0"
 futures = { version = "0.3.0" }
 tokio = { version = "1.0", features = ["io-util"] }
-tokio-util = { version = "0.6.0", features = ["codec"] }
+tokio-util = { version = "0.7.0", features = ["codec"] }
 log = "0.4.1"
 
 molecule = "0.7.0"

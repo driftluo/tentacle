@@ -14,7 +14,7 @@ tentacle-secio = { path = "../secio" }
 tokio-yamux = { path = "../yamux" }
 rand = "0.8"
 bytes = "1.0.0"
-tokio-util = { version = "0.6.0", features = ["codec"] }
+tokio-util = { version = "0.7.0", features = ["codec"] }
 
 # Prevent this from interfering with workspaces
 [workspace]

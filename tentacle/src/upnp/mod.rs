@@ -142,7 +142,9 @@ impl IgdClient {
     pub fn process_only_leases_support(&mut self) {
         for (addr, interval) in self.leases.iter_mut() {
             let register = interval
-                .map(|inner| inner.elapsed() > Duration::from_secs(40))
+                .map(|inner| {
+                    Instant::now().saturating_duration_since(inner) > Duration::from_secs(40)
+                })
                 .unwrap_or(true);
 
             if register {
