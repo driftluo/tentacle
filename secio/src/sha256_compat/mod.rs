@@ -1,10 +1,14 @@
-#[cfg(not(target_arch = "wasm32"))]
-mod native;
+#[cfg(unix)]
+mod openssl_impl;
+#[cfg(any(test, not(unix)))]
+mod ring_impl;
 #[cfg(any(target_arch = "wasm32", test))]
 mod wasm_compat;
 
-#[cfg(not(target_arch = "wasm32"))]
-pub use native::*;
+#[cfg(unix)]
+pub use openssl_impl::*;
+#[cfg(not(unix))]
+pub use ring_impl::*;
 
 #[cfg(target_arch = "wasm32")]
 pub use wasm_compat::*;
@@ -21,8 +25,10 @@ mod test {
 
         let hash = sha256(&key);
         let hash_wasm = wasm_compat::sha256(&key);
+        let hash_ring = ring_impl::sha256(&key);
 
         assert_eq!(hash.as_ref(), hash_wasm.as_slice());
+        assert_eq!(hash.as_ref(), hash_ring.as_ref());
 
         let mut context = Context::new();
         context.update(&key);
@@ -32,7 +38,12 @@ mod test {
         context_wasm.update(&key);
         let hash_context_wasm = context_wasm.finish();
 
+        let mut context_ring = ring_impl::Context::new();
+        context_ring.update(&key);
+        let hash_context_ring = context_ring.finish();
+
         assert_eq!(hash.as_ref(), hash_context.as_ref());
+        assert_eq!(hash.as_ref(), hash_context_ring.as_ref());
         assert_eq!(hash.as_ref(), hash_context_wasm.as_slice());
     }
 }
