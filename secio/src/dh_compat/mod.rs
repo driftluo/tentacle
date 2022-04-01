@@ -1,11 +1,14 @@
-#[cfg(not(target_arch = "wasm32"))]
-mod native;
+#[cfg(all(ossl110, unix))]
+mod openssl_impl;
+#[cfg(any(test, not(unix), not(ossl110)))]
+mod ring_impl;
 #[cfg(any(target_arch = "wasm32", test))]
 mod wasm_compat;
 
-#[cfg(not(target_arch = "wasm32"))]
-pub use native::*;
-
+#[cfg(unix)]
+pub use openssl_impl::*;
+#[cfg(not(unix))]
+pub use ring_impl::*;
 #[cfg(target_arch = "wasm32")]
 pub use wasm_compat::*;
 
