@@ -1,5 +1,6 @@
 #[cfg(unix)]
 mod openssl_impl;
+#[cfg(not(target_arch = "wasm32"))]
 #[cfg(any(test, not(unix)))]
 mod ring_impl;
 #[cfg(any(target_arch = "wasm32", test))]
@@ -7,6 +8,7 @@ mod wasm_compat;
 
 #[cfg(unix)]
 pub use openssl_impl::*;
+#[cfg(not(target_arch = "wasm32"))]
 #[cfg(not(unix))]
 pub use ring_impl::*;
 

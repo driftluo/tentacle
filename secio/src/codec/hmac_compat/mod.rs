@@ -1,5 +1,6 @@
 #[cfg(unix)]
 mod openssl_impl;
+#[cfg(not(target_arch = "wasm32"))]
 #[cfg(any(test, not(unix)))]
 mod ring_impl;
 #[cfg(any(target_arch = "wasm32", test))]
@@ -7,6 +8,7 @@ mod wasm_compat;
 
 #[cfg(unix)]
 pub use openssl_impl::*;
+#[cfg(not(target_arch = "wasm32"))]
 #[cfg(not(unix))]
 pub use ring_impl::*;
 #[cfg(target_arch = "wasm32")]
@@ -40,7 +42,7 @@ mod test {
         assert_eq!(hmac.num_bytes(), hmac_wasm.num_bytes());
         assert!(hmac.verify(data.as_bytes(), output_ring.as_ref()));
         assert!(hmac_ring.verify(data.as_bytes(), &output_wasm));
-        assert!(hmac_wasm.verify(data.as_bytes(), &output));
+        assert!(hmac_wasm.verify(data.as_bytes(), AsRef::<[u8]>::as_ref(&output)));
 
         let mut key = [0; 64];
         rand::thread_rng().fill(&mut key[..]);

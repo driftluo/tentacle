@@ -30,6 +30,7 @@ impl OpenSsLCrypt {
         // aead use self-increase iv
         let nonce_size = cipher_type.iv_size();
         let mut nonce = BytesMut::with_capacity(nonce_size);
+        // Safety: capacity == len
         unsafe {
             nonce.set_len(nonce_size);
             ::std::ptr::write_bytes(nonce.as_mut_ptr(), 0, nonce_size);
