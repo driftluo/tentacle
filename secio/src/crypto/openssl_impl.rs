@@ -100,8 +100,9 @@ impl StreamCipher for OpenSsLCrypt {
 #[cfg(test)]
 mod test {
     use super::{CipherType, OpenSsLCrypt};
+    use proptest::prelude::*;
 
-    fn test_openssl(mode: CipherType) {
+    fn test_openssl(mode: CipherType, message: &[u8]) {
         let key = (0..mode.key_size())
             .map(|_| rand::random::<u8>())
             .collect::<Vec<_>>();
@@ -109,16 +110,10 @@ mod test {
         let mut encryptor = OpenSsLCrypt::new(mode, &key[0..]);
         let mut decryptor = OpenSsLCrypt::new(mode, &key[0..]);
 
-        // first time
-        let message = b"HELLO WORLD";
-
         let encrypted_msg = encryptor.encrypt(message).unwrap();
         let decrypted_msg = decryptor.decrypt(&encrypted_msg[..]).unwrap();
 
         assert_eq!(message, &decrypted_msg[..]);
-
-        // second time
-        let message = b"hello, world";
 
         let encrypted_msg = encryptor.encrypt(message).unwrap();
         let decrypted_msg = decryptor.decrypt(&encrypted_msg[..]).unwrap();
@@ -126,19 +121,21 @@ mod test {
         assert_eq!(message, &decrypted_msg[..]);
     }
 
-    #[test]
-    fn test_aes_128_gcm() {
-        test_openssl(CipherType::Aes128Gcm)
-    }
+    proptest! {
+        #[test]
+        fn test_aes_128_gcm(message: Vec<u8>) {
+            test_openssl(CipherType::Aes128Gcm, &message)
+        }
 
-    #[test]
-    fn test_aes_256_gcm() {
-        test_openssl(CipherType::Aes256Gcm)
-    }
+        #[test]
+        fn test_aes_256_gcm(message: Vec<u8>) {
+            test_openssl(CipherType::Aes256Gcm, &message)
+        }
 
-    #[cfg(any(ossl110))]
-    #[test]
-    fn test_chacha20_poly1305() {
-        test_openssl(CipherType::ChaCha20Poly1305)
+        #[cfg(any(ossl110))]
+        #[test]
+        fn test_chacha20_poly1305(message: Vec<u8>) {
+            test_openssl(CipherType::ChaCha20Poly1305, &message)
+        }
     }
 }
