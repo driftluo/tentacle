@@ -54,15 +54,13 @@ mod ring_openssl_unix {
         my_private_key: EphemeralPrivateKey,
         other_public_key: &[u8],
     ) -> Result<Vec<u8>, SecioError> {
-        match (algorithm, my_private_key) {
-            (
-                KeyAgreement::EcdhP256 | KeyAgreement::EcdhP384,
-                EphemeralPrivateKey::Openssl(private_key),
-            ) => openssl_impl::agree(algorithm, private_key, other_public_key),
-            (KeyAgreement::X25519, EphemeralPrivateKey::Ring(private_key)) => {
+        match my_private_key {
+            EphemeralPrivateKey::Openssl(private_key) => {
+                openssl_impl::agree(algorithm, private_key, other_public_key)
+            }
+            EphemeralPrivateKey::Ring(private_key) => {
                 ring_impl::agree(algorithm, private_key, other_public_key)
             }
-            _ => unreachable!(),
         }
     }
 }

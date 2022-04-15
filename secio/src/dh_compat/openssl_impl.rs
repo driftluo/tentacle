@@ -136,16 +136,7 @@ pub fn agree(
 
     deriver.set_peer(&peer_evp_key)?;
 
-    let len = deriver.len()?;
-    let mut secret = Vec::with_capacity(len);
-    // Safety: capacity == len
-    unsafe {
-        secret.set_len(len);
-    }
-
-    deriver.derive(&mut secret)?;
-
-    Ok(secret)
+    deriver.derive_to_vec().map_err(Into::into)
 }
 
 #[cfg(test)]
