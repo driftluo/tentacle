@@ -128,8 +128,9 @@ impl<'a> Buffer for BufferWrap<'a> {
 #[cfg(test)]
 mod test {
     use super::{BytesMut, CipherType, WasmCrypt};
+    use proptest::prelude::*;
 
-    fn test_wasm(mode: CipherType) {
+    fn test_wasm(mode: CipherType, message: &[u8]) {
         let key = (0..mode.key_size())
             .map(|_| rand::random::<u8>())
             .collect::<Vec<_>>();
@@ -137,16 +138,10 @@ mod test {
         let mut encryptor = WasmCrypt::new(mode, &key[0..]);
         let mut decryptor = WasmCrypt::new(mode, &key[0..]);
 
-        // first time
-        let message = b"HELLO WORLD";
-
         let encrypted_msg = encryptor.encrypt(message).unwrap();
         let decrypted_msg = decryptor.decrypt(&encrypted_msg[..]).unwrap();
 
         assert_eq!(message, &decrypted_msg[..]);
-
-        // second time
-        let message = b"hello, world";
 
         let encrypted_msg = encryptor.encrypt(message).unwrap();
         let decrypted_msg = decryptor.decrypt(&encrypted_msg[..]).unwrap();
@@ -154,7 +149,7 @@ mod test {
         assert_eq!(message, &decrypted_msg[..]);
     }
 
-    fn test_wasm_in_place(mode: CipherType) {
+    fn test_wasm_in_place(mode: CipherType, message: &[u8]) {
         let key = (0..mode.key_size())
             .map(|_| rand::random::<u8>())
             .collect::<Vec<_>>();
@@ -162,16 +157,10 @@ mod test {
         let mut encryptor = WasmCrypt::new(mode, &key[0..]);
         let mut decryptor = WasmCrypt::new(mode, &key[0..]);
 
-        // first time
-        let message = b"HELLO WORLD";
-
         let mut encrypted_msg = BytesMut::from(encryptor.encrypt(message).unwrap().as_slice());
         decryptor.decrypt_in_place(&mut encrypted_msg).unwrap();
 
         assert_eq!(message, &encrypted_msg[..]);
-
-        // second time
-        let message = b"hello, world";
 
         let mut encrypted_msg = BytesMut::from(encryptor.encrypt(message).unwrap().as_slice());
         decryptor.decrypt_in_place(&mut encrypted_msg).unwrap();
@@ -179,9 +168,11 @@ mod test {
         assert_eq!(message, &encrypted_msg[..]);
     }
 
-    #[test]
-    fn test_chacha20_poly1305() {
-        test_wasm(CipherType::ChaCha20Poly1305);
-        test_wasm_in_place(CipherType::ChaCha20Poly1305);
+    proptest! {
+        #[test]
+        fn test_chacha20_poly1305(message: Vec<u8>) {
+            test_wasm(CipherType::ChaCha20Poly1305, &message);
+            test_wasm_in_place(CipherType::ChaCha20Poly1305, &message);
+        }
     }
 }

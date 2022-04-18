@@ -150,14 +150,12 @@ impl StreamCipher for RingAeadCipher {
 #[cfg(test)]
 mod test {
     use super::{CipherType, CryptoMode, RingAeadCipher};
+    use proptest::prelude::*;
 
-    fn test_ring_aead(cipher: CipherType) {
+    fn test_ring_aead(cipher: CipherType, message: &[u8]) {
         let key = (0..cipher.key_size())
             .map(|_| rand::random::<u8>())
             .collect::<Vec<_>>();
-
-        // first time
-        let message = b"HELLO WORLD";
 
         let mut enc = RingAeadCipher::new(cipher, &key[..], CryptoMode::Encrypt);
 
@@ -170,9 +168,6 @@ mod test {
 
         assert_eq!(&decrypted_msg[..], message);
 
-        // second time
-        let message = b"hello, world";
-
         let encrypted_msg = enc.encrypt(message).unwrap();
 
         assert_ne!(message, &encrypted_msg[..]);
@@ -182,18 +177,20 @@ mod test {
         assert_eq!(&decrypted_msg[..], message);
     }
 
-    #[test]
-    fn test_aes_128_gcm() {
-        test_ring_aead(CipherType::Aes128Gcm)
-    }
+    proptest! {
+        #[test]
+        fn test_aes_128_gcm(message: Vec<u8>) {
+            test_ring_aead(CipherType::Aes128Gcm, &message)
+        }
 
-    #[test]
-    fn test_aes_256_gcm() {
-        test_ring_aead(CipherType::Aes256Gcm)
-    }
+        #[test]
+        fn test_aes_256_gcm(message: Vec<u8>) {
+            test_ring_aead(CipherType::Aes256Gcm, &message)
+        }
 
-    #[test]
-    fn test_chacha20_poly1305() {
-        test_ring_aead(CipherType::ChaCha20Poly1305)
+        #[test]
+        fn test_chacha20_poly1305(message: Vec<u8>) {
+            test_ring_aead(CipherType::ChaCha20Poly1305, &message)
+        }
     }
 }
