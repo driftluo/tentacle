@@ -1,3 +1,8 @@
+## secio 0.5.4
+
+### Features
+- Use openssl repalce ring on unix and ossl110(#350)
+
 ## 0.4.0-beta.4
 
 ### Bug Fix
