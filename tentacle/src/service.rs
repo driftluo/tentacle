@@ -428,8 +428,24 @@ where
                         .await;
                 }
             }
+            TargetSession::Multi(iter) => {
+                for id in iter {
+                    if let Some(control) = self.sessions.get_mut(&id) {
+                        control.inner.incr_pending_data_size(data.len());
+                        let _ignore = control
+                            .send(
+                                priority,
+                                SessionEvent::ProtocolMessage {
+                                    proto_id,
+                                    data: data.clone(),
+                                },
+                            )
+                            .await;
+                    }
+                }
+            }
             // Send data to the specified protocol for the specified sessions.
-            TargetSession::Filter(filter) => {
+            TargetSession::Filter(mut filter) => {
                 for (id, control) in self.sessions.iter_mut().filter(|(id, _)| filter(id)) {
                     debug!(
                         "send message to session [{}], proto [{}], data len: {}",

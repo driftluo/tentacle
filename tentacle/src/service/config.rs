@@ -227,8 +227,10 @@ pub enum TargetSession {
     All,
     /// Try send to only one
     Single(SessionId),
+    /// Try send to some determined session
+    Multi(Box<dyn Iterator<Item = SessionId> + Send + 'static>),
     /// Try send to some session, if return true, send to it
-    Filter(Box<dyn Fn(&SessionId) -> bool + Sync + Send + 'static>),
+    Filter(Box<dyn FnMut(&SessionId) -> bool + Send + 'static>),
 }
 
 impl From<SessionId> for TargetSession {
