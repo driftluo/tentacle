@@ -1,3 +1,8 @@
+## 0.4.0-beta.5
+
+### Features
+- Re-add multi to target session(#352)
+
 ## secio 0.5.4
 
 ### Features
