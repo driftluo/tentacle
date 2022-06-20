@@ -90,6 +90,7 @@ pub struct ServiceProtocolStream<T> {
     current_task: CurrentTask,
     shutdown: Arc<AtomicBool>,
     future_task_sender: mpsc::Sender<BoxedFutureTask>,
+    need_poll: bool,
 }
 
 impl<T> ServiceProtocolStream<T>
@@ -117,6 +118,7 @@ where
             shutdown,
             panic_report,
             future_task_sender,
+            need_poll: true,
         }
     }
 
@@ -244,12 +246,12 @@ where
                         }
                     }
                 },
-                token = self.notify_receiver.next()  => {
-                    if let Some(token) = token {
-                        self.handle_event(ServiceProtocolEvent::Notify { token }).await;
-                    }
+                Some(token) = self.notify_receiver.next() => {
+                    self.handle_event(ServiceProtocolEvent::Notify { token }).await;
                 },
-                Some(_) = &mut self.handle.poll(&mut self.handle_context) => {},
+                res = &mut self.handle.poll(&mut self.handle_context), if self.need_poll => {
+                    self.need_poll = res.is_some();
+                },
                 _ = &mut recv => break,
                 else => break
             }
@@ -325,6 +327,7 @@ pub struct SessionProtocolStream<T> {
     panic_report: mpsc::Sender<SessionEvent>,
     shutdown: Arc<AtomicBool>,
     future_task_sender: mpsc::Sender<BoxedFutureTask>,
+    need_poll: bool,
 }
 
 impl<T> SessionProtocolStream<T>
@@ -353,6 +356,7 @@ where
             current_task: false,
             shutdown,
             future_task_sender,
+            need_poll: true,
         }
     }
 
@@ -454,12 +458,12 @@ where
                         }
                     }
                 }
-                token = self.notify_receiver.next() => {
-                    if let Some(token) = token {
-                        self.handle_event(SessionProtocolEvent::Notify { token }).await;
-                    }
+                Some(token) = self.notify_receiver.next() => {
+                    self.handle_event(SessionProtocolEvent::Notify { token }).await;
                 }
-                Some(_) = self.handle.poll(self.handle_context.as_mut(&self.context)) => {},
+                res = self.handle.poll(self.handle_context.as_mut(&self.context)), if self.need_poll => {
+                    self.need_poll = res.is_some();
+                },
                 _ = &mut recv => break,
                 else => break
             }

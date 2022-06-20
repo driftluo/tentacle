@@ -57,5 +57,6 @@ pub async fn yield_now() {
         yielded = true;
         cx.waker().wake_by_ref();
         Poll::Pending
-    }).await
+    })
+    .await
 }
