@@ -1,5 +1,6 @@
 use futures::{
     channel::{mpsc, oneshot},
+    future::poll_fn,
     SinkExt, StreamExt,
 };
 use log::{debug, trace};
@@ -232,6 +233,7 @@ where
                 self.current_task.idle();
                 break;
             }
+            poll_fn(|cx| crate::runtime::poll_proceed(cx)).await;
             tokio::select! {
                 event = self.receiver.next() => {
                     match event {
@@ -441,6 +443,7 @@ where
 
     pub async fn run(&mut self, mut recv: oneshot::Receiver<()>) {
         loop {
+            poll_fn(|cx| crate::runtime::poll_proceed(cx)).await;
             tokio::select! {
                 event = self.receiver.next() => {
                     match event {

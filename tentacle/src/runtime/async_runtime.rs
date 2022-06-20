@@ -1,5 +1,5 @@
 #[cfg(not(target_arch = "wasm32"))]
-pub use async_std::task::{spawn, spawn_blocking, JoinHandle};
+pub use async_std::task::{spawn, spawn_blocking, JoinHandle, yield_now};
 
 pub fn block_in_place<F, R>(f: F) -> R
 where

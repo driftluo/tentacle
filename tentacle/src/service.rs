@@ -1,4 +1,4 @@
-use futures::{channel::mpsc, prelude::*, stream::StreamExt};
+use futures::{channel::mpsc, future::poll_fn, prelude::*, stream::StreamExt};
 use log::{debug, error, trace};
 use nohash_hasher::IntMap;
 use std::{
@@ -1238,6 +1238,8 @@ where
                 self.wait_handle_poll().await;
                 break;
             }
+
+            poll_fn(|cx| crate::runtime::poll_proceed(cx)).await;
             #[cfg(not(target_arch = "wasm32"))]
             self.try_update_listens().await;
             tokio::select! {

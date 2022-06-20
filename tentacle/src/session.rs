@@ -763,6 +763,8 @@ impl Stream for Session {
 
         self.flush(cx);
 
+        futures::ready!(crate::runtime::poll_proceed(cx));
+
         let mut is_pending = self.recv_substreams(cx).is_pending();
 
         is_pending &= self.recv_service(cx).is_pending();
