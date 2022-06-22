@@ -8,10 +8,12 @@ use openssl::{
 
 use crate::{dh_compat::KeyAgreement, error::SecioError};
 
+type PairsGenarate = fn() -> Result<(PKey<Private>, Vec<u8>), SecioError>;
+
 struct Algorithm {
     _private_len: usize,
     pubkey_len: usize,
-    pairs_generate: fn() -> Result<(PKey<Private>, Vec<u8>), SecioError>,
+    pairs_generate: PairsGenarate,
     from_pubkey: fn(&[u8]) -> Result<PKey<Public>, SecioError>,
 }
 

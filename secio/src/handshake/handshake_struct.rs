@@ -27,7 +27,7 @@ impl Propose {
             .set(self.rand.into_iter().map(Into::into).collect())
             .build();
         let pubkey = handshake_mol::Bytes::new_builder()
-            .set(self.pubkey.to_vec().into_iter().map(Into::into).collect())
+            .set(self.pubkey.iter().copied().map(Into::into).collect())
             .build();
         let exchange = handshake_mol::String::new_builder()
             .set(

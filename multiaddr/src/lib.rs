@@ -55,8 +55,7 @@ impl Multiaddr {
     /// ```
     ///
     pub fn push(&mut self, p: Protocol<'_>) {
-        let mut w = Vec::with_capacity(self.bytes.len());
-        unsafe { w.set_len(self.bytes.len()) }
+        let mut w = vec![0; self.bytes.len()];
         w.copy_from_slice(&self.bytes[..]);
         p.write_to_bytes(&mut w);
         self.bytes = Bytes::from(w);

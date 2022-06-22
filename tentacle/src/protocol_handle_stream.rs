@@ -235,7 +235,7 @@ where
                 self.current_task.idle();
                 break;
             }
-            poll_fn(|cx| crate::runtime::poll_proceed(cx)).await;
+            poll_fn(crate::runtime::poll_proceed).await;
             tokio::select! {
                 event = self.receiver.next() => {
                     match event {
@@ -447,7 +447,7 @@ where
 
     pub async fn run(&mut self, mut recv: oneshot::Receiver<()>) {
         loop {
-            poll_fn(|cx| crate::runtime::poll_proceed(cx)).await;
+            poll_fn(crate::runtime::poll_proceed).await;
             tokio::select! {
                 event = self.receiver.next() => {
                     match event {
