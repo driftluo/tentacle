@@ -121,13 +121,6 @@ pub struct TcpSocket {
     pub(crate) inner: socket2::Socket,
 }
 
-#[cfg(not(target_arch = "wasm32"))]
-impl From<socket2::Socket> for TcpSocket {
-    fn from(s: socket2::Socket) -> TcpSocket {
-        TcpSocket { inner: s }
-    }
-}
-
 #[cfg(unix)]
 impl AsRawFd for TcpSocket {
     fn as_raw_fd(&self) -> RawFd {

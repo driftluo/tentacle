@@ -181,7 +181,14 @@ impl ServiceBuilder {
     ///      socket.set_reuse_address(true)?;
     ///      socket.bind(&"127.0.0.1:1080".parse::<SocketAddr>().unwrap().into())?;
     ///      socket.set_keepalive(true)?;
-    ///      Ok(socket.into())
+    ///      let socket = unsafe {
+    ///         #[cfg(unix)]
+    ///         let socket = TcpSocket::from_raw_fd(socket.into_raw_fd());
+    ///         #[cfg(windows)]
+    ///         let socket = TcpSocket::from_raw_socket(socket.into_raw_socket());
+    ///         socket
+    ///      };
+    ///      Ok(socket)
     /// });
     /// ```
     ///
