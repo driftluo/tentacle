@@ -1,3 +1,14 @@
+## 0.4.0
+
+### Bug Fix
+- Introduce budget model to avoid uninterrupted future(#355)
+- Fixed in the implementation of poll fn, which does not call it if it returns none(#355)
+- Reuse address by default(#356)
+- Clippy fix(#358)
+
+### Features
+- Remove the external exposure of socket2, so that external interaction is only possible via fd(#355)
+
 ## 0.4.0-beta.5
 
 ### Features
