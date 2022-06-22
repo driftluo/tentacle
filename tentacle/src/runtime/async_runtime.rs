@@ -170,6 +170,17 @@ mod os {
         let socket = Socket::new(domain, Type::STREAM, Some(SocketProtocol::TCP))?;
 
         let socket = {
+            // On platforms with Berkeley-derived sockets, this allows to quickly
+            // rebind a socket, without needing to wait for the OS to clean up the
+            // previous one.
+            //
+            // On Windows, this allows rebinding sockets which are actively in use,
+            // which allows “socket hijacking”, so we explicitly don't set it here.
+            // https://docs.microsoft.com/en-us/windows/win32/winsock/using-so-reuseaddr-and-so-exclusiveaddruse
+            //
+            // user can disable it on tcp_config
+            #[cfg(not(windows))]
+            socket.set_reuse_address(true)?;
             let t = tcp_config(socket.into())?;
             t.inner
         };
