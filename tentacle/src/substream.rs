@@ -472,6 +472,8 @@ where
             self.event_sender.len()
         );
 
+        futures::ready!(crate::runtime::poll_proceed(cx));
+
         let mut is_pending = self.recv_frame(cx).is_pending();
 
         is_pending &= self.recv_event(cx).is_pending();
@@ -844,6 +846,8 @@ where
             self.event_sender.len()
         );
 
+        futures::ready!(crate::runtime::poll_proceed(cx));
+
         let is_pending = self.recv_event(cx).is_pending();
 
         if is_pending {
@@ -893,6 +897,7 @@ impl Stream for SubstreamReadPart {
     type Item = Result<bytes::Bytes, io::Error>;
 
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Option<Self::Item>> {
+        futures::ready!(crate::runtime::poll_proceed(cx));
         match self.substream.poll_next_unpin(cx) {
             Poll::Ready(Some(Ok(data))) => {
                 let data = match self.before_receive {

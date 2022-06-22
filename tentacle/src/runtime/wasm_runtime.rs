@@ -1,6 +1,6 @@
 use wasm_bindgen_futures::spawn_local;
 
-use futures::channel::oneshot;
+use futures::{channel::oneshot, future::poll_fn};
 use std::{
     future::Future,
     io,
@@ -44,4 +44,19 @@ where
     });
 
     JoinHandle { recv: rx }
+}
+
+pub async fn yield_now() {
+    let mut yielded = false;
+
+    poll_fn(|cx| {
+        if yielded {
+            return Poll::Ready(());
+        }
+
+        yielded = true;
+        cx.waker().wake_by_ref();
+        Poll::Pending
+    })
+    .await
 }

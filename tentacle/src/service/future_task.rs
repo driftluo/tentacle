@@ -98,6 +98,8 @@ impl Stream for FutureTaskManager {
             return Poll::Ready(None);
         }
 
+        futures::ready!(crate::runtime::poll_proceed(cx));
+
         let mut is_pending = match Pin::new(&mut self.task_receiver).as_mut().poll_next(cx) {
             Poll::Ready(Some(task)) => {
                 self.add_task(task);

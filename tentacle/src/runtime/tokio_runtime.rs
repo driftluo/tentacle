@@ -1,10 +1,10 @@
 pub use tokio::{
     net::{TcpListener, TcpStream},
     spawn,
-    task::{block_in_place, spawn_blocking, JoinHandle},
+    task::{block_in_place, spawn_blocking, yield_now, JoinHandle},
 };
 
-use crate::service::config::TcpSocketConfig;
+use crate::service::config::{TcpSocket, TcpSocketConfig};
 use socket2::{Domain, Protocol as SocketProtocol, Socket, Type};
 #[cfg(unix)]
 use std::os::unix::io::{FromRawFd, IntoRawFd};
@@ -75,7 +75,7 @@ pub(crate) fn listen(addr: SocketAddr, tcp_config: TcpSocketConfig) -> io::Resul
         // user can disable it on tcp_config
         #[cfg(not(windows))]
         socket.set_reuse_address(true)?;
-        let t = tcp_config(socket.into())?;
+        let t = tcp_config(TcpSocket { inner: socket })?;
         t.inner.set_nonblocking(true)?;
         // safety: fd convert by socket2
         unsafe {
@@ -108,7 +108,7 @@ pub(crate) async fn connect(
     let socket = Socket::new(domain, Type::STREAM, Some(SocketProtocol::TCP))?;
 
     let socket = {
-        let t = tcp_config(socket.into())?;
+        let t = tcp_config(TcpSocket { inner: socket })?;
         t.inner.set_nonblocking(true)?;
         // safety: fd convert by socket2
         unsafe {

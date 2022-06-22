@@ -1,5 +1,5 @@
 #[cfg(not(target_arch = "wasm32"))]
-pub use async_std::task::{spawn, spawn_blocking, JoinHandle};
+pub use async_std::task::{spawn, spawn_blocking, yield_now, JoinHandle};
 
 pub fn block_in_place<F, R>(f: F) -> R
 where
@@ -13,7 +13,10 @@ pub use os::*;
 
 #[cfg(not(target_arch = "wasm32"))]
 mod os {
-    use crate::{runtime::CompatStream2, service::config::TcpSocketConfig};
+    use crate::{
+        runtime::CompatStream2,
+        service::config::{TcpSocket, TcpSocketConfig},
+    };
     use async_io::Async;
     use async_std::net::{TcpListener as AsyncListener, TcpStream as AsyncStream, ToSocketAddrs};
     use futures::{
@@ -142,7 +145,7 @@ mod os {
         let socket = Socket::new(domain, Type::STREAM, Some(SocketProtocol::TCP))?;
 
         let socket = {
-            let t = tcp_config(socket.into())?;
+            let t = tcp_config(TcpSocket { inner: socket })?;
             t.inner
         };
         // `bind` twice will return error
@@ -181,7 +184,7 @@ mod os {
             // user can disable it on tcp_config
             #[cfg(not(windows))]
             socket.set_reuse_address(true)?;
-            let t = tcp_config(socket.into())?;
+            let t = tcp_config(TcpSocket { inner: socket })?;
             t.inner
         };
 
