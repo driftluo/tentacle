@@ -71,10 +71,7 @@ impl RingAeadCipher {
     /// +----------------------------------------+-----------------------+
     /// ```
     pub fn encrypt(&mut self, input: &[u8]) -> Result<Vec<u8>, SecioError> {
-        let mut output = Vec::with_capacity(input.len() + self.cipher_type.tag_size());
-        unsafe {
-            output.set_len(input.len());
-        }
+        let mut output = vec![0; input.len()];
         output.copy_from_slice(input);
         if let RingAeadCryptoVariant::Seal(ref mut key) = self.cipher {
             key.seal_in_place_append_tag(Aad::empty(), &mut output)
@@ -96,11 +93,8 @@ impl RingAeadCipher {
             .len()
             .checked_sub(self.cipher_type.tag_size())
             .ok_or(SecioError::FrameTooShort)?;
-        let mut buf = Vec::with_capacity(input.len());
+        let mut buf = vec![0; input.len()];
 
-        unsafe {
-            buf.set_len(input.len());
-        }
         buf.copy_from_slice(input);
 
         if let RingAeadCryptoVariant::Open(ref mut key) = self.cipher {

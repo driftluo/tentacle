@@ -666,7 +666,7 @@ mod test {
             let data = [0; 8];
 
             stream.send_window_update().unwrap();
-            stream.write(&data).await.unwrap();
+            stream.write_all(&data).await.unwrap();
 
             let event = unbound_receiver.next().await.unwrap();
             match event {

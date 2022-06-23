@@ -1239,7 +1239,7 @@ where
                 break;
             }
 
-            poll_fn(|cx| crate::runtime::poll_proceed(cx)).await;
+            poll_fn(crate::runtime::poll_proceed).await;
             #[cfg(not(target_arch = "wasm32"))]
             self.try_update_listens().await;
             tokio::select! {

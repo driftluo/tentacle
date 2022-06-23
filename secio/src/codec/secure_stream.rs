@@ -109,7 +109,7 @@ where
     pub(crate) async fn verify_nonce(&mut self) -> Result<(), SecioError> {
         if !self.nonce.is_empty() {
             let mut nonce = self.nonce.clone();
-            self.read(&mut nonce).await?;
+            self.read_exact(&mut nonce).await?;
 
             trace!(
                 "received nonce={}, my_nonce={}",

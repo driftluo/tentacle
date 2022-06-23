@@ -42,14 +42,14 @@ mod test {
     #[test]
     fn test_budget() {
         assert_eq!(get(), 128);
-        block_on(poll_fn(|cx| poll_proceed(cx)));
+        block_on(poll_fn(poll_proceed));
         assert_eq!(get(), 127);
 
         thread::spawn(|| {
             assert_eq!(get(), 128);
             block_on(async {
                 for _ in 0..2 {
-                    poll_fn(|cx| poll_proceed(cx)).await
+                    poll_fn(poll_proceed).await
                 }
             });
             assert_eq!(get(), 126);
@@ -59,7 +59,7 @@ mod test {
         assert_eq!(get(), 127);
         block_on(async {
             for _ in 0..127 {
-                poll_fn(|cx| poll_proceed(cx)).await
+                poll_fn(poll_proceed).await
             }
         });
         assert_eq!(get(), 127);

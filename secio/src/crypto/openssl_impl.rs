@@ -29,12 +29,7 @@ impl OpenSsLCrypt {
 
         // aead use self-increase iv
         let nonce_size = cipher_type.iv_size();
-        let mut nonce = BytesMut::with_capacity(nonce_size);
-        // Safety: capacity == len
-        unsafe {
-            nonce.set_len(nonce_size);
-            ::std::ptr::write_bytes(nonce.as_mut_ptr(), 0, nonce_size);
-        }
+        let nonce = BytesMut::from(vec![0u8; nonce_size].as_slice());
 
         OpenSsLCrypt {
             cipher,
@@ -53,10 +48,7 @@ impl OpenSsLCrypt {
     pub fn encrypt(&mut self, input: &[u8]) -> Result<Vec<u8>, SecioError> {
         nonce_advance(self.iv.as_mut());
         let tag_size = self.cipher_type.tag_size();
-        let mut tag = Vec::with_capacity(tag_size);
-        unsafe {
-            tag.set_len(tag_size);
-        }
+        let mut tag = vec![0; tag_size];
         let mut output =
             symm::encrypt_aead(self.cipher, &self.key, Some(&self.iv), &[], input, &mut tag)?;
         output.append(&mut tag);
