@@ -78,6 +78,8 @@ tls = ["tokio-rustls"]
 upnp = ["igd"]
 unstable = []
 
+openssl-vendored = ["secio/openssl-vendored"]
+
 # Related to runtime
 
 tokio-timer = ["yamux/tokio-timer", "tokio/time", "tokio-runtime"]
