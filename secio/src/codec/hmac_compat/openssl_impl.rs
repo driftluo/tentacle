@@ -33,10 +33,9 @@ impl Hmac {
 
     /// Signs the data.
     pub fn sign(&mut self, crypted_data: &[u8]) -> Vec<u8> {
-        Signer::new(self.digest, &self.key)
-            .expect("init openssl signer ctx fail")
-            .sign_oneshot_to_vec(crypted_data)
-            .expect("hmac sign oneshot fail")
+        let mut sign = Signer::new(self.digest, &self.key).expect("init openssl signer ctx fail");
+        sign.update(crypted_data).expect("openssl hmac update fail");
+        sign.sign_to_vec().expect("hmac sign oneshot fail")
     }
 
     /// Verifies that the data matches the expected hash.
