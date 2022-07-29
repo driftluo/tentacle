@@ -1,3 +1,8 @@
+## 0.4.1
+
+### Features
+- Re-export openssl vendored
+
 ## 0.4.0
 
 ### Bug Fix

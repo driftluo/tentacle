@@ -3,6 +3,8 @@ name = "tentacle-multiaddr"
 version = "0.3.3"
 authors = ["driftluo <driftluo@foxmail.com>"]
 edition = "2021"
+license = "MIT"
+description = "Mini Implementation of multiaddr"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 

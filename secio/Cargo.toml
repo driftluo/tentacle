@@ -1,6 +1,6 @@
 [package]
 name = "tentacle-secio"
-version = "0.5.5"
+version = "0.5.6"
 license = "MIT"
 description = "Secio encryption protocol for p2p"
 authors = ["piaoliu <driftluo@foxmail.com>", "Nervos Core Dev <dev@nervos.org>"]
@@ -43,6 +43,9 @@ sha2 = "0.10.0"
 hmac = "0.12.0"
 x25519-dalek = "1.1"
 chacha20poly1305 = "0.9"
+
+[features]
+openssl-vendored = ["openssl/vendored"]
 
 [dev-dependencies]
 env_logger = "0.6"
