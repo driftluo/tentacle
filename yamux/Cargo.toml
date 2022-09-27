@@ -1,6 +1,6 @@
 [package]
 name = "tokio-yamux"
-version = "0.3.6"
+version = "0.3.7"
 license = "MIT"
 repository = "https://github.com/nervosnetwork/tentacle"
 description = "Rust implementation of Yamux"

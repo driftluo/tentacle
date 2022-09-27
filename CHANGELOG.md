@@ -1,3 +1,8 @@
+## yamux 0.3.7 secio 0.5.7
+
+### Bug Fix
+- Fix wrong behavior on half close(#362)
+
 ## 0.4.1
 
 ### Features

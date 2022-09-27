@@ -1,7 +1,7 @@
 #![allow(dead_code)]
 
 use chacha20poly1305::{
-    aead::{Aead, AeadInPlace, Buffer, Error, NewAead},
+    aead::{Aead, AeadInPlace, Buffer, Error, KeyInit},
     ChaCha20Poly1305, Key, Nonce,
 };
 

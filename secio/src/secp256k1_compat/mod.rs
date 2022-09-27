@@ -1,8 +1,8 @@
-pub use secp256k1::{constants::SECRET_KEY_SIZE, Message, PublicKey, SecretKey, Signature};
+pub use secp256k1::{constants::SECRET_KEY_SIZE, ecdsa::Signature, Message, PublicKey, SecretKey};
 
 pub fn from_secret_key(secret: &SecretKey) -> PublicKey {
     let secp = secp256k1::Secp256k1::signing_only();
-    secp256k1::key::PublicKey::from_secret_key(&secp, secret)
+    secp256k1::PublicKey::from_secret_key(&secp, secret)
 }
 
 // compressed serialize, len = 33
@@ -16,12 +16,12 @@ pub fn signature_to_vec(signature: Signature) -> Vec<u8> {
 
 pub fn sign(message: &Message, secret: &SecretKey) -> Signature {
     let secp256k1_key = secp256k1::Secp256k1::signing_only();
-    secp256k1_key.sign(message, secret)
+    secp256k1_key.sign_ecdsa(message, secret)
 }
 
 pub fn verify(message: &Message, signature: &Signature, pubkey: &PublicKey) -> bool {
     let secp256k1 = secp256k1::Secp256k1::verification_only();
-    secp256k1.verify(message, signature, pubkey).is_ok()
+    secp256k1.verify_ecdsa(message, signature, pubkey).is_ok()
 }
 
 pub fn secret_key_from_slice(key: &[u8]) -> Result<SecretKey, secp256k1::Error> {
