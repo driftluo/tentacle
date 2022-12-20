@@ -521,7 +521,20 @@ impl<T> Drop for UnboundedReceiver<T> {
                         // here. That said, if this case is hit, then another thread
                         // is about to push the value into the queue and this isn't
                         // the only spinlock in the impl right now.
-                        ::std::thread::yield_now();
+                        #[cfg(any(
+                            target_arch = "x86",
+                            target_arch = "x86_64",
+                            target_arch = "aarch64",
+                            target_arch = "arm"
+                        ))]
+                        std::hint::spin_loop();
+                        #[cfg(not(any(
+                            target_arch = "x86",
+                            target_arch = "x86_64",
+                            target_arch = "aarch64",
+                            target_arch = "arm"
+                        )))]
+                        std::thread::yield_now();
                     }
                 }
             }

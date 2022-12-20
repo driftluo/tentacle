@@ -1,4 +1,4 @@
-use futures::{channel::mpsc, future::poll_fn, prelude::*, stream::StreamExt};
+use futures::{channel::mpsc, future::poll_fn, prelude::*, stream::StreamExt, SinkExt};
 use log::{debug, error, trace};
 use nohash_hasher::IntMap;
 use std::{
@@ -26,7 +26,7 @@ use crate::{
     secio::{PublicKey, SecioKeyPair},
     service::{
         config::{ServiceConfig, State},
-        event::ServiceTask,
+        event::{ServiceEventAndError, ServiceTask},
         future_task::{BoxedFutureTask, FutureTaskManager},
         helper::{HandshakeContext, Source},
     },
@@ -57,8 +57,7 @@ pub use crate::service::config::TlsConfig;
 
 type Result<T> = std::result::Result<T, TransportErrorKind>;
 
-/// An abstraction of p2p service, currently only supports TCP/websocket protocol
-pub struct Service<T> {
+struct InnerService {
     protocol_configs: IntMap<ProtocolId, ProtocolMeta>,
 
     sessions: IntMap<SessionId, SessionController>,
@@ -79,12 +78,8 @@ pub struct Service<T> {
 
     before_sends: IntMap<ProtocolId, Box<dyn Fn(bytes::Bytes) -> bytes::Bytes + Send + 'static>>,
 
-    /// Can be upgrade to list service level protocols
-    handle: T,
+    handle_sender: mpsc::Sender<ServiceEventAndError>,
 
-    // Future task manager
-    future_task_manager: Option<FutureTaskManager>,
-    // To add a future task
     future_task_sender: mpsc::Sender<BoxedFutureTask>,
 
     service_proto_handles: IntMap<ProtocolId, mpsc::Sender<ServiceProtocolEvent>>,
@@ -107,6 +102,19 @@ pub struct Service<T> {
         Option<futures::channel::oneshot::Sender<()>>,
         crate::runtime::JoinHandle<()>,
     )>,
+}
+
+/// An abstraction of p2p service, currently only supports TCP/websocket protocol
+pub struct Service<T> {
+    /// Can be upgrade to list service level protocols
+    handle: T,
+    service_context: ServiceContext,
+    recv: mpsc::Receiver<ServiceEventAndError>,
+
+    // Future task manager
+    future_task_manager: Option<FutureTaskManager>,
+
+    inner_service: Option<InnerService>,
 }
 
 impl<T> Service<T>
@@ -134,6 +142,8 @@ where
             .collect();
         let (future_task_sender, future_task_receiver) =
             mpsc::channel(config.session_config.channel_size);
+        let (user_handle_sender, user_handle_receiver) =
+            mpsc::channel(config.session_config.channel_size);
         let shutdown = Arc::new(AtomicBool::new(false));
         #[cfg(all(not(target_arch = "wasm32"), feature = "upnp"))]
         let igd_client = if config.upnp {
@@ -142,46 +152,51 @@ where
             None
         };
 
+        let service_context =
+            ServiceContext::new(task_sender, proto_infos, key_pair, shutdown.clone());
+
         Service {
-            protocol_configs,
-            before_sends: HashMap::default(),
             handle,
-            multi_transport: {
-                #[cfg(target_arch = "wasm32")]
-                let transport = MultiTransport::new(config.timeout);
-                #[allow(clippy::let_and_return)]
-                #[cfg(not(target_arch = "wasm32"))]
-                let transport = MultiTransport::new(config.timeout, config.tcp_config.clone());
-                #[cfg(feature = "tls")]
-                let transport = transport.tls_config(config.tls_config.clone());
-                transport
-            },
-            future_task_sender,
+            service_context: service_context.clone_self(),
+            recv: user_handle_receiver,
+
             future_task_manager: Some(FutureTaskManager::new(
                 future_task_receiver,
                 shutdown.clone(),
             )),
-            sessions: HashMap::default(),
-            service_proto_handles: HashMap::default(),
-            session_proto_handles: HashMap::default(),
-            listens: HashSet::new(),
-            #[cfg(all(not(target_arch = "wasm32"), feature = "upnp"))]
-            igd_client,
-            dial_protocols: HashMap::default(),
-            state: State::new(forever),
-            next_session: SessionId::default(),
-            session_event_sender,
-            session_event_receiver,
-            service_context: ServiceContext::new(
-                task_sender,
-                proto_infos,
-                key_pair,
-                shutdown.clone(),
-            ),
-            config,
-            service_task_receiver: task_receiver,
-            shutdown,
-            wait_handle: Vec::new(),
+
+            inner_service: Some(InnerService {
+                protocol_configs,
+                before_sends: HashMap::default(),
+                handle_sender: user_handle_sender,
+                future_task_sender,
+                multi_transport: {
+                    #[cfg(target_arch = "wasm32")]
+                    let transport = MultiTransport::new(config.timeout);
+                    #[allow(clippy::let_and_return)]
+                    #[cfg(not(target_arch = "wasm32"))]
+                    let transport = MultiTransport::new(config.timeout, config.tcp_config.clone());
+                    #[cfg(feature = "tls")]
+                    let transport = transport.tls_config(config.tls_config.clone());
+                    transport
+                },
+                sessions: HashMap::default(),
+                service_proto_handles: HashMap::default(),
+                session_proto_handles: HashMap::default(),
+                listens: HashSet::new(),
+                #[cfg(all(not(target_arch = "wasm32"), feature = "upnp"))]
+                igd_client,
+                dial_protocols: HashMap::default(),
+                state: State::new(forever),
+                next_session: SessionId::default(),
+                session_event_sender,
+                session_event_receiver,
+                service_context,
+                config,
+                service_task_receiver: task_receiver,
+                shutdown,
+                wait_handle: Vec::new(),
+            }),
         }
     }
 
@@ -189,8 +204,16 @@ where
     ///
     /// Panic when max_frame_length < yamux_max_window_size
     pub fn yamux_config(mut self, config: YamuxConfig) -> Self {
-        assert!(self.config.max_frame_length as u32 >= config.max_stream_window_size);
-        self.config.session_config.yamux_config = config;
+        assert!(
+            self.inner_service.as_ref().unwrap().config.max_frame_length as u32
+                >= config.max_stream_window_size
+        );
+        self.inner_service
+            .as_mut()
+            .unwrap()
+            .config
+            .session_config
+            .yamux_config = config;
         self
     }
 
@@ -201,12 +224,15 @@ where
         assert!(
             size as u32
                 >= self
+                    .inner_service
+                    .as_ref()
+                    .unwrap()
                     .config
                     .session_config
                     .yamux_config
                     .max_stream_window_size
         );
-        self.config.max_frame_length = size;
+        self.inner_service.as_mut().unwrap().config.max_frame_length = size;
         self
     }
 
@@ -215,7 +241,8 @@ where
     /// Return really listen multiaddr, but if use `/dns4/localhost/tcp/80`,
     /// it will return original value, and create a future task to DNS resolver later.
     pub async fn listen(&mut self, address: Multiaddr) -> Result<Multiaddr> {
-        let listen_future = self.multi_transport.clone().listen(address.clone())?;
+        let inner = self.inner_service.as_mut().unwrap();
+        let listen_future = inner.multi_transport.clone().listen(address.clone())?;
 
         #[cfg(target_arch = "wasm32")]
         unreachable!();
@@ -225,21 +252,19 @@ where
             Ok((addr, incoming)) => {
                 let listen_address = addr.clone();
 
-                self.handle
-                    .handle_event(
-                        &mut self.service_context,
-                        ServiceEvent::ListenStarted {
-                            address: listen_address.clone(),
-                        },
-                    )
+                let _ignore = inner
+                    .handle_sender
+                    .send(ServiceEventAndError::Event(ServiceEvent::ListenStarted {
+                        address: listen_address.clone(),
+                    }))
                     .await;
                 #[cfg(feature = "upnp")]
-                if let Some(client) = self.igd_client.as_mut() {
+                if let Some(client) = inner.igd_client.as_mut() {
                     client.register(&listen_address)
                 }
-                self.listens.insert(listen_address.clone());
+                inner.listens.insert(listen_address.clone());
 
-                self.spawn_listener(incoming, listen_address);
+                inner.spawn_listener(incoming, listen_address);
 
                 Ok(addr)
             }
@@ -247,6 +272,58 @@ where
         }
     }
 
+    /// Dial the given address, doesn't actually make a request, just generate a future
+    pub async fn dial(&mut self, address: Multiaddr, target: TargetProtocol) -> Result<&mut Self> {
+        let inner = self.inner_service.as_mut().unwrap();
+        let dial_future = inner.multi_transport.clone().dial(address.clone())?;
+
+        match dial_future.await {
+            Ok((addr, incoming)) => {
+                inner.handshake(incoming, SessionType::Outbound, addr, None);
+                inner.dial_protocols.insert(address, target);
+                inner.state.increase();
+                Ok(self)
+            }
+            Err(err) => Err(err),
+        }
+    }
+
+    /// Get service control, control can send tasks externally to the runtime inside
+    pub fn control(&self) -> &ServiceAsyncControl {
+        self.service_context.control()
+    }
+
+    /// start service
+    pub async fn run(&mut self) {
+        let mut inner = self.inner_service.take().unwrap();
+        if let Some(stream) = self.future_task_manager.take() {
+            let (sender, receiver) = futures::channel::oneshot::channel();
+            let handle = crate::runtime::spawn(async move {
+                future::select(stream.for_each(|_| future::ready(())), receiver).await;
+            });
+            inner.wait_handle.push((Some(sender), handle));
+            inner.init_proto_handles();
+        }
+
+        crate::runtime::spawn(async move { inner.run().await });
+
+        while let Some(s) = self.recv.next().await {
+            match s {
+                ServiceEventAndError::Event(e) => {
+                    self.handle.handle_event(&mut self.service_context, e).await
+                }
+                ServiceEventAndError::Error(e) => {
+                    self.handle.handle_error(&mut self.service_context, e).await
+                }
+                ServiceEventAndError::Update { listen_addrs } => {
+                    self.service_context.update_listens(listen_addrs)
+                }
+            }
+        }
+    }
+}
+
+impl InnerService {
     #[cfg(not(target_arch = "wasm32"))]
     fn spawn_listener(&mut self, incoming: MultiIncoming, listen_address: Multiaddr) {
         let listener = Listener {
@@ -300,21 +377,6 @@ where
         Ok(())
     }
 
-    /// Dial the given address, doesn't actually make a request, just generate a future
-    pub async fn dial(&mut self, address: Multiaddr, target: TargetProtocol) -> Result<&mut Self> {
-        let dial_future = self.multi_transport.clone().dial(address.clone())?;
-
-        match dial_future.await {
-            Ok((addr, incoming)) => {
-                self.handshake(incoming, SessionType::Outbound, addr, None);
-                self.dial_protocols.insert(address, target);
-                self.state.increase();
-                Ok(self)
-            }
-            Err(err) => Err(err),
-        }
-    }
-
     /// Use by inner
     #[inline(always)]
     fn dial_inner(&mut self, address: Multiaddr, target: TargetProtocol) -> Result<()> {
@@ -360,11 +422,6 @@ where
         });
         self.state.increase();
         Ok(())
-    }
-
-    /// Get service control, control can send tasks externally to the runtime inside
-    pub fn control(&self) -> &ServiceAsyncControl {
-        self.service_context.control()
     }
 
     /// Spawn protocol handle
@@ -571,24 +628,20 @@ where
                         let _ignore = handle.shutdown().await;
                     });
                     if ty.is_outbound() {
-                        self.handle
-                            .handle_error(
-                                &mut self.service_context,
-                                ServiceError::DialerError {
-                                    error: DialerErrorKind::RepeatedConnection(context.inner.id),
-                                    address,
-                                },
-                            )
+                        let _ignore = self
+                            .handle_sender
+                            .send(ServiceEventAndError::Error(ServiceError::DialerError {
+                                error: DialerErrorKind::RepeatedConnection(context.inner.id),
+                                address,
+                            }))
                             .await;
                     } else {
-                        self.handle
-                            .handle_error(
-                                &mut self.service_context,
-                                ServiceError::ListenError {
-                                    error: ListenErrorKind::RepeatedConnection(context.inner.id),
-                                    address: listen_addr.expect("listen address must exist"),
-                                },
-                            )
+                        let _ignore = self
+                            .handle_sender
+                            .send(ServiceEventAndError::Error(ServiceError::ListenError {
+                                error: ListenErrorKind::RepeatedConnection(context.inner.id),
+                                address: listen_addr.expect("listen address must exist"),
+                            }))
                             .await;
                     }
                     return;
@@ -598,14 +651,12 @@ where
                     if let Some(peer_id) = extract_peer_id(&address) {
                         if key.peer_id() != peer_id {
                             trace!("Peer id not match");
-                            self.handle
-                                .handle_error(
-                                    &mut self.service_context,
-                                    ServiceError::DialerError {
-                                        error: DialerErrorKind::PeerIdNotMatch,
-                                        address,
-                                    },
-                                )
+                            let _ignore = self
+                                .handle_sender
+                                .send(ServiceEventAndError::Error(ServiceError::DialerError {
+                                    error: DialerErrorKind::PeerIdNotMatch,
+                                    address,
+                                }))
                                 .await;
                             return;
                         }
@@ -712,11 +763,11 @@ where
 
         crate::runtime::spawn(session.for_each(|_| future::ready(())));
 
-        self.handle
-            .handle_event(
-                &mut self.service_context,
-                ServiceEvent::SessionOpen { session_context },
-            )
+        let _ignore = self
+            .handle_sender
+            .send(ServiceEventAndError::Event(ServiceEvent::SessionOpen {
+                session_context,
+            }))
             .await;
     }
 
@@ -740,13 +791,11 @@ where
 
         if let Some(session_control) = self.sessions.remove(&id) {
             // Service handle processing flow
-            self.handle
-                .handle_event(
-                    &mut self.service_context,
-                    ServiceEvent::SessionClose {
-                        session_context: session_control.inner,
-                    },
-                )
+            let _ignore = self
+                .handle_sender
+                .send(ServiceEventAndError::Event(ServiceEvent::SessionClose {
+                    session_context: session_control.inner,
+                }))
                 .await;
         }
     }
@@ -827,6 +876,13 @@ where
 
         let mut error = false;
 
+        let _ignore = self
+            .handle_sender
+            .send(ServiceEventAndError::Update {
+                listen_addrs: new_listens.clone(),
+            })
+            .await;
+
         for (proto_id, sender) in self.service_proto_handles.iter_mut() {
             if sender
                 .send(ServiceProtocolEvent::Update {
@@ -835,14 +891,14 @@ where
                 .await
                 .is_err()
             {
-                self.handle
-                    .handle_error(
-                        &mut self.service_context,
+                let _ignore = self
+                    .handle_sender
+                    .send(ServiceEventAndError::Error(
                         ServiceError::ProtocolHandleError {
                             proto_id: *proto_id,
                             error: ProtocolHandleErrorKind::AbnormallyClosed(None),
                         },
-                    )
+                    ))
                     .await;
                 error = true;
             }
@@ -857,14 +913,14 @@ where
                 .is_err()
             {
                 error = true;
-                self.handle
-                    .handle_error(
-                        &mut self.service_context,
+                let _ignore = self
+                    .handle_sender
+                    .send(ServiceEventAndError::Error(
                         ServiceError::ProtocolHandleError {
                             proto_id: *proto_id,
                             error: ProtocolHandleErrorKind::AbnormallyClosed(Some(*session_id)),
                         },
-                    )
+                    ))
                     .await;
             }
         }
@@ -899,15 +955,13 @@ where
                 if ty.is_outbound() {
                     self.state.decrease();
                     self.dial_protocols.remove(&address);
-                    self.handle
-                        .handle_error(
-                            &mut self.service_context,
-                            ServiceError::DialerError {
-                                address,
-                                error: DialerErrorKind::HandshakeError(error),
-                            },
-                        )
-                        .await
+                    let _ignore = self
+                        .handle_sender
+                        .send(ServiceEventAndError::Error(ServiceError::DialerError {
+                            address,
+                            error: DialerErrorKind::HandshakeError(error),
+                        }))
+                        .await;
                 }
             }
             SessionEvent::ProtocolMessage { .. }
@@ -915,15 +969,15 @@ where
             | SessionEvent::ProtocolClose { .. } => unreachable!(),
             SessionEvent::ProtocolSelectError { id, proto_name } => {
                 if let Some(session_control) = self.sessions.get(&id) {
-                    self.handle
-                        .handle_error(
-                            &mut self.service_context,
+                    let _ignore = self
+                        .handle_sender
+                        .send(ServiceEventAndError::Error(
                             ServiceError::ProtocolSelectError {
                                 proto_name,
                                 session_context: Arc::clone(&session_control.inner),
                             },
-                        )
-                        .await
+                        ))
+                        .await;
                 }
             }
             SessionEvent::ProtocolError {
@@ -931,40 +985,34 @@ where
                 proto_id,
                 error,
             } => {
-                self.handle
-                    .handle_error(
-                        &mut self.service_context,
-                        ServiceError::ProtocolError {
-                            id,
-                            proto_id,
-                            error,
-                        },
-                    )
-                    .await
+                let _ignore = self
+                    .handle_sender
+                    .send(ServiceEventAndError::Error(ServiceError::ProtocolError {
+                        id,
+                        proto_id,
+                        error,
+                    }))
+                    .await;
             }
             SessionEvent::DialError { address, error } => {
                 self.state.decrease();
                 self.dial_protocols.remove(&address);
-                self.handle
-                    .handle_error(
-                        &mut self.service_context,
-                        ServiceError::DialerError {
-                            address,
-                            error: DialerErrorKind::TransportError(error),
-                        },
-                    )
-                    .await
+                let _ignore = self
+                    .handle_sender
+                    .send(ServiceEventAndError::Error(ServiceError::DialerError {
+                        address,
+                        error: DialerErrorKind::TransportError(error),
+                    }))
+                    .await;
             }
             #[cfg(not(target_arch = "wasm32"))]
             SessionEvent::ListenError { address, error } => {
-                self.handle
-                    .handle_error(
-                        &mut self.service_context,
-                        ServiceError::ListenError {
-                            address: address.clone(),
-                            error: ListenErrorKind::TransportError(error),
-                        },
-                    )
+                let _ignore = self
+                    .handle_sender
+                    .send(ServiceEventAndError::Error(ServiceError::ListenError {
+                        address: address.clone(),
+                        error: ListenErrorKind::TransportError(error),
+                    }))
                     .await;
                 if self.listens.remove(&address) {
                     #[cfg(feature = "upnp")]
@@ -972,12 +1020,12 @@ where
                         client.remove(&address);
                     }
 
-                    self.handle
-                        .handle_event(
-                            &mut self.service_context,
-                            ServiceEvent::ListenClose { address },
-                        )
-                        .await
+                    let _ignore = self
+                        .handle_sender
+                        .send(ServiceEventAndError::Event(ServiceEvent::ListenClose {
+                            address,
+                        }))
+                        .await;
                 } else {
                     // try start listen error
                     self.state.decrease();
@@ -985,27 +1033,23 @@ where
             }
             SessionEvent::SessionTimeout { id } => {
                 if let Some(session_control) = self.sessions.get(&id) {
-                    self.handle
-                        .handle_error(
-                            &mut self.service_context,
-                            ServiceError::SessionTimeout {
-                                session_context: Arc::clone(&session_control.inner),
-                            },
-                        )
-                        .await
+                    let _ignore = self
+                        .handle_sender
+                        .send(ServiceEventAndError::Error(ServiceError::SessionTimeout {
+                            session_context: Arc::clone(&session_control.inner),
+                        }))
+                        .await;
                 }
             }
             SessionEvent::MuxerError { id, error } => {
                 if let Some(session_control) = self.sessions.get(&id) {
-                    self.handle
-                        .handle_error(
-                            &mut self.service_context,
-                            ServiceError::MuxerError {
-                                session_context: Arc::clone(&session_control.inner),
-                                error,
-                            },
-                        )
-                        .await
+                    let _ignore = self
+                        .handle_sender
+                        .send(ServiceEventAndError::Error(ServiceError::MuxerError {
+                            session_context: Arc::clone(&session_control.inner),
+                            error,
+                        }))
+                        .await;
                 }
             }
             #[cfg(not(target_arch = "wasm32"))]
@@ -1013,13 +1057,11 @@ where
                 listen_address,
                 incoming,
             } => {
-                self.handle
-                    .handle_event(
-                        &mut self.service_context,
-                        ServiceEvent::ListenStarted {
-                            address: listen_address.clone(),
-                        },
-                    )
+                let _ignore = self
+                    .handle_sender
+                    .send(ServiceEventAndError::Event(ServiceEvent::ListenStarted {
+                        address: listen_address.clone(),
+                    }))
                     .await;
                 self.listens.insert(listen_address.clone());
                 self.state.decrease();
@@ -1031,11 +1073,11 @@ where
                 self.spawn_listener(incoming, listen_address);
             }
             SessionEvent::ProtocolHandleError { error, proto_id } => {
-                self.handle
-                    .handle_error(
-                        &mut self.service_context,
+                let _ignore = self
+                    .handle_sender
+                    .send(ServiceEventAndError::Error(
                         ServiceError::ProtocolHandleError { error, proto_id },
-                    )
+                    ))
                     .await;
                 // if handle panic, close service
                 self.handle_service_task(ServiceTask::Shutdown(false), Priority::High)
@@ -1043,14 +1085,12 @@ where
             }
             SessionEvent::ChangeState { id, .. } => {
                 if let Some(session) = self.sessions.get(&id) {
-                    self.handle
-                        .handle_error(
-                            &mut self.service_context,
-                            ServiceError::SessionBlocked {
-                                session_context: session.inner.clone(),
-                            },
-                        )
-                        .await
+                    let _ignore = self
+                        .handle_sender
+                        .send(ServiceEventAndError::Error(ServiceError::SessionBlocked {
+                            session_context: session.inner.clone(),
+                        }))
+                        .await;
                 }
             }
             _ => (),
@@ -1071,14 +1111,12 @@ where
             ServiceTask::Dial { address, target } => {
                 if !self.dial_protocols.contains_key(&address) {
                     if let Err(e) = self.dial_inner(address.clone(), target) {
-                        self.handle
-                            .handle_error(
-                                &mut self.service_context,
-                                ServiceError::DialerError {
-                                    address,
-                                    error: DialerErrorKind::TransportError(e),
-                                },
-                            )
+                        let _ignore = self
+                            .handle_sender
+                            .send(ServiceEventAndError::Error(ServiceError::DialerError {
+                                address,
+                                error: DialerErrorKind::TransportError(e),
+                            }))
                             .await;
                     }
                 }
@@ -1086,14 +1124,12 @@ where
             ServiceTask::Listen { address } => {
                 if !self.listens.contains(&address) {
                     if let Err(e) = self.listen_inner(address.clone()) {
-                        self.handle
-                            .handle_error(
-                                &mut self.service_context,
-                                ServiceError::ListenError {
-                                    address,
-                                    error: ListenErrorKind::TransportError(e),
-                                },
-                            )
+                        let _ignore = self
+                            .handle_sender
+                            .send(ServiceEventAndError::Error(ServiceError::ListenError {
+                                address,
+                                error: ListenErrorKind::TransportError(e),
+                            }))
                             .await;
                     }
                 }
@@ -1173,14 +1209,18 @@ where
             ServiceTask::Shutdown(quick) => {
                 self.state.pre_shutdown();
 
-                for address in self.listens.drain() {
-                    self.handle
-                        .handle_event(
-                            &mut self.service_context,
-                            ServiceEvent::ListenClose { address },
-                        )
-                        .await
-                }
+                let mut events = futures::stream::iter(
+                    self.listens
+                        .drain()
+                        .map(|address| {
+                            ServiceEventAndError::Event(ServiceEvent::ListenClose { address })
+                        })
+                        .collect::<Vec<_>>(),
+                )
+                .map(Ok);
+
+                let _ignore = self.handle_sender.send_all(&mut events).await;
+
                 // clear upnp register
                 #[cfg(all(not(target_arch = "wasm32"), feature = "upnp"))]
                 if let Some(client) = self.igd_client.as_mut() {
@@ -1211,6 +1251,8 @@ where
 
     #[cold]
     async fn wait_handle_poll(&mut self) {
+        // close user handle first
+        self.handle_sender.close_channel();
         for (sender, handle) in self.wait_handle.split_off(0) {
             if let Some(sender) = sender {
                 // don't care about it
@@ -1222,15 +1264,6 @@ where
 
     /// start service
     pub async fn run(&mut self) {
-        if let Some(stream) = self.future_task_manager.take() {
-            let (sender, receiver) = futures::channel::oneshot::channel();
-            let handle = crate::runtime::spawn(async move {
-                future::select(stream.for_each(|_| future::ready(())), receiver).await;
-            });
-            self.wait_handle.push((Some(sender), handle));
-            self.init_proto_handles();
-        }
-
         loop {
             if self.listens.is_empty() && self.state.is_shutdown() && self.sessions.is_empty() {
                 debug!("shutdown because all state is empty head");

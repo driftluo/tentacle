@@ -352,7 +352,7 @@ mod tests {
     fn stretch() {
         let mut output = [0u8; 32];
 
-        let key1 = Hmac::from_key(Digest::Sha256, &[]);
+        let key1 = Hmac::from_key(Digest::Sha256, &[0; 32]);
         stretch_key(key1, &mut output);
         assert_eq!(
             &output,
