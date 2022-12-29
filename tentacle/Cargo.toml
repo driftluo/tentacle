@@ -1,6 +1,6 @@
 [package]
 name = "tentacle"
-version = "0.4.1"
+version = "0.4.2"
 license = "MIT"
 description = "Minimal implementation for a multiplexed p2p network framework."
 authors = ["piaoliu <driftluo@foxmail.com>", "Nervos Core Dev <dev@nervos.org>"]

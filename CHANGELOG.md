@@ -1,3 +1,9 @@
+## 0.4.2
+
+### Features
+
+- Sparete service handle(#364)
+
 ## yamux 0.3.7 secio 0.5.7
 
 ### Bug Fix
