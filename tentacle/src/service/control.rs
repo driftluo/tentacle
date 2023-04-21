@@ -1,16 +1,12 @@
 use futures::prelude::*;
 
+use std::sync::{atomic::Ordering, Arc};
 use std::time::Duration;
-use std::{
-    collections::HashMap,
-    sync::{atomic::Ordering, Arc},
-};
 
 use crate::{
     channel::mpsc,
     error::SendErrorKind,
     multiaddr::Multiaddr,
-    protocol_select::ProtocolInfo,
     service::{event::ServiceTask, TargetProtocol, TargetSession},
     ProtocolId, SessionId,
 };
@@ -23,20 +19,14 @@ type Result = std::result::Result<(), SendErrorKind>;
 #[derive(Clone)]
 pub struct ServiceControl {
     pub(crate) task_sender: mpsc::Sender<ServiceTask>,
-    pub(crate) proto_infos: Arc<HashMap<ProtocolId, ProtocolInfo>>,
     closed: Arc<AtomicBool>,
 }
 
 impl ServiceControl {
     /// New
-    pub(crate) fn new(
-        task_sender: mpsc::Sender<ServiceTask>,
-        proto_infos: HashMap<ProtocolId, ProtocolInfo>,
-        closed: Arc<AtomicBool>,
-    ) -> Self {
+    pub(crate) fn new(task_sender: mpsc::Sender<ServiceTask>, closed: Arc<AtomicBool>) -> Self {
         ServiceControl {
             task_sender,
-            proto_infos: Arc::new(proto_infos),
             closed,
         }
     }
@@ -68,12 +58,6 @@ impl ServiceControl {
                 SendErrorKind::BrokenPipe
             }
         })
-    }
-
-    /// Get service protocol message, Map(ID, Name), but can't modify
-    #[inline]
-    pub fn protocols(&self) -> &Arc<HashMap<ProtocolId, ProtocolInfo>> {
-        &self.proto_infos
     }
 
     /// Create a new listener
@@ -257,7 +241,6 @@ impl From<ServiceControl> for ServiceAsyncControl {
     fn from(control: ServiceControl) -> Self {
         ServiceAsyncControl {
             task_sender: control.task_sender,
-            proto_infos: control.proto_infos,
             closed: control.closed,
         }
     }
@@ -267,7 +250,6 @@ impl From<ServiceAsyncControl> for ServiceControl {
     fn from(control: ServiceAsyncControl) -> Self {
         ServiceControl {
             task_sender: control.task_sender,
-            proto_infos: control.proto_infos,
             closed: control.closed,
         }
     }
@@ -277,7 +259,6 @@ impl From<ServiceAsyncControl> for ServiceControl {
 #[derive(Clone)]
 pub struct ServiceAsyncControl {
     task_sender: mpsc::Sender<ServiceTask>,
-    proto_infos: Arc<HashMap<ProtocolId, ProtocolInfo>>,
     closed: Arc<AtomicBool>,
 }
 
@@ -306,12 +287,6 @@ impl ServiceAsyncControl {
                 // await only return err when channel close
                 SendErrorKind::BrokenPipe
             })
-    }
-
-    /// Get service protocol message, Map(ID, Name), but can't modify
-    #[inline]
-    pub fn protocols(&self) -> &Arc<HashMap<ProtocolId, ProtocolInfo>> {
-        &self.proto_infos
     }
 
     /// Create a new listener

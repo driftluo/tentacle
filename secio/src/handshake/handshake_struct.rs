@@ -119,34 +119,19 @@ impl Exchange {
 
 /// Public Key
 #[derive(Clone, PartialEq, Ord, PartialOrd, Eq, Hash)]
-pub enum PublicKey {
-    /// Secp256k1
-    Secp256k1(Vec<u8>),
+pub struct PublicKey {
+    pub(crate) key: Vec<u8>,
 }
 
 impl PublicKey {
     /// Get inner data
     pub fn inner_ref(&self) -> &[u8] {
-        match self {
-            PublicKey::Secp256k1(ref key) => key,
-        }
+        &self.key
     }
 
     /// Get inner data
     pub fn inner(self) -> Vec<u8> {
-        match self {
-            PublicKey::Secp256k1(key) => key,
-        }
-    }
-
-    /// Creates a public key directly from a slice
-    pub fn secp256k1_raw_key<K>(key: K) -> Result<Self, crate::error::SecioError>
-    where
-        K: AsRef<[u8]>,
-    {
-        crate::secp256k1_compat::pubkey_from_slice(key.as_ref())
-            .map(|key| PublicKey::Secp256k1(crate::secp256k1_compat::serialize_pubkey(&key)))
-            .map_err(|_| crate::error::SecioError::SecretGenerationFailed)
+        self.key
     }
 
     /// Encode with molecule
@@ -164,10 +149,11 @@ impl PublicKey {
     pub fn decode(data: &[u8]) -> Option<Self> {
         let reader = handshake_mol::PublicKeyReader::from_compatible_slice(data).ok()?;
         let union = reader.to_enum();
+
         match union {
-            handshake_mol::PublicKeyUnionReader::Secp256k1(reader) => {
-                Some(PublicKey::Secp256k1(reader.raw_data().to_owned()))
-            }
+            handshake_mol::PublicKeyUnionReader::Secp256k1(reader) => Some(PublicKey {
+                key: reader.raw_data().to_owned(),
+            }),
         }
     }
 
@@ -190,7 +176,7 @@ impl fmt::Debug for PublicKey {
 #[cfg(test)]
 mod tests {
     use super::{Exchange, Propose, PublicKey};
-    use crate::SecioKeyPair;
+    use crate::{SecioKeyPair, Signer};
     use bytes::Bytes;
 
     #[test]
@@ -230,13 +216,13 @@ mod tests {
         let raw = privkey.public_key();
         let inner = raw.inner_ref();
 
-        let other = PublicKey::secp256k1_raw_key(inner).unwrap();
-        assert_eq!(raw, other);
+        let other = SecioKeyPair::pubkey_from_slice(inner).unwrap();
+        assert_eq!(raw.inner_ref(), other.serialize());
         let uncompressed = crate::secp256k1_compat::pubkey_from_slice(inner)
             .map(|key| key.serialize_uncompressed().to_vec())
             .unwrap();
 
-        let other_1 = PublicKey::secp256k1_raw_key(uncompressed).unwrap();
-        assert_eq!(raw, other_1);
+        let other_1 = SecioKeyPair::pubkey_from_slice(&uncompressed).unwrap();
+        assert_eq!(raw.inner_ref(), other_1.serialize());
     }
 }

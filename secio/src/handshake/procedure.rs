@@ -9,7 +9,7 @@ use tokio::io::{AsyncRead, AsyncWrite};
 use tokio_util::codec::length_delimited::Builder;
 
 use crate::{
-    codec::{secure_stream::SecureStream, Hmac},
+    codec::{hmac_compat::Hmac, secure_stream::SecureStream},
     crypto::{cipher::CipherType, new_stream, BoxStreamCipher, CryptoMode},
     error::SecioError,
     handshake::Config,
@@ -17,7 +17,7 @@ use crate::{
         handshake_context::HandshakeContext,
         handshake_struct::{Exchange, PublicKey},
     },
-    EphemeralPublicKey, KeyPairInner,
+    EphemeralPublicKey, Pubkey, Signer,
 };
 use bytes::BytesMut;
 use tokio::io::AsyncWriteExt;
@@ -31,12 +31,13 @@ use tokio::io::AsyncWriteExt;
 /// On success, returns an object that implements the `AsyncWrite` and `AsyncRead` trait,
 /// plus the public key of the remote, plus the ephemeral public key used during
 /// negotiation.
-pub(in crate::handshake) async fn handshake<T>(
+pub(in crate::handshake) async fn handshake<T, K>(
     socket: T,
-    config: Config,
+    config: Config<K>,
 ) -> Result<(SecureStream<T>, PublicKey, EphemeralPublicKey), SecioError>
 where
     T: AsyncRead + AsyncWrite + Send + 'static + Unpin,
+    K: Signer,
 {
     // The handshake messages all start with a 4-bytes message length prefix.
     let mut socket = Builder::new()
@@ -98,21 +99,24 @@ where
         exchanges.epubkey = tmp_pub_key;
 
         let data_to_sign = crate::sha256_compat::sha256(&data_to_sign);
-        let message = match crate::secp256k1_compat::message_from_slice(data_to_sign.as_ref()) {
-            Ok(msg) => msg,
-            Err(_) => {
-                debug!("message has wrong format");
-                return Err(SecioError::InvalidMessage);
-            }
+
+        exchanges.signature = {
+            #[cfg(not(feature = "async-trait"))]
+            let signature = ephemeral_context
+                .config
+                .key
+                .sign_ecdsa(data_to_sign.as_ref())
+                .map_err(Into::into)?;
+            #[cfg(feature = "async-trait")]
+            let signature = ephemeral_context
+                .config
+                .key
+                .sign_ecdsa_async(data_to_sign.as_ref())
+                .await
+                .map_err(Into::into)?;
+            signature
         };
 
-        let signature = match ephemeral_context.config.key.inner {
-            KeyPairInner::Secp256k1 { ref private } => {
-                crate::secp256k1_compat::sign(&message, private)
-            }
-        };
-
-        exchanges.signature = crate::secp256k1_compat::signature_to_vec(signature);
         exchanges
     };
     let local_exchanges = exchanges.encode();
@@ -152,26 +156,12 @@ where
 
     let data_to_verify = crate::sha256_compat::sha256(&data_to_verify);
 
-    let message = match crate::secp256k1_compat::message_from_slice(data_to_verify.as_ref()) {
-        Ok(msg) => msg,
-        Err(_) => {
-            debug!("remote's message has wrong format");
-            return Err(SecioError::InvalidMessage);
-        }
-    };
+    let remote_public_key =
+        <K as Signer>::pubkey_from_slice(ephemeral_context.state.remote.public_key.inner_ref())
+            .map_err(Into::into)?;
 
-    let signature = crate::secp256k1_compat::signature_from_der(&remote_exchanges.signature);
-    let remote_public_key = match ephemeral_context.state.remote.public_key {
-        PublicKey::Secp256k1(ref key) => crate::secp256k1_compat::pubkey_from_slice(key),
-    };
-
-    if let (Ok(signature), Ok(remote_public_key)) = (signature, remote_public_key) {
-        if !crate::secp256k1_compat::verify(&message, &signature, &remote_public_key) {
-            debug!("failed to verify the remote's signature");
-            return Err(SecioError::SignatureVerificationFailed);
-        }
-    } else {
-        debug!("remote's secp256k1 signature has wrong format");
+    if !remote_public_key.verify_ecdsa(&data_to_verify, &remote_exchanges.signature) {
+        debug!("failed to verify the remote's signature");
         return Err(SecioError::SignatureVerificationFailed);
     }
 
@@ -300,7 +290,7 @@ fn generate_stream_cipher_and_hmac(
 #[cfg(test)]
 mod tests {
     use super::stretch_key;
-    use crate::{codec::Hmac, handshake::Config, Digest, SecioKeyPair};
+    use crate::{codec::hmac_compat::Hmac, handshake::Config, Digest, SecioKeyPair, Signer};
 
     use bytes::BytesMut;
     use futures::channel;
@@ -309,7 +299,11 @@ mod tests {
         net::{TcpListener, TcpStream},
     };
 
-    fn handshake_with_self_success(config_1: Config, config_2: Config, data: &'static [u8]) {
+    fn handshake_with_self_success<K: Signer>(
+        config_1: Config<K>,
+        config_2: Config<K>,
+        data: &'static [u8],
+    ) {
         let rt = tokio::runtime::Runtime::new().unwrap();
         let (sender, receiver) = channel::oneshot::channel::<bytes::BytesMut>();
         let (addr_sender, addr_receiver) = channel::oneshot::channel::<::std::net::SocketAddr>();

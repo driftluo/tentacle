@@ -9,9 +9,9 @@ use tentacle::{
     ProtocolId,
 };
 
-pub fn create<F>(meta: ProtocolMeta, shandle: F) -> Service<F>
+pub fn create<F>(meta: ProtocolMeta, shandle: F) -> Service<F, ()>
 where
-    F: ServiceHandle + Unpin,
+    F: ServiceHandle + Unpin + 'static,
 {
     ServiceBuilder::default()
         .insert_protocol(meta)

@@ -31,9 +31,9 @@ enum Notify {
     Message(bytes::Bytes),
 }
 
-pub fn create<F>(secio: bool, meta: ProtocolMeta, shandle: F) -> Service<F>
+pub fn create<F>(secio: bool, meta: ProtocolMeta, shandle: F) -> Service<F, SecioKeyPair>
 where
-    F: ServiceHandle + Unpin,
+    F: ServiceHandle + Unpin + 'static,
 {
     let builder = ServiceBuilder::default()
         .insert_protocol(meta)

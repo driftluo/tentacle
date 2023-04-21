@@ -1,11 +1,13 @@
 /// Most of the code for this module comes from `rust-libp2p`, but modified some logic(struct).
 use crate::{
     crypto::cipher::CipherType, dh_compat::KeyAgreement, error::SecioError,
-    handshake::procedure::handshake, support, Digest, EphemeralPublicKey, PublicKey, SecioKeyPair,
+    handshake::procedure::handshake, support, Digest, EphemeralPublicKey, PublicKey,
 };
 
 use crate::codec::secure_stream::SecureStream;
 use tokio::io::{AsyncRead, AsyncWrite};
+
+use std::sync::Arc;
 
 #[rustfmt::skip]
 #[allow(clippy::all)]
@@ -20,19 +22,22 @@ const MAX_FRAME_SIZE: usize = 1024 * 1024 * 8;
 
 /// Config for Secio
 #[derive(Debug, Clone)]
-pub struct Config {
-    pub(crate) key: SecioKeyPair,
+pub struct Config<K> {
+    pub(crate) key: Arc<K>,
     pub(crate) agreements_proposal: Option<String>,
     pub(crate) ciphers_proposal: Option<String>,
     pub(crate) digests_proposal: Option<String>,
     pub(crate) max_frame_length: usize,
 }
 
-impl Config {
+impl<K> Config<K>
+where
+    K: crate::Signer,
+{
     /// Create config
-    pub fn new(key_pair: SecioKeyPair) -> Self {
+    pub fn new(key_pair: K) -> Self {
         Config {
-            key: key_pair,
+            key: Arc::new(key_pair),
             agreements_proposal: None,
             ciphers_proposal: None,
             digests_proposal: None,

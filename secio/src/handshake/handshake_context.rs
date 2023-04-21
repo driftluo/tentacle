@@ -9,7 +9,7 @@ use crate::{
         handshake_struct::{Propose, PublicKey},
         Config,
     },
-    support, Digest,
+    support, Digest, Pubkey, Signer,
 };
 
 use bytes::{Bytes, BytesMut};
@@ -20,8 +20,8 @@ use std::cmp::Ordering;
 
 // This struct contains the whole context of a handshake, and is filled progressively
 // throughout the various parts of the handshake.
-pub struct HandshakeContext<T> {
-    pub(crate) config: Config,
+pub struct HandshakeContext<T, K> {
+    pub(crate) config: Config<K>,
     pub(crate) state: T,
 }
 
@@ -30,7 +30,7 @@ pub struct Local {
     // Locally-generated random number. The array size can be changed without any repercussion.
     pub(crate) nonce: [u8; 16],
     // Our local public key bytes:
-    pub(crate) public_key: Vec<u8>,
+    pub(crate) public_key: PublicKey,
     // Our local proposition's raw bytes:
     pub(crate) proposition_bytes: Bytes,
 }
@@ -75,23 +75,28 @@ pub struct PubEphemeral {
     pub(crate) local_tmp_pub_key: Vec<u8>,
 }
 
-impl HandshakeContext<()> {
-    pub fn new(config: Config) -> Self {
+impl<K> HandshakeContext<(), K>
+where
+    K: Signer,
+{
+    pub fn new(config: Config<K>) -> Self {
         HandshakeContext { config, state: () }
     }
 
     // Setup local proposition.
-    pub fn with_local(self) -> HandshakeContext<Local> {
+    pub fn with_local(self) -> HandshakeContext<Local, K> {
         let mut nonce = [0; 16];
         rand::thread_rng().fill_bytes(&mut nonce);
 
-        let public_key = self.config.key.public_key();
+        let public_key = PublicKey {
+            key: self.config.key.pubkey().serialize(),
+        };
 
         // Send our proposition with our nonce, public key and supported protocols.
         let mut proposition = Propose::new();
         proposition.rand = nonce.to_vec();
-        let encode_key = public_key.clone();
-        proposition.pubkey = encode_key.encode();
+        let encode_key = public_key.clone().encode();
+        proposition.pubkey = encode_key;
 
         proposition.exchange = self
             .config
@@ -120,19 +125,22 @@ impl HandshakeContext<()> {
             config: self.config,
             state: Local {
                 nonce,
-                public_key: public_key.inner(),
+                public_key,
                 proposition_bytes,
             },
         }
     }
 }
 
-impl HandshakeContext<Local> {
+impl<K> HandshakeContext<Local, K>
+where
+    K: Signer,
+{
     // Process remote proposition.
     pub fn with_remote(
         self,
         remote_bytes: BytesMut,
-    ) -> Result<HandshakeContext<Remote>, SecioError> {
+    ) -> Result<HandshakeContext<Remote, K>, SecioError> {
         let propose = match Propose::decode(&remote_bytes) {
             Some(prop) => prop,
             None => {
@@ -152,7 +160,7 @@ impl HandshakeContext<Local> {
             }
         };
 
-        if public_key.inner_ref() == self.state.public_key {
+        if public_key == self.state.public_key {
             return Err(SecioError::ConnectSelf);
         }
 
@@ -168,7 +176,7 @@ impl HandshakeContext<Local> {
 
             let oh2 = {
                 let mut ctx = crate::sha256_compat::Context::new();
-                ctx.update(&self.state.public_key);
+                ctx.update(self.state.public_key.inner_ref());
                 ctx.update(&nonce);
                 ctx.finish()
             };
@@ -252,12 +260,15 @@ impl HandshakeContext<Local> {
     }
 }
 
-impl HandshakeContext<Remote> {
+impl<K> HandshakeContext<Remote, K>
+where
+    K: Signer,
+{
     pub fn with_ephemeral(
         self,
         sk: crate::dh_compat::EphemeralPrivateKey,
         pk: Vec<u8>,
-    ) -> HandshakeContext<Ephemeral> {
+    ) -> HandshakeContext<Ephemeral, K> {
         HandshakeContext {
             config: self.config,
             state: Ephemeral {
@@ -269,11 +280,14 @@ impl HandshakeContext<Remote> {
     }
 }
 
-impl HandshakeContext<Ephemeral> {
+impl<K> HandshakeContext<Ephemeral, K>
+where
+    K: Signer,
+{
     pub fn take_private_key(
         self,
     ) -> (
-        HandshakeContext<PubEphemeral>,
+        HandshakeContext<PubEphemeral, K>,
         crate::dh_compat::EphemeralPrivateKey,
     ) {
         let context = HandshakeContext {

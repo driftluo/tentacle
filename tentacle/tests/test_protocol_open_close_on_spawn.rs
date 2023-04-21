@@ -96,9 +96,13 @@ impl ProtocolSpawn for PHandle {
     }
 }
 
-pub fn create<F>(secio: bool, metas: impl Iterator<Item = ProtocolMeta>, shandle: F) -> Service<F>
+pub fn create<F>(
+    secio: bool,
+    metas: impl Iterator<Item = ProtocolMeta>,
+    shandle: F,
+) -> Service<F, SecioKeyPair>
 where
-    F: ServiceHandle + Unpin,
+    F: ServiceHandle + Unpin + 'static,
 {
     let mut builder = ServiceBuilder::default().forever(true);
 

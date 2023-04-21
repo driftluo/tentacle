@@ -114,9 +114,9 @@ impl ServiceHandle for SHandle {
     }
 }
 
-pub fn create<F>(secio: bool, meta: ProtocolMeta, shandle: F) -> Service<F>
+pub fn create<F>(secio: bool, meta: ProtocolMeta, shandle: F) -> Service<F, SecioKeyPair>
 where
-    F: ServiceHandle + Unpin,
+    F: ServiceHandle + Unpin + Send + 'static,
 {
     let builder = ServiceBuilder::default().insert_protocol(meta);
 

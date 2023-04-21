@@ -126,7 +126,7 @@ fn main() {
     }
 }
 
-fn create_server() -> Service<SHandle> {
+fn create_server() -> Service<SHandle, SecioKeyPair> {
     ServiceBuilder::default()
         .insert_protocol(create_meta(0.into()))
         .insert_protocol(create_meta(1.into()))
@@ -139,7 +139,7 @@ fn create_server() -> Service<SHandle> {
 /// Proto 2 open failure
 ///
 /// Because server only supports 0,1
-fn create_client() -> Service<SHandle> {
+fn create_client() -> Service<SHandle, SecioKeyPair> {
     ServiceBuilder::default()
         .insert_protocol(create_meta(0.into()))
         .insert_protocol(create_meta(1.into()))

@@ -1,6 +1,7 @@
 use futures::{channel::mpsc, future::poll_fn, prelude::*, stream::StreamExt, SinkExt};
 use log::{debug, error, trace};
 use nohash_hasher::IntMap;
+use secio::Signer;
 use std::{
     borrow::Cow,
     collections::{HashMap, HashSet},
@@ -22,8 +23,7 @@ use crate::{
     protocol_handle_stream::{
         ServiceProtocolEvent, ServiceProtocolStream, SessionProtocolEvent, SessionProtocolStream,
     },
-    protocol_select::ProtocolInfo,
-    secio::{PublicKey, SecioKeyPair},
+    secio::PublicKey,
     service::{
         config::{ServiceConfig, State},
         event::{ServiceEventAndError, ServiceTask},
@@ -34,7 +34,6 @@ use crate::{
     traits::ServiceHandle,
     transports::{MultiIncoming, MultiTransport, Transport},
     utils::extract_peer_id,
-    yamux::Config as YamuxConfig,
     ProtocolId, SessionId,
 };
 
@@ -57,12 +56,14 @@ pub use crate::service::config::TlsConfig;
 
 type Result<T> = std::result::Result<T, TransportErrorKind>;
 
-struct InnerService {
+struct InnerService<K> {
     protocol_configs: IntMap<ProtocolId, ProtocolMeta>,
 
     sessions: IntMap<SessionId, SessionController>,
 
     multi_transport: MultiTransport,
+
+    key_pair: Option<Arc<K>>,
 
     listens: HashSet<Multiaddr>,
 
@@ -105,7 +106,7 @@ struct InnerService {
 }
 
 /// An abstraction of p2p service, currently only supports TCP/websocket protocol
-pub struct Service<T> {
+pub struct Service<T, K> {
     /// Can be upgrade to list service level protocols
     handle: T,
     service_context: ServiceContext,
@@ -114,18 +115,19 @@ pub struct Service<T> {
     // Future task manager
     future_task_manager: Option<FutureTaskManager>,
 
-    inner_service: Option<InnerService>,
+    inner_service: Option<InnerService<K>>,
 }
 
-impl<T> Service<T>
+impl<T, K> Service<T, K>
 where
     T: ServiceHandle + Unpin,
+    K: Signer,
 {
     /// New a Service
     pub(crate) fn new(
         protocol_configs: IntMap<ProtocolId, ProtocolMeta>,
         handle: T,
-        key_pair: Option<SecioKeyPair>,
+        key_pair: Option<Arc<K>>,
         forever: bool,
         config: ServiceConfig,
     ) -> Self {
@@ -133,13 +135,6 @@ where
             mpsc::channel(config.session_config.channel_size);
         let (task_sender, task_receiver) =
             priority_mpsc::channel(config.session_config.channel_size);
-        let proto_infos = protocol_configs
-            .values()
-            .map(|meta| {
-                let proto_info = ProtocolInfo::new(&meta.name(), meta.support_versions());
-                (meta.id(), proto_info)
-            })
-            .collect();
         let (future_task_sender, future_task_receiver) =
             mpsc::channel(config.session_config.channel_size);
         let (user_handle_sender, user_handle_receiver) =
@@ -152,8 +147,7 @@ where
             None
         };
 
-        let service_context =
-            ServiceContext::new(task_sender, proto_infos, key_pair, shutdown.clone());
+        let service_context = ServiceContext::new(task_sender, shutdown.clone());
 
         Service {
             handle,
@@ -170,6 +164,7 @@ where
                 before_sends: HashMap::default(),
                 handle_sender: user_handle_sender,
                 future_task_sender,
+                key_pair,
                 multi_transport: {
                     #[cfg(target_arch = "wasm32")]
                     let transport = MultiTransport::new(config.timeout);
@@ -198,42 +193,6 @@ where
                 wait_handle: Vec::new(),
             }),
         }
-    }
-
-    /// Yamux config for service
-    ///
-    /// Panic when max_frame_length < yamux_max_window_size
-    pub fn yamux_config(mut self, config: YamuxConfig) -> Self {
-        assert!(
-            self.inner_service.as_ref().unwrap().config.max_frame_length as u32
-                >= config.max_stream_window_size
-        );
-        self.inner_service
-            .as_mut()
-            .unwrap()
-            .config
-            .session_config
-            .yamux_config = config;
-        self
-    }
-
-    /// Secio max frame length
-    ///
-    /// Panic when max_frame_length < yamux_max_window_size
-    pub fn max_frame_length(mut self, size: usize) -> Self {
-        assert!(
-            size as u32
-                >= self
-                    .inner_service
-                    .as_ref()
-                    .unwrap()
-                    .config
-                    .session_config
-                    .yamux_config
-                    .max_stream_window_size
-        );
-        self.inner_service.as_mut().unwrap().config.max_frame_length = size;
-        self
     }
 
     /// Listen on the given address.
@@ -323,12 +282,15 @@ where
     }
 }
 
-impl InnerService {
+impl<K> InnerService<K>
+where
+    K: Signer,
+{
     #[cfg(not(target_arch = "wasm32"))]
     fn spawn_listener(&mut self, incoming: MultiIncoming, listen_address: Multiaddr) {
         let listener = Listener {
             inner: incoming,
-            key_pair: self.service_context.key_pair().cloned(),
+            key_pair: self.key_pair.clone(),
             event_sender: self.session_event_sender.clone(),
             max_frame_length: self.config.max_frame_length,
             timeout: self.config.timeout,
@@ -383,7 +345,7 @@ impl InnerService {
         self.dial_protocols.insert(address.clone(), target);
         let dial_future = self.multi_transport.clone().dial(address.clone())?;
 
-        let key_pair = self.service_context.key_pair().cloned();
+        let key_pair = self.key_pair.clone();
         let timeout = self.config.timeout;
         let max_frame_length = self.config.max_frame_length;
 
@@ -561,7 +523,7 @@ impl InnerService {
             ty,
             remote_address,
             listen_address,
-            key_pair: self.service_context.key_pair().cloned(),
+            key_pair: self.key_pair.clone(),
             event_sender: self.session_event_sender.clone(),
             max_frame_length: self.config.max_frame_length,
             timeout: self.config.timeout,

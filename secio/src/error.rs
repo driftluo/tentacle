@@ -14,6 +14,9 @@ pub enum SecioError {
     /// Crypto error
     CryptoError,
 
+    /// Signer not support
+    NotSupportSigner,
+
     /// Failed to generate ephemeral key.
     EphemeralKeyGenerationFailed,
 
@@ -28,9 +31,6 @@ pub enum SecioError {
 
     /// The received frame was of invalid length.
     FrameTooShort,
-
-    /// The hashes of the message didn't match.
-    HmacNotMatching,
 
     /// Connect yourself
     ConnectSelf,
@@ -58,11 +58,11 @@ impl PartialEq for SecioError {
             | (NoSupportIntersection, NoSupportIntersection)
             | (NonceVerificationFailed, NonceVerificationFailed)
             | (FrameTooShort, FrameTooShort)
-            | (HmacNotMatching, HmacNotMatching)
             | (ConnectSelf, ConnectSelf)
             | (HandshakeParsingFailure, HandshakeParsingFailure)
             | (SignatureVerificationFailed, SignatureVerificationFailed)
-            | (InvalidMessage, InvalidMessage) => true,
+            | (InvalidMessage, InvalidMessage)
+            | (NotSupportSigner, NotSupportSigner) => true,
             _ => false,
         }
     }
@@ -113,12 +113,12 @@ impl fmt::Display for SecioError {
             SecioError::NoSupportIntersection => write!(f, "No Support Intersection"),
             SecioError::NonceVerificationFailed => write!(f, "Nonce Verification Failed"),
             SecioError::FrameTooShort => write!(f, "Frame Too Short"),
-            SecioError::HmacNotMatching => write!(f, "Hmac Not Matching"),
             SecioError::ConnectSelf => write!(f, "Connect Self"),
             SecioError::HandshakeParsingFailure => write!(f, "Handshake Parsing Failure"),
             SecioError::InvalidMessage => write!(f, "Invalid Message"),
             SecioError::SignatureVerificationFailed => write!(f, "Signature Verification Failed"),
             SecioError::InvalidProposition(e) => write!(f, "Invalid Proposition: {}", e),
+            SecioError::NotSupportSigner => write!(f, "Signer operation not supported"),
         }
     }
 }

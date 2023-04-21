@@ -3,7 +3,4 @@
 /// Encryption and decryption stream
 pub mod secure_stream;
 // hmac compatible
-mod hmac_compat;
-
-// TODO: remove this pub use for next break version
-pub use hmac_compat::Hmac;
+pub(crate) mod hmac_compat;

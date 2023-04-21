@@ -1,10 +1,11 @@
 use futures::{channel::mpsc, prelude::*};
 use log::{debug, error, trace};
 use multiaddr::Multiaddr;
-use secio::handshake::Config;
+use secio::{handshake::Config, Signer};
 use std::{
     io,
     pin::Pin,
+    sync::Arc,
     task::{Context, Poll},
     time::Duration,
 };
@@ -72,8 +73,8 @@ impl From<SessionType> for YamuxType {
     }
 }
 
-pub(crate) struct HandshakeContext {
-    pub(crate) key_pair: Option<secio::SecioKeyPair>,
+pub(crate) struct HandshakeContext<K> {
+    pub(crate) key_pair: Option<Arc<K>>,
     pub(crate) event_sender: mpsc::Sender<SessionEvent>,
     pub(crate) max_frame_length: usize,
     pub(crate) timeout: Duration,
@@ -82,7 +83,10 @@ pub(crate) struct HandshakeContext {
     pub(crate) listen_address: Option<Multiaddr>,
 }
 
-impl HandshakeContext {
+impl<K> HandshakeContext<K>
+where
+    K: Signer,
+{
     pub async fn handshake<H>(mut self, socket: H)
     where
         H: AsyncRead + AsyncWrite + Send + 'static + Unpin,
@@ -152,9 +156,9 @@ impl HandshakeContext {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-pub struct Listener {
+pub struct Listener<K> {
     pub(crate) inner: MultiIncoming,
-    pub(crate) key_pair: Option<secio::SecioKeyPair>,
+    pub(crate) key_pair: Option<Arc<K>>,
     pub(crate) event_sender: mpsc::Sender<SessionEvent>,
     pub(crate) max_frame_length: usize,
     pub(crate) timeout: Duration,
@@ -163,7 +167,10 @@ pub struct Listener {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-impl Listener {
+impl<K> Listener<K>
+where
+    K: Signer,
+{
     fn close(&self, io_err: io::Error) {
         let mut event_sender = self.event_sender.clone();
         let mut future_sender = self.future_task_sender.clone();
@@ -216,7 +223,10 @@ impl Listener {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-impl Stream for Listener {
+impl<K> Stream for Listener<K>
+where
+    K: Signer,
+{
     type Item = ();
 
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
