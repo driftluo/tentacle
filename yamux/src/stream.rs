@@ -14,6 +14,7 @@ use std::{
     task::{Context, Poll},
 };
 
+use futures::future;
 use log::{debug, trace};
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 
@@ -320,6 +321,57 @@ impl StreamHandle {
         } else {
             Ok(false)
         }
+    }
+
+    /// Attempts to receive data on the socket, without removing that data from the queue,
+    /// registering the current task for wakeup if data is not yet available.
+    pub fn poll_peek(
+        &mut self,
+        cx: &mut Context<'_>,
+        buf: &mut ReadBuf<'_>,
+    ) -> Poll<io::Result<usize>> {
+        if self.check_self_state()? {
+            return Poll::Ready(Ok(0));
+        }
+
+        if let Err(e) = self.recv_frames(cx) {
+            match e {
+                // read flag error or read data error
+                Error::UnexpectedFlag | Error::RecvWindowExceeded | Error::InvalidMsgType => {
+                    self.send_go_away();
+                    return Poll::Ready(Err(io::ErrorKind::InvalidData.into()));
+                }
+                _ => (),
+            }
+        }
+
+        if self.check_self_state()? {
+            return Poll::Ready(Ok(0));
+        }
+
+        let n = ::std::cmp::min(buf.remaining(), self.read_buf.len());
+        trace!(
+            "stream-handle({}) poll_peek self.read_buf.len={}, buf.len={}, n={}",
+            self.id,
+            self.read_buf.len(),
+            buf.remaining(),
+            n,
+        );
+        if n == 0 {
+            return Poll::Pending;
+        }
+
+        let b = &self.read_buf[..n];
+        buf.put_slice(b);
+
+        Poll::Ready(Ok(n))
+    }
+
+    /// Receives data on the socket from the remote address to which it is connected,
+    /// without removing that data from the queue. On success, returns the number of bytes peeked.
+    pub async fn peek(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        let mut read_buf = ReadBuf::new(buf);
+        future::poll_fn(|cx| self.poll_peek(cx, &mut read_buf)).await
     }
 }
 
