@@ -15,14 +15,14 @@ use tentacle::{
     ProtocolId,
 };
 
-pub fn create<F>(key_pair: SecioKeyPair, meta: ProtocolMeta, shandle: F) -> Service<F>
+pub fn create<F>(key_pair: SecioKeyPair, meta: ProtocolMeta, shandle: F) -> Service<F, SecioKeyPair>
 where
-    F: ServiceHandle + Unpin,
+    F: ServiceHandle + Unpin + 'static,
 {
     ServiceBuilder::default()
         .insert_protocol(meta)
         .forever(true)
-        .key_pair(key_pair)
+        .handshake_type(key_pair.into())
         .build(shandle)
 }
 

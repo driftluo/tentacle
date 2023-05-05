@@ -43,7 +43,7 @@ molecule = "0.7.0"
 igd = { version = "0.12", optional = true }
 
 #tls
-tokio-rustls = { version = "0.23.0", optional = true }
+tokio-rustls = { version = "0.24.0", optional = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 # rand 0.8 not support wasm32
@@ -76,6 +76,7 @@ default = ["tokio-runtime", "tokio-timer"]
 ws = ["tokio-tungstenite"]
 tls = ["tokio-rustls"]
 upnp = ["igd"]
+secio-async-trait = ["secio/async-trait"]
 unstable = []
 
 openssl-vendored = ["secio/openssl-vendored"]

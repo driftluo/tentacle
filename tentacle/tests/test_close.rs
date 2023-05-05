@@ -11,9 +11,13 @@ use tentacle::{
 
 use std::{sync::mpsc::channel, thread, time::Duration};
 
-pub fn create<F>(secio: bool, metas: impl Iterator<Item = ProtocolMeta>, shandle: F) -> Service<F>
+pub fn create<F>(
+    secio: bool,
+    metas: impl Iterator<Item = ProtocolMeta>,
+    shandle: F,
+) -> Service<F, SecioKeyPair>
 where
-    F: ServiceHandle + Unpin,
+    F: ServiceHandle + Unpin + 'static,
 {
     let mut builder = ServiceBuilder::default().forever(true);
 
@@ -23,7 +27,7 @@ where
 
     if secio {
         builder
-            .key_pair(SecioKeyPair::secp256k1_generated())
+            .handshake_type(SecioKeyPair::secp256k1_generated().into())
             .build(shandle)
     } else {
         builder.build(shandle)
@@ -163,7 +167,7 @@ fn test(secio: bool, shutdown: bool) {
 }
 
 fn start_service<F>(
-    mut service: Service<F>,
+    mut service: Service<F, SecioKeyPair>,
     listen_addr: Multiaddr,
     handle: &tokio::runtime::Handle,
 ) where

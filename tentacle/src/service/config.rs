@@ -344,6 +344,36 @@ impl<T> ProtocolHandle<T> {
     }
 }
 
+/// Handshake encryption layer protocol selection
+#[non_exhaustive]
+pub enum HandshakeType<T> {
+    /// Enable secio
+    Secio(T),
+    /// Disable all built-in encryption layer
+    Noop,
+}
+
+impl<K> From<K> for HandshakeType<K>
+where
+    K: secio::KeyProvider,
+{
+    fn from(value: K) -> Self {
+        HandshakeType::Secio(value)
+    }
+}
+
+impl<T> Clone for HandshakeType<T>
+where
+    T: Clone,
+{
+    fn clone(&self) -> Self {
+        match self {
+            HandshakeType::Secio(s) => HandshakeType::Secio(s.clone()),
+            HandshakeType::Noop => HandshakeType::Noop,
+        }
+    }
+}
+
 /// Service state
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Hash)]
 pub enum State {

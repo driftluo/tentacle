@@ -4,14 +4,15 @@ use tentacle::{
     async_trait,
     builder::{MetaBuilder, ServiceBuilder},
     context::ProtocolContext,
+    secio::NoopKeyProvider,
     service::{ProtocolHandle, ProtocolMeta, Service},
     traits::{ServiceHandle, ServiceProtocol},
     ProtocolId,
 };
 
-pub fn create<F>(meta: ProtocolMeta, shandle: F) -> Service<F>
+pub fn create<F>(meta: ProtocolMeta, shandle: F) -> Service<F, NoopKeyProvider>
 where
-    F: ServiceHandle + Unpin,
+    F: ServiceHandle + Unpin + 'static,
 {
     ServiceBuilder::default()
         .insert_protocol(meta)

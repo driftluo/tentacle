@@ -12,9 +12,9 @@ use tentacle::{
     ProtocolId,
 };
 
-pub fn create<F>(secio: bool, meta: ProtocolMeta, shandle: F) -> Service<F>
+pub fn create<F>(secio: bool, meta: ProtocolMeta, shandle: F) -> Service<F, SecioKeyPair>
 where
-    F: ServiceHandle + Unpin,
+    F: ServiceHandle + Unpin + 'static,
 {
     let builder = ServiceBuilder::default()
         .insert_protocol(meta)
@@ -23,7 +23,7 @@ where
 
     if secio {
         builder
-            .key_pair(SecioKeyPair::secp256k1_generated())
+            .handshake_type(SecioKeyPair::secp256k1_generated().into())
             .build(shandle)
     } else {
         builder.build(shandle)

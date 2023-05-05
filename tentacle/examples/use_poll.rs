@@ -66,10 +66,10 @@ fn create_meta(id: ProtocolId, recv: Receiver<()>) -> ProtocolMeta {
         .build()
 }
 
-fn create_server(recv: Receiver<()>) -> Service<SHandle> {
+fn create_server(recv: Receiver<()>) -> Service<SHandle, SecioKeyPair> {
     ServiceBuilder::default()
         .insert_protocol(create_meta(0.into(), recv))
-        .key_pair(SecioKeyPair::secp256k1_generated())
+        .handshake_type(SecioKeyPair::secp256k1_generated().into())
         .build(SHandle)
 }
 

@@ -1,7 +1,7 @@
 use futures::{channel::mpsc, prelude::*};
 use log::{debug, error, trace};
 use multiaddr::Multiaddr;
-use secio::handshake::Config;
+use secio::{handshake::Config, KeyProvider};
 use std::{
     io,
     pin::Pin,
@@ -13,7 +13,7 @@ use yamux::session::SessionType as YamuxType;
 
 use crate::{
     error::{HandshakeErrorKind, TransportErrorKind},
-    service::future_task::BoxedFutureTask,
+    service::{future_task::BoxedFutureTask, HandshakeType},
     session::SessionEvent,
     transports::MultiIncoming,
 };
@@ -72,8 +72,8 @@ impl From<SessionType> for YamuxType {
     }
 }
 
-pub(crate) struct HandshakeContext {
-    pub(crate) key_pair: Option<secio::SecioKeyPair>,
+pub(crate) struct HandshakeContext<K> {
+    pub(crate) handshake_type: HandshakeType<K>,
     pub(crate) event_sender: mpsc::Sender<SessionEvent>,
     pub(crate) max_frame_length: usize,
     pub(crate) timeout: Duration,
@@ -82,16 +82,19 @@ pub(crate) struct HandshakeContext {
     pub(crate) listen_address: Option<Multiaddr>,
 }
 
-impl HandshakeContext {
+impl<K> HandshakeContext<K>
+where
+    K: KeyProvider,
+{
     pub async fn handshake<H>(mut self, socket: H)
     where
         H: AsyncRead + AsyncWrite + Send + 'static + Unpin,
     {
-        match self.key_pair {
-            Some(key_pair) => {
+        match self.handshake_type {
+            HandshakeType::Secio(key_provider) => {
                 let result = crate::runtime::timeout(
                     self.timeout,
-                    Config::new(key_pair)
+                    Config::new(key_provider)
                         .max_frame_length(self.max_frame_length)
                         .handshake(socket),
                 )
@@ -135,7 +138,7 @@ impl HandshakeContext {
                     error!("handshake result send back error: {:?}", err);
                 }
             }
-            None => {
+            HandshakeType::Noop => {
                 let event = SessionEvent::HandshakeSuccess {
                     handle: Box::new(socket),
                     public_key: None,
@@ -152,9 +155,9 @@ impl HandshakeContext {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-pub struct Listener {
+pub struct Listener<K> {
     pub(crate) inner: MultiIncoming,
-    pub(crate) key_pair: Option<secio::SecioKeyPair>,
+    pub(crate) handshake_type: HandshakeType<K>,
     pub(crate) event_sender: mpsc::Sender<SessionEvent>,
     pub(crate) max_frame_length: usize,
     pub(crate) timeout: Duration,
@@ -163,7 +166,10 @@ pub struct Listener {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-impl Listener {
+impl<K> Listener<K>
+where
+    K: KeyProvider,
+{
     fn close(&self, io_err: io::Error) {
         let mut event_sender = self.event_sender.clone();
         let mut future_sender = self.future_task_sender.clone();
@@ -194,7 +200,7 @@ impl Listener {
             ty: SessionType::Inbound,
             remote_address,
             listen_address: Some(self.listen_addr.clone()),
-            key_pair: self.key_pair.clone(),
+            handshake_type: self.handshake_type.clone(),
             event_sender: self.event_sender.clone(),
             max_frame_length: self.max_frame_length,
             timeout: self.timeout,
@@ -216,7 +222,13 @@ impl Listener {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-impl Stream for Listener {
+impl<K> Unpin for Listener<K> {}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl<K> Stream for Listener<K>
+where
+    K: KeyProvider,
+{
     type Item = ();
 
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {

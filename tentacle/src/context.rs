@@ -1,7 +1,6 @@
 use bytes::Bytes;
 use futures::prelude::*;
 use std::{
-    collections::HashMap,
     ops::{Deref, DerefMut},
     sync::{
         atomic::{AtomicBool, AtomicUsize, Ordering},
@@ -15,8 +14,7 @@ use crate::{
     channel::{mpsc, mpsc::Priority},
     error::SendErrorKind,
     multiaddr::Multiaddr,
-    protocol_select::ProtocolInfo,
-    secio::{PublicKey, SecioKeyPair},
+    secio::PublicKey,
     service::{
         event::ServiceTask, ServiceAsyncControl, ServiceControl, SessionType, TargetProtocol,
         TargetSession,
@@ -120,21 +118,14 @@ type Result = std::result::Result<(), SendErrorKind>;
 // TODO: Need to maintain the network topology map here?
 pub struct ServiceContext {
     listens: Vec<Multiaddr>,
-    key_pair: Option<SecioKeyPair>,
     inner: ServiceAsyncControl,
 }
 
 impl ServiceContext {
     /// New
-    pub(crate) fn new(
-        task_sender: mpsc::Sender<ServiceTask>,
-        proto_infos: HashMap<ProtocolId, ProtocolInfo>,
-        key_pair: Option<SecioKeyPair>,
-        closed: Arc<AtomicBool>,
-    ) -> Self {
+    pub(crate) fn new(task_sender: mpsc::Sender<ServiceTask>, closed: Arc<AtomicBool>) -> Self {
         ServiceContext {
-            inner: ServiceControl::new(task_sender, proto_infos, closed).into(),
-            key_pair,
+            inner: ServiceControl::new(task_sender, closed).into(),
             listens: Vec::new(),
         }
     }
@@ -246,18 +237,6 @@ impl ServiceContext {
         &self.inner
     }
 
-    /// Get service protocol message, Map(ID, Name), but can't modify
-    #[inline]
-    pub fn protocols(&self) -> &Arc<HashMap<ProtocolId, ProtocolInfo>> {
-        self.inner.protocols()
-    }
-
-    /// Get the key pair of self
-    #[inline]
-    pub fn key_pair(&self) -> Option<&SecioKeyPair> {
-        self.key_pair.as_ref()
-    }
-
     /// Get service listen address list
     #[inline]
     pub fn listens(&self) -> &[Multiaddr] {
@@ -331,7 +310,6 @@ impl ServiceContext {
     pub(crate) fn clone_self(&self) -> Self {
         ServiceContext {
             inner: self.inner.clone(),
-            key_pair: self.key_pair.clone(),
             listens: self.listens.clone(),
         }
     }

@@ -1,6 +1,5 @@
 use openssl::{
     hash::MessageDigest,
-    memcmp,
     pkey::{PKey, Private},
     sign::Signer,
 };
@@ -15,6 +14,7 @@ pub struct Hmac {
 
 impl Hmac {
     /// Returns the size of the hash in bytes.
+    #[cfg(test)]
     #[inline]
     pub fn num_bytes(&self) -> usize {
         self.digest.size()
@@ -32,6 +32,7 @@ impl Hmac {
     }
 
     /// Signs the data.
+    #[cfg(test)]
     pub fn sign(&mut self, crypted_data: &[u8]) -> Vec<u8> {
         let mut sign = Signer::new(self.digest, &self.key).expect("init openssl signer ctx fail");
         sign.update(crypted_data).expect("openssl hmac update fail");
@@ -39,12 +40,13 @@ impl Hmac {
     }
 
     /// Verifies that the data matches the expected hash.
+    #[cfg(test)]
     pub fn verify(&mut self, crypted_data: &[u8], expected_hash: &[u8]) -> bool {
         let n = self.sign(crypted_data);
         if n.len() != expected_hash.len() {
             return false;
         }
-        memcmp::eq(&n, expected_hash)
+        openssl::memcmp::eq(&n, expected_hash)
     }
 
     /// Return a multi-step hmac context

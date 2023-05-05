@@ -7,9 +7,9 @@ use tokio_util::codec::LengthDelimitedCodec;
 use crate::service::config::TlsConfig;
 use crate::{
     protocol_select::SelectFn,
-    secio::SecioKeyPair,
+    secio::KeyProvider,
     service::{
-        config::{Meta, ServiceConfig},
+        config::{HandshakeType, Meta, ServiceConfig},
         ProtocolHandle, ProtocolMeta, Service, TcpSocket,
     },
     traits::{Codec, ProtocolSpawn, ServiceHandle, ServiceProtocol, SessionProtocol},
@@ -18,26 +18,45 @@ use crate::{
 };
 
 /// Builder for Service
-#[derive(Default)]
-pub struct ServiceBuilder {
+pub struct ServiceBuilder<K> {
     inner: IntMap<ProtocolId, ProtocolMeta>,
-    key_pair: Option<SecioKeyPair>,
+    handshake_type: HandshakeType<K>,
     forever: bool,
     config: ServiceConfig,
 }
 
-impl ServiceBuilder {
+impl<K> Default for ServiceBuilder<K> {
+    fn default() -> Self {
+        Self {
+            handshake_type: HandshakeType::Noop,
+            inner: IntMap::default(),
+            forever: false,
+            config: ServiceConfig::default(),
+        }
+    }
+}
+
+impl<K> ServiceBuilder<K>
+where
+    K: KeyProvider,
+{
     /// New a default empty builder
     pub fn new() -> Self {
         Default::default()
     }
 
     /// Combine the configuration of this builder with service handle to create a Service.
-    pub fn build<H>(self, handle: H) -> Service<H>
+    pub fn build<H>(self, handle: H) -> Service<H, K>
     where
-        H: ServiceHandle + Unpin,
+        H: ServiceHandle + Unpin + 'static,
     {
-        Service::new(self.inner, handle, self.key_pair, self.forever, self.config)
+        Service::new(
+            self.inner,
+            handle,
+            self.handshake_type,
+            self.forever,
+            self.config,
+        )
     }
 
     /// Insert a custom protocol
@@ -46,11 +65,11 @@ impl ServiceBuilder {
         self
     }
 
-    /// Enable encrypted communication mode.
+    /// Handshake encryption layer protocol selection
     ///
     /// If you do not need encrypted communication, you do not need to call this method
-    pub fn key_pair(mut self, key_pair: SecioKeyPair) -> Self {
-        self.key_pair = Some(key_pair);
+    pub fn handshake_type(mut self, handshake_type: HandshakeType<K>) -> Self {
+        self.handshake_type = handshake_type;
         self
     }
 
@@ -157,7 +176,7 @@ impl ServiceBuilder {
     ///
     /// for example, set all tcp bind to `127.0.0.1:1080`, set keepalive:
     ///
-    /// ```rust
+    /// ```ignore
     ///  use socket2;
     ///  use tentacle::{service::TcpSocket, builder::ServiceBuilder};
     ///  #[cfg(unix)]

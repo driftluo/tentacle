@@ -3,6 +3,7 @@ use crossbeam_channel::Receiver;
 use rustls_pemfile::{certs, pkcs8_private_keys, rsa_private_keys};
 use std::io::BufReader;
 use std::str::FromStr;
+use std::sync::Arc;
 use std::time::Duration;
 use std::{fs, thread};
 use tentacle::bytes::Bytes;
@@ -12,6 +13,7 @@ use tentacle::{
     builder::{MetaBuilder, ServiceBuilder},
     context::{ProtocolContext, ProtocolContextMutRef},
     multiaddr::Multiaddr,
+    secio::NoopKeyProvider,
     service::{ProtocolHandle, ProtocolMeta, Service, TargetProtocol, TlsConfig},
     traits::{ServiceHandle, ServiceProtocol},
     ProtocolId,
@@ -23,9 +25,9 @@ use tokio_rustls::rustls::{
     SupportedProtocolVersion, ALL_CIPHER_SUITES,
 };
 
-pub fn create<F>(meta: ProtocolMeta, shandle: F, cert_path: String) -> Service<F>
+pub fn create<F>(meta: ProtocolMeta, shandle: F, cert_path: String) -> Service<F, NoopKeyProvider>
 where
-    F: ServiceHandle + Unpin,
+    F: ServiceHandle + Unpin + 'static,
 {
     let mut builder = ServiceBuilder::default()
         .insert_protocol(meta)
@@ -215,7 +217,7 @@ pub fn make_server_config(config: &NetConfig) -> ServerConfig {
     for cacert in &cacerts {
         client_auth_roots.add(cacert).unwrap();
     }
-    let client_auth = AllowAnyAuthenticatedClient::new(client_auth_roots);
+    let client_auth = Arc::new(AllowAnyAuthenticatedClient::new(client_auth_roots));
 
     let server_config = server_config.with_client_cert_verifier(client_auth);
 

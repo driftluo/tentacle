@@ -6,6 +6,7 @@ pub struct Hmac(ring::hmac::Key);
 
 impl Hmac {
     /// Returns the size of the hash in bytes.
+    #[cfg(test)]
     #[inline]
     pub fn num_bytes(&self) -> usize {
         self.0.algorithm().digest_algorithm().output_len
@@ -20,11 +21,13 @@ impl Hmac {
     }
 
     /// Signs the data.
+    #[cfg(test)]
     pub fn sign(&mut self, crypted_data: &[u8]) -> ring::hmac::Tag {
         ring::hmac::sign(&self.0, crypted_data)
     }
 
     /// Verifies that the data matches the expected hash.
+    #[cfg(test)]
     pub fn verify(&mut self, crypted_data: &[u8], expected_hash: &[u8]) -> bool {
         ring::hmac::verify(&self.0, crypted_data, expected_hash).is_ok()
     }
