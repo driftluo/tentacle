@@ -327,7 +327,7 @@ fn clint_node_connect(path: String, dial_address: Multiaddr) {
     let handle = thread::spawn(move || {
         let rt = tokio::runtime::Runtime::new().unwrap();
         rt.block_on(async move {
-            let _ = service.dial(dial_address, TargetProtocol::All).await;
+            let _ignore = service.dial(dial_address, TargetProtocol::All).await;
             service.run().await
         });
     });

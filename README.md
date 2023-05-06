@@ -1,7 +1,7 @@
 # Tentacle
 
-[![Build Status](https://travis-ci.com/nervosnetwork/tentacle.svg?branch=master)](https://travis-ci.com/nervosnetwork/tentacle)
-![image](https://img.shields.io/badge/rustc-1.56.1-blue.svg)
+[![Build Status](https://github.com/nervosnetwork/tentacle/actions/workflows/ci.yaml/badge.svg?branch=master)](https://github.com/nervosnetwork/tentacle/actions/workflows/ci.yaml/badge.svg?branch=master)
+![image](https://img.shields.io/badge/rustc-1.68.2-blue.svg)
 
 ## Overview
 

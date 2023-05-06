@@ -1,6 +1,6 @@
 [package]
 name = "tentacle"
-version = "0.4.2"
+version = "0.5.0-alpha.1"
 license = "MIT"
 description = "Minimal implementation for a multiplexed p2p network framework."
 authors = ["piaoliu <driftluo@foxmail.com>", "Nervos Core Dev <dev@nervos.org>"]
@@ -18,7 +18,7 @@ rustc-args = ["--cfg", "docsrs"]
 
 [dependencies]
 yamux = { path = "../yamux", version = "0.3.0", default-features = false, package = "tokio-yamux"}
-secio = { path = "../secio", version = "0.5.0", package = "tentacle-secio" }
+secio = { path = "../secio", version = "0.6.0", package = "tentacle-secio" }
 
 futures = { version = "0.3.0" }
 tokio = { version = "1.0.0", features = ["macros"] }

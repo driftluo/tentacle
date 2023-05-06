@@ -270,7 +270,7 @@ mod tests {
         let hmac_key: [u8; 16] = rand::random();
         let _hmac_key_clone = hmac_key;
         let data = b"hello world";
-        let data_clone = &*data;
+        let data_clone = data;
         let nonce = vec![0, 1, 2, 3, 4, 5, 6, 7, 8, 9];
         let nonce2 = nonce.clone();
 
@@ -311,7 +311,7 @@ mod tests {
             // if not send nonce to remote, handshake will unable to complete the final confirmation
             // it will return error and shutdown this session
             if send_nonce {
-                let _ = handle.write_all(&nonce).await;
+                let _ignore = handle.write_all(&nonce).await;
             }
 
             let _res = handle.write_all(&data_clone[..]).await;

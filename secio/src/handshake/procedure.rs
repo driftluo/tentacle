@@ -158,7 +158,7 @@ where
 
     if !<K as KeyProvider>::verify_ecdsa(
         ephemeral_context.state.remote.public_key.inner_ref(),
-        &data_to_verify,
+        data_to_verify,
         &remote_exchanges.signature,
     ) {
         debug!("failed to verify the remote's signature");

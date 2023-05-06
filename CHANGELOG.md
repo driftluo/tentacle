@@ -1,3 +1,9 @@
+## yamux 0.3.8 secio 0.6.0 tentacle 0.5.0-alpha.1
+
+### Features
+- Yamux `StreamHandle` support peek(#367)
+- Secio support custom `KeyProvider`(#366)
+
 ## 0.4.2
 
 ### Features
