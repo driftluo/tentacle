@@ -156,7 +156,7 @@ where
 
     let data_to_verify = crate::sha256_compat::sha256(&data_to_verify);
 
-    if !<K as KeyProvider>::verify_ecdsa(
+    if !ephemeral_context.config.key_provider.verify_ecdsa(
         ephemeral_context.state.remote.public_key.inner_ref(),
         data_to_verify,
         &remote_exchanges.signature,

@@ -135,7 +135,7 @@ pub trait KeyProvider: std::clone::Clone + Send + Sync + 'static {
     fn pubkey(&self) -> Vec<u8>;
 
     /// Checks that `sig` is a valid ECDSA signature for `msg` using the pubkey.
-    fn verify_ecdsa<P, T, F>(pubkey: P, message: T, signature: F) -> bool
+    fn verify_ecdsa<P, T, F>(&self, pubkey: P, message: T, signature: F) -> bool
     where
         P: AsRef<[u8]>,
         T: AsRef<[u8]>,
@@ -168,7 +168,7 @@ impl KeyProvider for SecioKeyPair {
         }
     }
 
-    fn verify_ecdsa<P, T, F>(pubkey: P, message: T, signature: F) -> bool
+    fn verify_ecdsa<P, T, F>(&self, pubkey: P, message: T, signature: F) -> bool
     where
         P: AsRef<[u8]>,
         T: AsRef<[u8]>,
@@ -205,7 +205,7 @@ impl KeyProvider for NoopKeyProvider {
         Vec::new()
     }
 
-    fn verify_ecdsa<P, T, F>(_pubkey: P, _message: T, _signature: F) -> bool
+    fn verify_ecdsa<P, T, F>(&self, _pubkey: P, _message: T, _signature: F) -> bool
     where
         P: AsRef<[u8]>,
         T: AsRef<[u8]>,

@@ -134,6 +134,11 @@ impl PublicKey {
         self.key
     }
 
+    /// from raw pubkey
+    pub fn from_raw_key(pubkey: Vec<u8>) -> Self {
+        PublicKey { key: pubkey }
+    }
+
     /// Encode with molecule
     pub fn encode(self) -> Bytes {
         let secp256k1 = handshake_mol::Secp256k1::new_builder()

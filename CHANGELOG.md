@@ -1,3 +1,8 @@
+## secio 0.6.1
+
+### Features
+- Expose the PublicKey `from_raw_key` api
+
 ## yamux 0.3.8 secio 0.6.0 tentacle 0.5.0-alpha.1
 
 ### Features
