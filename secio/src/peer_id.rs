@@ -111,6 +111,12 @@ impl fmt::Debug for PeerId {
     }
 }
 
+impl fmt::Display for PeerId {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{}", self.to_base58())
+    }
+}
+
 impl From<PublicKey> for PeerId {
     #[inline]
     fn from(key: PublicKey) -> PeerId {
