@@ -9,7 +9,7 @@ impl Hmac {
     #[cfg(test)]
     #[inline]
     pub fn num_bytes(&self) -> usize {
-        self.0.algorithm().digest_algorithm().output_len
+        self.0.algorithm().digest_algorithm().output_len()
     }
 
     /// Builds a `Hmac` from an algorithm and key.

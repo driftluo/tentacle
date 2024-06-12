@@ -33,7 +33,7 @@ pub fn pubkey_from_slice(key: &[u8]) -> Result<PublicKey, secp256k1::Error> {
 }
 
 pub fn message_from_slice(msg: &[u8]) -> Result<Message, secp256k1::Error> {
-    Message::from_slice(msg)
+    Message::from_digest_slice(msg)
 }
 
 pub fn signature_from_der(data: &[u8]) -> Result<Signature, secp256k1::Error> {

@@ -5,5 +5,6 @@ pub use parking_lot::{const_fair_mutex, const_mutex, const_rwlock, FairMutex, Mu
 #[cfg(not(feature = "parking_lot"))]
 pub mod native;
 
+#[allow(unused_imports)]
 #[cfg(not(feature = "parking_lot"))]
 pub use native::{Mutex, RwLock};

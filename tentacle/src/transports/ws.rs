@@ -322,6 +322,8 @@ impl AsyncRead for WsStream {
                     }
                     Message::Pong(_) => Vec::new(),
                     Message::Text(_) => Vec::new(),
+                    // never reach this branch
+                    Message::Frame(_) => Vec::new(),
                 };
 
                 if data.is_empty() {

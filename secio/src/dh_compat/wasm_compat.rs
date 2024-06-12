@@ -12,7 +12,7 @@ pub fn generate_agreement(
 ) -> Result<(EphemeralPrivateKey, Vec<u8>), SecioError> {
     match algorithm {
         KeyAgreement::X25519 => {
-            let key = EphemeralPrivateKey::new(OsRng);
+            let key = EphemeralPrivateKey::random_from_rng(OsRng);
             let pubkey = PublicKey::from(&key);
             Ok((key, pubkey.to_bytes().to_vec()))
         }

@@ -6,6 +6,7 @@ use ring::rand as ring_rand;
 
 use super::KeyAgreement;
 use crate::error::SecioError;
+#[allow(unused_imports)]
 pub use ring::agreement::EphemeralPrivateKey;
 
 impl From<KeyAgreement> for &'static agreement::Algorithm {
@@ -50,7 +51,7 @@ pub fn agree(
     agreement::agree_ephemeral(
         my_private_key,
         &agreement::UnparsedPublicKey::new(algorithm.into(), other_public_key),
-        SecioError::SecretGenerationFailed,
-        |key_material| Ok(key_material.to_vec()),
+        |key_material| key_material.to_vec(),
     )
+    .map_err(|_| SecioError::SecretGenerationFailed)
 }

@@ -1,3 +1,9 @@
+## secio 0.6.2 tentacle 0.6.0
+
+### Features
+- upgrade dependences
+- impl Display for PeerId
+
 ## secio 0.6.1
 
 ### Features
