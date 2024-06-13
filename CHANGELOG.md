@@ -1,3 +1,8 @@
+## tentacle 0.6.1
+
+### Features
+- impl `AsFd` `AsSocket` for `TcpSocket`
+
 ## secio 0.6.2 tentacle 0.6.0
 
 ### Features

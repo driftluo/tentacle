@@ -4,10 +4,15 @@ use crate::{
     yamux::config::Config as YamuxConfig,
     ProtocolId, SessionId,
 };
-#[cfg(unix)]
-use std::os::unix::io::{AsRawFd, FromRawFd, IntoRawFd, RawFd};
 #[cfg(windows)]
-use std::os::windows::io::{AsRawSocket, FromRawSocket, IntoRawSocket, RawSocket};
+use std::os::windows::io::{
+    AsRawSocket, AsSocket, BorrowedSocket, FromRawSocket, IntoRawSocket, RawSocket,
+};
+#[cfg(unix)]
+use std::os::{
+    fd::AsFd,
+    unix::io::{AsRawFd, BorrowedFd, FromRawFd, IntoRawFd, RawFd},
+};
 use std::{sync::Arc, time::Duration};
 #[cfg(feature = "tls")]
 use tokio_rustls::rustls::{ClientConfig, ServerConfig};
@@ -144,6 +149,13 @@ impl IntoRawFd for TcpSocket {
     }
 }
 
+#[cfg(unix)]
+impl AsFd for TcpSocket {
+    fn as_fd(&self) -> BorrowedFd<'_> {
+        self.inner.as_fd()
+    }
+}
+
 #[cfg(windows)]
 impl IntoRawSocket for TcpSocket {
     fn into_raw_socket(self) -> RawSocket {
@@ -164,6 +176,13 @@ impl FromRawSocket for TcpSocket {
     unsafe fn from_raw_socket(socket: RawSocket) -> TcpSocket {
         let inner = socket2::Socket::from_raw_socket(socket);
         TcpSocket { inner }
+    }
+}
+
+#[cfg(windows)]
+impl AsSocket for TcpSocket {
+    fn as_socket(&self) -> BorrowedSocket<'_> {
+        unsafe { BorrowedSocket::borrow_raw(self.as_raw_socket()) }
     }
 }
 
