@@ -81,8 +81,8 @@ $ cd tentacle && RUST_LOG=info cargo run --example simple --features ws -- serve
 
 2. setup a browser client
 ```
-$ cd simple_wasm/www && wasm-pack build
-$ npm install && npm run start
+$ cd simple_wasm && wasm-pack build
+$ npm install && npm run serve
 ```
 
 all wasm code generate from [book](https://rustwasm.github.io/docs/book/game-of-life/hello-world.html)
