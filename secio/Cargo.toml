@@ -34,10 +34,10 @@ rand = "0.8"
 openssl = "0.10.25"
 openssl-sys = "0.9"
 
-[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+[target.'cfg(not(target_family = "wasm"))'.dependencies]
 ring = "0.17"
 
-[target.'cfg(target_arch = "wasm32")'.dependencies]
+[target.'cfg(target_family = "wasm")'.dependencies]
 rand_core = { version = "0.6" }
 getrandom = { version = "0.2", features = ["js"] }
 sha2 = "0.10.0"

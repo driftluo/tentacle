@@ -154,7 +154,7 @@ where
     }
 }
 
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(not(target_family = "wasm"))]
 pub struct Listener<K> {
     pub(crate) inner: MultiIncoming,
     pub(crate) handshake_type: HandshakeType<K>,
@@ -165,7 +165,7 @@ pub struct Listener<K> {
     pub(crate) future_task_sender: mpsc::Sender<BoxedFutureTask>,
 }
 
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(not(target_family = "wasm"))]
 impl<K> Listener<K>
 where
     K: KeyProvider,
@@ -221,10 +221,10 @@ where
     }
 }
 
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(not(target_family = "wasm"))]
 impl<K> Unpin for Listener<K> {}
 
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(not(target_family = "wasm"))]
 impl<K> Stream for Listener<K>
 where
     K: KeyProvider,

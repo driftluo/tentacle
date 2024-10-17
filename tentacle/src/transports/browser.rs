@@ -111,7 +111,7 @@ impl BrowserTransport {
 }
 
 pub type BrowserDialFuture =
-    TransportFuture<Pin<Box<dyn Future<Output = Result<(Multiaddr, BrowserStream)>>>>>;
+    TransportFuture<Pin<Box<dyn Future<Output = Result<(Multiaddr, BrowserStream)>> + Send>>>;
 
 impl Transport for BrowserTransport {
     type ListenFuture = ();
@@ -125,8 +125,11 @@ impl Transport for BrowserTransport {
         if !matches!(find_type(&address), TransportType::Ws) {
             return Err(TransportErrorKind::NotSupported(address));
         }
-        let dial = connect(address, self.timeout);
-        Ok(TransportFuture::new(Box::pin(dial)))
+        let dial = crate::runtime::spawn(connect(address, self.timeout));
+
+        Ok(TransportFuture::new(Box::pin(async {
+            dial.await.expect("oneshot channel panic")
+        })))
     }
 }
 

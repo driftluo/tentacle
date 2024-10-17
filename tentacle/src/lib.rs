@@ -103,7 +103,7 @@
 
 #![deny(missing_docs)]
 #![cfg_attr(
-    target_arch = "wasm32",
+    target_family = "wasm",
     allow(dead_code, unused_variables, unused_imports)
 )]
 #![cfg_attr(docsrs, feature(doc_cfg))]
@@ -151,7 +151,7 @@ mod channel;
 #[allow(missing_docs)]
 pub mod runtime;
 
-#[cfg(all(not(target_arch = "wasm32"), feature = "upnp"))]
+#[cfg(all(not(target_family = "wasm"), feature = "upnp"))]
 pub(crate) mod upnp;
 
 use std::{fmt, ops::AddAssign};

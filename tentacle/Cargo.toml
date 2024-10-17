@@ -27,11 +27,10 @@ async-trait = "0.1"
 log = "0.4"
 bytes = "1.0.0"
 thiserror = "1.0"
-once_cell = "1.0"
 nohash-hasher = "0.2"
 
 parking_lot = { version = "0.12", optional = true }
-tokio-tungstenite = { version = "0.21", optional = true }
+tokio-tungstenite = { version = "0.24", optional = true }
 futures-timer = { version = "3.0.2", optional = true }
 async-std = { version = "1", features = ["unstable"], optional = true }
 async-io = { version = "1", optional = true }
@@ -43,14 +42,14 @@ molecule = "0.8.0"
 igd = { version = "0.12", optional = true }
 
 #tls
-tokio-rustls = { version = "0.24.0", optional = true }
+tokio-rustls = { version = "0.26.0", optional = true }
 
-[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+[target.'cfg(not(target_family = "wasm"))'.dependencies]
 # rand 0.8 not support wasm32
 rand = "0.8"
 socket2 = { version = "0.5.0", features = ["all"] }
 
-[target.'cfg(target_arch = "wasm32")'.dependencies]
+[target.'cfg(target_family = "wasm")'.dependencies]
 js-sys = "0.3"
 wasm-bindgen = "0.2"
 wasm-bindgen-futures = "0.4"
@@ -69,12 +68,11 @@ winapi = { version = "0.3.7", features = [
 [dev-dependencies]
 env_logger = "0.6.0"
 crossbeam-channel = "0.5"
-systemstat = "0.1.3"
+systemstat = "0.2"
 futures-test = "0.3.5"
-rustls-pemfile = "1"
 
 [target.'cfg(unix)'.dev-dependencies]
-nix = { version = "0.24.1", default-features = false, features = ["signal"] }
+nix = { version = "0.29", default-features = false, features = ["signal"] }
 
 [features]
 default = ["tokio-runtime", "tokio-timer"]

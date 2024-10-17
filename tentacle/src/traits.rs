@@ -22,8 +22,7 @@ use crate::{
 /// Mainly handle some Service-level errors thrown at runtime, such as listening errors.
 ///
 /// At the same time, the session establishment and disconnection messages will also be perceived here.
-#[cfg_attr(target_arch = "wasm32", async_trait::async_trait(?Send))]
-#[cfg_attr(not(target_arch = "wasm32"), async_trait::async_trait)]
+#[async_trait::async_trait]
 pub trait ServiceHandle: Send {
     /// Handling runtime errors
     async fn handle_error(&mut self, _control: &mut ServiceContext, _error: ServiceError) {}
@@ -52,8 +51,7 @@ pub trait ServiceHandle: Send {
 /// The opening and closing of the protocol will create and clean up the handle exclusive
 /// to the session, but the service handle will remain in the state until the service is closed.
 ///
-#[cfg_attr(target_arch = "wasm32", async_trait::async_trait(?Send))]
-#[cfg_attr(not(target_arch = "wasm32"), async_trait::async_trait)]
+#[async_trait::async_trait]
 pub trait ServiceProtocol: Send {
     /// This function is called when the service start.
     ///
@@ -77,8 +75,7 @@ pub trait ServiceProtocol: Send {
 }
 
 /// Session level protocol handle
-#[cfg_attr(target_arch = "wasm32", async_trait::async_trait(?Send))]
-#[cfg_attr(not(target_arch = "wasm32"), async_trait::async_trait)]
+#[async_trait::async_trait]
 pub trait SessionProtocol: Send {
     /// Called when opening protocol
     async fn connected(&mut self, _context: ProtocolContextMutRef<'_>, _version: &str) {}
@@ -97,8 +94,7 @@ pub trait SessionProtocol: Send {
     }
 }
 
-#[cfg_attr(target_arch = "wasm32", async_trait::async_trait(?Send))]
-#[cfg_attr(not(target_arch = "wasm32"), async_trait::async_trait)]
+#[async_trait::async_trait]
 impl ServiceHandle for Box<dyn ServiceHandle + Send + 'static> {
     async fn handle_error(&mut self, control: &mut ServiceContext, error: ServiceError) {
         (**self).handle_error(control, error).await
@@ -109,8 +105,7 @@ impl ServiceHandle for Box<dyn ServiceHandle + Send + 'static> {
     }
 }
 
-#[cfg_attr(target_arch = "wasm32", async_trait::async_trait(?Send))]
-#[cfg_attr(not(target_arch = "wasm32"), async_trait::async_trait)]
+#[async_trait::async_trait]
 impl ServiceHandle for Box<dyn ServiceHandle + Send + Sync + 'static> {
     async fn handle_error(&mut self, control: &mut ServiceContext, error: ServiceError) {
         (**self).handle_error(control, error).await
@@ -121,12 +116,10 @@ impl ServiceHandle for Box<dyn ServiceHandle + Send + Sync + 'static> {
     }
 }
 
-#[cfg_attr(target_arch = "wasm32", async_trait::async_trait(?Send))]
-#[cfg_attr(not(target_arch = "wasm32"), async_trait::async_trait)]
+#[async_trait::async_trait]
 impl ServiceHandle for () {}
 
-#[cfg_attr(target_arch = "wasm32", async_trait::async_trait(?Send))]
-#[cfg_attr(not(target_arch = "wasm32"), async_trait::async_trait)]
+#[async_trait::async_trait]
 impl ServiceProtocol for Box<dyn ServiceProtocol + Send + 'static + Unpin> {
     async fn init(&mut self, context: &mut ProtocolContext) {
         (**self).init(context).await
@@ -154,8 +147,7 @@ impl ServiceProtocol for Box<dyn ServiceProtocol + Send + 'static + Unpin> {
     }
 }
 
-#[cfg_attr(target_arch = "wasm32", async_trait::async_trait(?Send))]
-#[cfg_attr(not(target_arch = "wasm32"), async_trait::async_trait)]
+#[async_trait::async_trait]
 impl ServiceProtocol for Box<dyn ServiceProtocol + Send + Sync + 'static + Unpin> {
     async fn init(&mut self, context: &mut ProtocolContext) {
         (**self).init(context).await
@@ -183,8 +175,7 @@ impl ServiceProtocol for Box<dyn ServiceProtocol + Send + Sync + 'static + Unpin
     }
 }
 
-#[cfg_attr(target_arch = "wasm32", async_trait::async_trait(?Send))]
-#[cfg_attr(not(target_arch = "wasm32"), async_trait::async_trait)]
+#[async_trait::async_trait]
 impl SessionProtocol for Box<dyn SessionProtocol + Send + 'static + Unpin> {
     async fn connected(&mut self, context: ProtocolContextMutRef<'_>, version: &str) {
         (**self).connected(context, version).await
@@ -208,8 +199,7 @@ impl SessionProtocol for Box<dyn SessionProtocol + Send + 'static + Unpin> {
     }
 }
 
-#[cfg_attr(target_arch = "wasm32", async_trait::async_trait(?Send))]
-#[cfg_attr(not(target_arch = "wasm32"), async_trait::async_trait)]
+#[async_trait::async_trait]
 impl SessionProtocol for Box<dyn SessionProtocol + Send + Sync + 'static + Unpin> {
     async fn connected(&mut self, context: ProtocolContextMutRef<'_>, version: &str) {
         (**self).connected(context, version).await

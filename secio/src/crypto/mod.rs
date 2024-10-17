@@ -5,10 +5,10 @@ use bytes::BytesMut;
 pub mod cipher;
 #[cfg(unix)]
 mod openssl_impl;
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(not(target_family = "wasm"))]
 #[cfg(any(not(ossl110), test, not(unix)))]
 mod ring_impl;
-#[cfg(any(target_arch = "wasm32", test))]
+#[cfg(any(target_family = "wasm", test))]
 mod wasm_compat;
 
 /// Variant cipher which contains all possible stream ciphers
@@ -66,7 +66,7 @@ pub fn new_stream(t: cipher::CipherType, key: &[u8], mode: CryptoMode) -> BoxStr
 
 /// Generate a specific Cipher with key and initialize vector
 #[doc(hidden)]
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(not(target_family = "wasm"))]
 #[cfg(not(unix))]
 pub fn new_stream(t: cipher::CipherType, key: &[u8], mode: CryptoMode) -> BoxStreamCipher {
     Box::new(ring_impl::RingAeadCipher::new(t, key, mode))
@@ -74,7 +74,7 @@ pub fn new_stream(t: cipher::CipherType, key: &[u8], mode: CryptoMode) -> BoxStr
 
 /// Generate a specific Cipher with key and initialize vector
 #[doc(hidden)]
-#[cfg(target_arch = "wasm32")]
+#[cfg(target_family = "wasm")]
 pub fn new_stream(t: cipher::CipherType, key: &[u8], _mode: CryptoMode) -> BoxStreamCipher {
     Box::new(wasm_compat::WasmCrypt::new(t, key))
 }

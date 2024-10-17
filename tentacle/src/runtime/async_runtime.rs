@@ -1,4 +1,4 @@
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(not(target_family = "wasm"))]
 pub use async_std::task::{spawn, spawn_blocking, yield_now, JoinHandle};
 
 pub fn block_in_place<F, R>(f: F) -> R
@@ -8,10 +8,10 @@ where
     f()
 }
 
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(not(target_family = "wasm"))]
 pub use os::*;
 
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(not(target_family = "wasm"))]
 mod os {
     use crate::{
         runtime::CompatStream2,

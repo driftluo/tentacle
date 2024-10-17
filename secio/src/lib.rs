@@ -110,11 +110,7 @@ impl Digest {
 }
 
 /// KeyProvider on ecdh procedure
-#[cfg_attr(all(target_arch = "wasm32", feature = "async-trait"), async_trait::async_trait(?Send))]
-#[cfg_attr(
-    all(not(target_arch = "wasm32"), feature = "async-trait"),
-    async_trait::async_trait
-)]
+#[cfg_attr(feature = "async-trait", async_trait::async_trait)]
 pub trait KeyProvider: std::clone::Clone + Send + Sync + 'static {
     /// Error
     type Error: Into<crate::error::SecioError>;

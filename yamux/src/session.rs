@@ -1,6 +1,6 @@
 //! The session, can open and manage substreams
 
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(not(target_family = "wasm"))]
 use std::time::Instant;
 use std::{
     collections::{hash_map::Entry, BTreeMap, HashMap, HashSet, VecDeque},
@@ -9,7 +9,7 @@ use std::{
     task::{Context, Poll},
     time::Duration,
 };
-#[cfg(target_arch = "wasm32")]
+#[cfg(target_family = "wasm")]
 use timer::Instant;
 
 use futures::{
@@ -39,7 +39,7 @@ const TIMEOUT: Duration = Duration::from_secs(30);
 /// But we can simulate it with `futures-timer`.
 /// So, I implemented a global time dependent on `futures-timer`,
 /// Because in the browser environment, it is always single-threaded, so feel free to be unsafe
-#[cfg(target_arch = "wasm32")]
+#[cfg(target_family = "wasm")]
 static mut TIME: Instant = Instant::from_u64(0);
 
 /// The session
@@ -731,7 +731,7 @@ mod timer {
         }
     }
 
-    #[cfg(target_arch = "wasm32")]
+    #[cfg(target_family = "wasm")]
     pub use wasm_mock::Instant;
 
     #[cfg(feature = "generic-timer")]
@@ -766,7 +766,7 @@ mod timer {
                     Poll::Ready(_) => {
                         let dur = self.period;
                         self.delay.reset(dur);
-                        #[cfg(target_arch = "wasm32")]
+                        #[cfg(target_family = "wasm")]
                         unsafe {
                             super::super::TIME += dur;
                         }
@@ -784,7 +784,7 @@ mod timer {
         }
     }
 
-    #[cfg(target_arch = "wasm32")]
+    #[cfg(target_family = "wasm")]
     #[allow(dead_code)]
     mod wasm_mock {
         use std::cmp::{Eq, Ord, Ordering, PartialEq, PartialOrd};
@@ -881,8 +881,7 @@ mod timer {
 
 #[cfg(test)]
 pub(crate) fn rt() -> &'static tokio::runtime::Runtime {
-    static RT: once_cell::sync::OnceCell<tokio::runtime::Runtime> =
-        once_cell::sync::OnceCell::new();
+    static RT: std::sync::OnceLock<tokio::runtime::Runtime> = std::sync::OnceLock::new();
     RT.get_or_init(|| tokio::runtime::Runtime::new().unwrap())
 }
 

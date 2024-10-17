@@ -92,7 +92,7 @@ impl From<openssl::error::ErrorStack> for SecioError {
     }
 }
 
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(not(target_family = "wasm"))]
 impl From<ring::error::Unspecified> for SecioError {
     fn from(_err: ring::error::Unspecified) -> SecioError {
         SecioError::CryptoError

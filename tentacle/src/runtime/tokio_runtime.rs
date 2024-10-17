@@ -16,7 +16,7 @@ use tokio::net::TcpSocket as TokioTcp;
 #[cfg(feature = "tokio-timer")]
 pub use time::{interval, Interval};
 #[cfg(feature = "tokio-timer")]
-pub use tokio::time::{sleep as delay_for, timeout, Sleep as Delay, Timeout};
+pub use tokio::time::{sleep as delay_for, timeout, MissedTickBehavior, Sleep as Delay, Timeout};
 
 #[cfg(feature = "tokio-timer")]
 mod time {
@@ -26,13 +26,17 @@ mod time {
         task::{Context, Poll},
         time::Duration,
     };
-    use tokio::time::{interval as inner_interval, Interval as Inner};
+    use tokio::time::{interval as inner_interval, Interval as Inner, MissedTickBehavior};
 
     pub struct Interval(Inner);
 
     impl Interval {
         pub fn new(period: Duration) -> Self {
             Self(inner_interval(period))
+        }
+
+        pub fn set_missed_tick_behavior(&mut self, behavior: MissedTickBehavior) {
+            self.0.set_missed_tick_behavior(behavior);
         }
     }
 
