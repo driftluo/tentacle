@@ -39,7 +39,7 @@ multiaddr = { path = "../multiaddr", package = "tentacle-multiaddr", version = "
 molecule = "0.8.0"
 
 # upnp
-igd = { version = "0.12", optional = true }
+igd = { version = "0.15", optional = true, package = "igd-next" }
 
 #tls
 tokio-rustls = { version = "0.26.0", optional = true }
