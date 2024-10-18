@@ -241,8 +241,7 @@ mod tests {
     use tokio_util::codec::{length_delimited::LengthDelimitedCodec, Framed};
 
     fn rt() -> &'static tokio::runtime::Runtime {
-        static RT: once_cell::sync::OnceCell<tokio::runtime::Runtime> =
-            once_cell::sync::OnceCell::new();
+        static RT: std::sync::OnceLock<tokio::runtime::Runtime> = std::sync::OnceLock::new();
         RT.get_or_init(|| tokio::runtime::Runtime::new().unwrap())
     }
 

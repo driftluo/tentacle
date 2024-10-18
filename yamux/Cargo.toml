@@ -20,6 +20,9 @@ nohash-hasher = "0.2"
 
 futures-timer = { version = "3.0.2", optional = true }
 
+[target.'cfg(all(target_family = "wasm", target_os = "unknown"))'.dependencies]
+web-time = "1.1.0"
+
 [dev-dependencies]
 env_logger = "0.6"
 rand = "0.8"

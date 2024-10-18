@@ -47,6 +47,9 @@ features-check:
 	# required wasm32-unknown-unknown target
 	$(Change_Work_Path) && cargo build --features wasm-timer,unstable --no-default-features --target=wasm32-unknown-unknown
 	$(Change_Work_Path) && cargo build --features wasm-timer,unstable,secio-async-trait --no-default-features --target=wasm32-unknown-unknown
+	# required wasm32-wasip1 target
+	$(Change_Work_Path) && cargo build --features wasm-timer,unstable --no-default-features --target=wasm32-wasip1
+	$(Change_Work_Path) && cargo build --features wasm-timer,unstable,secio-async-trait --no-default-features --target=wasm32-wasip1
 bench_p2p:
 	cd bench && cargo run --release
 

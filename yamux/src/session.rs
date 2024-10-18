@@ -9,8 +9,12 @@ use std::{
     task::{Context, Poll},
     time::Duration,
 };
-#[cfg(target_family = "wasm")]
+
+#[cfg(all(target_family = "wasm", not(target_os = "unknown")))]
 use timer::Instant;
+/// wasm-unknown-unkown brower doesn't support time get, must use browser timer instead
+#[cfg(all(target_family = "wasm", target_os = "unknown"))]
+use web_time::Instant;
 
 use futures::{
     channel::mpsc::{channel, unbounded, Receiver, Sender, UnboundedReceiver, UnboundedSender},
@@ -34,13 +38,6 @@ use timer::{interval, Interval};
 
 const BUF_SHRINK_THRESHOLD: usize = u8::MAX as usize;
 const TIMEOUT: Duration = Duration::from_secs(30);
-
-/// wasm doesn't support time get, must use browser timer instead
-/// But we can simulate it with `futures-timer`.
-/// So, I implemented a global time dependent on `futures-timer`,
-/// Because in the browser environment, it is always single-threaded, so feel free to be unsafe
-#[cfg(target_family = "wasm")]
-static mut TIME: Instant = Instant::from_u64(0);
 
 /// The session
 pub struct Session<T> {
@@ -109,6 +106,10 @@ pub struct Session<T> {
     control_receiver: Receiver<Command>,
 
     keepalive: Option<Interval>,
+    /// wasi use time mock to recording time changes
+    /// yamux's timeout statistics are session independent
+    #[cfg(all(target_family = "wasm", not(target_os = "unknown")))]
+    time_mock: std::sync::Arc<std::sync::atomic::AtomicUsize>,
 }
 
 /// Session type, client or server
@@ -149,8 +150,18 @@ where
             raw_stream,
             FrameCodec::default().max_frame_size(config.max_stream_window_size),
         );
+        #[cfg(all(target_family = "wasm", not(target_os = "unknown")))]
+        let time_mock = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let keepalive = if config.enable_keepalive {
-            Some(interval(config.keepalive_interval))
+            #[cfg(not(all(target_family = "wasm", not(target_os = "unknown"))))]
+            let interval = interval(config.keepalive_interval);
+
+            #[cfg(all(target_family = "wasm", not(target_os = "unknown")))]
+            let mut interval = interval(config.keepalive_interval);
+            #[cfg(all(target_family = "wasm", not(target_os = "unknown")))]
+            interval.mock_instant(time_mock.clone());
+
+            Some(interval)
         } else {
             None
         };
@@ -174,6 +185,8 @@ where
             control_sender,
             control_receiver,
             keepalive,
+            #[cfg(all(target_family = "wasm", not(target_os = "unknown")))]
+            time_mock,
         }
     }
 
@@ -276,7 +289,7 @@ where
         if self
             .pings
             .iter()
-            .any(|(_id, time)| Instant::now().saturating_duration_since(*time) > TIMEOUT)
+            .any(|(_id, time)| ping_at.saturating_duration_since(*time) > TIMEOUT)
         {
             return Err(io::ErrorKind::TimedOut.into());
         }
@@ -636,7 +649,13 @@ where
                         // Assume that remote peer has gone away and this session should be closed.
                         self.remote_go_away = true;
                     } else {
-                        self.keep_alive(cx, Instant::now())?;
+                        #[cfg(not(all(target_family = "wasm", not(target_os = "unknown"))))]
+                        let now = Instant::now();
+                        #[cfg(all(target_family = "wasm", not(target_os = "unknown")))]
+                        let now = Instant::from_u64(
+                            self.time_mock.load(std::sync::atomic::Ordering::Acquire) as u64,
+                        );
+                        self.keep_alive(cx, now)?;
                     }
                 }
                 Poll::Ready(None) => {
@@ -731,7 +750,7 @@ mod timer {
         }
     }
 
-    #[cfg(target_family = "wasm")]
+    #[cfg(all(target_family = "wasm", not(target_os = "unknown")))]
     pub use wasm_mock::Instant;
 
     #[cfg(feature = "generic-timer")]
@@ -747,6 +766,8 @@ mod timer {
         pub struct Interval {
             delay: Delay,
             period: Duration,
+            #[cfg(all(target_family = "wasm", not(target_os = "unknown")))]
+            mock_instant: std::sync::Arc<std::sync::atomic::AtomicUsize>,
         }
 
         impl Interval {
@@ -754,7 +775,17 @@ mod timer {
                 Self {
                     delay: Delay::new(period),
                     period,
+                    #[cfg(all(target_family = "wasm", not(target_os = "unknown")))]
+                    mock_instant: Default::default(),
                 }
+            }
+
+            #[cfg(all(target_family = "wasm", not(target_os = "unknown")))]
+            pub fn mock_instant(
+                &mut self,
+                mock_instant: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+            ) {
+                self.mock_instant = mock_instant;
             }
         }
 
@@ -766,10 +797,11 @@ mod timer {
                     Poll::Ready(_) => {
                         let dur = self.period;
                         self.delay.reset(dur);
-                        #[cfg(target_family = "wasm")]
-                        unsafe {
-                            super::super::TIME += dur;
-                        }
+                        #[cfg(all(target_family = "wasm", not(target_os = "unknown")))]
+                        self.mock_instant.fetch_add(
+                            dur.as_millis() as usize,
+                            std::sync::atomic::Ordering::AcqRel,
+                        );
                         Poll::Ready(Some(()))
                     }
                     Poll::Pending => Poll::Pending,
@@ -784,7 +816,7 @@ mod timer {
         }
     }
 
-    #[cfg(target_family = "wasm")]
+    #[cfg(all(target_family = "wasm", not(target_os = "unknown")))]
     #[allow(dead_code)]
     mod wasm_mock {
         use std::cmp::{Eq, Ord, Ordering, PartialEq, PartialOrd};
@@ -824,20 +856,12 @@ mod timer {
                 Instant { inner: val }
             }
 
-            pub fn now() -> Instant {
-                unsafe { super::super::TIME }
-            }
-
             pub fn duration_since(&self, earlier: Instant) -> Duration {
                 *self - earlier
             }
 
             pub fn saturating_duration_since(&self, earlier: Instant) -> Duration {
                 *self - earlier
-            }
-
-            pub fn elapsed(&self) -> Duration {
-                Instant::now() - *self
             }
         }
 

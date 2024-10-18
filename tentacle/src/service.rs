@@ -288,7 +288,7 @@ impl<K> InnerService<K>
 where
     K: KeyProvider,
 {
-    #[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
+    #[cfg(not(target_family = "wasm"))]
     fn spawn_listener(&mut self, incoming: MultiIncoming, listen_address: Multiaddr) {
         let listener = Listener {
             inner: incoming,
