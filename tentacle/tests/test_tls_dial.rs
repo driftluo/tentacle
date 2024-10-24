@@ -1,6 +1,5 @@
 #![cfg(feature = "tls")]
 use futures::channel;
-use rustls_pemfile::{certs, pkcs8_private_keys, rsa_private_keys};
 use std::io::BufReader;
 use std::str::FromStr;
 use std::sync::Arc;
@@ -19,11 +18,15 @@ use tentacle::{
     traits::{ServiceHandle, ServiceProtocol},
     ProtocolId, SessionId,
 };
-use tokio_rustls::rustls::server::AllowAnyAuthenticatedClient;
+use tokio_rustls::rustls::server::WebPkiClientVerifier;
 use tokio_rustls::rustls::version::{TLS12, TLS13};
 use tokio_rustls::rustls::{
-    Certificate, ClientConfig, PrivateKey, RootCertStore, ServerConfig, SupportedCipherSuite,
-    SupportedProtocolVersion, ALL_CIPHER_SUITES,
+    crypto::aws_lc_rs::default_provider,
+    crypto::aws_lc_rs::ALL_CIPHER_SUITES,
+    pki_types::{
+        pem::PemObject, CertificateDer, PrivateKeyDer, PrivatePkcs1KeyDer, PrivatePkcs8KeyDer,
+    },
+    ClientConfig, RootCertStore, ServerConfig, SupportedCipherSuite, SupportedProtocolVersion,
 };
 
 pub fn create<F>(meta: ProtocolMeta, shandle: F, cert_path: String) -> Service<F, NoopKeyProvider>
@@ -220,45 +223,43 @@ fn lookup_versions(versions: &[String]) -> Vec<&'static SupportedProtocolVersion
     out
 }
 
-fn load_certs(filename: &str) -> Vec<Certificate> {
+fn load_certs(filename: &str) -> Vec<CertificateDer<'static>> {
     let certfile = fs::File::open(filename).expect("cannot open certificate file");
     let mut reader = BufReader::new(certfile);
-    certs(&mut reader)
+    CertificateDer::pem_reader_iter(&mut reader)
+        .collect::<Result<Vec<_>, _>>()
         .unwrap()
-        .iter()
-        .map(|v| Certificate(v.clone()))
-        .collect()
 }
 
-fn load_private_key(filename: &str) -> PrivateKey {
+fn load_private_key(filename: &str) -> PrivateKeyDer<'static> {
     let keyfile = fs::File::open(filename).expect("cannot open private key file");
     let mut reader = BufReader::new(keyfile);
-    let rsa_keys = rsa_private_keys(&mut reader).expect("file contains invalid rsa private key");
+    let mut rsa_keys = PrivatePkcs1KeyDer::pem_reader_iter(&mut reader);
 
-    if !rsa_keys.is_empty() {
-        return PrivateKey(rsa_keys[0].clone());
+    let rsa_keys_peek = rsa_keys.next();
+
+    if rsa_keys_peek.is_some() {
+        return PrivateKeyDer::Pkcs1(rsa_keys_peek.unwrap().unwrap().clone_key());
     }
 
     let keyfile = fs::File::open(filename).expect("cannot open private key file");
     let mut reader = BufReader::new(keyfile);
-    let pkcs8_keys =
-        pkcs8_private_keys(&mut reader).expect("file contains invalid pkcs8 private key");
+    let mut pkcs8_keys = PrivatePkcs8KeyDer::pem_reader_iter(&mut reader);
+    let pkcs8_keys_peek = pkcs8_keys.next();
 
-    assert!(!pkcs8_keys.is_empty());
-    PrivateKey(pkcs8_keys[0].clone())
+    assert!(pkcs8_keys_peek.is_some());
+    PrivateKeyDer::Pkcs8(pkcs8_keys_peek.unwrap().unwrap().clone_key())
 }
 
 /// Build a `ServerConfig` from our NetConfig
 pub fn make_server_config(config: &NetConfig) -> ServerConfig {
-    let server_config = ServerConfig::builder();
+    let mut cryp = default_provider();
 
-    let server_config = if config.cypher_suits.is_some() {
-        server_config.with_cipher_suites(&lookup_suites(config.cypher_suits.as_ref().unwrap()))
-    } else {
-        server_config.with_safe_default_cipher_suites()
+    if config.cypher_suits.is_some() {
+        cryp.cipher_suites = lookup_suites(config.cypher_suits.as_ref().unwrap())
     };
 
-    let server_config = server_config.with_safe_default_kx_groups();
+    let server_config = ServerConfig::builder_with_provider(Arc::new(cryp));
 
     let server_config = if config.protocols.is_some() {
         server_config
@@ -272,9 +273,11 @@ pub fn make_server_config(config: &NetConfig) -> ServerConfig {
 
     let mut client_auth_roots = RootCertStore::empty();
     for cacert in &cacerts {
-        client_auth_roots.add(cacert).unwrap();
+        client_auth_roots.add(cacert.clone()).unwrap();
     }
-    let client_auth = Arc::new(AllowAnyAuthenticatedClient::new(client_auth_roots));
+    let client_auth = WebPkiClientVerifier::builder(client_auth_roots.into())
+        .build()
+        .unwrap();
 
     let server_config = server_config.with_client_cert_verifier(client_auth);
 
@@ -302,15 +305,13 @@ pub fn make_server_config(config: &NetConfig) -> ServerConfig {
 
 /// Build a `ClientConfig` from our NetConfig
 pub fn make_client_config(config: &NetConfig) -> ClientConfig {
-    let client_config = ClientConfig::builder();
+    let mut cryp = default_provider();
 
-    let client_config = if config.cypher_suits.is_some() {
-        client_config.with_cipher_suites(&lookup_suites(config.cypher_suits.as_ref().unwrap()))
-    } else {
-        client_config.with_safe_default_cipher_suites()
+    if config.cypher_suits.is_some() {
+        cryp.cipher_suites = lookup_suites(config.cypher_suits.as_ref().unwrap());
     };
 
-    let client_config = client_config.with_safe_default_kx_groups();
+    let client_config = ClientConfig::builder_with_provider(Arc::new(cryp));
 
     let client_config = if config.protocols.is_some() {
         client_config
@@ -322,11 +323,8 @@ pub fn make_client_config(config: &NetConfig) -> ClientConfig {
 
     let cafile = config.ca_cert.as_ref().unwrap();
 
-    let certfile = fs::File::open(cafile).expect("Cannot open CA file");
-    let mut reader = BufReader::new(certfile);
-
     let mut client_root_cert_store = RootCertStore::empty();
-    client_root_cert_store.add_parsable_certificates(&certs(&mut reader).unwrap());
+    client_root_cert_store.add_parsable_certificates(load_certs(cafile));
 
     let client_config = client_config.with_root_certificates(client_root_cert_store);
 
@@ -351,7 +349,7 @@ pub fn make_client_config(config: &NetConfig) -> ClientConfig {
             certs.extend(cacerts);
         }
 
-        client_config.with_single_cert(certs, privkey).unwrap()
+        client_config.with_client_auth_cert(certs, privkey).unwrap()
     } else {
         client_config.with_no_client_auth()
     }

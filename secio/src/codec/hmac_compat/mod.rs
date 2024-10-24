@@ -1,17 +1,17 @@
 #[cfg(unix)]
 mod openssl_impl;
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(not(target_family = "wasm"))]
 #[cfg(any(test, not(unix)))]
 mod ring_impl;
-#[cfg(any(target_arch = "wasm32", test))]
+#[cfg(any(target_family = "wasm", test))]
 mod wasm_compat;
 
 #[cfg(unix)]
 pub use openssl_impl::*;
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(not(target_family = "wasm"))]
 #[cfg(not(unix))]
 pub use ring_impl::*;
-#[cfg(target_arch = "wasm32")]
+#[cfg(target_family = "wasm")]
 pub use wasm_compat::*;
 
 #[cfg(test)]

@@ -20,6 +20,8 @@ impl Interval {
             period,
         }
     }
+
+    pub fn set_missed_tick_behavior(&mut self, _behavior: MissedTickBehavior) {}
 }
 
 impl Stream for Interval {
@@ -35,6 +37,14 @@ impl Stream for Interval {
             Poll::Pending => Poll::Pending,
         }
     }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum MissedTickBehavior {
+    #[default]
+    Burst,
+    Delay,
+    Skip,
 }
 
 pub fn interval(period: Duration) -> Interval {

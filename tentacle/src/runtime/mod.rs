@@ -9,31 +9,31 @@
 //! this module contains async timer, compat async read/write between futures and tokio, spawn on any runtime
 //!
 
-#[cfg(all(not(target_arch = "wasm32"), feature = "async-runtime"))]
+#[cfg(all(not(target_family = "wasm"), feature = "async-runtime"))]
 mod async_runtime;
 #[cfg(any(
     feature = "generic-timer",
-    all(target_arch = "wasm32", feature = "wasm-timer")
+    all(target_family = "wasm", feature = "wasm-timer")
 ))]
 mod generic_timer;
-#[cfg(all(not(target_arch = "wasm32"), feature = "tokio-runtime"))]
+#[cfg(all(not(target_family = "wasm"), feature = "tokio-runtime"))]
 mod tokio_runtime;
-#[cfg(target_arch = "wasm32")]
+#[cfg(target_family = "wasm")]
 mod wasm_runtime;
 
-#[cfg(all(not(target_arch = "wasm32"), feature = "async-runtime"))]
+#[cfg(all(not(target_family = "wasm"), feature = "async-runtime"))]
 pub use async_runtime::*;
 #[cfg(any(
     feature = "generic-timer",
-    all(target_arch = "wasm32", feature = "wasm-timer")
+    all(target_family = "wasm", feature = "wasm-timer")
 ))]
 pub use generic_timer::*;
-#[cfg(all(not(target_arch = "wasm32"), feature = "tokio-runtime"))]
+#[cfg(all(not(target_family = "wasm"), feature = "tokio-runtime"))]
 pub use tokio_runtime::*;
-#[cfg(target_arch = "wasm32")]
+#[cfg(target_family = "wasm")]
 pub use wasm_runtime::*;
 
-#[cfg(all(not(target_arch = "wasm32"), feature = "tokio-runtime"))]
+#[cfg(all(not(target_family = "wasm"), feature = "tokio-runtime"))]
 pub use tokio::io::{split, ReadHalf, WriteHalf};
 
 #[cfg(not(feature = "tokio-runtime"))]

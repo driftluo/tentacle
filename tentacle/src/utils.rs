@@ -8,7 +8,7 @@ use std::{
 };
 
 /// This module create a `DnsResolver` future task to DNS resolver
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(not(target_family = "wasm"))]
 pub mod dns;
 
 /// Check if the ip address is reachable.

@@ -1,10 +1,10 @@
 name: Github Action
 
 on:
-  pull_request:  # trigger on pull requests
+  pull_request: # trigger on pull requests
   push:
     branches:
-      - master    # trigger on push to master
+      - master # trigger on push to master
 
 jobs:
   test:
@@ -12,7 +12,7 @@ jobs:
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
-        build: [ linux, macos, windows ]
+        build: [linux, macos, windows]
         include:
           - build: linux
             os: ubuntu-latest
@@ -63,6 +63,7 @@ jobs:
         run: |
           echo "stable" > rust-toolchain
           rustup target add wasm32-unknown-unknown
+          rustup target add wasm32-wasip1
           make features-check
 
   fuzz_test:

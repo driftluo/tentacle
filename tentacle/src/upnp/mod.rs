@@ -48,7 +48,7 @@ impl IgdClient {
             }
             Ok(gateway) => {
                 // if gateway address is public, don't need upnp, disable it
-                if is_reachable((*gateway.addr.ip()).into()) {
+                if is_reachable((gateway.addr.ip()).into()) {
                     return None;
                 }
 
@@ -73,7 +73,11 @@ impl IgdClient {
 
         let state = get_local_net_state().ok().and_then(|networks| {
             networks.into_iter().find(|network| {
-                in_same_subnet(network.address, *gateway.addr.ip(), network.net_mask)
+                if let std::net::IpAddr::V4(ip) = gateway.addr.ip() {
+                    in_same_subnet(network.address, ip, network.net_mask)
+                } else {
+                    false
+                }
             })
         })?;
 
@@ -106,7 +110,7 @@ impl IgdClient {
                 match self.gateway.add_port(
                     igd::PortMappingProtocol::TCP,
                     addr.port(),
-                    SocketAddrV4::new(self.state.address, addr.port()),
+                    SocketAddrV4::new(self.state.address, addr.port()).into(),
                     0, // forever
                     "p2p",
                 ) {
@@ -152,7 +156,7 @@ impl IgdClient {
                 let _ignore = self.gateway.add_port(
                     igd::PortMappingProtocol::TCP,
                     addr.port(),
-                    SocketAddrV4::new(self.state.address, addr.port()),
+                    SocketAddrV4::new(self.state.address, addr.port()).into(),
                     60, // 60s
                     "p2p",
                 );

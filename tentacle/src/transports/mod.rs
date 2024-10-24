@@ -10,20 +10,20 @@ use std::{
     task::{Context, Poll},
 };
 
-#[cfg(target_arch = "wasm32")]
+#[cfg(target_family = "wasm")]
 mod browser;
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(not(target_family = "wasm"))]
 mod memory;
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(not(target_family = "wasm"))]
 mod tcp;
-#[cfg(all(feature = "tls", not(target_arch = "wasm32")))]
+#[cfg(all(feature = "tls", not(target_family = "wasm")))]
 mod tls;
-#[cfg(all(feature = "ws", not(target_arch = "wasm32")))]
+#[cfg(all(feature = "ws", not(target_family = "wasm")))]
 mod ws;
 
-#[cfg(target_arch = "wasm32")]
+#[cfg(target_family = "wasm")]
 pub use on_browser::*;
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(not(target_family = "wasm"))]
 pub use os::*;
 
 type Result<T> = std::result::Result<T, TransportErrorKind>;
@@ -93,7 +93,7 @@ pub fn find_type(addr: &Multiaddr) -> TransportType {
     .unwrap_or(TransportType::Tcp)
 }
 
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(not(target_family = "wasm"))]
 mod os {
     use super::*;
 
@@ -467,7 +467,7 @@ mod os {
     }
 }
 
-#[cfg(target_arch = "wasm32")]
+#[cfg(target_family = "wasm")]
 mod on_browser {
     use super::*;
 

@@ -148,7 +148,7 @@ where
     /// then an attempt is made to register the local listener port into the mapping so that it can
     /// receive the access request of the external network, and if the external ip of the route is not the public network,
     /// Then do nothing
-    #[cfg(all(not(target_arch = "wasm32"), feature = "upnp"))]
+    #[cfg(all(not(target_family = "wasm"), feature = "upnp"))]
     #[cfg_attr(docsrs, doc(cfg(feature = "upnp")))]
     pub fn upnp(mut self, enable: bool) -> Self {
         self.config.upnp = enable;
@@ -214,7 +214,7 @@ where
     /// ## Note
     ///
     /// User use `listen(2)` or `connect(2)` on this closure will cause abnormal behavior
-    #[cfg(not(target_arch = "wasm32"))]
+    #[cfg(not(target_family = "wasm"))]
     pub fn tcp_config<F>(mut self, f: F) -> Self
     where
         F: Fn(TcpSocket) -> Result<TcpSocket, std::io::Error> + Send + Sync + 'static,

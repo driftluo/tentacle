@@ -22,7 +22,7 @@ use crate::{
 use futures::channel::mpsc::{channel, Receiver, Sender};
 use std::sync::Arc;
 use tokio::io;
-use tokio_rustls::rustls::{ServerConfig, ServerName};
+use tokio_rustls::rustls::{pki_types::ServerName, ServerConfig};
 use tokio_rustls::{TlsAcceptor, TlsConnector};
 
 pub type TlsStream = Box<dyn AsyncRw + Send + Unpin + 'static>;
@@ -71,7 +71,7 @@ async fn connect(
         Some(socket_address) => {
             let stream = tcp_dial(socket_address, tcp_config, timeout).await?;
 
-            let domain_name = ServerName::try_from(domain_name.as_str())
+            let domain_name = ServerName::try_from(domain_name)
                 .map_err(|_| TransportErrorKind::TlsError("invalid dnsname".to_string()))?;
             let connector = TlsConnector::from(tls_client_config);
             Ok((

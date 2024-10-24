@@ -11,19 +11,19 @@ use futures::{
     stream::{FusedStream, Stream, StreamExt},
     SinkExt,
 };
-use once_cell::sync::Lazy;
 use std::{
     collections::{hash_map::Entry, HashMap},
     future::Future,
     io,
     num::NonZeroU64,
     pin::Pin,
+    sync::LazyLock,
     task::{Context, Poll},
 };
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 
-static MEMORY_HUB: Lazy<Mutex<HashMap<NonZeroU64, Sender<MemorySocket>>>> =
-    Lazy::new(|| Mutex::new(HashMap::default()));
+static MEMORY_HUB: LazyLock<Mutex<HashMap<NonZeroU64, Sender<MemorySocket>>>> =
+    LazyLock::new(|| Mutex::new(HashMap::default()));
 
 async fn bind(address: Multiaddr) -> Result<(Multiaddr, MemoryListener)> {
     match parse_memory_port(&address) {

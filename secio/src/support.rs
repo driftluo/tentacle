@@ -19,13 +19,13 @@ const CHACHA20_POLY1305: &str = "CHACHA20_POLY1305";
 const SHA_256: &str = "SHA256";
 const SHA_512: &str = "SHA512";
 
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(not(target_family = "wasm"))]
 pub(crate) const DEFAULT_AGREEMENTS_PROPOSITION: &str = "P-256,P-384,X25519";
-#[cfg(target_arch = "wasm32")]
+#[cfg(target_family = "wasm")]
 pub(crate) const DEFAULT_AGREEMENTS_PROPOSITION: &str = "X25519";
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(not(target_family = "wasm"))]
 pub(crate) const DEFAULT_CIPHERS_PROPOSITION: &str = "AES-128-GCM,AES-256-GCM,CHACHA20_POLY1305";
-#[cfg(target_arch = "wasm32")]
+#[cfg(target_family = "wasm")]
 pub(crate) const DEFAULT_CIPHERS_PROPOSITION: &str = "CHACHA20_POLY1305";
 pub(crate) const DEFAULT_DIGESTS_PROPOSITION: &str = "SHA256,SHA512";
 

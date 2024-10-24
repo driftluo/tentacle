@@ -1,12 +1,12 @@
 #[cfg(unix)]
 mod openssl_impl;
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(not(target_family = "wasm"))]
 #[cfg(any(test, not(unix), not(ossl110)))]
 mod ring_impl;
-#[cfg(any(target_arch = "wasm32", test))]
+#[cfg(any(target_family = "wasm", test))]
 mod wasm_compat;
 
-#[cfg(target_arch = "wasm32")]
+#[cfg(target_family = "wasm")]
 pub use wasm_compat::*;
 
 /// Possible key agreement algorithms.
@@ -19,7 +19,7 @@ pub enum KeyAgreement {
 
 #[cfg(all(ossl110, unix))]
 pub use openssl_impl::*;
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(not(target_family = "wasm"))]
 #[cfg(not(unix))]
 pub use ring_impl::*;
 #[cfg(all(not(ossl110), unix))]
