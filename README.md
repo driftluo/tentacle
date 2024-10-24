@@ -1,7 +1,7 @@
 # Tentacle
 
 [![Build Status](https://github.com/nervosnetwork/tentacle/actions/workflows/ci.yaml/badge.svg?branch=master)](https://github.com/nervosnetwork/tentacle/actions/workflows/ci.yaml/badge.svg?branch=master)
-![image](https://img.shields.io/badge/rustc-1.68.2-blue.svg)
+![image](https://img.shields.io/badge/rustc-1.81.0-blue.svg)
 
 ## Overview
 
@@ -38,7 +38,7 @@ The codes in the `protocols/` directory are no longer maintained and only used a
 
 ```toml
 [dependencies]
-tentacle = { version = "0.4.0" }
+tentacle = { version = "0.6.0" }
 ```
 
 ### Example
