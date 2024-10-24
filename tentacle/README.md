@@ -1,7 +1,7 @@
 # Tentacle
 
-[![Build Status](https://travis-ci.com/nervosnetwork/tentacle.svg?branch=master)](https://travis-ci.com/nervosnetwork/tentacle)
-![image](https://img.shields.io/badge/rustc-1.68.2-blue.svg)
+[![Build Status](https://github.com/nervosnetwork/tentacle/actions/workflows/ci.yaml/badge.svg?branch=master)](https://github.com/nervosnetwork/tentacle/actions/workflows/ci.yaml/badge.svg?branch=master)
+![image](https://img.shields.io/badge/rustc-1.81.0-blue.svg)
 
 ## Overview
 
@@ -38,7 +38,7 @@ The codes in the `protocols/` directory are no longer maintained and only used a
 
 ```toml
 [dependencies]
-tentacle = { version = "0.4.0" }
+tentacle = { version = "0.6.0" }
 ```
 
 ### Example
@@ -66,11 +66,11 @@ $ RUST_LOG=simple=info,tentacle=debug cargo run --example simple
 
 You can see more detailed example in these three repos:
 
-- [p2p-message](https://github.com/doitian/tentacle-p2p-message)
 - [ckb](https://github.com/nervosnetwork/ckb)
 - [cita](https://github.com/cryptape/cita)
 - [muta](https://github.com/nervosnetwork/muta)
 - [axon](https://github.com/nervosnetwork/axon)
+- [godwoken](https://github.com/nervosnetwork/godwoken)
 
 ### Run on browser and test
 
@@ -81,8 +81,8 @@ $ cd tentacle && RUST_LOG=info cargo run --example simple --features ws -- serve
 
 2. setup a browser client
 ```
-$ cd simple_wasm/www && wasm-pack build
-$ npm install && npm run start
+$ cd simple_wasm && wasm-pack build
+$ npm install && npm run serve
 ```
 
 all wasm code generate from [book](https://rustwasm.github.io/docs/book/game-of-life/hello-world.html)

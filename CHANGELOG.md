@@ -1,3 +1,9 @@
+## tentacle 0.6.2 secio 0.6.3 yamux 0.3.9
+
+### Features
+- Fix wasm example(#373)
+- optimizing wasm experience(#375)
+
 ## tentacle 0.6.1
 
 ### Features
