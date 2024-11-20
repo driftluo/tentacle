@@ -26,13 +26,15 @@ mod time {
         task::{Context, Poll},
         time::Duration,
     };
-    use tokio::time::{interval as inner_interval, Interval as Inner, MissedTickBehavior};
+    use tokio::time::{
+        interval_at as inner_interval, Instant, Interval as Inner, MissedTickBehavior,
+    };
 
     pub struct Interval(Inner);
 
     impl Interval {
         pub fn new(period: Duration) -> Self {
-            Self(inner_interval(period))
+            Self(inner_interval(Instant::now() + period, period))
         }
 
         pub fn set_missed_tick_behavior(&mut self, behavior: MissedTickBehavior) {
