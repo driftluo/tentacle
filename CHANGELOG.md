@@ -1,3 +1,8 @@
+## tentacle 0.6.4
+
+## Feature
+- Make `runtime::Interval` behavior same as tokio interval(#379)
+
 ## tentacle 0.6.3
 
 ## Bug Fix
