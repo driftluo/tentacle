@@ -1,3 +1,9 @@
+## tentacle 0.6.3
+
+## Bug Fix
+- Fix session open protocol open order(#377)
+- Fix interval inconsistent behavior(#378)
+
 ## tentacle 0.6.2 secio 0.6.3 yamux 0.3.9
 
 ### Features
