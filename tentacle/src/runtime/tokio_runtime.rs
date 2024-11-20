@@ -33,8 +33,14 @@ mod time {
     pub struct Interval(Inner);
 
     impl Interval {
+        /// Same as tokio::time::interval
         pub fn new(period: Duration) -> Self {
-            Self(inner_interval(Instant::now() + period, period))
+            Self::new_at(Duration::ZERO, period)
+        }
+
+        /// Same as tokio::time::interval_at
+        pub fn new_at(start_since_now: Duration, period: Duration) -> Self {
+            Self(inner_interval(Instant::now() + start_since_now, period))
         }
 
         pub fn set_missed_tick_behavior(&mut self, behavior: MissedTickBehavior) {
