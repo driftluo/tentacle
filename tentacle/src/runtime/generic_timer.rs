@@ -14,9 +14,15 @@ pub struct Interval {
 }
 
 impl Interval {
+    /// Same as tokio::time::interval
     pub fn new(period: Duration) -> Self {
+        Self::new_at(Duration::ZERO, period)
+    }
+
+    /// Same as tokio::time::interval_at
+    pub fn new_at(start_since_now: Duration, period: Duration) -> Self {
         Self {
-            delay: Delay::new(period),
+            delay: Delay::new(start_since_now),
             period,
         }
     }
