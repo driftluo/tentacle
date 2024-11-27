@@ -59,7 +59,7 @@ mod time {
         }
 
         fn size_hint(&self) -> (usize, Option<usize>) {
-            (std::usize::MAX, None)
+            (usize::MAX, None)
         }
     }
 

@@ -181,8 +181,8 @@ fn load_private_key(filename: &str) -> PrivateKeyDer<'static> {
 
     let rsa_keys_peek = rsa_keys.next();
 
-    if rsa_keys_peek.is_some() {
-        return PrivateKeyDer::Pkcs1(rsa_keys_peek.unwrap().unwrap().clone_key());
+    if let Some(rsa_keys_peek) = rsa_keys_peek {
+        return PrivateKeyDer::Pkcs1(rsa_keys_peek.unwrap().clone_key());
     }
 
     let keyfile = fs::File::open(filename).expect("cannot open private key file");

@@ -58,12 +58,9 @@ struct SHandle {
 #[async_trait]
 impl ServiceHandle for SHandle {
     async fn handle_event(&mut self, _control: &mut ServiceContext, event: ServiceEvent) {
-        match event {
-            ServiceEvent::SessionOpen { .. } => {
-                thread::sleep(Duration::from_secs(2));
-                self.count.fetch_add(1, Ordering::SeqCst);
-            }
-            _ => (),
+        if let ServiceEvent::SessionOpen { .. } = event {
+            thread::sleep(Duration::from_secs(2));
+            self.count.fetch_add(1, Ordering::SeqCst);
         }
     }
 }

@@ -7,7 +7,7 @@ use std::{
 };
 
 thread_local! {
-    static CURRENT: RefCell<u8> = RefCell::new(128);
+    static CURRENT: RefCell<u8> = const { RefCell::new(128) };
 }
 
 /// Returns `Poll::Pending` if the current task has exceeded its budget and should yield.

@@ -101,6 +101,10 @@ mod os {
         pub fn peer_addr(&self) -> io::Result<SocketAddr> {
             self.0.get_ref().peer_addr()
         }
+
+        pub async fn peek(&self, buf: &mut [u8]) -> io::Result<usize> {
+            self.0.get_ref().peek(buf).await
+        }
     }
 
     impl AsyncRead for TcpStream {

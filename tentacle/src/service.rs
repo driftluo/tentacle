@@ -32,7 +32,7 @@ use crate::{
     },
     session::{Session, SessionEvent, SessionMeta},
     traits::ServiceHandle,
-    transports::{MultiIncoming, MultiTransport, Transport},
+    transports::{MultiIncoming, MultiTransport, TransportDial, TransportListen},
     utils::extract_peer_id,
     ProtocolId, SessionId,
 };
@@ -228,7 +228,9 @@ where
                 }
                 inner.listens.insert(listen_address.clone());
 
-                inner.spawn_listener(incoming, listen_address);
+                if !matches!(incoming, MultiIncoming::TcpUpgrade) {
+                    inner.spawn_listener(incoming, listen_address);
+                }
 
                 Ok(addr)
             }
@@ -1017,7 +1019,7 @@ where
                     if let Some(ref mut client) = self.igd_client {
                         client.remove(&address);
                     }
-
+                    self.try_update_listens().await;
                     let _ignore = self
                         .handle_sender
                         .send(ServiceEvent::ListenClose { address }.into())
@@ -1075,7 +1077,9 @@ where
                 if let Some(client) = self.igd_client.as_mut() {
                     client.register(&listen_address)
                 }
-                self.spawn_listener(incoming, listen_address);
+                if !matches!(incoming, MultiIncoming::TcpUpgrade) {
+                    self.spawn_listener(incoming, listen_address);
+                }
             }
             SessionEvent::ProtocolHandleError { error, proto_id } => {
                 let _ignore = self

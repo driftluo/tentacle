@@ -2,6 +2,7 @@ use crate::{
     error::TransportErrorKind,
     multiaddr::{Multiaddr, Protocol},
     service::config::TcpSocketConfig,
+    utils::{find_type, TransportType},
 };
 
 use std::{
@@ -16,6 +17,8 @@ mod browser;
 mod memory;
 #[cfg(not(target_family = "wasm"))]
 mod tcp;
+#[cfg(not(target_family = "wasm"))]
+mod tcp_base_listen;
 #[cfg(all(feature = "tls", not(target_family = "wasm")))]
 mod tls;
 #[cfg(all(feature = "ws", not(target_family = "wasm")))]
@@ -28,13 +31,18 @@ pub use os::*;
 
 type Result<T> = std::result::Result<T, TransportErrorKind>;
 
-/// Definition of transport protocol behavior
-pub trait Transport {
+/// Definition of transport listen protocol behavior
+pub trait TransportListen {
     type ListenFuture;
-    type DialFuture;
 
     /// Transport listen
     fn listen(self, address: Multiaddr) -> Result<Self::ListenFuture>;
+}
+
+/// Definition of transport dial protocol behavior
+pub trait TransportDial {
+    type DialFuture;
+
     /// Transport dial
     fn dial(self, address: Multiaddr) -> Result<Self::DialFuture>;
 }
@@ -65,32 +73,16 @@ where
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum TransportType {
-    Ws,
-    Wss,
-    Tcp,
-    Tls,
-    Memory,
-}
-
-pub fn find_type(addr: &Multiaddr) -> TransportType {
+pub(crate) fn parse_tls_domain_name(addr: &Multiaddr) -> Option<String> {
     let mut iter = addr.iter();
 
     iter.find_map(|proto| {
-        if let Protocol::Ws = proto {
-            Some(TransportType::Ws)
-        } else if let Protocol::Wss = proto {
-            Some(TransportType::Wss)
-        } else if let Protocol::Tls(_) = proto {
-            Some(TransportType::Tls)
-        } else if let Protocol::Memory(_) = proto {
-            Some(TransportType::Memory)
+        if let Protocol::Tls(s) = proto {
+            Some(s.to_string())
         } else {
             None
         }
     })
-    .unwrap_or(TransportType::Tcp)
 }
 
 #[cfg(not(target_family = "wasm"))]
@@ -100,17 +92,17 @@ mod os {
     use crate::{
         runtime::{TcpListener, TcpStream},
         service::config::TcpConfig,
-        utils::socketaddr_to_multiaddr,
     };
 
     use futures::{prelude::Stream, FutureExt, StreamExt};
-    use log::debug;
     use std::{
+        collections::HashMap,
         fmt,
         future::Future,
         io,
         net::SocketAddr,
         pin::Pin,
+        sync::Arc,
         task::{Context, Poll},
         time::Duration,
     };
@@ -120,19 +112,31 @@ mod os {
         MemoryDialFuture, MemoryListenFuture, MemoryListener, MemorySocket, MemoryTransport,
     };
     use self::tcp::{TcpDialFuture, TcpListenFuture, TcpTransport};
-    #[cfg(feature = "tls")]
-    use self::tls::{TlsDialFuture, TlsListenFuture, TlsListener, TlsStream, TlsTransport};
+    use self::tcp_base_listen::{TcpBaseListener, TcpBaseListenerEnum, UpgradeMode};
     #[cfg(feature = "ws")]
-    use self::ws::{WebsocketListener, WsDialFuture, WsListenFuture, WsStream, WsTransport};
+    use self::ws::{WsDialFuture, WsStream, WsTransport};
     #[cfg(feature = "tls")]
-    use crate::service::config::TlsConfig;
+    use {
+        self::tls::{TlsDialFuture, TlsStream, TlsTransport},
+        crate::service::config::TlsConfig,
+    };
+
+    #[derive(Debug, Clone, Copy)]
+    pub(crate) enum TcpListenMode {
+        Tcp,
+        #[cfg(feature = "tls")]
+        Tls,
+        #[cfg(feature = "ws")]
+        Ws,
+    }
 
     #[derive(Clone)]
     pub(crate) struct MultiTransport {
-        timeout: Duration,
-        tcp_config: TcpConfig,
+        pub(crate) timeout: Duration,
+        pub(crate) tcp_config: TcpConfig,
+        pub(crate) listens_upgrade_modes: Arc<crate::lock::Mutex<HashMap<SocketAddr, UpgradeMode>>>,
         #[cfg(feature = "tls")]
-        tls_config: Option<TlsConfig>,
+        pub(crate) tls_config: Option<TlsConfig>,
     }
 
     impl MultiTransport {
@@ -140,6 +144,7 @@ mod os {
             MultiTransport {
                 timeout,
                 tcp_config,
+                listens_upgrade_modes: Arc::new(crate::lock::Mutex::new(Default::default())),
                 #[cfg(feature = "tls")]
                 tls_config: None,
             }
@@ -152,46 +157,57 @@ mod os {
         }
     }
 
-    impl Transport for MultiTransport {
+    impl TransportListen for MultiTransport {
         type ListenFuture = MultiListenFuture;
-        type DialFuture = MultiDialFuture;
 
         fn listen(self, address: Multiaddr) -> Result<Self::ListenFuture> {
             match find_type(&address) {
                 TransportType::Tcp => {
-                    match TcpTransport::new(self.timeout, self.tcp_config.tcp).listen(address) {
+                    match TcpTransport::from_multi_transport(self, TcpListenMode::Tcp)
+                        .listen(address)
+                    {
                         Ok(future) => Ok(MultiListenFuture::Tcp(future)),
                         Err(e) => Err(e),
                     }
                 }
                 #[cfg(feature = "ws")]
                 TransportType::Ws => {
-                    match WsTransport::new(self.timeout, self.tcp_config.ws).listen(address) {
-                        Ok(future) => Ok(MultiListenFuture::Ws(future)),
+                    match TcpTransport::from_multi_transport(self, TcpListenMode::Ws)
+                        .listen(address)
+                    {
+                        Ok(future) => Ok(MultiListenFuture::Tcp(future)),
                         Err(e) => Err(e),
                     }
                 }
                 #[cfg(not(feature = "ws"))]
                 TransportType::Ws => Err(TransportErrorKind::NotSupported(address)),
-                TransportType::Memory => match MemoryTransport::default().listen(address) {
+                TransportType::Memory => match MemoryTransport.listen(address) {
                     Ok(future) => Ok(MultiListenFuture::Memory(future)),
                     Err(e) => Err(e),
                 },
                 TransportType::Wss => Err(TransportErrorKind::NotSupported(address)),
                 #[cfg(feature = "tls")]
                 TransportType::Tls => {
-                    let tls_config = self.tls_config.ok_or_else(|| {
-                        TransportErrorKind::TlsError("tls config is not set".to_string())
-                    })?;
-                    TlsTransport::new(self.timeout, tls_config, self.tcp_config.tls)
+                    if self.tls_config.is_none() {
+                        return Err(TransportErrorKind::TlsError(
+                            "tls config is not set".to_string(),
+                        ));
+                    }
+                    match TcpTransport::from_multi_transport(self, TcpListenMode::Tls)
                         .listen(address)
-                        .map(MultiListenFuture::Tls)
+                    {
+                        Ok(future) => Ok(MultiListenFuture::Tcp(future)),
+                        Err(e) => Err(e),
+                    }
                 }
                 #[cfg(not(feature = "tls"))]
                 TransportType::Tls => Err(TransportErrorKind::NotSupported(address)),
             }
         }
+    }
 
+    impl TransportDial for MultiTransport {
+        type DialFuture = MultiDialFuture;
         fn dial(self, address: Multiaddr) -> Result<Self::DialFuture> {
             match find_type(&address) {
                 TransportType::Tcp => {
@@ -209,7 +225,7 @@ mod os {
                 }
                 #[cfg(not(feature = "ws"))]
                 TransportType::Ws => Err(TransportErrorKind::NotSupported(address)),
-                TransportType::Memory => match MemoryTransport::default().dial(address) {
+                TransportType::Memory => match MemoryTransport.dial(address) {
                     Ok(future) => Ok(MultiDialFuture::Memory(future)),
                     Err(e) => Err(e),
                 },
@@ -232,10 +248,6 @@ mod os {
     pub enum MultiListenFuture {
         Tcp(TcpListenFuture),
         Memory(MemoryListenFuture),
-        #[cfg(feature = "ws")]
-        Ws(WsListenFuture),
-        #[cfg(feature = "tls")]
-        Tls(TlsListenFuture),
     }
 
     impl Future for MultiListenFuture {
@@ -243,22 +255,15 @@ mod os {
 
         fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
             match self.get_mut() {
-                MultiListenFuture::Tcp(inner) => Pin::new(
-                    &mut inner.map(|res| res.map(|res| (res.0, MultiIncoming::Tcp(res.1)))),
-                )
+                MultiListenFuture::Tcp(inner) => Pin::new(&mut inner.map(|res| {
+                    res.map(|res| match res.1 {
+                        TcpBaseListenerEnum::New(i) => (res.0, MultiIncoming::Tcp(i)),
+                        TcpBaseListenerEnum::Upgrade => (res.0, MultiIncoming::TcpUpgrade),
+                    })
+                }))
                 .poll(cx),
                 MultiListenFuture::Memory(inner) => Pin::new(
                     &mut inner.map(|res| res.map(|res| (res.0, MultiIncoming::Memory(res.1)))),
-                )
-                .poll(cx),
-                #[cfg(feature = "ws")]
-                MultiListenFuture::Ws(inner) => {
-                    Pin::new(&mut inner.map(|res| res.map(|res| (res.0, MultiIncoming::Ws(res.1)))))
-                        .poll(cx)
-                }
-                #[cfg(feature = "tls")]
-                MultiListenFuture::Tls(inner) => Pin::new(
-                    &mut inner.map(|res| res.map(|res| (res.0, MultiIncoming::Tls(res.1)))),
                 )
                 .poll(cx),
             }
@@ -381,12 +386,9 @@ mod os {
     }
 
     pub enum MultiIncoming {
-        Tcp(TcpListener),
+        TcpUpgrade,
+        Tcp(TcpBaseListener),
         Memory(MemoryListener),
-        #[cfg(feature = "ws")]
-        Ws(WebsocketListener),
-        #[cfg(feature = "tls")]
-        Tls(TlsListener),
     }
 
     impl Stream for MultiIncoming {
@@ -394,46 +396,15 @@ mod os {
 
         fn poll_next(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Option<Self::Item>> {
             match self.get_mut() {
-                MultiIncoming::Tcp(inner) => {
-                    loop {
-                        match inner.poll_accept(cx)? {
-                            // Why can't get the peer address of the connected stream ?
-                            // Error will be "Transport endpoint is not connected",
-                            // so why incoming will appear unconnected stream ?
-                            Poll::Ready((stream, _)) => match stream.peer_addr() {
-                                Ok(remote_address) => {
-                                    break Poll::Ready(Some(Ok((
-                                        socketaddr_to_multiaddr(remote_address),
-                                        MultiStream::Tcp(stream),
-                                    ))))
-                                }
-                                Err(err) => {
-                                    debug!("stream get peer address error: {:?}", err);
-                                }
-                            },
-                            Poll::Pending => break Poll::Pending,
-                        }
-                    }
-                }
+                MultiIncoming::Tcp(inner) => match inner.poll_next_unpin(cx)? {
+                    Poll::Ready(Some((addr, stream))) => Poll::Ready(Some(Ok((addr, stream)))),
+                    Poll::Ready(None) => Poll::Ready(None),
+                    Poll::Pending => Poll::Pending,
+                },
+                MultiIncoming::TcpUpgrade => unreachable!(),
                 MultiIncoming::Memory(inner) => match inner.poll_next_unpin(cx)? {
                     Poll::Ready(Some((addr, stream))) => {
                         Poll::Ready(Some(Ok((addr, MultiStream::Memory(stream)))))
-                    }
-                    Poll::Ready(None) => Poll::Ready(None),
-                    Poll::Pending => Poll::Pending,
-                },
-                #[cfg(feature = "ws")]
-                MultiIncoming::Ws(inner) => match inner.poll_next_unpin(cx)? {
-                    Poll::Ready(Some((addr, stream))) => {
-                        Poll::Ready(Some(Ok((addr, MultiStream::Ws(Box::new(stream))))))
-                    }
-                    Poll::Ready(None) => Poll::Ready(None),
-                    Poll::Pending => Poll::Pending,
-                },
-                #[cfg(feature = "tls")]
-                MultiIncoming::Tls(inner) => match inner.poll_next_unpin(cx)? {
-                    Poll::Ready(Some((addr, stream))) => {
-                        Poll::Ready(Some(Ok((addr, MultiStream::Tls(stream)))))
                     }
                     Poll::Ready(None) => Poll::Ready(None),
                     Poll::Pending => Poll::Pending,

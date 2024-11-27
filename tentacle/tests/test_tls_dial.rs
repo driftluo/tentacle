@@ -130,7 +130,7 @@ pub struct NetConfig {
 }
 
 impl NetConfig {
-    fn example(node_dir: String) -> Self {
+    pub fn example(node_dir: String) -> Self {
         Self {
             server_cert_chain: Some(node_dir.clone() + "server.crt"),
             server_key: Some(node_dir.clone() + "server.key"),
@@ -238,8 +238,8 @@ fn load_private_key(filename: &str) -> PrivateKeyDer<'static> {
 
     let rsa_keys_peek = rsa_keys.next();
 
-    if rsa_keys_peek.is_some() {
-        return PrivateKeyDer::Pkcs1(rsa_keys_peek.unwrap().unwrap().clone_key());
+    if let Some(rsa_keys_peek) = rsa_keys_peek {
+        return PrivateKeyDer::Pkcs1(rsa_keys_peek.unwrap().clone_key());
     }
 
     let keyfile = fs::File::open(filename).expect("cannot open private key file");

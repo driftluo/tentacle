@@ -36,7 +36,9 @@ use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 use crate::{
     error::TransportErrorKind,
     multiaddr::{Multiaddr, Protocol},
-    transports::{find_type, Result, Transport, TransportFuture, TransportType},
+    transports::{
+        find_type, Result, TransportDial, TransportFuture, TransportListen, TransportType,
+    },
     utils::multiaddr_to_socketaddr,
 };
 use futures::FutureExt;
@@ -113,13 +115,16 @@ impl BrowserTransport {
 pub type BrowserDialFuture =
     TransportFuture<Pin<Box<dyn Future<Output = Result<(Multiaddr, BrowserStream)>> + Send>>>;
 
-impl Transport for BrowserTransport {
+impl TransportListen for BrowserTransport {
     type ListenFuture = ();
-    type DialFuture = BrowserDialFuture;
 
     fn listen(self, address: Multiaddr) -> Result<Self::ListenFuture> {
         Err(TransportErrorKind::NotSupported(address))
     }
+}
+
+impl TransportDial for BrowserTransport {
+    type DialFuture = BrowserDialFuture;
 
     fn dial(self, address: Multiaddr) -> Result<Self::DialFuture> {
         if !matches!(find_type(&address), TransportType::Ws) {

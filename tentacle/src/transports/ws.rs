@@ -1,8 +1,4 @@
-use futures::{
-    channel::mpsc::{channel, Receiver, Sender},
-    future::ok,
-    Sink, SinkExt, Stream, StreamExt, TryFutureExt,
-};
+use futures::{future::ok, Sink, StreamExt, TryFutureExt};
 use log::debug;
 use std::{
     future::Future,
@@ -13,38 +9,19 @@ use std::{
 };
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 use tokio_tungstenite::{
-    accept_async, client_async_with_config,
+    client_async_with_config,
     tungstenite::{Error, Message},
     WebSocketStream,
 };
 
 use crate::{
     error::TransportErrorKind,
-    multiaddr::{Multiaddr, Protocol},
-    runtime::{TcpListener, TcpStream},
+    multiaddr::Multiaddr,
+    runtime::TcpStream,
     service::config::TcpSocketConfig,
-    transports::{tcp_dial, tcp_listen, Result, Transport, TransportFuture},
-    utils::{dns::DnsResolver, multiaddr_to_socketaddr, socketaddr_to_multiaddr},
+    transports::{tcp_dial, Result, TransportDial, TransportFuture},
+    utils::{dns::DnsResolver, multiaddr_to_socketaddr},
 };
-
-/// websocket listen bind
-async fn bind(
-    address: impl Future<Output = Result<Multiaddr>>,
-    timeout: Duration,
-    tcp_config: TcpSocketConfig,
-) -> Result<(Multiaddr, WebsocketListener)> {
-    let addr = address.await?;
-    match multiaddr_to_socketaddr(&addr) {
-        Some(socket_address) => {
-            let (addr, tcp) = tcp_listen(socket_address, tcp_config).await?;
-            let mut listen_addr = socketaddr_to_multiaddr(addr);
-            listen_addr.push(Protocol::Ws);
-
-            Ok((listen_addr, WebsocketListener::new(timeout, tcp)))
-        }
-        None => Err(TransportErrorKind::NotSupported(addr)),
-    }
-}
 
 /// websocket connect
 async fn connect(
@@ -91,33 +68,11 @@ impl WsTransport {
     }
 }
 
-pub type WsListenFuture =
-    TransportFuture<Pin<Box<dyn Future<Output = Result<(Multiaddr, WebsocketListener)>> + Send>>>;
 pub type WsDialFuture =
     TransportFuture<Pin<Box<dyn Future<Output = Result<(Multiaddr, WsStream)>> + Send>>>;
 
-impl Transport for WsTransport {
-    type ListenFuture = WsListenFuture;
+impl TransportDial for WsTransport {
     type DialFuture = WsDialFuture;
-
-    fn listen(self, address: Multiaddr) -> Result<Self::ListenFuture> {
-        match DnsResolver::new(address.clone()) {
-            Some(dns) => {
-                let task = bind(
-                    dns.map_err(|(multiaddr, io_error)| {
-                        TransportErrorKind::DnsResolverError(multiaddr, io_error)
-                    }),
-                    self.timeout,
-                    self.tcp_config,
-                );
-                Ok(TransportFuture::new(Box::pin(task)))
-            }
-            None => {
-                let task = bind(ok(address), self.timeout, self.tcp_config);
-                Ok(TransportFuture::new(Box::pin(task)))
-            }
-        }
-    }
 
     fn dial(self, address: Multiaddr) -> Result<Self::DialFuture> {
         match DnsResolver::new(address.clone()) {
@@ -143,92 +98,6 @@ impl Transport for WsTransport {
 }
 
 #[derive(Debug)]
-pub struct WebsocketListener {
-    inner: TcpListener,
-    timeout: Duration,
-    sender: Sender<(Multiaddr, WsStream)>,
-    pending_stream: Receiver<(Multiaddr, WsStream)>,
-}
-
-impl WebsocketListener {
-    fn new(timeout: Duration, listen: TcpListener) -> Self {
-        let (sender, rx) = channel(24);
-        WebsocketListener {
-            inner: listen,
-            timeout,
-            sender,
-            pending_stream: rx,
-        }
-    }
-
-    fn poll_pending(&mut self, cx: &mut Context) -> Poll<(Multiaddr, WsStream)> {
-        match Pin::new(&mut self.pending_stream).as_mut().poll_next(cx) {
-            Poll::Ready(Some(res)) => Poll::Ready(res),
-            Poll::Ready(None) | Poll::Pending => Poll::Pending,
-        }
-    }
-
-    fn poll_listen(&mut self, cx: &mut Context) -> Poll<std::result::Result<(), io::Error>> {
-        match self.inner.poll_accept(cx)? {
-            Poll::Ready((stream, _)) => {
-                match stream.peer_addr() {
-                    Ok(remote_address) => {
-                        let timeout = self.timeout;
-                        let mut sender = self.sender.clone();
-                        crate::runtime::spawn(async move {
-                            match crate::runtime::timeout(timeout, accept_async(stream)).await {
-                                Err(_) => debug!("accept websocket stream timeout"),
-                                Ok(res) => match res {
-                                    Ok(stream) => {
-                                        let mut addr = socketaddr_to_multiaddr(remote_address);
-                                        addr.push(Protocol::Ws);
-                                        if sender.send((addr, WsStream::new(stream))).await.is_err()
-                                        {
-                                            debug!("receiver closed unexpectedly")
-                                        }
-                                    }
-                                    Err(err) => {
-                                        debug!("accept websocket stream err: {:?}", err);
-                                    }
-                                },
-                            }
-                        });
-                    }
-                    Err(err) => {
-                        debug!("stream get peer address error: {:?}", err);
-                    }
-                }
-                Poll::Ready(Ok(()))
-            }
-            Poll::Pending => Poll::Pending,
-        }
-    }
-}
-
-impl Stream for WebsocketListener {
-    type Item = std::result::Result<(Multiaddr, WsStream), io::Error>;
-
-    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Option<Self::Item>> {
-        if let Poll::Ready(res) = self.poll_pending(cx) {
-            return Poll::Ready(Some(Ok(res)));
-        }
-
-        loop {
-            let is_pending = self.poll_listen(cx)?.is_pending();
-            match self.poll_pending(cx) {
-                Poll::Ready(res) => return Poll::Ready(Some(Ok(res))),
-                Poll::Pending => {
-                    if is_pending {
-                        break;
-                    }
-                }
-            }
-        }
-        Poll::Pending
-    }
-}
-
-#[derive(Debug)]
 pub struct WsStream {
     inner: WebSocketStream<TcpStream>,
     recv_buf: Vec<u8>,
@@ -237,7 +106,7 @@ pub struct WsStream {
 }
 
 impl WsStream {
-    fn new(inner: WebSocketStream<TcpStream>) -> Self {
+    pub fn new(inner: WebSocketStream<TcpStream>) -> Self {
         WsStream {
             inner,
             recv_buf: Vec::new(),
