@@ -14,9 +14,10 @@ use std::{io, net::SocketAddr};
 use tokio::net::TcpSocket as TokioTcp;
 
 #[cfg(feature = "tokio-timer")]
-pub use time::{interval, Interval};
-#[cfg(feature = "tokio-timer")]
-pub use tokio::time::{sleep as delay_for, timeout, MissedTickBehavior, Sleep as Delay, Timeout};
+pub use {
+    time::{interval, Interval},
+    tokio::time::{sleep as delay_for, timeout, MissedTickBehavior, Sleep as Delay, Timeout},
+};
 
 #[cfg(feature = "tokio-timer")]
 mod time {
