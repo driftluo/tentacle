@@ -127,6 +127,8 @@ pub enum TransportType {
     Tls,
     /// Memory
     Memory,
+    /// Onion
+    Onion,
 }
 
 /// Confirm the transport used by multiaddress
@@ -142,6 +144,8 @@ pub fn find_type(addr: &Multiaddr) -> TransportType {
             Some(TransportType::Tls)
         } else if let Protocol::Memory(_) = proto {
             Some(TransportType::Memory)
+        } else if let Protocol::Onion3(_) = proto {
+            Some(TransportType::Onion)
         } else {
             None
         }

@@ -273,8 +273,7 @@ impl fmt::Display for Protocol<'_> {
             Wss => write!(f, "/wss"),
             Memory(port) => write!(f, "/memory/{}", port),
             Onion3(addr) => {
-                let s = BASE32.encode(addr.hash());
-                write!(f, "/onion3/{}:{}", s.to_lowercase(), addr.port())
+                write!(f, "/onion3/{}:{}", addr.hash_string(), addr.port())
             }
         }
     }

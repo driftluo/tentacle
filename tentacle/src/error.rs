@@ -9,6 +9,9 @@ pub enum TransportErrorKind {
     /// IO error
     #[error("transport io error: `{0:?}`")]
     Io(#[from] IOError),
+    /// Proxy server error
+    #[error("proxy error: `{0:?}`")]
+    ProxyError(IOError),
     /// Protocol not support
     #[error("multiaddr `{0:?}` is not supported")]
     NotSupported(Multiaddr),

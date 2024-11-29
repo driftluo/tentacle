@@ -1,5 +1,7 @@
 use std::{borrow::Cow, fmt};
 
+use data_encoding::BASE32;
+
 /// Represents an Onion v3 address
 #[derive(Clone)]
 pub struct Onion3Addr<'a>(Cow<'a, [u8; 35]>, u16);
@@ -18,6 +20,11 @@ impl Onion3Addr<'_> {
     /// Consume this instance and create an owned version containing the same address
     pub fn acquire<'b>(self) -> Onion3Addr<'b> {
         Onion3Addr(Cow::Owned(self.0.into_owned()), self.1)
+    }
+
+    pub fn hash_string(&self) -> String {
+        let s = BASE32.encode(self.hash());
+        s.to_lowercase()
     }
 }
 

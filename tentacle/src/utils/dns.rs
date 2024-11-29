@@ -1,4 +1,5 @@
 use futures::FutureExt;
+use log::warn;
 use std::{
     borrow::Cow,
     future::Future,
@@ -86,6 +87,9 @@ impl DnsResolver {
                     }
                     TransportType::Ws => address.push(Protocol::Ws),
                     TransportType::Wss => address.push(Protocol::Wss),
+                    TransportType::Onion => {
+                        warn!("Onion transport type should not have dns resolve")
+                    }
                 }
 
                 if let Some(peer_id) = self.peer_id.take() {
