@@ -2,7 +2,7 @@ use crate::{
     error::TransportErrorKind,
     lock::Mutex,
     multiaddr::{Multiaddr, Protocol},
-    transports::{Result, Transport, TransportFuture},
+    transports::{Result, TransportDial, TransportFuture, TransportListen},
 };
 
 use bytes::Bytes;
@@ -120,15 +120,16 @@ pub type MemoryListenFuture =
 pub type MemoryDialFuture =
     TransportFuture<Pin<Box<dyn Future<Output = Result<(Multiaddr, MemorySocket)>> + Send>>>;
 
-impl Transport for MemoryTransport {
+impl TransportListen for MemoryTransport {
     type ListenFuture = MemoryListenFuture;
-    type DialFuture = MemoryDialFuture;
 
     fn listen(self, address: Multiaddr) -> Result<Self::ListenFuture> {
         let task = bind(address);
         Ok(TransportFuture::new(Box::pin(task)))
     }
-
+}
+impl TransportDial for MemoryTransport {
+    type DialFuture = MemoryDialFuture;
     fn dial(self, address: Multiaddr) -> Result<Self::DialFuture> {
         let task = connect(address);
         Ok(TransportFuture::new(Box::pin(task)))

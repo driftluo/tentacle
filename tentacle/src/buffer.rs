@@ -6,7 +6,7 @@ use std::{
 };
 
 /// If the buffer unused capacity is greater than u8 max, shrink it
-const BUF_SHRINK_THRESHOLD: usize = u8::max_value() as usize;
+const BUF_SHRINK_THRESHOLD: usize = u8::MAX as usize;
 
 pub enum SendResult {
     Ok,

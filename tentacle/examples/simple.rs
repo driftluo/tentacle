@@ -217,7 +217,7 @@ fn server() {
             .unwrap();
         #[cfg(feature = "ws")]
         service
-            .listen("/ip4/127.0.0.1/tcp/1338/ws".parse().unwrap())
+            .listen("/ip4/127.0.0.1/tcp/1337/ws".parse().unwrap())
             .await
             .unwrap();
         service.run().await

@@ -22,7 +22,7 @@ pub use sink_impl::QuickSinkExt;
 use std::fmt;
 
 // The `is_open` flag is stored in the left-most bit of `Inner::state`
-const OPEN_MASK: usize = usize::max_value() - (usize::max_value() >> 1);
+const OPEN_MASK: usize = usize::MAX - (usize::MAX >> 1);
 
 // When a new channel is created, it is created in the open state with no
 // pending messages.

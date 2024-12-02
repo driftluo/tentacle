@@ -14,8 +14,8 @@ use tentacle::{
 /// 2. open test session protocol
 /// 3. test protocol disconnect current session
 /// 4. service handle dial with dummy protocol,
-///   4.1. goto 1
-///   4.2. count >= 10, test done
+///    4.1. goto 1
+///    4.2. count >= 10, test done
 
 #[derive(Clone)]
 struct PHandle;

@@ -188,7 +188,7 @@ mod test {
         let mut manager = FutureTaskManager::new(receiver, shutdown);
         let finished_tasks = Arc::new(AtomicUsize::new(0));
         let finished_tasks_inner = Arc::clone(&finished_tasks);
-        let signals_len = Arc::new(AtomicUsize::new(usize::max_value()));
+        let signals_len = Arc::new(AtomicUsize::new(usize::MAX));
         let signals_len_inner = Arc::clone(&signals_len);
 
         let mut send_task = sender.clone();

@@ -114,6 +114,41 @@ pub fn extract_peer_id(addr: &Multiaddr) -> Option<PeerId> {
     })
 }
 
+/// Transport type on tentacle
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
+pub enum TransportType {
+    /// Websocket
+    Ws,
+    /// Websocket with tls
+    Wss,
+    /// Tcp
+    Tcp,
+    /// Tcp with tls
+    Tls,
+    /// Memory
+    Memory,
+}
+
+/// Confirm the transport used by multiaddress
+pub fn find_type(addr: &Multiaddr) -> TransportType {
+    let mut iter = addr.iter();
+
+    iter.find_map(|proto| {
+        if let Protocol::Ws = proto {
+            Some(TransportType::Ws)
+        } else if let Protocol::Wss = proto {
+            Some(TransportType::Wss)
+        } else if let Protocol::Tls(_) = proto {
+            Some(TransportType::Tls)
+        } else if let Protocol::Memory(_) = proto {
+            Some(TransportType::Memory)
+        } else {
+            None
+        }
+    })
+    .unwrap_or(TransportType::Tcp)
+}
+
 #[cfg(test)]
 mod test {
     use crate::{

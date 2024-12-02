@@ -1,33 +1,21 @@
-use super::Result;
 use futures::{future::ok, TryFutureExt};
-use std::{future::Future, pin::Pin, time::Duration};
+use std::{
+    collections::HashMap, future::Future, net::SocketAddr, pin::Pin, sync::Arc, time::Duration,
+};
 
+#[cfg(feature = "tls")]
+use crate::service::TlsConfig;
 use crate::{
     error::TransportErrorKind,
     multiaddr::Multiaddr,
-    runtime::{TcpListener, TcpStream},
+    runtime::TcpStream,
     service::config::TcpSocketConfig,
-    transports::{tcp_dial, tcp_listen, Transport, TransportFuture},
-    utils::{dns::DnsResolver, multiaddr_to_socketaddr, socketaddr_to_multiaddr},
+    transports::{
+        tcp_base_listen::{bind, TcpBaseListenerEnum, UpgradeMode},
+        tcp_dial, Result, TcpListenMode, TransportDial, TransportFuture, TransportListen,
+    },
+    utils::{dns::DnsResolver, multiaddr_to_socketaddr},
 };
-
-/// Tcp listen bind
-async fn bind(
-    address: impl Future<Output = Result<Multiaddr>>,
-    tcp_config: TcpSocketConfig,
-) -> Result<(Multiaddr, TcpListener)> {
-    let addr = address.await?;
-    match multiaddr_to_socketaddr(&addr) {
-        Some(socket_address) => {
-            let (local_addr, tcp) = tcp_listen(socket_address, tcp_config).await?;
-
-            let listen_addr = socketaddr_to_multiaddr(local_addr);
-
-            Ok((listen_addr, tcp))
-        }
-        None => Err(TransportErrorKind::NotSupported(addr)),
-    }
-}
 
 /// Tcp connect
 async fn connect(
@@ -50,26 +38,53 @@ async fn connect(
 pub struct TcpTransport {
     timeout: Duration,
     tcp_config: TcpSocketConfig,
+    listen_mode: TcpListenMode,
+    global: Arc<crate::lock::Mutex<HashMap<SocketAddr, UpgradeMode>>>,
+    #[cfg(feature = "tls")]
+    tls_config: TlsConfig,
 }
 
 impl TcpTransport {
     pub fn new(timeout: Duration, tcp_config: TcpSocketConfig) -> Self {
-        TcpTransport {
+        Self {
             timeout,
             tcp_config,
+            listen_mode: TcpListenMode::Tcp,
+            global: Arc::new(crate::lock::Mutex::new(Default::default())),
+            #[cfg(feature = "tls")]
+            tls_config: Default::default(),
+        }
+    }
+
+    pub fn from_multi_transport(
+        multi_transport: super::MultiTransport,
+        listen_mode: TcpListenMode,
+    ) -> Self {
+        Self {
+            timeout: multi_transport.timeout,
+            tcp_config: match listen_mode {
+                TcpListenMode::Tcp => multi_transport.tcp_config.tcp,
+                #[cfg(feature = "ws")]
+                TcpListenMode::Ws => multi_transport.tcp_config.ws,
+                #[cfg(feature = "tls")]
+                TcpListenMode::Tls => multi_transport.tcp_config.tls,
+            },
+            listen_mode,
+            global: multi_transport.listens_upgrade_modes,
+            #[cfg(feature = "tls")]
+            tls_config: multi_transport.tls_config.unwrap_or_default(),
         }
     }
 }
 
 // If `Existence type` is available, `Pin<Box<...>>` will no longer be needed here, and the signature is `TransportFuture<impl Future<Output=xxx>>`
 pub type TcpListenFuture =
-    TransportFuture<Pin<Box<dyn Future<Output = Result<(Multiaddr, TcpListener)>> + Send>>>;
+    TransportFuture<Pin<Box<dyn Future<Output = Result<(Multiaddr, TcpBaseListenerEnum)>> + Send>>>;
 pub type TcpDialFuture =
     TransportFuture<Pin<Box<dyn Future<Output = Result<(Multiaddr, TcpStream)>> + Send>>>;
 
-impl Transport for TcpTransport {
+impl TransportListen for TcpTransport {
     type ListenFuture = TcpListenFuture;
-    type DialFuture = TcpDialFuture;
 
     fn listen(self, address: Multiaddr) -> Result<Self::ListenFuture> {
         match DnsResolver::new(address.clone()) {
@@ -79,15 +94,32 @@ impl Transport for TcpTransport {
                         TransportErrorKind::DnsResolverError(multiaddr, io_error)
                     }),
                     self.tcp_config,
+                    self.listen_mode,
+                    #[cfg(feature = "tls")]
+                    self.tls_config,
+                    self.global,
+                    self.timeout,
                 );
                 Ok(TransportFuture::new(Box::pin(task)))
             }
             None => {
-                let task = bind(ok(address), self.tcp_config);
+                let task = bind(
+                    ok(address),
+                    self.tcp_config,
+                    self.listen_mode,
+                    #[cfg(feature = "tls")]
+                    self.tls_config,
+                    self.global,
+                    self.timeout,
+                );
                 Ok(TransportFuture::new(Box::pin(task)))
             }
         }
     }
+}
+
+impl TransportDial for TcpTransport {
+    type DialFuture = TcpDialFuture;
 
     fn dial(self, address: Multiaddr) -> Result<Self::DialFuture> {
         match DnsResolver::new(address.clone()) {
