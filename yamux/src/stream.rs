@@ -334,15 +334,12 @@ impl StreamHandle {
             return Poll::Ready(Ok(0));
         }
 
-        if let Err(e) = self.recv_frames(cx) {
-            match e {
-                // read flag error or read data error
-                Error::UnexpectedFlag | Error::RecvWindowExceeded | Error::InvalidMsgType => {
-                    self.send_go_away();
-                    return Poll::Ready(Err(io::ErrorKind::InvalidData.into()));
-                }
-                _ => (),
-            }
+        if let Err(Error::UnexpectedFlag | Error::RecvWindowExceeded | Error::InvalidMsgType) =
+            self.recv_frames(cx)
+        {
+            // read flag error or read data error
+            self.send_go_away();
+            return Poll::Ready(Err(io::ErrorKind::InvalidData.into()));
         }
 
         if self.check_self_state()? {
@@ -385,15 +382,12 @@ impl AsyncRead for StreamHandle {
             return Poll::Ready(Ok(()));
         }
 
-        if let Err(e) = self.recv_frames(cx) {
-            match e {
-                // read flag error or read data error
-                Error::UnexpectedFlag | Error::RecvWindowExceeded | Error::InvalidMsgType => {
-                    self.send_go_away();
-                    return Poll::Ready(Err(io::ErrorKind::InvalidData.into()));
-                }
-                _ => (),
-            }
+        if let Err(Error::UnexpectedFlag | Error::RecvWindowExceeded | Error::InvalidMsgType) =
+            self.recv_frames(cx)
+        {
+            // read flag error or read data error
+            self.send_go_away();
+            return Poll::Ready(Err(io::ErrorKind::InvalidData.into()));
         }
 
         if self.check_self_state()? {
