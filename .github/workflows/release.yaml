@@ -16,7 +16,7 @@ jobs:
       - name: Publish
         run: |
           cargo login ${{ secrets.CARGO_REGISTRY_TOKEN }}
-          cd multiaddr && cargo publish
-          cd ../secio && cargo publish
-          cd ../yamux && cargo publish
-          cd ../tentacle && cargo publish
+          cd multiaddr && cargo publish || true
+          cd ../secio && cargo publish || true
+          cd ../yamux && cargo publish || true
+          cd ../tentacle && cargo publish || true
