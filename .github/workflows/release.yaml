@@ -9,16 +9,14 @@ permissions:
 
 jobs:
   release:
-  runs-on: ubuntu-latest
-  include:
-    - rust: stable
-  steps:
-    - uses: actions/checkout@v4
-    - run: sudo apt-get update && sudo apt-get install libssl-dev pkg-config libclang-dev -y
-    - name: Publish
-      run: |
-        cargo login ${{ secrets.CARGO_REGISTRY_TOKEN }}
-        cd multiaddr && cargo publish --dry-run
-        cd secio && cargo publish --dry-run
-        cd yamux && cargo publish --dry-run
-        cd tentacle && cargo publish --dry-run
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: sudo apt-get update && sudo apt-get install libssl-dev pkg-config libclang-dev -y
+      - name: Publish
+        run: |
+          cargo login ${{ secrets.CARGO_REGISTRY_TOKEN }}
+          cd multiaddr && cargo publish
+          cd ../secio && cargo publish
+          cd ../yamux && cargo publish
+          cd ../tentacle && cargo publish
