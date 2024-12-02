@@ -20,7 +20,7 @@ use tentacle::{
     ProtocolId,
 };
 
-#[path = "./test_tls_dial.rs"]
+#[path = "./tls_common.rs"]
 mod tls;
 
 pub fn create<F>(
