@@ -18,7 +18,7 @@ impl OpenSsLCrypt {
         let cipher = match cipher_type {
             CipherType::Aes128Gcm => symm::Cipher::aes_128_gcm(),
             CipherType::Aes256Gcm => symm::Cipher::aes_256_gcm(),
-            #[cfg(any(ossl110))]
+            #[cfg(ossl110)]
             CipherType::ChaCha20Poly1305 => symm::Cipher::chacha20_poly1305(),
             #[cfg(not(ossl110))]
             _ => panic!(

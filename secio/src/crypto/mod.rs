@@ -88,7 +88,7 @@ pub fn new_stream(t: cipher::CipherType, key: &[u8], _mode: CryptoMode) -> BoxSt
 /// ...
 fn nonce_advance(nonce: &mut [u8]) {
     for i in nonce {
-        if std::u8::MAX == *i {
+        if u8::MAX == *i {
             *i = 0;
         } else {
             *i += 1;

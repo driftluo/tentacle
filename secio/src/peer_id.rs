@@ -62,8 +62,7 @@ impl PeerId {
 
         let header_len = code.len() + 1;
 
-        let mut inner = Vec::new();
-        inner.resize(header_len + SHA256_SIZE as usize, 0);
+        let mut inner = vec![0; header_len + SHA256_SIZE as usize];
         inner[..code.len()].copy_from_slice(code);
         inner[code.len()] = SHA256_SIZE;
 
