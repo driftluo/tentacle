@@ -1,11 +1,17 @@
+## tentacle 0.6.5 yamux 0.3.10 secio 0.6.4
+
+### Features
+
+- enable tcp base protocol listen on same port
+
 ## tentacle 0.6.4
 
-## Feature
+### Features
 - Make `runtime::Interval` behavior same as tokio interval(#379)
 
 ## tentacle 0.6.3
 
-## Bug Fix
+### Bug Fix
 - Fix session open protocol open order(#377)
 - Fix interval inconsistent behavior(#378)
 
