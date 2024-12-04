@@ -1,3 +1,8 @@
+## tentacle 0.6.6
+
+### Bug Fix
+- Fix dial inner order bug
+
 ## tentacle 0.6.5 yamux 0.3.10 secio 0.6.4
 
 ### Features
