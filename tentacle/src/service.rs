@@ -357,8 +357,8 @@ where
     /// Use by inner
     #[inline(always)]
     fn dial_inner(&mut self, address: Multiaddr, target: TargetProtocol) -> Result<()> {
-        self.dial_protocols.insert(address.clone(), target);
         let dial_future = self.multi_transport.clone().dial(address.clone())?;
+        self.dial_protocols.insert(address.clone(), target);
 
         let handshake_type = self.handshake_type.clone();
         let timeout = self.config.timeout;
