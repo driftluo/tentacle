@@ -1,3 +1,4 @@
+use bytes::Bytes;
 use futures::{future::ok, Sink, StreamExt, TryFutureExt};
 use log::debug;
 use std::{
@@ -101,7 +102,7 @@ impl TransportDial for WsTransport {
 pub struct WsStream {
     inner: WebSocketStream<TcpStream>,
     recv_buf: Vec<u8>,
-    pending_ping: Option<Vec<u8>>,
+    pending_ping: Option<Bytes>,
     already_send_close: bool,
 }
 
@@ -182,7 +183,7 @@ impl AsyncRead for WsStream {
         match self.inner.poll_next_unpin(cx) {
             Poll::Ready(Some(Ok(t))) => {
                 let data = match t {
-                    Message::Binary(data) => data,
+                    Message::Binary(data) => data.to_vec(),
                     Message::Close(_) => return Poll::Ready(Err(io::ErrorKind::BrokenPipe.into())),
                     Message::Ping(data) => {
                         self.pending_ping = Some(data);
@@ -239,7 +240,7 @@ impl AsyncWrite for WsStream {
         match sink.as_mut().poll_ready(cx) {
             Poll::Ready(Ok(_)) => {
                 sink.as_mut()
-                    .start_send(Message::Binary(buf.to_vec()))
+                    .start_send(Message::Binary(buf.to_vec().into()))
                     .map_err::<io::Error, _>(|_| Into::into(io::ErrorKind::BrokenPipe))?;
                 let _ignore = sink
                     .as_mut()
