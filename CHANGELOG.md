@@ -1,3 +1,9 @@
+## tentacle 0.6.7
+
+### Features
+
+- wasm target support wss
+
 ## tentacle 0.6.6
 
 ### Bug Fix
