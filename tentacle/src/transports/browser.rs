@@ -44,9 +44,23 @@ use crate::{
 use futures::FutureExt;
 use wasm_bindgen::JsCast;
 
-async fn connect(addr: Multiaddr, timeout: Duration) -> Result<(Multiaddr, BrowserStream)> {
+async fn connect(
+    addr: Multiaddr,
+    timeout: Duration,
+    ty: TransportType,
+) -> Result<(Multiaddr, BrowserStream)> {
+    let schema = match ty {
+        TransportType::Ws => "ws",
+        TransportType::Wss => "wss",
+        _ => unreachable!(),
+    };
     let url = match multiaddr_to_socketaddr(&addr) {
-        Some(socket_address) => format!("ws://{}:{}", socket_address.ip(), socket_address.port()),
+        Some(socket_address) => format!(
+            "{}://{}:{}",
+            schema,
+            socket_address.ip(),
+            socket_address.port()
+        ),
         None => {
             let mut iter = addr.iter().peekable();
 
@@ -72,10 +86,10 @@ async fn connect(addr: Multiaddr, timeout: Duration) -> Result<(Multiaddr, Brows
 
                 match (proto1, proto2) {
                     (Protocol::Dns4(domain), Protocol::Tcp(port)) => {
-                        break format!("ws://{}:{}", domain, port)
+                        break format!("{}://{}:{}", schema, domain, port)
                     }
                     (Protocol::Dns6(domain), Protocol::Tcp(port)) => {
-                        break format!("ws://{}:{}", domain, port)
+                        break format!("{}://{}:{}", schema, domain, port)
                     }
                     _ => return Err(TransportErrorKind::NotSupported(addr.clone())),
                 }
@@ -127,14 +141,24 @@ impl TransportDial for BrowserTransport {
     type DialFuture = BrowserDialFuture;
 
     fn dial(self, address: Multiaddr) -> Result<Self::DialFuture> {
-        if !matches!(find_type(&address), TransportType::Ws) {
-            return Err(TransportErrorKind::NotSupported(address));
-        }
-        let dial = crate::runtime::spawn(connect(address, self.timeout));
+        match find_type(&address) {
+            TransportType::Ws => {
+                let dial = crate::runtime::spawn(connect(address, self.timeout, TransportType::Ws));
 
-        Ok(TransportFuture::new(Box::pin(async {
-            dial.await.expect("oneshot channel panic")
-        })))
+                Ok(TransportFuture::new(Box::pin(async {
+                    dial.await.expect("oneshot channel panic")
+                })))
+            }
+            TransportType::Wss => {
+                let dial =
+                    crate::runtime::spawn(connect(address, self.timeout, TransportType::Wss));
+
+                Ok(TransportFuture::new(Box::pin(async {
+                    dial.await.expect("oneshot channel panic")
+                })))
+            }
+            _ => Err(TransportErrorKind::NotSupported(address)),
+        }
     }
 }
 
