@@ -20,7 +20,7 @@ const WS: u32 = 0x01dd;
 const WSS: u32 = 0x01de;
 const MEMORY: u32 = 0x0309;
 
-const SHA256_CODE: u16 = 0x12;
+const SHA256_CODE: u64 = 0x12;
 const SHA256_SIZE: u8 = 32;
 
 /// `Protocol` describes all possible multiaddress protocols.
@@ -276,7 +276,7 @@ impl<'a> From<Ipv6Addr> for Protocol<'a> {
 }
 
 fn check_p2p(data: &[u8]) -> Result<(), Error> {
-    let (code, bytes) = unsigned_varint::decode::u16(data)?;
+    let (code, bytes) = unsigned_varint::decode::u64(data)?;
 
     if code != SHA256_CODE {
         return Err(Error::UnknownHash);

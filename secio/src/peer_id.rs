@@ -6,7 +6,7 @@ use unsigned_varint::{decode, encode};
 
 use crate::handshake::handshake_struct::PublicKey;
 
-const SHA256_CODE: u16 = 0x12;
+const SHA256_CODE: u64 = 0x12;
 const SHA256_SIZE: u8 = 32;
 
 /// Identifier of a peer of the network
@@ -31,7 +31,7 @@ impl PeerId {
             return Err(Error::Empty);
         }
 
-        let (code, bytes) = decode::u16(&data).map_err(|_| Error::InvalidData)?;
+        let (code, bytes) = decode::u64(&data).map_err(|_| Error::InvalidData)?;
 
         if code != SHA256_CODE {
             return Err(Error::NotSupportHashCode);
@@ -57,8 +57,8 @@ impl PeerId {
 
     /// Return `PeerId` which used hashed seed as inner.
     fn from_seed(seed: &[u8]) -> Self {
-        let mut buf = encode::u16_buffer();
-        let code = encode::u16(SHA256_CODE, &mut buf);
+        let mut buf = encode::u64_buffer();
+        let code = encode::u64(SHA256_CODE, &mut buf);
 
         let header_len = code.len() + 1;
 

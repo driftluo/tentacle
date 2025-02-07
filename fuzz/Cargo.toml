@@ -9,7 +9,7 @@ edition = "2021"
 cargo-fuzz = true
 
 [dependencies]
-libfuzzer-sys = "0.3"
+libfuzzer-sys = "0.4"
 tentacle-secio = { path = "../secio" }
 tokio-yamux = { path = "../yamux" }
 rand = "0.8"
