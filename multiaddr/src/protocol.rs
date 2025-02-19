@@ -112,13 +112,6 @@ impl<'a> Protocol<'a> {
             Ok(input.split_at(n))
         }
 
-        fn split_at(n: usize, input: &[u8]) -> Result<(&[u8], &[u8]), Error> {
-            if input.len() < n {
-                return Err(Error::DataLessThanLen);
-            }
-            Ok(input.split_at(n))
-        }
-
         let (id, input) = decode::u32(input)?;
         match id {
             DNS4 => {
@@ -179,7 +172,7 @@ impl<'a> Protocol<'a> {
                 Ok((Protocol::Memory(num), rest))
             }
             ONION3 => {
-                let (data, rest) = split_at(37, input)?;
+                let (data, rest) = split_header(37, input)?;
                 let port = BigEndian::read_u16(&data[35..]);
                 Ok((
                     Protocol::Onion3((array_ref!(data, 0, 35), port).into()),

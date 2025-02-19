@@ -1,3 +1,9 @@
+## multiaddr 0.3.5 secio 0.6.5
+
+### Features
+- multiaddr support onion3(#396)
+- p2p message use `unsigned_varint::decode::u64`(#395)
+
 ## tentacle 0.6.7
 
 ### Features
