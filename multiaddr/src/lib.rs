@@ -1,8 +1,10 @@
 ///! Mini Implementation of [multiaddr](https://github.com/jbenet/multiaddr) in Rust.
 mod error;
+mod onion_addr;
 mod protocol;
 
 pub use self::error::Error;
+pub use self::onion_addr::Onion3Addr;
 pub use self::protocol::Protocol;
 use bytes::{Bytes, BytesMut};
 use serde::{

@@ -5,6 +5,7 @@ use unsigned_varint::decode;
 pub enum Error {
     DataLessThanLen,
     InvalidMultiaddr,
+    InvalidOnion3Addr,
     InvalidProtocolString,
     InvalidUvar(decode::Error),
     ParsingError(Box<dyn error::Error + Send + Sync>),
@@ -19,6 +20,7 @@ impl fmt::Display for Error {
             Error::DataLessThanLen => f.write_str("we have less data than indicated by length"),
             Error::InvalidMultiaddr => f.write_str("invalid multiaddr"),
             Error::InvalidProtocolString => f.write_str("invalid protocol string"),
+            Error::InvalidOnion3Addr => f.write_str("invalid onion3 address"),
             Error::InvalidUvar(e) => write!(f, "failed to decode unsigned varint: {}", e),
             Error::ParsingError(e) => write!(f, "failed to parse: {}", e),
             Error::UnknownHash => write!(f, "unknown hash"),

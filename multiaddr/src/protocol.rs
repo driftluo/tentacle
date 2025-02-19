@@ -1,4 +1,7 @@
+use arrayref::array_ref;
+use byteorder::{BigEndian, ByteOrder};
 use bytes::{Buf, BufMut};
+use data_encoding::BASE32;
 use std::{
     borrow::Cow,
     fmt,
@@ -7,7 +10,7 @@ use std::{
     str::{self, FromStr},
 };
 
-use crate::error::Error;
+use crate::{error::Error, Onion3Addr};
 
 const DNS4: u32 = 0x36;
 const DNS6: u32 = 0x37;
@@ -19,6 +22,7 @@ const TLS: u32 = 0x01c0;
 const WS: u32 = 0x01dd;
 const WSS: u32 = 0x01de;
 const MEMORY: u32 = 0x0309;
+const ONION3: u32 = 0x01bd;
 
 const SHA256_CODE: u64 = 0x12;
 const SHA256_SIZE: u8 = 32;
@@ -37,6 +41,7 @@ pub enum Protocol<'a> {
     Wss,
     /// Contains the "port" to contact. Similar to TCP or UDP, 0 means "assign me a port".
     Memory(u64),
+    Onion3(Onion3Addr<'a>),
 }
 
 impl<'a> Protocol<'a> {
@@ -87,6 +92,11 @@ impl<'a> Protocol<'a> {
                 let s = iter.next().ok_or(Error::InvalidProtocolString)?;
                 Ok(Protocol::Memory(s.parse()?))
             }
+            "onion3" => iter
+                .next()
+                .ok_or(Error::InvalidProtocolString)
+                .and_then(|s| read_onion3(&s.to_uppercase()))
+                .map(|(a, p)| Protocol::Onion3((a, p).into())),
             _ => Err(Error::UnknownProtocolString),
         }
     }
@@ -101,6 +111,14 @@ impl<'a> Protocol<'a> {
             }
             Ok(input.split_at(n))
         }
+
+        fn split_at(n: usize, input: &[u8]) -> Result<(&[u8], &[u8]), Error> {
+            if input.len() < n {
+                return Err(Error::DataLessThanLen);
+            }
+            Ok(input.split_at(n))
+        }
+
         let (id, input) = decode::u32(input)?;
         match id {
             DNS4 => {
@@ -160,6 +178,14 @@ impl<'a> Protocol<'a> {
                 let num = rdr.get_u64();
                 Ok((Protocol::Memory(num), rest))
             }
+            ONION3 => {
+                let (data, rest) = split_at(37, input)?;
+                let port = BigEndian::read_u16(&data[35..]);
+                Ok((
+                    Protocol::Onion3((array_ref!(data, 0, 35), port).into()),
+                    rest,
+                ))
+            }
             _ => Err(Error::UnknownProtocolId(id)),
         }
     }
@@ -213,6 +239,11 @@ impl<'a> Protocol<'a> {
                 w.put(encode::u32(MEMORY, &mut buf));
                 w.put_u64(*port)
             }
+            Protocol::Onion3(addr) => {
+                w.put(encode::u32(ONION3, &mut buf));
+                w.put(addr.hash().as_ref());
+                w.put_u16(addr.port());
+            }
         }
     }
 
@@ -229,6 +260,7 @@ impl<'a> Protocol<'a> {
             Protocol::Ws => Protocol::Ws,
             Protocol::Wss => Protocol::Wss,
             Protocol::Memory(a) => Protocol::Memory(a),
+            Protocol::Onion3(addr) => Protocol::Onion3(addr.acquire()),
         }
     }
 }
@@ -247,6 +279,10 @@ impl<'a> fmt::Display for Protocol<'a> {
             Ws => write!(f, "/ws"),
             Wss => write!(f, "/wss"),
             Memory(port) => write!(f, "/memory/{}", port),
+            Onion3(addr) => {
+                let s = BASE32.encode(addr.hash());
+                write!(f, "/onion3/{}:{}", s.to_lowercase(), addr.port())
+            }
         }
     }
 }
@@ -291,3 +327,53 @@ fn check_p2p(data: &[u8]) -> Result<(), Error> {
     }
     Ok(())
 }
+
+macro_rules! read_onion_impl {
+    ($name:ident, $len:expr, $encoded_len:expr) => {
+        fn $name(s: &str) -> Result<([u8; $len], u16), Error> {
+            let mut parts = s.split(':');
+
+            // address part (without ".onion")
+            let b32 = parts.next().ok_or(Error::InvalidMultiaddr)?;
+            if b32.len() != $encoded_len {
+                return Err(Error::InvalidMultiaddr);
+            }
+
+            // port number
+            let port = parts
+                .next()
+                .ok_or(Error::InvalidMultiaddr)
+                .and_then(|p| str::parse(p).map_err(From::from))?;
+
+            // port == 0 is not valid for onion
+            if port == 0 {
+                return Err(Error::InvalidMultiaddr);
+            }
+
+            // nothing else expected
+            if parts.next().is_some() {
+                return Err(Error::InvalidMultiaddr);
+            }
+
+            if $len
+                != BASE32
+                    .decode_len(b32.len())
+                    .map_err(|_| Error::InvalidMultiaddr)?
+            {
+                return Err(Error::InvalidMultiaddr);
+            }
+
+            let mut buf = [0u8; $len];
+            BASE32
+                .decode_mut(b32.as_bytes(), &mut buf)
+                .map_err(|_| Error::InvalidMultiaddr)?;
+
+            Ok((buf, port))
+        }
+    };
+}
+
+// Parse a version 3 onion address and return its binary representation.
+//
+// Format: <base-32 address> ":" <port number>
+read_onion_impl!(read_onion3, 35, 56);
