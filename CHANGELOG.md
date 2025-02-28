@@ -1,3 +1,8 @@
+## yamux 0.3.11
+
+### Bug Fix
+- Fix stream only write will stuck forever(#398)
+
 ## multiaddr 0.3.5 secio 0.6.5
 
 ### Features
