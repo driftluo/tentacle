@@ -45,6 +45,9 @@ pub struct StreamHandle {
 
     // when the cache is sent, a writable notification is issued
     writeable_wake: Option<Waker>,
+
+    // when the cache is received by write, a readable notification is issued
+    readable_wake: Option<Waker>,
 }
 
 impl StreamHandle {
@@ -67,6 +70,7 @@ impl StreamHandle {
             unbound_event_sender,
             frame_receiver,
             writeable_wake: None,
+            readable_wake: None,
         }
     }
 
@@ -253,15 +257,15 @@ impl StreamHandle {
 
         let (_, body) = frame.into_parts();
         if let Some(data) = body {
-            // only when buf is empty, poll read can read from remote
-            self.read_buf = data;
+            self.read_buf.extend_from_slice(&data);
         }
         self.recv_window -= length;
         Ok(())
     }
 
-    fn recv_frames(&mut self, cx: &mut Context) -> Result<(), Error> {
+    fn recv_frames(&mut self, cx: &mut Context, mut should_wake_reader: bool) -> Result<(), Error> {
         trace!("stream-handle({}) recv_frames", self.id);
+        let buf_len = self.read_buf.len();
         loop {
             match self.state {
                 StreamState::RemoteClosing => {
@@ -273,30 +277,27 @@ impl StreamHandle {
                 _ => {}
             }
 
-            // After get data, break here
-            // if not, it will never wake upstream here have some cache buffer
-            // buffer will left here, waiting for the next session wake
-            // this will cause the message to be delayed, unable to read, etc.
-            if !self.read_buf.is_empty() {
-                trace!(
-                    "stream-handle({}) recv_frames break since buf is not empty",
-                    self.id
-                );
-                break;
-            }
-
             if self.frame_receiver.is_terminated() {
                 self.state = StreamState::RemoteClosing;
-                return Err(Error::SessionShutdown);
+                return Err(Error::SubStreamRemoteClosing);
             }
 
             match Pin::new(&mut self.frame_receiver).as_mut().poll_next(cx) {
-                Poll::Ready(Some(frame)) => self.handle_frame(frame)?,
+                Poll::Ready(Some(frame)) => {
+                    self.handle_frame(frame)?;
+                    should_wake_reader &= true;
+                }
                 Poll::Ready(None) => {
                     self.state = StreamState::RemoteClosing;
-                    return Err(Error::SessionShutdown);
+                    return Err(Error::SubStreamRemoteClosing);
                 }
                 Poll::Pending => break,
+            }
+        }
+        // poll by write and read something, then wake read
+        if should_wake_reader && self.read_buf.len() != buf_len {
+            if let Some(waker) = self.readable_wake.take() {
+                waker.wake();
             }
         }
         Ok(())
@@ -335,7 +336,7 @@ impl StreamHandle {
         }
 
         if let Err(Error::UnexpectedFlag | Error::RecvWindowExceeded | Error::InvalidMsgType) =
-            self.recv_frames(cx)
+            self.recv_frames(cx, false)
         {
             // read flag error or read data error
             self.send_go_away();
@@ -355,6 +356,7 @@ impl StreamHandle {
             n,
         );
         if n == 0 {
+            self.readable_wake = Some(cx.waker().clone());
             return Poll::Pending;
         }
 
@@ -383,7 +385,7 @@ impl AsyncRead for StreamHandle {
         }
 
         if let Err(Error::UnexpectedFlag | Error::RecvWindowExceeded | Error::InvalidMsgType) =
-            self.recv_frames(cx)
+            self.recv_frames(cx, false)
         {
             // read flag error or read data error
             self.send_go_away();
@@ -403,6 +405,7 @@ impl AsyncRead for StreamHandle {
             n,
         );
         if n == 0 {
+            self.readable_wake = Some(cx.waker().clone());
             return Poll::Pending;
         }
         let b = self.read_buf.split_to(n);
@@ -429,6 +432,27 @@ impl AsyncWrite for StreamHandle {
         cx: &mut Context,
         buf: &[u8],
     ) -> Poll<io::Result<usize>> {
+        // https://github.com/driftluo/tentacle/issues/33
+        // read frame from session is necessary.
+        // The window update message of Yamux must be updated normally.
+        // If the user only writes but does not read, the entire stream will be stuck.
+        // To avoid this, read operations are required when there is a frame in the session.
+        //
+        // Another solution to avoid this problem is to let the session and stream share the state.
+        // In the rust implementation, at least the following three states are required:
+        // 1. writeable_wake
+        // 2. send_window
+        // 3. state
+        //
+        // When the session receives a window update frame, it can update the state of the stream.
+        // In the implementation here, we try not to share state between the session and the stream.
+        if let Err(Error::UnexpectedFlag | Error::RecvWindowExceeded | Error::InvalidMsgType) =
+            self.recv_frames(cx, true)
+        {
+            // read flag error or read data error
+            self.send_go_away();
+        }
+
         match self.state {
             StreamState::Reset => return Poll::Ready(Err(io::ErrorKind::BrokenPipe.into())),
             StreamState::LocalClosing | StreamState::Closed => {
