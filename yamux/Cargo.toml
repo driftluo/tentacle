@@ -27,6 +27,7 @@ web-time = "1.1.0"
 env_logger = "0.6"
 rand = "0.8"
 bytesize = "1"
+criterion = { version = "0.3", features = ["async_tokio", "async"] }
 tokio = { version = "1.0.0", features = [
     "time",
     "net",
@@ -44,3 +45,8 @@ tokio-timer = ["tokio/time"]
 generic-timer = ["futures-timer"]
 # use futures-timer's wasm feature
 wasm = ["generic-timer", "futures-timer/wasm-bindgen"]
+
+
+[[bench]]
+name = "bench"
+harness = false

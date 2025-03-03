@@ -34,7 +34,7 @@ pub struct StreamHandle {
     max_recv_window: u32,
     pub(crate) recv_window: u32,
     send_window: u32,
-    read_buf: BytesMut,
+    read_buf: Vec<BytesMut>,
 
     // Send stream event to parent session
     unbound_event_sender: UnboundedSender<StreamEvent>,
@@ -66,7 +66,7 @@ impl StreamHandle {
             max_recv_window: max_window_size,
             recv_window: INITIAL_STREAM_WINDOW,
             send_window: INITIAL_STREAM_WINDOW,
-            read_buf: BytesMut::default(),
+            read_buf: Vec::new(),
             unbound_event_sender,
             frame_receiver,
             writeable_wake: None,
@@ -147,7 +147,7 @@ impl StreamHandle {
 
     // Send a window update
     pub(crate) fn send_window_update(&mut self) -> Result<(), Error> {
-        let buf_len = self.read_buf.len() as u32;
+        let buf_len = self.read_buf.iter().map(|b| b.len()).sum::<usize>() as u32;
         let delta = self.max_recv_window - buf_len - self.recv_window;
 
         // Check if we can omit the update
@@ -257,15 +257,19 @@ impl StreamHandle {
 
         let (_, body) = frame.into_parts();
         if let Some(data) = body {
-            self.read_buf.extend_from_slice(&data);
+            // yamux allows empty data frame
+            // but here we just drop it
+            if length > 0 {
+                self.read_buf.push(data);
+            }
         }
         self.recv_window -= length;
         Ok(())
     }
 
-    fn recv_frames(&mut self, cx: &mut Context, mut should_wake_reader: bool) -> Result<(), Error> {
+    fn recv_frames(&mut self, cx: &mut Context) -> Result<bool, Error> {
         trace!("stream-handle({}) recv_frames", self.id);
-        let buf_len = self.read_buf.len();
+        let mut has_new_frame = false;
         loop {
             match self.state {
                 StreamState::RemoteClosing => {
@@ -285,7 +289,7 @@ impl StreamHandle {
             match Pin::new(&mut self.frame_receiver).as_mut().poll_next(cx) {
                 Poll::Ready(Some(frame)) => {
                     self.handle_frame(frame)?;
-                    should_wake_reader &= true;
+                    has_new_frame = true;
                 }
                 Poll::Ready(None) => {
                     self.state = StreamState::RemoteClosing;
@@ -294,13 +298,37 @@ impl StreamHandle {
                 Poll::Pending => break,
             }
         }
-        // poll by write and read something, then wake read
-        if should_wake_reader && self.read_buf.len() != buf_len {
-            if let Some(waker) = self.readable_wake.take() {
-                waker.wake();
+        Ok(has_new_frame)
+    }
+
+    fn recv_frames_wake(&mut self, cx: &mut Context) -> Result<(), Error> {
+        let buf_len = self.read_buf.len();
+        let state = self.state;
+        match self.recv_frames(cx) {
+            Ok(should_wake_read) => {
+                // if state change to RemoteClosing, wake read
+                // if read buf len change, wake read
+                if (self.state == StreamState::RemoteClosing && state != StreamState::RemoteClosing)
+                    || (should_wake_read && buf_len != self.read_buf.len())
+                {
+                    if let Some(waker) = self.readable_wake.take() {
+                        waker.wake();
+                    }
+                }
+
+                Ok(())
+            }
+            Err(e) => {
+                // if state change to RemoteClosing, wake read
+                if self.state == StreamState::RemoteClosing && state != StreamState::RemoteClosing {
+                    if let Some(waker) = self.readable_wake.take() {
+                        waker.wake();
+                    }
+                }
+
+                Err(e)
             }
         }
-        Ok(())
     }
 
     // Returns Ok(true) only if eof is reached.
@@ -336,7 +364,7 @@ impl StreamHandle {
         }
 
         if let Err(Error::UnexpectedFlag | Error::RecvWindowExceeded | Error::InvalidMsgType) =
-            self.recv_frames(cx, false)
+            self.recv_frames(cx)
         {
             // read flag error or read data error
             self.send_go_away();
@@ -347,23 +375,31 @@ impl StreamHandle {
             return Poll::Ready(Ok(0));
         }
 
-        let n = ::std::cmp::min(buf.remaining(), self.read_buf.len());
+        if self.read_buf.is_empty() {
+            self.readable_wake = Some(cx.waker().clone());
+            return Poll::Pending;
+        }
+
+        let mut total_read = 0;
+        for read_buf in self.read_buf.iter() {
+            let n = ::std::cmp::min(buf.remaining(), read_buf.len());
+            if n == 0 {
+                break;
+            }
+            total_read += n;
+            let b = &read_buf[..n];
+            buf.put_slice(b);
+        }
+
         trace!(
             "stream-handle({}) poll_peek self.read_buf.len={}, buf.len={}, n={}",
             self.id,
             self.read_buf.len(),
             buf.remaining(),
-            n,
+            total_read,
         );
-        if n == 0 {
-            self.readable_wake = Some(cx.waker().clone());
-            return Poll::Pending;
-        }
 
-        let b = &self.read_buf[..n];
-        buf.put_slice(b);
-
-        Poll::Ready(Ok(n))
+        Poll::Ready(Ok(total_read))
     }
 
     /// Receives data on the socket from the remote address to which it is connected,
@@ -385,7 +421,7 @@ impl AsyncRead for StreamHandle {
         }
 
         if let Err(Error::UnexpectedFlag | Error::RecvWindowExceeded | Error::InvalidMsgType) =
-            self.recv_frames(cx, false)
+            self.recv_frames(cx)
         {
             // read flag error or read data error
             self.send_go_away();
@@ -396,21 +432,49 @@ impl AsyncRead for StreamHandle {
             return Poll::Ready(Ok(()));
         }
 
-        let n = ::std::cmp::min(buf.remaining(), self.read_buf.len());
+        if self.read_buf.is_empty() {
+            self.readable_wake = Some(cx.waker().clone());
+            return Poll::Pending;
+        }
+
+        let mut offset = 0;
+        let mut total_read = 0;
+        let mut need_drain = false;
+        for (index, read_buf) in self.read_buf.iter_mut().enumerate() {
+            let n = ::std::cmp::min(buf.remaining(), read_buf.len());
+            if n == 0 {
+                break;
+            }
+            total_read += n;
+            if n == read_buf.len() {
+                let b = &read_buf[..n];
+                buf.put_slice(b);
+                offset = index;
+                need_drain = true;
+            } else {
+                let b = read_buf.split_to(n);
+                buf.put_slice(&b);
+            }
+        }
+
+        if need_drain {
+            self.read_buf.drain(..=offset);
+            // drain does not shrink the capacity, if the capacity is too large, shrink it
+            if self.read_buf.capacity() > 24
+                && self.read_buf.capacity() / (self.read_buf.len() + 1) > 4
+            {
+                self.read_buf.shrink_to_fit();
+            }
+        }
+
         trace!(
             "stream-handle({}) poll_read self.read_buf.len={}, buf.len={}, n={}",
             self.id,
             self.read_buf.len(),
             buf.remaining(),
-            n,
+            total_read,
         );
-        if n == 0 {
-            self.readable_wake = Some(cx.waker().clone());
-            return Poll::Pending;
-        }
-        let b = self.read_buf.split_to(n);
 
-        buf.put_slice(&b);
         match self.state {
             StreamState::RemoteClosing | StreamState::Closed | StreamState::Reset => {
                 debug!("this branch should be unreachable")
@@ -447,7 +511,7 @@ impl AsyncWrite for StreamHandle {
         // When the session receives a window update frame, it can update the state of the stream.
         // In the implementation here, we try not to share state between the session and the stream.
         if let Err(Error::UnexpectedFlag | Error::RecvWindowExceeded | Error::InvalidMsgType) =
-            self.recv_frames(cx, true)
+            self.recv_frames_wake(cx)
         {
             // read flag error or read data error
             self.send_go_away();
@@ -825,6 +889,62 @@ mod test {
             jh.await.unwrap().expect("not tiemout");
 
             assert_eq!(stream.state, StreamState::RemoteClosing);
+        });
+    }
+
+    #[test]
+    fn test_frame_read_more_than_one() {
+        let rt = rt();
+        rt.block_on(async {
+            let (mut frame_sender, frame_receiver) = channel(3);
+            let (unbound_sender, _unbound_receiver) = unbounded();
+            let mut stream = StreamHandle::new(
+                0,
+                unbound_sender,
+                frame_receiver,
+                StreamState::Init,
+                INITIAL_STREAM_WINDOW,
+            );
+
+            let flags = Flags::from(Flag::Syn);
+            let frame = Frame::new_data(flags, 0, BytesMut::from("1234"));
+            frame_sender.send(frame).await.unwrap();
+            let flags = Flags::from(Flag::Syn);
+            let frame = Frame::new_data(flags, 0, BytesMut::default());
+            frame_sender.send(frame).await.unwrap();
+            let flags = Flags::from(Flag::Syn);
+            let frame = Frame::new_data(flags, 0, BytesMut::from("5678"));
+            frame_sender.send(frame).await.unwrap();
+            let mut b = [0; 2];
+
+            assert_eq!(stream.read(&mut b).await.unwrap(), 2);
+            assert_eq!(&b[..2], b"12");
+            assert_eq!(stream.read_buf.len(), 2);
+            assert_eq!(stream.read_buf.capacity(), 4);
+
+            assert_eq!(stream.read(&mut b).await.unwrap(), 2);
+            assert_eq!(&b[..2], b"34");
+            assert_eq!(stream.read_buf.len(), 1);
+            // Drain does not shrink the capacity
+            assert_eq!(stream.read_buf.capacity(), 4);
+
+            let flags = Flags::from(Flag::Syn);
+            let frame = Frame::new_data(flags, 0, BytesMut::default());
+            frame_sender.send(frame).await.unwrap();
+            let flags = Flags::from(Flag::Syn);
+            let frame = Frame::new_data(flags, 0, BytesMut::from("1234"));
+            frame_sender.send(frame).await.unwrap();
+            let mut c = [0; 5];
+
+            assert_eq!(stream.read(&mut c).await.unwrap(), 5);
+            assert_eq!(&c[..5], b"56781");
+            assert_eq!(stream.read_buf.len(), 1);
+            assert_eq!(stream.read_buf.capacity(), 4);
+
+            assert_eq!(stream.read(&mut b).await.unwrap(), 2);
+            assert_eq!(&b[..2], b"23");
+            assert_eq!(stream.read_buf.len(), 1);
+            assert_eq!(stream.read_buf.capacity(), 4);
         });
     }
 }
