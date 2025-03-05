@@ -1,3 +1,8 @@
+## yamux 0.3.12
+
+### Features
+- perf yamux stream read(#400)
+
 ## yamux 0.3.11
 
 ### Bug Fix
