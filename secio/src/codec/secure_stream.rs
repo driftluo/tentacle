@@ -21,10 +21,10 @@ enum RecvBuf {
 impl RecvBuf {
     fn drain_to(&mut self, buf: &mut ReadBuf, size: usize) {
         match self {
-            RecvBuf::Vec(ref mut b) => {
+            RecvBuf::Vec(b) => {
                 buf.put_slice(b.drain(..size).as_slice());
             }
-            RecvBuf::Byte(ref mut b) => {
+            RecvBuf::Byte(b) => {
                 buf.put_slice(&b[..size]);
                 b.advance(size);
             }
@@ -33,8 +33,8 @@ impl RecvBuf {
 
     fn len(&self) -> usize {
         match self {
-            RecvBuf::Vec(ref b) => b.len(),
-            RecvBuf::Byte(ref b) => b.len(),
+            RecvBuf::Vec(b) => b.len(),
+            RecvBuf::Byte(b) => b.len(),
         }
     }
 
@@ -46,8 +46,8 @@ impl RecvBuf {
 impl AsRef<[u8]> for RecvBuf {
     fn as_ref(&self) -> &[u8] {
         match self {
-            RecvBuf::Vec(ref b) => b.as_ref(),
-            RecvBuf::Byte(ref b) => b.as_ref(),
+            RecvBuf::Vec(b) => b.as_ref(),
+            RecvBuf::Byte(b) => b.as_ref(),
         }
     }
 }

@@ -352,7 +352,7 @@ pub struct ProtocolContextMutRef<'a> {
     pub session: &'a SessionContext,
 }
 
-impl<'a> ProtocolContextMutRef<'a> {
+impl ProtocolContextMutRef<'_> {
     /// Send message to current protocol current session
     #[inline]
     pub async fn send_message(&self, data: Bytes) -> Result {
@@ -394,7 +394,7 @@ impl DerefMut for ProtocolContext {
     }
 }
 
-impl<'a> Deref for ProtocolContextMutRef<'a> {
+impl Deref for ProtocolContextMutRef<'_> {
     type Target = ProtocolContext;
 
     #[inline]
@@ -403,7 +403,7 @@ impl<'a> Deref for ProtocolContextMutRef<'a> {
     }
 }
 
-impl<'a> DerefMut for ProtocolContextMutRef<'a> {
+impl DerefMut for ProtocolContextMutRef<'_> {
     #[inline]
     fn deref_mut(&mut self) -> &mut Self::Target {
         self.inner

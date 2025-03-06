@@ -1,4 +1,4 @@
-///! Mini Implementation of [multiaddr](https://github.com/jbenet/multiaddr) in Rust.
+//! Mini Implementation of [multiaddr](https://github.com/jbenet/multiaddr) in Rust.
 mod error;
 mod onion_addr;
 mod protocol;

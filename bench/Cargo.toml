@@ -2,7 +2,7 @@
 name = "bench"
 version = "0.1.0"
 authors = ["piaoliu <441594700@qq.com>"]
-edition = "2021"
+edition = "2024"
 
 [lib]
 name = "bench"

@@ -7,7 +7,7 @@ description = "p2p identify protocol"
 keywords = ["network", "peer-to-peer", "p2p", "identify"]
 repository = "https://github.com/nervosnetwork/tentacle"
 categories = ["network-programming", "asynchronous"]
-edition = "2018"
+edition = "2024"
 
 [package.metadata.docs.rs]
 features = []

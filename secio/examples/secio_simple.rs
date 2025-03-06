@@ -1,5 +1,4 @@
 use bytes::BytesMut;
-use env_logger;
 use log::info;
 use tentacle_secio::{handshake::Config, SecioKeyPair};
 use tokio::{

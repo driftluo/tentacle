@@ -70,8 +70,8 @@ impl Hmac {
     /// Return a multi-step hmac context
     pub fn context(&self) -> Context {
         match self {
-            Hmac::Sha256(ref hmac) => Context::Sha256(hmac.clone()),
-            Hmac::Sha512(ref hmac) => Context::Sha512(hmac.clone()),
+            Hmac::Sha256(hmac) => Context::Sha256(hmac.clone()),
+            Hmac::Sha512(hmac) => Context::Sha512(hmac.clone()),
         }
     }
 }

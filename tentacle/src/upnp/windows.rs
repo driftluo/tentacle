@@ -89,7 +89,7 @@ struct IpAdapterAddresses {
 // https://docs.microsoft.com/zh-cn/windows/desktop/api/iphlpapi/nf-iphlpapi-getadaptersaddresses
 // C:\Program Files (x86)\Windows Kits\10\Include\um\iphlpApi.h
 #[link(name = "iphlpapi")]
-extern "system" {
+unsafe extern "system" {
     fn GetAdaptersAddresses(
         family: ULONG,
         flags: ULONG,

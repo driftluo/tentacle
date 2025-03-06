@@ -44,16 +44,17 @@ impl ServiceHandle for EmptySHandle {
     async fn handle_error(&mut self, _env: &mut ServiceContext, error: ServiceError) {
         self.error_count += 1;
 
-        if let ServiceError::DialerError { error, .. } = error {
-            match error {
+        match error {
+            ServiceError::DialerError { error, .. } => match error {
                 DialerErrorKind::PeerIdNotMatch => {}
                 err => panic!(
                     "test fail, expected DialerErrorKind::PeerIdNotMatch, got {:?}",
                     err
                 ),
+            },
+            _ => {
+                panic!("test fail {:?}", error);
             }
-        } else {
-            panic!("test fail {:?}", error);
         }
 
         if self.error_count > 8 {

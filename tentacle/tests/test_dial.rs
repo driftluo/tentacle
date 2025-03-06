@@ -51,14 +51,17 @@ impl ServiceHandle for EmptySHandle {
     async fn handle_error(&mut self, _env: &mut ServiceContext, error: ServiceError) {
         use std::io;
 
-        let error_type = if let ServiceError::DialerError { error, .. } = error {
-            match error {
+        let error_type = match error {
+            ServiceError::DialerError { error, .. } => {
+                match error {
                 DialerErrorKind::TransportError(TransportErrorKind::Io(e)) => assert_eq!(io::ErrorKind::ConnectionRefused, e.kind()),
                 e => panic!("test fail, expected DialerErrorKind::TransportError(TransportErrorKind::Io), got {:?}", e),
             }
-            ServiceErrorType::Dialer
-        } else {
-            panic!("test fail {:?}", error);
+                ServiceErrorType::Dialer
+            }
+            _ => {
+                panic!("test fail {:?}", error);
+            }
         };
         let _res = self.sender.try_send(error_type);
     }

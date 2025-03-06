@@ -1,5 +1,4 @@
 use bytes::Bytes;
-use env_logger;
 use futures::{
     channel::oneshot::{channel, Sender},
     future::select,

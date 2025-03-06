@@ -159,8 +159,8 @@ mod test {
                     let _res = send_task
                         .send(Box::pin(async {
                             let mut stream = pending::<()>();
-                            loop {
-                                stream.next().await;
+                            while let Some(_) = stream.next().await {
+                                //
                             }
                         }) as BoxedFutureTask)
                         .await;

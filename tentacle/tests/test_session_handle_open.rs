@@ -45,24 +45,29 @@ struct SHandle {
 #[async_trait]
 impl ServiceHandle for SHandle {
     async fn handle_event(&mut self, control: &mut ServiceContext, event: ServiceEvent) {
-        if let ServiceEvent::SessionOpen { session_context } = event {
-            self.addr = Some(session_context.address.clone());
-            if session_context.ty.is_outbound() {
-                control
-                    .open_protocol(session_context.id, 1.into())
-                    .await
-                    .unwrap();
+        match event {
+            ServiceEvent::SessionOpen { session_context } => {
+                self.addr = Some(session_context.address.clone());
+                if session_context.ty.is_outbound() {
+                    control
+                        .open_protocol(session_context.id, 1.into())
+                        .await
+                        .unwrap();
+                }
             }
-        } else if let ServiceEvent::SessionClose { session_context } = event {
-            // Test ends after 10 connections and opening session protocol
-            if session_context.ty.is_outbound() {
-                self.count += 1;
-                if self.count >= 10 {
-                    control.shutdown().await.unwrap();
-                } else {
-                    let _res = control
-                        .dial(self.addr.clone().unwrap(), TargetProtocol::Single(0.into()))
-                        .await;
+            _ => {
+                if let ServiceEvent::SessionClose { session_context } = event {
+                    // Test ends after 10 connections and opening session protocol
+                    if session_context.ty.is_outbound() {
+                        self.count += 1;
+                        if self.count >= 10 {
+                            control.shutdown().await.unwrap();
+                        } else {
+                            let _res = control
+                                .dial(self.addr.clone().unwrap(), TargetProtocol::Single(0.into()))
+                                .await;
+                        }
+                    }
                 }
             }
         }

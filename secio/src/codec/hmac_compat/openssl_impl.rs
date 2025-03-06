@@ -57,7 +57,7 @@ impl Hmac {
 
 pub struct Context<'a>(Signer<'a>);
 
-impl<'a> Context<'a> {
+impl Context<'_> {
     pub fn update(&mut self, data: &[u8]) {
         self.0.update(data).expect("openssl hmac update fail")
     }
