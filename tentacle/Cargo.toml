@@ -9,6 +9,7 @@ readme = "README.md"
 keywords = ["network", "peer-to-peer"]
 categories = ["network-programming", "asynchronous"]
 edition = "2021"
+rust-version = "1.80.1"
 
 [package.metadata.docs.rs]
 features = ["tokio-runtime", "tokio-timer", "upnp", "ws", "unstable", "tls"]
