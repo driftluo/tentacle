@@ -1,3 +1,8 @@
+## yamux 0.3.13
+
+### Features
+- Falling back to a better code on #400
+
 ## yamux 0.3.12
 
 ### Features
