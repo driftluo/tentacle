@@ -382,7 +382,7 @@ impl StreamHandle {
 
         let mut total_read = 0;
         for read_buf in self.read_buf.iter() {
-            let n = ::std::cmp::min(buf.remaining(), read_buf.len());
+            let n = buf.remaining().min(read_buf.len());
             if n == 0 {
                 break;
             }
@@ -437,27 +437,20 @@ impl AsyncRead for StreamHandle {
             return Poll::Pending;
         }
 
-        let mut offset = 0;
+        let mut offset = None;
         let mut total_read = 0;
-        let mut need_drain = false;
         for (index, read_buf) in self.read_buf.iter_mut().enumerate() {
-            let n = ::std::cmp::min(buf.remaining(), read_buf.len());
+            let n = buf.remaining().min(read_buf.len());
             if n == 0 {
                 break;
             }
-            total_read += n;
-            if n == read_buf.len() {
-                let b = &read_buf[..n];
-                buf.put_slice(b);
-                offset = index;
-                need_drain = true;
-            } else {
-                let b = read_buf.split_to(n);
-                buf.put_slice(&b);
+            buf.put_slice(&read_buf.split_to(n));
+            if read_buf.is_empty() {
+                offset = Some(index);
             }
+            total_read += n;
         }
-
-        if need_drain {
+        if let Some(offset) = offset {
             self.read_buf.drain(..=offset);
             // drain does not shrink the capacity, if the capacity is too large, shrink it
             if self.read_buf.capacity() > 24
