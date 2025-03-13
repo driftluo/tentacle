@@ -8,6 +8,7 @@ repository = "https://github.com/nervosnetwork/tentacle"
 keywords = ["network", "peer-to-peer"]
 categories = ["network-programming", "asynchronous"]
 edition = "2021"
+rust-version = "1.70.0"
 build = "build.rs"
 
 [package.metadata.docs.rs]

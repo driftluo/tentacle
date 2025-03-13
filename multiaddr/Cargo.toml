@@ -3,6 +3,7 @@ name = "tentacle-multiaddr"
 version = "0.3.5"
 authors = ["driftluo <driftluo@foxmail.com>"]
 edition = "2021"
+rust-version = "1.61.0"
 repository = "https://github.com/nervosnetwork/tentacle"
 license = "MIT"
 description = "Mini Implementation of multiaddr"
