@@ -228,8 +228,44 @@ pub(crate) enum ServiceTask {
         /// Listen address
         address: Multiaddr,
     },
+    /// Receive an established connection session
+    /// and build the tentacle protocol on top of it.
+    RawSession {
+        /// Remote address
+        remote_address: Multiaddr,
+        /// Raw session
+        raw_session: Box<dyn crate::session::AsyncRw + Send + Unpin + 'static>,
+        /// Session info
+        session_info: RawSessionInfo,
+    },
     /// Shutdown service
     Shutdown(bool),
+}
+
+/// Raw session info
+pub enum RawSessionInfo {
+    /// Inbound session
+    Inbound {
+        /// Session provenance
+        listen_addr: Multiaddr,
+    },
+    /// Outbound session
+    Outbound {
+        /// Dial protocols
+        target: TargetProtocol,
+    },
+}
+
+impl RawSessionInfo {
+    /// Inbound session info
+    pub fn inbound(listen_addr: Multiaddr) -> Self {
+        RawSessionInfo::Inbound { listen_addr }
+    }
+
+    /// Outbound session info
+    pub fn outbound(target: TargetProtocol) -> Self {
+        RawSessionInfo::Outbound { target }
+    }
 }
 
 impl fmt::Debug for ServiceTask {
@@ -269,6 +305,7 @@ impl fmt::Debug for ServiceTask {
             Disconnect { session_id } => write!(f, "Disconnect session [{}]", session_id),
             Dial { address, .. } => write!(f, "Dial address: {}", address),
             Listen { address } => write!(f, "Listen address: {}", address),
+            RawSession { remote_address, .. } => write!(f, "Raw session from: {}", remote_address),
             ProtocolOpen { session_id, .. } => write!(f, "Open session [{}] proto", session_id),
             ProtocolClose {
                 session_id,
