@@ -9,8 +9,6 @@
 //! this module contains async timer, compat async read/write between futures and tokio, spawn on any runtime
 //!
 
-#[cfg(all(not(target_family = "wasm"), feature = "async-runtime"))]
-mod async_runtime;
 #[cfg(any(
     feature = "generic-timer",
     all(target_family = "wasm", feature = "wasm-timer")
@@ -21,8 +19,6 @@ mod tokio_runtime;
 #[cfg(target_family = "wasm")]
 mod wasm_runtime;
 
-#[cfg(all(not(target_family = "wasm"), feature = "async-runtime"))]
-pub use async_runtime::*;
 #[cfg(any(
     feature = "generic-timer",
     all(target_family = "wasm", feature = "wasm-timer")

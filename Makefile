@@ -42,8 +42,6 @@ features-check:
 	$(Change_Work_Path) && cargo build --features parking_lot
 	$(Change_Work_Path) && cargo build --features unstable
 	$(Change_Work_Path) && cargo build --features tokio-runtime,generic-timer,unstable --no-default-features
-	$(Change_Work_Path) && cargo build --features async-runtime,generic-timer,unstable --no-default-features
-	$(Change_Work_Path) && cargo build --features async-runtime,async-timer,unstable --no-default-features
 	# required wasm32-unknown-unknown target
 	$(Change_Work_Path) && cargo build --features wasm-timer,unstable --no-default-features --target=wasm32-unknown-unknown
 	$(Change_Work_Path) && cargo build --features wasm-timer,unstable,secio-async-trait --no-default-features --target=wasm32-unknown-unknown

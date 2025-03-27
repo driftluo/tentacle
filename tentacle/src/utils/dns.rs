@@ -128,18 +128,6 @@ impl Future for DnsResolver {
                 Ok(Err(e)) => Poll::Ready(Err((self.source_address.clone(), e))),
             },
         }
-
-        #[cfg(feature = "async-runtime")]
-        match handle.poll_unpin(cx) {
-            Poll::Pending => {
-                self.join_handle = Some(handle);
-                Poll::Pending
-            }
-            Poll::Ready(res) => match res {
-                Ok(iter) => self.new_addr(iter),
-                Err(e) => Poll::Ready(Err((self.source_address.clone(), e.into()))),
-            },
-        }
     }
 }
 
