@@ -78,9 +78,6 @@
 //! - `tokio-runtime`: Enable by default, use tokio runtime
 //! - `tokio-timer`: Enable by default, use tokio inner timer
 //!
-//! - `async-timer`: use async-io timer
-//! - `async-runtime`: use async-std runtime
-//!
 //! - `generic-timer`: use futures-timer
 //! - `wasm-timer`: only use on Browser WebAssembly platform
 //!
