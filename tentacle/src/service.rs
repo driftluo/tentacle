@@ -48,7 +48,7 @@ pub use crate::service::{
         HandshakeType, ProtocolHandle, ProtocolMeta, TargetProtocol, TargetSession, TcpSocket,
     },
     control::{ServiceAsyncControl, ServiceControl},
-    event::{ServiceError, ServiceEvent},
+    event::{RawSessionInfo, ServiceError, ServiceEvent},
     helper::SessionType,
 };
 use bytes::Bytes;
@@ -1149,6 +1149,23 @@ where
                             .await;
                     }
                 }
+            }
+            ServiceTask::RawSession {
+                remote_address,
+                raw_session,
+                session_info,
+            } => {
+                let (ty, listen_addr) = match session_info {
+                    RawSessionInfo::Inbound { listen_addr } => {
+                        (SessionType::Inbound, Some(listen_addr))
+                    }
+                    RawSessionInfo::Outbound { target } => {
+                        self.dial_protocols.insert(remote_address.clone(), target);
+                        self.state.increase();
+                        (SessionType::Outbound, None)
+                    }
+                };
+                self.handshake(raw_session, ty, remote_address, listen_addr);
             }
             ServiceTask::Disconnect { session_id } => {
                 self.session_close(session_id, Source::External).await

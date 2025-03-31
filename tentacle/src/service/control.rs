@@ -1,5 +1,6 @@
 use futures::prelude::*;
 
+use std::fmt::Debug;
 use std::sync::{atomic::Ordering, Arc};
 use std::time::Duration;
 
@@ -7,7 +8,10 @@ use crate::{
     channel::mpsc,
     error::SendErrorKind,
     multiaddr::Multiaddr,
-    service::{event::ServiceTask, TargetProtocol, TargetSession},
+    service::{
+        event::{RawSessionInfo, ServiceTask},
+        TargetProtocol, TargetSession,
+    },
     ProtocolId, SessionId,
 };
 use bytes::Bytes;
@@ -70,6 +74,25 @@ impl ServiceControl {
     #[inline]
     pub fn dial(&self, address: Multiaddr, target: TargetProtocol) -> Result {
         self.quick_send(ServiceTask::Dial { address, target })
+    }
+
+    /// Receive an established connection session
+    /// and build the tentacle protocol on top of it.
+    #[inline]
+    pub fn raw_session<T>(
+        &self,
+        raw_session: T,
+        remote_address: Multiaddr,
+        info: RawSessionInfo,
+    ) -> Result
+    where
+        T: tokio::io::AsyncRead + tokio::io::AsyncWrite + Send + Unpin + 'static,
+    {
+        self.quick_send(ServiceTask::RawSession {
+            raw_session: Box::new(raw_session),
+            remote_address,
+            session_info: info,
+        })
     }
 
     /// Disconnect a connection
@@ -255,6 +278,18 @@ impl From<ServiceAsyncControl> for ServiceControl {
     }
 }
 
+impl Debug for ServiceControl {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        write!(f, "ServiceControl")
+    }
+}
+
+impl Debug for ServiceAsyncControl {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        write!(f, "ServiceAsyncControl")
+    }
+}
+
 /// Service control, used to send commands externally at runtime, All interfaces are async methods
 #[derive(Clone)]
 pub struct ServiceAsyncControl {
@@ -299,6 +334,26 @@ impl ServiceAsyncControl {
     #[inline]
     pub async fn dial(&self, address: Multiaddr, target: TargetProtocol) -> Result {
         self.quick_send(ServiceTask::Dial { address, target }).await
+    }
+
+    /// Receive an established connection session
+    /// and build the tentacle protocol on top of it.
+    #[inline]
+    pub async fn raw_session<T>(
+        &self,
+        raw_session: T,
+        remote_address: Multiaddr,
+        info: RawSessionInfo,
+    ) -> Result
+    where
+        T: tokio::io::AsyncRead + tokio::io::AsyncWrite + Send + Unpin + 'static,
+    {
+        self.quick_send(ServiceTask::RawSession {
+            raw_session: Box::new(raw_session),
+            remote_address,
+            session_info: info,
+        })
+        .await
     }
 
     /// Disconnect a connection
