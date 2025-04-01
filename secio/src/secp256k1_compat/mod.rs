@@ -1,4 +1,4 @@
-pub use secp256k1::{constants::SECRET_KEY_SIZE, ecdsa::Signature, Message, PublicKey, SecretKey};
+pub use secp256k1::{Message, PublicKey, SecretKey, constants::SECRET_KEY_SIZE, ecdsa::Signature};
 
 pub fn from_secret_key(secret: &SecretKey) -> PublicKey {
     let secp = secp256k1::Secp256k1::signing_only();

@@ -1,4 +1,4 @@
-use crate::{secio::error::SecioError, SessionId};
+use crate::{SessionId, secio::error::SecioError};
 use multiaddr::Multiaddr;
 use std::io::Error as IOError;
 use thiserror::Error;

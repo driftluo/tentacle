@@ -10,7 +10,7 @@ use std::{
     str::{self, FromStr},
 };
 
-use crate::{error::Error, Onion3Addr};
+use crate::{Onion3Addr, error::Error};
 
 const DNS4: u32 = 0x36;
 const DNS6: u32 = 0x37;

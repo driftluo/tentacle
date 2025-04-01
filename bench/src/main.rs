@@ -2,7 +2,7 @@ use bench::Bench;
 use bytes::Bytes;
 use futures::channel;
 use p2p::{
-    async_trait,
+    ProtocolId, async_trait,
     builder::{MetaBuilder, ServiceBuilder},
     context::{ProtocolContext, ProtocolContextMutRef},
     multiaddr::Multiaddr,
@@ -11,7 +11,6 @@ use p2p::{
         ProtocolHandle, ProtocolMeta, Service, ServiceControl, TargetProtocol, TargetSession,
     },
     traits::{ServiceHandle, ServiceProtocol},
-    ProtocolId,
 };
 use std::{
     sync::{Once, OnceLock},

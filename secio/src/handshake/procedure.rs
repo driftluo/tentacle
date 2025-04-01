@@ -9,15 +9,15 @@ use tokio::io::{AsyncRead, AsyncWrite};
 use tokio_util::codec::length_delimited::Builder;
 
 use crate::{
+    EphemeralPublicKey, KeyProvider,
     codec::{hmac_compat::Hmac, secure_stream::SecureStream},
-    crypto::{cipher::CipherType, new_stream, BoxStreamCipher, CryptoMode},
+    crypto::{BoxStreamCipher, CryptoMode, cipher::CipherType, new_stream},
     error::SecioError,
     handshake::Config,
     handshake::{
         handshake_context::HandshakeContext,
         handshake_struct::{Exchange, PublicKey},
     },
-    EphemeralPublicKey, KeyProvider,
 };
 use bytes::BytesMut;
 use tokio::io::AsyncWriteExt;
@@ -70,8 +70,7 @@ where
 
     trace!(
         "received proposition from remote; pubkey = {:?}; nonce = {:?}",
-        remote_context.state.public_key,
-        remote_context.state.nonce
+        remote_context.state.public_key, remote_context.state.nonce
     );
 
     // Generate an ephemeral key for the negotiation.
@@ -205,8 +204,7 @@ where
 
     trace!(
         "local info: {:?}, remote_info: {:?}",
-        local_infos,
-        remote_infos
+        local_infos, remote_infos
     );
 
     let encode_cipher = generate_stream_cipher_and_hmac(
@@ -290,7 +288,7 @@ fn generate_stream_cipher_and_hmac(
 #[cfg(test)]
 mod tests {
     use super::stretch_key;
-    use crate::{codec::hmac_compat::Hmac, handshake::Config, Digest, KeyProvider, SecioKeyPair};
+    use crate::{Digest, KeyProvider, SecioKeyPair, codec::hmac_compat::Hmac, handshake::Config};
 
     use bytes::BytesMut;
     use futures::channel;

@@ -1,7 +1,7 @@
 /// Most of the code for this module comes from `rust-libp2p`.
 use std::fmt;
 
-use rand::{thread_rng, Rng};
+use rand::{Rng, thread_rng};
 use unsigned_varint::{decode, encode};
 
 use crate::handshake::handshake_struct::PublicKey;
@@ -161,7 +161,7 @@ impl ::std::error::Error for Error {}
 
 #[cfg(test)]
 mod tests {
-    use crate::{peer_id::PeerId, SecioKeyPair};
+    use crate::{SecioKeyPair, peer_id::PeerId};
 
     #[test]
     fn peer_id_is_public_key() {

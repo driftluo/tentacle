@@ -1,20 +1,20 @@
 use std::{
-    collections::{hash_map::Entry, HashMap},
+    collections::{HashMap, hash_map::Entry},
     future::Future,
     io,
     net::SocketAddr,
     pin::Pin,
     sync::{
-        atomic::{AtomicU8, Ordering},
         Arc,
+        atomic::{AtomicU8, Ordering},
     },
     task::{Context, Poll},
     time::Duration,
 };
 
 use futures::{
-    channel::mpsc::{self, Receiver, Sender},
     SinkExt, Stream,
+    channel::mpsc::{self, Receiver, Sender},
 };
 use log::debug;
 
@@ -27,8 +27,8 @@ use {
     crate::{service::TlsConfig, transports::parse_tls_domain_name},
     std::borrow::Cow,
     tokio_rustls::{
-        rustls::{server::ResolvesServerCertUsingSni, ServerConfig},
         TlsAcceptor,
+        rustls::{ServerConfig, server::ResolvesServerCertUsingSni},
     },
 };
 
@@ -36,7 +36,7 @@ use crate::{
     multiaddr::Multiaddr,
     runtime::{TcpListener, TcpStream},
     service::config::TcpSocketConfig,
-    transports::{tcp_listen, MultiStream, Result, TcpListenMode, TransportErrorKind},
+    transports::{MultiStream, Result, TcpListenMode, TransportErrorKind, tcp_listen},
     utils::{multiaddr_to_socketaddr, socketaddr_to_multiaddr},
 };
 

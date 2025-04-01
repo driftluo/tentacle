@@ -1,6 +1,6 @@
 use bytes::BytesMut;
 use log::info;
-use tentacle_secio::{handshake::Config, SecioKeyPair};
+use tentacle_secio::{SecioKeyPair, handshake::Config};
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::{TcpListener, TcpStream},

@@ -1,8 +1,8 @@
 use std::{
     sync::{
+        Arc,
         atomic::{AtomicU8, Ordering},
         mpsc::{self, Sender},
-        Arc,
     },
     thread,
     time::Duration,
@@ -10,14 +10,13 @@ use std::{
 
 use futures::channel;
 use tentacle::{
-    async_trait,
+    ProtocolId, async_trait,
     builder::{MetaBuilder, ServiceBuilder},
     context::{ProtocolContext, ServiceContext},
     multiaddr::{Multiaddr, Protocol},
     secio::SecioKeyPair,
     service::{ProtocolHandle, ProtocolMeta, Service, ServiceError, TargetProtocol},
     traits::{ServiceHandle, ServiceProtocol},
-    ProtocolId,
 };
 
 pub fn create<F>(secio: bool, meta: ProtocolMeta, shandle: F) -> Service<F, SecioKeyPair>

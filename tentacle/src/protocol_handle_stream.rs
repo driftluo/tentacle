@@ -1,27 +1,27 @@
 use futures::{
+    SinkExt, StreamExt,
     channel::{mpsc, oneshot},
     future::poll_fn,
-    SinkExt, StreamExt,
 };
 use log::{debug, trace};
 use nohash_hasher::IntMap;
 use std::collections::HashMap;
 use std::{
     sync::{
-        atomic::{AtomicBool, Ordering},
         Arc,
+        atomic::{AtomicBool, Ordering},
     },
     time::Duration,
 };
 
 use crate::{
+    ProtocolId, SessionId,
     context::{ProtocolContext, ServiceContext, SessionContext},
     error::ProtocolHandleErrorKind,
     multiaddr::Multiaddr,
     service::future_task::BoxedFutureTask,
     session::SessionEvent,
     traits::{ServiceProtocol, SessionProtocol},
-    ProtocolId, SessionId,
 };
 
 #[derive(Clone)]

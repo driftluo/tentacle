@@ -1,7 +1,7 @@
 use std::net::Ipv4Addr;
 use std::{ffi, io, ptr};
 
-use libc::{freeifaddrs, getifaddrs, ifaddrs, sockaddr, AF_INET};
+use libc::{AF_INET, freeifaddrs, getifaddrs, ifaddrs, sockaddr};
 
 use crate::upnp::Network;
 

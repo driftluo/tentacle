@@ -1,12 +1,12 @@
 #![allow(dead_code)]
 
 use chacha20poly1305::{
-    aead::{Aead, AeadInPlace, Buffer, Error, KeyInit},
     ChaCha20Poly1305, Key, Nonce,
+    aead::{Aead, AeadInPlace, Buffer, Error, KeyInit},
 };
 
 use crate::{
-    crypto::{cipher::CipherType, nonce_advance, StreamCipher},
+    crypto::{StreamCipher, cipher::CipherType, nonce_advance},
     error::SecioError,
 };
 

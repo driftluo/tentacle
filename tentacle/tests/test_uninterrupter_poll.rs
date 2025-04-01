@@ -1,6 +1,6 @@
 use futures::channel;
 use tentacle::{
-    async_trait,
+    ProtocolId, async_trait,
     builder::{MetaBuilder, ServiceBuilder},
     bytes::Bytes,
     context::{ProtocolContext, ProtocolContextMutRef},
@@ -8,7 +8,6 @@ use tentacle::{
     secio::NoopKeyProvider,
     service::{ProtocolHandle, ProtocolMeta, Service, TargetProtocol},
     traits::{ServiceHandle, ServiceProtocol},
-    ProtocolId,
 };
 
 struct PHandle;

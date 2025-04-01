@@ -68,7 +68,7 @@ impl Bench {
             self.cycles,
             total,
             total / self.cycles,
-            self.executed_time_list[(self.cycles/2) as usize],
+            self.executed_time_list[(self.cycles / 2) as usize],
             self.executed_time_list[self.cycles as usize - 1],
             self.executed_time_list[0]
         )

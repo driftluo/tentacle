@@ -1,6 +1,6 @@
 use crate::channel::{
-    decode_state, encode_state, queue::Queue, Priority, SendError, SendErrorKind, TryRecvError,
-    TrySendError, INIT_STATE, MAX_BUFFER, MAX_CAPACITY, OPEN_MASK,
+    INIT_STATE, MAX_BUFFER, MAX_CAPACITY, OPEN_MASK, Priority, SendError, SendErrorKind,
+    TryRecvError, TrySendError, decode_state, encode_state, queue::Queue,
 };
 use futures::{
     future::poll_fn,
@@ -10,8 +10,8 @@ use futures::{
 use std::{
     pin::Pin,
     sync::{
-        atomic::{AtomicUsize, Ordering::SeqCst},
         Arc,
+        atomic::{AtomicUsize, Ordering::SeqCst},
     },
     task::{Context, Poll},
 };

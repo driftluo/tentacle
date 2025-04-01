@@ -13,8 +13,8 @@ mod unbound;
 
 #[allow(unused_imports)]
 pub(crate) mod mpsc {
-    pub use super::bound::{channel, Receiver, Sender};
-    pub use super::unbound::{unbounded, UnboundedReceiver, UnboundedSender};
+    pub use super::bound::{Receiver, Sender, channel};
+    pub use super::unbound::{UnboundedReceiver, UnboundedSender, unbounded};
     pub use super::{Priority, SendError, TrySendError};
 }
 pub use sink_impl::QuickSinkExt;

@@ -3,24 +3,24 @@ use futures::prelude::*;
 use std::{
     ops::{Deref, DerefMut},
     sync::{
-        atomic::{AtomicBool, AtomicUsize, Ordering},
         Arc,
+        atomic::{AtomicBool, AtomicUsize, Ordering},
     },
     time::Duration,
 };
 
 use crate::channel::QuickSinkExt;
 use crate::{
+    ProtocolId, SessionId,
     channel::{mpsc, mpsc::Priority},
     error::SendErrorKind,
     multiaddr::Multiaddr,
     secio::PublicKey,
     service::{
-        event::ServiceTask, ServiceAsyncControl, ServiceControl, SessionType, TargetProtocol,
-        TargetSession,
+        ServiceAsyncControl, ServiceControl, SessionType, TargetProtocol, TargetSession,
+        event::ServiceTask,
     },
     session::SessionEvent,
-    ProtocolId, SessionId,
 };
 
 pub(crate) struct SessionController {

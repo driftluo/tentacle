@@ -2,7 +2,7 @@ use bytes::{Bytes, BytesMut};
 use openssl::symm;
 
 use crate::{
-    crypto::{cipher::CipherType, nonce_advance, StreamCipher},
+    crypto::{StreamCipher, cipher::CipherType, nonce_advance},
     error::SecioError,
 };
 

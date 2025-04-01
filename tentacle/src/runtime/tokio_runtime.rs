@@ -1,7 +1,7 @@
 pub use tokio::{
     net::{TcpListener, TcpStream},
     spawn,
-    task::{block_in_place, spawn_blocking, yield_now, JoinHandle},
+    task::{JoinHandle, block_in_place, spawn_blocking, yield_now},
 };
 
 use crate::service::config::{TcpSocket, TcpSocketConfig};
@@ -15,8 +15,8 @@ use tokio::net::TcpSocket as TokioTcp;
 
 #[cfg(feature = "tokio-timer")]
 pub use {
-    time::{interval, Interval},
-    tokio::time::{sleep as delay_for, timeout, MissedTickBehavior, Sleep as Delay, Timeout},
+    time::{Interval, interval},
+    tokio::time::{MissedTickBehavior, Sleep as Delay, Timeout, sleep as delay_for, timeout},
 };
 
 #[cfg(feature = "tokio-timer")]
@@ -28,7 +28,7 @@ mod time {
         time::Duration,
     };
     use tokio::time::{
-        interval_at as inner_interval, Instant, Interval as Inner, MissedTickBehavior,
+        Instant, Interval as Inner, MissedTickBehavior, interval_at as inner_interval,
     };
 
     pub struct Interval(Inner);

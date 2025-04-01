@@ -7,7 +7,7 @@ use log::trace;
 use tokio_util::codec::{Decoder, Encoder};
 
 use crate::{
-    config::INITIAL_STREAM_WINDOW, StreamId, HEADER_SIZE, PROTOCOL_VERSION, RESERVED_STREAM_ID,
+    HEADER_SIZE, PROTOCOL_VERSION, RESERVED_STREAM_ID, StreamId, config::INITIAL_STREAM_WINDOW,
 };
 
 /// The base message type is frame
@@ -352,7 +352,7 @@ impl Encoder<Frame> for FrameCodec {
 
 #[cfg(test)]
 mod test {
-    use super::{Flags, Frame, FrameCodec, Type, HEADER_SIZE, INITIAL_STREAM_WINDOW};
+    use super::{Flags, Frame, FrameCodec, HEADER_SIZE, INITIAL_STREAM_WINDOW, Type};
     use bytes::{BufMut, BytesMut};
     use std::io;
     use tokio_util::codec::{Decoder, Encoder};

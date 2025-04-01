@@ -1,4 +1,4 @@
-use futures::{channel::mpsc, future::poll_fn, prelude::*, stream::StreamExt, SinkExt};
+use futures::{SinkExt, channel::mpsc, future::poll_fn, prelude::*, stream::StreamExt};
 use log::{debug, error, trace};
 use nohash_hasher::IntMap;
 use secio::KeyProvider;
@@ -6,8 +6,8 @@ use std::{
     borrow::Cow,
     collections::{HashMap, HashSet},
     sync::{
-        atomic::{AtomicBool, AtomicUsize, Ordering},
         Arc,
+        atomic::{AtomicBool, AtomicUsize, Ordering},
     },
 };
 use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt};
@@ -15,6 +15,7 @@ use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt};
 #[cfg(not(target_family = "wasm"))]
 use crate::service::helper::Listener;
 use crate::{
+    ProtocolId, SessionId,
     buffer::Buffer,
     channel::{mpsc as priority_mpsc, mpsc::Priority},
     context::{ServiceContext, SessionContext, SessionController},
@@ -34,7 +35,6 @@ use crate::{
     traits::ServiceHandle,
     transports::{MultiIncoming, MultiTransport, TransportDial, TransportListen},
     utils::extract_peer_id,
-    ProtocolId, SessionId,
 };
 
 pub(crate) mod config;

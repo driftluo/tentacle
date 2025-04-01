@@ -2,13 +2,13 @@
 use bytes::Bytes;
 use futures::channel;
 use nix::{
-    sys::signal::{kill, Signal},
-    unistd::{fork, ForkResult},
+    sys::signal::{Signal, kill},
+    unistd::{ForkResult, fork},
 };
 use std::{thread, time::Duration};
 use systemstat::{Platform, System};
 use tentacle::{
-    async_trait,
+    ProtocolId, async_trait,
     builder::{MetaBuilder, ServiceBuilder},
     context::{ProtocolContext, ProtocolContextMutRef},
     multiaddr::Multiaddr,
@@ -17,7 +17,6 @@ use tentacle::{
         ProtocolHandle, ProtocolMeta, Service, ServiceControl, TargetProtocol, TargetSession,
     },
     traits::{ServiceHandle, ServiceProtocol},
-    ProtocolId,
 };
 
 /// Get current used memory(bytes)

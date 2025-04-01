@@ -1,21 +1,20 @@
 use futures::channel;
 use std::{
     sync::{
-        atomic::{AtomicBool, AtomicUsize, Ordering},
         Arc,
+        atomic::{AtomicBool, AtomicUsize, Ordering},
     },
     thread,
     time::Duration,
 };
 use tentacle::{
-    async_trait,
+    ProtocolId, async_trait,
     builder::{MetaBuilder, ServiceBuilder},
     context::{ProtocolContext, ProtocolContextMutRef, ServiceContext},
     multiaddr::Multiaddr,
     secio::SecioKeyPair,
     service::{ProtocolHandle, ProtocolMeta, Service, ServiceEvent, TargetProtocol},
     traits::{ServiceHandle, ServiceProtocol},
-    ProtocolId,
 };
 
 pub fn create<F>(secio: bool, meta: ProtocolMeta, shandle: F) -> Service<F, SecioKeyPair>

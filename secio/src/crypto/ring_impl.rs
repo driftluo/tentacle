@@ -1,8 +1,8 @@
 use bytes::BytesMut;
 use ring::{
     aead::{
-        Aad, BoundKey, Nonce, NonceSequence, OpeningKey, SealingKey, UnboundKey, AES_128_GCM,
-        AES_256_GCM, CHACHA20_POLY1305,
+        AES_128_GCM, AES_256_GCM, Aad, BoundKey, CHACHA20_POLY1305, Nonce, NonceSequence,
+        OpeningKey, SealingKey, UnboundKey,
     },
     error::Unspecified,
 };
@@ -10,7 +10,7 @@ use ring::{
 use std::ptr;
 
 use crate::{
-    crypto::{cipher::CipherType, nonce_advance, CryptoMode, StreamCipher},
+    crypto::{CryptoMode, StreamCipher, cipher::CipherType, nonce_advance},
     error::SecioError,
 };
 

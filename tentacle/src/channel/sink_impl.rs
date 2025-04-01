@@ -1,5 +1,5 @@
-use super::{bound::Sender, unbound::UnboundedSender, SendError, TrySendError};
-use futures::{ready, Sink};
+use super::{SendError, TrySendError, bound::Sender, unbound::UnboundedSender};
+use futures::{Sink, ready};
 use std::{
     future::Future,
     pin::Pin,

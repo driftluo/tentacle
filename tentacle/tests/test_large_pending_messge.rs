@@ -2,14 +2,13 @@ use bytes::Bytes;
 use futures::channel;
 use std::thread;
 use tentacle::{
-    async_trait,
+    ProtocolId, async_trait,
     builder::{MetaBuilder, ServiceBuilder},
     context::{ProtocolContext, ProtocolContextMutRef, ServiceContext},
     multiaddr::Multiaddr,
     secio::SecioKeyPair,
     service::{ProtocolHandle, ProtocolMeta, Service, ServiceError, TargetProtocol},
     traits::{ServiceHandle, ServiceProtocol},
-    ProtocolId,
 };
 
 pub fn create<F>(secio: bool, meta: ProtocolMeta, shandle: F) -> Service<F, SecioKeyPair>

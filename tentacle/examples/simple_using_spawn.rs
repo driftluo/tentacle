@@ -7,7 +7,7 @@ use futures::StreamExt;
 use log::info;
 use std::{str, sync::Arc, time::Duration};
 use tentacle::{
-    async_trait,
+    ProtocolId, SubstreamReadPart, async_trait,
     builder::{MetaBuilder, ServiceBuilder},
     context::{ServiceContext, SessionContext},
     secio::SecioKeyPair,
@@ -16,7 +16,6 @@ use tentacle::{
         TargetSession,
     },
     traits::{ProtocolSpawn, ServiceHandle},
-    ProtocolId, SubstreamReadPart,
 };
 
 struct ProtocolStream;

@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use std::thread;
 use std::time::{Duration, Instant};
 use tentacle::{
-    async_trait,
+    ProtocolId, SessionId, async_trait,
     builder::{MetaBuilder, ServiceBuilder},
     context::{ProtocolContext, ProtocolContextMutRef, ServiceContext},
     secio::SecioKeyPair,
@@ -13,7 +13,6 @@ use tentacle::{
         TargetProtocol,
     },
     traits::{ServiceHandle, ServiceProtocol},
-    ProtocolId, SessionId,
 };
 
 struct PHandle {

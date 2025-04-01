@@ -3,7 +3,7 @@
 #[cfg(not(target_family = "wasm"))]
 use std::time::Instant;
 use std::{
-    collections::{hash_map::Entry, BTreeMap, HashMap, HashSet, VecDeque},
+    collections::{BTreeMap, HashMap, HashSet, VecDeque, hash_map::Entry},
     io,
     pin::Pin,
     task::{Context, Poll},
@@ -17,8 +17,8 @@ use timer::Instant;
 use web_time::Instant;
 
 use futures::{
-    channel::mpsc::{channel, unbounded, Receiver, Sender, UnboundedReceiver, UnboundedSender},
     Sink, Stream,
+    channel::mpsc::{Receiver, Sender, UnboundedReceiver, UnboundedSender, channel, unbounded},
 };
 use log::{debug, log_enabled, trace};
 use nohash_hasher::IntMap;
@@ -26,15 +26,15 @@ use tokio::io::{AsyncRead, AsyncWrite};
 use tokio_util::codec::Framed;
 
 use crate::{
+    StreamId,
     config::Config,
     control::{Command, Control},
     error::Error,
     frame::{Flag, Flags, Frame, FrameCodec, GoAwayCode, Type},
     stream::{StreamEvent, StreamHandle, StreamState},
-    StreamId,
 };
 
-use timer::{interval, Interval};
+use timer::{Interval, interval};
 
 const BUF_SHRINK_THRESHOLD: usize = u8::MAX as usize;
 const TIMEOUT: Duration = Duration::from_secs(30);
@@ -709,9 +709,9 @@ where
 
 mod timer {
     #[cfg(feature = "generic-timer")]
-    pub use generic_time::{interval, Interval};
+    pub use generic_time::{Interval, interval};
     #[cfg(feature = "tokio-timer")]
-    pub use inter::{interval, Interval};
+    pub use inter::{Interval, interval};
 
     #[cfg(feature = "tokio-timer")]
     mod inter {
@@ -721,7 +721,7 @@ mod timer {
             task::{Context, Poll},
             time::Duration,
         };
-        use tokio::time::{interval_at, Instant, Interval as Inner};
+        use tokio::time::{Instant, Interval as Inner, interval_at};
 
         pub struct Interval(Inner);
 
@@ -912,15 +912,15 @@ pub(crate) fn rt() -> &'static tokio::runtime::Runtime {
 
 #[cfg(test)]
 mod test {
-    use super::{rt, Session};
+    use super::{Session, rt};
     use crate::{
         config::Config,
         frame::{Flag, Flags, Frame, FrameCodec, GoAwayCode, Type},
     };
     use futures::{
-        channel::mpsc::{channel, Receiver, Sender},
-        stream::FusedStream,
         SinkExt, Stream, StreamExt,
+        channel::mpsc::{Receiver, Sender, channel},
+        stream::FusedStream,
     };
     use std::{
         io,

@@ -2,10 +2,10 @@
 
 use bytes::BytesMut;
 use futures::{
+    Stream,
     channel::mpsc::{Receiver, UnboundedSender},
     stream::FusedStream,
     task::Waker,
-    Stream,
 };
 
 use std::{
@@ -19,10 +19,10 @@ use log::{debug, trace};
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 
 use crate::{
+    StreamId,
     config::INITIAL_STREAM_WINDOW,
     error::Error,
     frame::{Flag, Flags, Frame, Type},
-    StreamId,
 };
 
 /// The substream
@@ -630,8 +630,8 @@ mod test {
     };
     use bytes::BytesMut;
     use futures::{
-        channel::mpsc::{channel, unbounded},
         SinkExt, StreamExt,
+        channel::mpsc::{channel, unbounded},
     };
     use std::io::ErrorKind;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};

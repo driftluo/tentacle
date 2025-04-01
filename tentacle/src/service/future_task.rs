@@ -4,12 +4,12 @@ use futures::{
 };
 use log::{debug, trace};
 use nohash_hasher::IntMap;
-use std::collections::{hash_map::Entry, HashMap};
+use std::collections::{HashMap, hash_map::Entry};
 use std::{
     pin::Pin,
     sync::{
-        atomic::{AtomicBool, Ordering},
         Arc,
+        atomic::{AtomicBool, Ordering},
     },
     task::{Context, Poll},
 };
@@ -140,7 +140,7 @@ mod test {
     use super::{Arc, AtomicBool, BoxedFutureTask, FutureTaskManager, Ordering};
 
     use crate::runtime::delay_for;
-    use futures::{channel::mpsc::channel, stream::pending, SinkExt, StreamExt};
+    use futures::{SinkExt, StreamExt, channel::mpsc::channel, stream::pending};
     use std::sync::atomic::AtomicUsize;
     use std::{thread, time};
 

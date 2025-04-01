@@ -1,5 +1,5 @@
 use super::Result;
-use futures::{future::ok, TryFutureExt};
+use futures::{TryFutureExt, future::ok};
 use std::{future::Future, pin::Pin, time::Duration};
 
 use crate::service::TlsConfig;
@@ -8,12 +8,12 @@ use crate::{
     multiaddr::Multiaddr,
     service::config::TcpSocketConfig,
     session::AsyncRw,
-    transports::{parse_tls_domain_name, tcp_dial, TransportDial, TransportFuture},
+    transports::{TransportDial, TransportFuture, parse_tls_domain_name, tcp_dial},
     utils::{dns::DnsResolver, multiaddr_to_socketaddr},
 };
 
-use tokio_rustls::rustls::pki_types::ServerName;
 use tokio_rustls::TlsConnector;
+use tokio_rustls::rustls::pki_types::ServerName;
 
 pub type TlsStream = Box<dyn AsyncRw + Send + Unpin + 'static>;
 

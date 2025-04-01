@@ -4,20 +4,19 @@ use std::{str::FromStr, thread, time::Duration};
 use tentacle::bytes::Bytes;
 use tentacle::service::ServiceControl;
 use tentacle::{
-    async_trait,
+    ProtocolId, async_trait,
     builder::{MetaBuilder, ServiceBuilder},
     context::{ProtocolContext, ProtocolContextMutRef},
     multiaddr::Multiaddr,
     secio::NoopKeyProvider,
     service::{ProtocolHandle, ProtocolMeta, Service, TargetProtocol, TlsConfig},
     traits::{ServiceHandle, ServiceProtocol},
-    ProtocolId,
 };
 
 #[path = "./tls_common.rs"]
 mod tls;
 
-use tls::{make_client_config, make_server_config, NetConfig};
+use tls::{NetConfig, make_client_config, make_server_config};
 
 pub fn create<F>(meta: ProtocolMeta, shandle: F, cert_path: String) -> Service<F, NoopKeyProvider>
 where

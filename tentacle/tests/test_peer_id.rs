@@ -1,6 +1,6 @@
 use std::{borrow::Cow, sync::mpsc::channel, thread};
 use tentacle::{
-    async_trait,
+    ProtocolId, async_trait,
     builder::{MetaBuilder, ServiceBuilder},
     context::{ProtocolContext, ServiceContext},
     error::DialerErrorKind,
@@ -12,7 +12,6 @@ use tentacle::{
         TargetProtocol,
     },
     traits::{ServiceHandle, ServiceProtocol},
-    ProtocolId,
 };
 
 pub fn create<F>(key_pair: SecioKeyPair, meta: ProtocolMeta, shandle: F) -> Service<F, SecioKeyPair>

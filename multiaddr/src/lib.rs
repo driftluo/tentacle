@@ -8,8 +8,8 @@ pub use self::onion_addr::Onion3Addr;
 pub use self::protocol::Protocol;
 use bytes::{Bytes, BytesMut};
 use serde::{
-    de::{self, Error as DeserializerError},
     Deserialize, Deserializer, Serialize, Serializer,
+    de::{self, Error as DeserializerError},
 };
 use std::{
     fmt,

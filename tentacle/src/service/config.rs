@@ -1,8 +1,8 @@
 use crate::{
+    ProtocolId, SessionId,
     builder::{BeforeReceiveFn, CodecFn, NameFn, SelectVersionFn, SessionHandleFn},
     traits::{Codec, ProtocolSpawn, ServiceProtocol, SessionProtocol},
     yamux::config::Config as YamuxConfig,
-    ProtocolId, SessionId,
 };
 #[cfg(windows)]
 use std::os::windows::io::{

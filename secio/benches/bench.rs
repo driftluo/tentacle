@@ -1,5 +1,5 @@
-use criterion::{criterion_group, criterion_main, Bencher, Criterion};
-use tentacle_secio::crypto::{cipher::CipherType, new_stream, CryptoMode};
+use criterion::{Bencher, Criterion, criterion_group, criterion_main};
+use tentacle_secio::crypto::{CryptoMode, cipher::CipherType, new_stream};
 
 fn decode_encode(data: &[u8], cipher: CipherType) {
     let cipher_key = (0..cipher.key_size())

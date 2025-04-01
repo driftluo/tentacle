@@ -1,16 +1,17 @@
-use futures::{channel::mpsc, prelude::*, stream::iter, SinkExt, StreamExt};
+use futures::{SinkExt, StreamExt, channel::mpsc, prelude::*, stream::iter};
 use log::debug;
 use std::{
     collections::VecDeque,
     io::{self, ErrorKind},
     pin::Pin,
-    sync::{atomic::Ordering, Arc},
+    sync::{Arc, atomic::Ordering},
     task::{Context, Poll},
 };
 use tokio::io::AsyncWrite;
-use tokio_util::codec::{length_delimited::LengthDelimitedCodec, Framed, FramedRead, FramedWrite};
+use tokio_util::codec::{Framed, FramedRead, FramedWrite, length_delimited::LengthDelimitedCodec};
 
 use crate::{
+    ProtocolId, StreamId,
     buffer::{Buffer, SendResult},
     builder::BeforeReceive,
     channel::{mpsc as priority_mpsc, mpsc::Priority},
@@ -19,7 +20,6 @@ use crate::{
     service::config::SessionConfig,
     traits::Codec,
     yamux::StreamHandle,
-    ProtocolId, StreamId,
 };
 
 /// Event generated/received by the protocol stream

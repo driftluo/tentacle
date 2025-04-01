@@ -1,6 +1,6 @@
 use bytes::Bytes;
 use futures::{
-    channel::oneshot::{channel, Sender},
+    channel::oneshot::{Sender, channel},
     future::select,
     prelude::*,
 };
@@ -8,7 +8,7 @@ use log::info;
 use std::collections::HashMap;
 use std::{str, time::Duration};
 use tentacle::{
-    async_trait,
+    ProtocolId, SessionId, async_trait,
     builder::{MetaBuilder, ServiceBuilder},
     context::{ProtocolContext, ProtocolContextMutRef, ServiceContext},
     secio::SecioKeyPair,
@@ -17,7 +17,6 @@ use tentacle::{
         TargetSession,
     },
     traits::{ServiceHandle, ServiceProtocol},
-    ProtocolId, SessionId,
 };
 
 // Any protocol will be abstracted into a ProtocolMeta structure.

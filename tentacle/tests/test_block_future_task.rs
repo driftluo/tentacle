@@ -1,13 +1,12 @@
 use futures::future::pending;
 use std::time::Duration;
 use tentacle::{
-    async_trait,
+    ProtocolId, async_trait,
     builder::{MetaBuilder, ServiceBuilder},
     context::ProtocolContext,
     secio::NoopKeyProvider,
     service::{ProtocolHandle, ProtocolMeta, Service},
     traits::{ServiceHandle, ServiceProtocol},
-    ProtocolId,
 };
 
 pub fn create<F>(meta: ProtocolMeta, shandle: F) -> Service<F, NoopKeyProvider>

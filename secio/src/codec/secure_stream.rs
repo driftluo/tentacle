@@ -2,7 +2,7 @@ use bytes::{Buf, Bytes, BytesMut};
 use futures::{SinkExt, StreamExt};
 use log::{debug, trace};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, ReadBuf};
-use tokio_util::codec::{length_delimited::LengthDelimitedCodec, Framed};
+use tokio_util::codec::{Framed, length_delimited::LengthDelimitedCodec};
 
 use std::{
     cmp::min,
@@ -231,14 +231,14 @@ where
 #[cfg(test)]
 mod tests {
     use super::SecureStream;
-    use crate::crypto::{cipher::CipherType, new_stream, CryptoMode};
+    use crate::crypto::{CryptoMode, cipher::CipherType, new_stream};
     use bytes::BytesMut;
     use futures::channel;
     use tokio::{
         io::{AsyncReadExt, AsyncWriteExt},
         net::{TcpListener, TcpStream},
     };
-    use tokio_util::codec::{length_delimited::LengthDelimitedCodec, Framed};
+    use tokio_util::codec::{Framed, length_delimited::LengthDelimitedCodec};
 
     fn rt() -> &'static tokio::runtime::Runtime {
         static RT: std::sync::OnceLock<tokio::runtime::Runtime> = std::sync::OnceLock::new();

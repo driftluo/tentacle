@@ -145,8 +145,8 @@ pub fn agree(
 mod test {
     use super::{agree, generate_agreement};
     use crate::dh_compat::{
-        ring_impl::{agree as agree_ring, generate_agreement as generate_agreement_ring},
         KeyAgreement,
+        ring_impl::{agree as agree_ring, generate_agreement as generate_agreement_ring},
     };
 
     fn test_ecdh(ty: KeyAgreement) {
