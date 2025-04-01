@@ -202,7 +202,7 @@ impl<T> Clone for PriorityBuffer<T> {
 mod test {
     use super::{Buffer, PriorityBuffer};
     use crate::channel::mpsc::channel as priority_channel;
-    use futures::{channel::mpsc::channel, executor::block_on, future::poll_fn, StreamExt};
+    use futures::{StreamExt, channel::mpsc::channel, executor::block_on, future::poll_fn};
     use std::{
         collections::VecDeque,
         task::{Context, Poll},

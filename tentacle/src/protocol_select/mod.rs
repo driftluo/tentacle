@@ -6,7 +6,7 @@ use log::{debug, trace};
 use std::cmp::Ordering;
 use std::{collections::HashMap, io};
 use tokio::io::{AsyncRead, AsyncWrite};
-use tokio_util::codec::{length_delimited::LengthDelimitedCodec, Framed};
+use tokio_util::codec::{Framed, length_delimited::LengthDelimitedCodec};
 
 #[rustfmt::skip]
 #[allow(clippy::all)]
@@ -178,7 +178,7 @@ pub fn select_version<T: Ord + Clone>(local: &[T], remote: &[T]) -> Option<T> {
 
 #[cfg(test)]
 mod tests {
-    use super::{client_select, select_version, server_select, ProtocolInfo};
+    use super::{ProtocolInfo, client_select, select_version, server_select};
     use futures::channel;
     use std::collections::HashMap;
     use tokio::net::{TcpListener, TcpStream};

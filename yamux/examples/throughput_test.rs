@@ -117,7 +117,6 @@ fn run_client() {
 
         let mut session = Session::new_client(socket, Config::default());
         let streams = (0..num)
-            .into_iter()
             .map(|_| session.open_stream().unwrap())
             .collect::<Vec<_>>();
 

@@ -3,11 +3,11 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use crate::{
+    ProtocolId, SessionId,
     context::SessionContext,
     error::{DialerErrorKind, ListenErrorKind, ProtocolHandleErrorKind},
     multiaddr::Multiaddr,
-    service::{future_task::BoxedFutureTask, TargetProtocol, TargetSession},
-    ProtocolId, SessionId,
+    service::{TargetProtocol, TargetSession, future_task::BoxedFutureTask},
 };
 use bytes::Bytes;
 

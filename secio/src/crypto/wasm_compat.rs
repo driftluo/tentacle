@@ -1,12 +1,12 @@
 #![allow(dead_code)]
 
 use chacha20poly1305::{
-    aead::{Aead, AeadInPlace, Buffer, Error, KeyInit},
     ChaCha20Poly1305, Key, Nonce,
+    aead::{Aead, AeadInPlace, Buffer, Error, KeyInit},
 };
 
 use crate::{
-    crypto::{cipher::CipherType, nonce_advance, StreamCipher},
+    crypto::{StreamCipher, cipher::CipherType, nonce_advance},
     error::SecioError,
 };
 
@@ -102,19 +102,19 @@ impl StreamCipher for WasmCrypt {
 
 struct BufferWrap<'a>(&'a mut BytesMut);
 
-impl<'a> AsRef<[u8]> for BufferWrap<'a> {
+impl AsRef<[u8]> for BufferWrap<'_> {
     fn as_ref(&self) -> &[u8] {
         self.0.as_ref()
     }
 }
 
-impl<'a> AsMut<[u8]> for BufferWrap<'a> {
+impl AsMut<[u8]> for BufferWrap<'_> {
     fn as_mut(&mut self) -> &mut [u8] {
         self.0.as_mut()
     }
 }
 
-impl<'a> Buffer for BufferWrap<'a> {
+impl Buffer for BufferWrap<'_> {
     fn extend_from_slice(&mut self, other: &[u8]) -> Result<(), Error> {
         self.0.extend_from_slice(other);
         Ok(())

@@ -2,7 +2,7 @@ use bench::Bench;
 use bytes::Bytes;
 use futures::channel;
 use p2p::{
-    async_trait,
+    ProtocolId, async_trait,
     builder::{MetaBuilder, ServiceBuilder},
     context::{ProtocolContext, ProtocolContextMutRef},
     multiaddr::Multiaddr,
@@ -11,19 +11,21 @@ use p2p::{
         ProtocolHandle, ProtocolMeta, Service, ServiceControl, TargetProtocol, TargetSession,
     },
     traits::{ServiceHandle, ServiceProtocol},
-    ProtocolId,
 };
-use std::{sync::Once, thread};
+use std::{
+    sync::{Once, OnceLock},
+    thread,
+};
 use tokio_util::codec::length_delimited::Builder;
 
 static START_SECIO: Once = Once::new();
 static START_NO_SECIO: Once = Once::new();
 
-static mut SECIO_CONTROL: Option<ServiceControl> = None;
-static mut NO_SECIO_CONTROL: Option<ServiceControl> = None;
+static SECIO_CONTROL: OnceLock<ServiceControl> = OnceLock::new();
+static NO_SECIO_CONTROL: OnceLock<ServiceControl> = OnceLock::new();
 
-static mut SECIO_RECV: Option<crossbeam_channel::Receiver<Notify>> = None;
-static mut NO_SECIO_RECV: Option<crossbeam_channel::Receiver<Notify>> = None;
+static SECIO_RECV: OnceLock<crossbeam_channel::Receiver<Notify>> = OnceLock::new();
+static NO_SECIO_RECV: OnceLock<crossbeam_channel::Receiver<Notify>> = OnceLock::new();
 
 #[derive(Debug, PartialEq)]
 enum Notify {
@@ -134,10 +136,8 @@ pub fn init() {
         });
 
         assert_eq!(client_receiver.recv(), Ok(Notify::Connected));
-        unsafe {
-            SECIO_CONTROL = Some(control.into());
-            SECIO_RECV = Some(client_receiver);
-        }
+        assert!(SECIO_CONTROL.set(control.into()).is_ok());
+        assert!(SECIO_RECV.set(client_receiver).is_ok());
     });
 
     // init no secio two peers
@@ -174,43 +174,37 @@ pub fn init() {
         });
 
         assert_eq!(client_receiver.recv(), Ok(Notify::Connected));
-        unsafe {
-            NO_SECIO_CONTROL = Some(control.into());
-            NO_SECIO_RECV = Some(client_receiver);
-        }
+        assert!(NO_SECIO_CONTROL.set(control.into()).is_ok());
+        assert!(NO_SECIO_RECV.set(client_receiver).is_ok());
     });
 }
 
 fn secio_and_send_data(data: &[u8]) {
-    unsafe {
-        SECIO_CONTROL.as_mut().map(|control| {
-            control.filter_broadcast(
-                TargetSession::All,
-                ProtocolId::new(1),
-                Bytes::from(data.to_owned()),
-            )
-        });
-        if let Some(rev) = SECIO_RECV.as_ref() {
-            assert_eq!(
-                rev.recv(),
-                Ok(Notify::Message(bytes::Bytes::from(data.to_owned())))
-            )
-        }
+    SECIO_CONTROL.get().map(|control| {
+        control.filter_broadcast(
+            TargetSession::All,
+            ProtocolId::new(1),
+            Bytes::from(data.to_owned()),
+        )
+    });
+    if let Some(rev) = SECIO_RECV.get() {
+        assert_eq!(
+            rev.recv(),
+            Ok(Notify::Message(bytes::Bytes::from(data.to_owned())))
+        )
     }
 }
 
 fn no_secio_and_send_data(data: &[u8]) {
-    unsafe {
-        NO_SECIO_CONTROL.as_mut().map(|control| {
-            control.filter_broadcast(TargetSession::All, 1.into(), Bytes::from(data.to_owned()))
-        });
+    NO_SECIO_CONTROL.get().map(|control| {
+        control.filter_broadcast(TargetSession::All, 1.into(), Bytes::from(data.to_owned()))
+    });
 
-        if let Some(rev) = NO_SECIO_RECV.as_ref() {
-            assert_eq!(
-                rev.recv(),
-                Ok(Notify::Message(bytes::Bytes::from(data.to_owned())))
-            )
-        }
+    if let Some(rev) = NO_SECIO_RECV.get() {
+        assert_eq!(
+            rev.recv(),
+            Ok(Notify::Message(bytes::Bytes::from(data.to_owned())))
+        )
     }
 }
 

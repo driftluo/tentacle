@@ -13,7 +13,7 @@ use crate::{
     multiaddr::{Multiaddr, Protocol},
     secio::PeerId,
     transports::parse_tls_domain_name,
-    utils::{extract_peer_id, find_type, socketaddr_to_multiaddr, TransportType},
+    utils::{TransportType, extract_peer_id, find_type, socketaddr_to_multiaddr},
 };
 
 /// DNS resolver, use on multi-thread tokio runtime

@@ -3,20 +3,20 @@ use futures::StreamExt;
 use std::{
     sync::mpsc::channel,
     sync::{
-        atomic::{AtomicBool, AtomicUsize, Ordering},
         Arc,
+        atomic::{AtomicBool, AtomicUsize, Ordering},
     },
     thread,
     time::Duration,
 };
 use tentacle::{
+    SubstreamReadPart,
     builder::{MetaBuilder, ServiceBuilder},
     context::SessionContext,
     multiaddr::Multiaddr,
     secio::SecioKeyPair,
     service::{ProtocolMeta, Service, ServiceAsyncControl, ServiceControl, TargetProtocol},
     traits::{ProtocolSpawn, ServiceHandle},
-    SubstreamReadPart,
 };
 
 /// test case:

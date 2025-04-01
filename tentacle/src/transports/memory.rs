@@ -7,12 +7,12 @@ use crate::{
 
 use bytes::Bytes;
 use futures::{
-    channel::mpsc::{channel, Receiver, Sender},
-    stream::{FusedStream, Stream, StreamExt},
     SinkExt,
+    channel::mpsc::{Receiver, Sender, channel},
+    stream::{FusedStream, Stream, StreamExt},
 };
 use std::{
-    collections::{hash_map::Entry, HashMap},
+    collections::{HashMap, hash_map::Entry},
     future::Future,
     io,
     num::NonZeroU64,
@@ -75,7 +75,7 @@ async fn connect(address: Multiaddr) -> Result<(Multiaddr, MemorySocket)> {
                 None => {
                     return Err(TransportErrorKind::Io(
                         io::ErrorKind::AddrNotAvailable.into(),
-                    ))
+                    ));
                 }
             };
 

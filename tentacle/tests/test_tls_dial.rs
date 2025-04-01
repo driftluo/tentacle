@@ -2,7 +2,7 @@
 use futures::channel;
 use std::{str::FromStr, thread};
 use tentacle::{
-    async_trait,
+    ProtocolId, SessionId, async_trait,
     builder::{MetaBuilder, ServiceBuilder},
     context::{ProtocolContext, ProtocolContextMutRef, ServiceContext},
     error::{DialerErrorKind, ListenErrorKind},
@@ -13,13 +13,12 @@ use tentacle::{
         TargetProtocol, TlsConfig,
     },
     traits::{ServiceHandle, ServiceProtocol},
-    ProtocolId, SessionId,
 };
 
 #[path = "./tls_common.rs"]
 mod tls;
 
-use tls::{make_client_config, make_server_config, NetConfig};
+use tls::{NetConfig, make_client_config, make_server_config};
 
 pub fn create<F>(meta: ProtocolMeta, shandle: F, cert_path: String) -> Service<F, NoopKeyProvider>
 where

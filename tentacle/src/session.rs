@@ -1,11 +1,11 @@
-use futures::{channel::mpsc, prelude::*, stream::iter, SinkExt};
+use futures::{SinkExt, channel::mpsc, prelude::*, stream::iter};
 use log::{debug, error, log_enabled, trace, warn};
 use nohash_hasher::IntMap;
 use std::{
     collections::HashMap,
     io::{self, ErrorKind},
     pin::Pin,
-    sync::{atomic::Ordering, Arc},
+    sync::{Arc, atomic::Ordering},
     task::{Context, Poll},
     time::Duration,
 };
@@ -14,22 +14,22 @@ use tokio_util::codec::{Framed, FramedParts, FramedRead, FramedWrite, LengthDeli
 use yamux::{Control, Session as YamuxSession, StreamHandle};
 
 use crate::{
+    ProtocolId, SessionId, StreamId, SubstreamReadPart,
     buffer::{Buffer, PriorityBuffer, SendResult},
-    channel::{mpsc as priority_mpsc, mpsc::Priority, QuickSinkExt},
+    channel::{QuickSinkExt, mpsc as priority_mpsc, mpsc::Priority},
     context::SessionContext,
     error::{HandshakeErrorKind, ProtocolHandleErrorKind, TransportErrorKind},
     multiaddr::Multiaddr,
     protocol_handle_stream::{ServiceProtocolEvent, SessionProtocolEvent},
-    protocol_select::{client_select, server_select, ProtocolInfo},
+    protocol_select::{ProtocolInfo, client_select, server_select},
     secio::PublicKey,
     service::{
+        ServiceAsyncControl, SessionType,
         config::{Meta, SessionConfig},
         future_task::BoxedFutureTask,
-        ServiceAsyncControl, SessionType,
     },
     substream::{ProtocolEvent, SubstreamBuilder, SubstreamWritePartBuilder},
     transports::MultiIncoming,
-    ProtocolId, SessionId, StreamId, SubstreamReadPart,
 };
 
 pub trait AsyncRw: AsyncWrite + AsyncRead {}
@@ -245,16 +245,16 @@ impl Session {
     fn select_procedure(
         &mut self,
         procedure: impl Future<
-                Output = Result<
-                    (
-                        Framed<StreamHandle, LengthDelimitedCodec>,
-                        String,
-                        Option<String>,
-                    ),
-                    io::Error,
-                >,
-            > + Send
-            + 'static,
+            Output = Result<
+                (
+                    Framed<StreamHandle, LengthDelimitedCodec>,
+                    String,
+                    Option<String>,
+                ),
+                io::Error,
+            >,
+        > + Send
+        + 'static,
     ) {
         let mut event_sender = self.proto_event_sender.clone();
         let timeout = self.timeout;

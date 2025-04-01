@@ -100,8 +100,8 @@ fn nonce_advance(nonce: &mut [u8]) {
 #[cfg(all(test, unix))]
 mod test {
     use super::{
-        cipher::CipherType, openssl_impl::OpenSsLCrypt, ring_impl::RingAeadCipher,
-        wasm_compat::WasmCrypt, CryptoMode,
+        CryptoMode, cipher::CipherType, openssl_impl::OpenSsLCrypt, ring_impl::RingAeadCipher,
+        wasm_compat::WasmCrypt,
     };
     use proptest::prelude::*;
 

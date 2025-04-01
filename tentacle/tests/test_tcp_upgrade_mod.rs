@@ -9,15 +9,14 @@ use std::{
     thread,
 };
 use tentacle::{
-    async_trait,
+    ProtocolId, async_trait,
     builder::{MetaBuilder, ServiceBuilder},
     context::{ProtocolContext, ServiceContext},
     multiaddr::Multiaddr,
     secio::SecioKeyPair,
     service::{ProtocolHandle, ProtocolMeta, Service, ServiceEvent, TargetProtocol, TlsConfig},
     traits::{ServiceHandle, ServiceProtocol},
-    utils::{find_type, TransportType},
-    ProtocolId,
+    utils::{TransportType, find_type},
 };
 
 #[path = "./tls_common.rs"]

@@ -89,7 +89,7 @@ struct IpAdapterAddresses {
 // https://docs.microsoft.com/zh-cn/windows/desktop/api/iphlpapi/nf-iphlpapi-getadaptersaddresses
 // C:\Program Files (x86)\Windows Kits\10\Include\um\iphlpApi.h
 #[link(name = "iphlpapi")]
-extern "system" {
+unsafe extern "system" {
     fn GetAdaptersAddresses(
         family: ULONG,
         flags: ULONG,
@@ -196,7 +196,7 @@ fn parse_addr(p_sock: *const SOCKADDR) -> Option<Ipv4Addr> {
 }
 
 fn u16_array_to_string(p_array: *const u16) -> String {
-    use std::char::{decode_utf16, REPLACEMENT_CHARACTER};
+    use std::char::{REPLACEMENT_CHARACTER, decode_utf16};
     unsafe {
         if p_array.is_null() {
             return String::new();
@@ -236,7 +236,7 @@ fn netmask_v4(bits: u8) -> Option<Ipv4Addr> {
 
 #[cfg(test)]
 mod test {
-    use super::{netmask_v4, Ipv4Addr};
+    use super::{Ipv4Addr, netmask_v4};
 
     #[test]
     fn netmask_v4_test() {

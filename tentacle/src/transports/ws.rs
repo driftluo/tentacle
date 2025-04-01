@@ -1,5 +1,5 @@
 use bytes::Bytes;
-use futures::{future::ok, Sink, StreamExt, TryFutureExt};
+use futures::{Sink, StreamExt, TryFutureExt, future::ok};
 use log::debug;
 use std::{
     future::Future,
@@ -10,9 +10,8 @@ use std::{
 };
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 use tokio_tungstenite::{
-    client_async_with_config,
+    WebSocketStream, client_async_with_config,
     tungstenite::{Error, Message},
-    WebSocketStream,
 };
 
 use crate::{
@@ -20,7 +19,7 @@ use crate::{
     multiaddr::Multiaddr,
     runtime::TcpStream,
     service::config::TcpSocketConfig,
-    transports::{tcp_dial, Result, TransportDial, TransportFuture},
+    transports::{Result, TransportDial, TransportFuture, tcp_dial},
     utils::{dns::DnsResolver, multiaddr_to_socketaddr},
 };
 
@@ -277,7 +276,7 @@ impl AsyncWrite for WsStream {
                 }
                 Poll::Pending => return Poll::Pending,
                 Poll::Ready(Err(_)) => {
-                    return Poll::Ready(Err(Into::into(io::ErrorKind::BrokenPipe)))
+                    return Poll::Ready(Err(Into::into(io::ErrorKind::BrokenPipe)));
                 }
             }
         }

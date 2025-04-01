@@ -1,7 +1,7 @@
 use futures::{channel::mpsc, prelude::*};
 use log::{debug, error, trace};
 use multiaddr::Multiaddr;
-use secio::{handshake::Config, KeyProvider};
+use secio::{KeyProvider, handshake::Config};
 use std::{
     io,
     pin::Pin,
@@ -13,7 +13,7 @@ use yamux::session::SessionType as YamuxType;
 
 use crate::{
     error::{HandshakeErrorKind, TransportErrorKind},
-    service::{future_task::BoxedFutureTask, HandshakeType},
+    service::{HandshakeType, future_task::BoxedFutureTask},
     session::SessionEvent,
     transports::MultiIncoming,
 };

@@ -30,7 +30,7 @@ pub use tokio_runtime::*;
 pub use wasm_runtime::*;
 
 #[cfg(all(not(target_family = "wasm"), feature = "tokio-runtime"))]
-pub use tokio::io::{split, ReadHalf, WriteHalf};
+pub use tokio::io::{ReadHalf, WriteHalf, split};
 
 #[cfg(not(feature = "tokio-runtime"))]
 pub use generic_split::*;
@@ -55,7 +55,7 @@ mod generic_split {
 mod budget;
 pub use budget::*;
 
-use futures::{ready, AsyncRead as FutureAsyncRead, AsyncWrite as FutureAsyncWrite};
+use futures::{AsyncRead as FutureAsyncRead, AsyncWrite as FutureAsyncWrite, ready};
 use std::{
     fmt, io,
     pin::Pin,

@@ -3,7 +3,7 @@ use crate::dh_compat::KeyAgreement;
 ///
 /// Delete part of the structure
 use crate::error::SecioError;
-use crate::{crypto::cipher::CipherType, Digest};
+use crate::{Digest, crypto::cipher::CipherType};
 
 use std::cmp::Ordering;
 

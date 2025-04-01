@@ -3,7 +3,7 @@ name = "tentacle-fuzz"
 version = "0.0.1"
 license = "MIT"
 authors = ["Nervos Core Dev <dev@nervos.org>"]
-edition = "2021"
+edition = "2024"
 
 [package.metadata]
 cargo-fuzz = true

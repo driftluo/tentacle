@@ -1,4 +1,4 @@
-use futures::{future::ok, TryFutureExt};
+use futures::{TryFutureExt, future::ok};
 use std::{
     collections::HashMap, future::Future, net::SocketAddr, pin::Pin, sync::Arc, time::Duration,
 };
@@ -11,8 +11,9 @@ use crate::{
     runtime::TcpStream,
     service::config::TcpSocketConfig,
     transports::{
-        tcp_base_listen::{bind, TcpBaseListenerEnum, UpgradeMode},
-        tcp_dial, Result, TcpListenMode, TransportDial, TransportFuture, TransportListen,
+        Result, TcpListenMode, TransportDial, TransportFuture, TransportListen,
+        tcp_base_listen::{TcpBaseListenerEnum, UpgradeMode, bind},
+        tcp_dial,
     },
     utils::{dns::DnsResolver, multiaddr_to_socketaddr},
 };

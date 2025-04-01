@@ -4,7 +4,7 @@ use std::{borrow::Cow, fmt};
 #[derive(Clone)]
 pub struct Onion3Addr<'a>(Cow<'a, [u8; 35]>, u16);
 
-impl<'a> Onion3Addr<'a> {
+impl Onion3Addr<'_> {
     /// Return the hash of the public key as bytes
     pub fn hash(&self) -> &[u8; 35] {
         self.0.as_ref()

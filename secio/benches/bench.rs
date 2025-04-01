@@ -1,5 +1,5 @@
-use criterion::{criterion_group, criterion_main, Bencher, Criterion};
-use tentacle_secio::crypto::{cipher::CipherType, new_stream, CryptoMode};
+use criterion::{Bencher, Criterion, criterion_group, criterion_main};
+use tentacle_secio::crypto::{CryptoMode, cipher::CipherType, new_stream};
 
 fn decode_encode(data: &[u8], cipher: CipherType) {
     let cipher_key = (0..cipher.key_size())
@@ -9,11 +9,11 @@ fn decode_encode(data: &[u8], cipher: CipherType) {
     let mut encode_cipher = new_stream(cipher, &cipher_key, CryptoMode::Encrypt);
     let mut decode_cipher = new_stream(cipher, &cipher_key, CryptoMode::Decrypt);
 
-    let encode_data = encode_cipher.encrypt(&data[..]).unwrap();
+    let encode_data = encode_cipher.encrypt(data).unwrap();
 
     let decode_data = decode_cipher.decrypt(&encode_data).unwrap();
 
-    assert_eq!(&decode_data[..], &data[..]);
+    assert_eq!(&decode_data[..], data);
 }
 
 fn bench_test(bench: &mut Bencher, cipher: CipherType, data: &[u8]) {

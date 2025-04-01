@@ -37,7 +37,7 @@ use crate::{
     error::TransportErrorKind,
     multiaddr::{Multiaddr, Protocol},
     transports::{
-        find_type, Result, TransportDial, TransportFuture, TransportListen, TransportType,
+        Result, TransportDial, TransportFuture, TransportListen, TransportType, find_type,
     },
     utils::multiaddr_to_socketaddr,
 };
@@ -86,10 +86,10 @@ async fn connect(
 
                 match (proto1, proto2) {
                     (Protocol::Dns4(domain), Protocol::Tcp(port)) => {
-                        break format!("{}://{}:{}", schema, domain, port)
+                        break format!("{}://{}:{}", schema, domain, port);
                     }
                     (Protocol::Dns6(domain), Protocol::Tcp(port)) => {
-                        break format!("{}://{}:{}", schema, domain, port)
+                        break format!("{}://{}:{}", schema, domain, port);
                     }
                     _ => return Err(TransportErrorKind::NotSupported(addr.clone())),
                 }

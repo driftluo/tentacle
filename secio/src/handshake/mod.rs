@@ -1,7 +1,7 @@
 /// Most of the code for this module comes from `rust-libp2p`, but modified some logic(struct).
 use crate::{
-    crypto::cipher::CipherType, dh_compat::KeyAgreement, error::SecioError,
-    handshake::procedure::handshake, support, Digest, EphemeralPublicKey, PublicKey,
+    Digest, EphemeralPublicKey, PublicKey, crypto::cipher::CipherType, dh_compat::KeyAgreement,
+    error::SecioError, handshake::procedure::handshake, support,
 };
 
 use crate::codec::secure_stream::SecureStream;

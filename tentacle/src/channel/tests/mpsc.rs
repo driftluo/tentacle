@@ -2,14 +2,14 @@ use crate::channel::mpsc;
 use crate::lock::Mutex;
 use futures::channel::oneshot;
 use futures::executor::{block_on, block_on_stream};
-use futures::future::{poll_fn, FutureExt};
+use futures::future::{FutureExt, poll_fn};
 use futures::pin_mut;
 use futures::sink::{Sink, SinkExt};
 use futures::stream::{Stream, StreamExt};
 use futures::task::{Context, Poll};
 use futures_test::task::{new_count_waker, noop_context};
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::thread;
 
 trait AssertSend: Send {}

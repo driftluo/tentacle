@@ -1,12 +1,11 @@
 use tentacle::{
-    async_trait,
+    ProtocolId, async_trait,
     builder::{MetaBuilder, ServiceBuilder},
     context::{ProtocolContext, ProtocolContextMutRef},
     multiaddr::Multiaddr,
     secio::SecioKeyPair,
     service::{ProtocolHandle, ProtocolMeta, Service, TargetProtocol},
     traits::{ServiceHandle, ServiceProtocol},
-    ProtocolId,
 };
 
 use std::{sync::mpsc::channel, thread, time::Duration};

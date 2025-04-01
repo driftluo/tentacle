@@ -1,17 +1,16 @@
 use tentacle::{
-    async_trait,
+    ProtocolId, async_trait,
     builder::{MetaBuilder, ServiceBuilder},
     context::{ProtocolContext, ServiceContext},
     secio::SecioKeyPair,
     service::{ProtocolHandle, ProtocolMeta, Service, ServiceError, ServiceEvent},
     traits::{ServiceHandle, ServiceProtocol},
-    ProtocolId,
 };
 
 use futures::{
-    channel::mpsc::{channel, Receiver},
-    prelude::*,
     StreamExt,
+    channel::mpsc::{Receiver, channel},
+    prelude::*,
 };
 use log::info;
 use std::time::Duration;

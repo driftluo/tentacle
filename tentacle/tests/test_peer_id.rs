@@ -1,6 +1,6 @@
 use std::{borrow::Cow, sync::mpsc::channel, thread};
 use tentacle::{
-    async_trait,
+    ProtocolId, async_trait,
     builder::{MetaBuilder, ServiceBuilder},
     context::{ProtocolContext, ServiceContext},
     error::DialerErrorKind,
@@ -12,7 +12,6 @@ use tentacle::{
         TargetProtocol,
     },
     traits::{ServiceHandle, ServiceProtocol},
-    ProtocolId,
 };
 
 pub fn create<F>(key_pair: SecioKeyPair, meta: ProtocolMeta, shandle: F) -> Service<F, SecioKeyPair>
@@ -44,16 +43,17 @@ impl ServiceHandle for EmptySHandle {
     async fn handle_error(&mut self, _env: &mut ServiceContext, error: ServiceError) {
         self.error_count += 1;
 
-        if let ServiceError::DialerError { error, .. } = error {
-            match error {
+        match error {
+            ServiceError::DialerError { error, .. } => match error {
                 DialerErrorKind::PeerIdNotMatch => {}
                 err => panic!(
                     "test fail, expected DialerErrorKind::PeerIdNotMatch, got {:?}",
                     err
                 ),
+            },
+            _ => {
+                panic!("test fail {:?}", error);
             }
-        } else {
-            panic!("test fail {:?}", error);
         }
 
         if self.error_count > 8 {

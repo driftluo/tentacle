@@ -4,7 +4,7 @@ use std::{
     time::{Duration, Instant},
 };
 use tentacle::{
-    async_trait,
+    ProtocolId, SessionId, async_trait,
     builder::{MetaBuilder, ServiceBuilder},
     context::{ProtocolContext, ProtocolContextMutRef, ServiceContext},
     error::{DialerErrorKind, ListenErrorKind, TransportErrorKind},
@@ -15,7 +15,6 @@ use tentacle::{
         SessionType, TargetProtocol,
     },
     traits::{ServiceHandle, ServiceProtocol},
-    ProtocolId, SessionId,
 };
 
 pub fn create<F>(secio: bool, meta: ProtocolMeta, shandle: F) -> Service<F, SecioKeyPair>
@@ -51,14 +50,22 @@ impl ServiceHandle for EmptySHandle {
     async fn handle_error(&mut self, _env: &mut ServiceContext, error: ServiceError) {
         use std::io;
 
-        let error_type = if let ServiceError::DialerError { error, .. } = error {
-            match error {
-                DialerErrorKind::TransportError(TransportErrorKind::Io(e)) => assert_eq!(io::ErrorKind::ConnectionRefused, e.kind()),
-                e => panic!("test fail, expected DialerErrorKind::TransportError(TransportErrorKind::Io), got {:?}", e),
+        let error_type = match error {
+            ServiceError::DialerError { error, .. } => {
+                match error {
+                    DialerErrorKind::TransportError(TransportErrorKind::Io(e)) => {
+                        assert_eq!(io::ErrorKind::ConnectionRefused, e.kind())
+                    }
+                    e => panic!(
+                        "test fail, expected DialerErrorKind::TransportError(TransportErrorKind::Io), got {:?}",
+                        e
+                    ),
+                }
+                ServiceErrorType::Dialer
             }
-            ServiceErrorType::Dialer
-        } else {
-            panic!("test fail {:?}", error);
+            _ => {
+                panic!("test fail {:?}", error);
+            }
         };
         let _res = self.sender.try_send(error_type);
     }

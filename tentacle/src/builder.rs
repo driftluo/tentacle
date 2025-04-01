@@ -6,15 +6,15 @@ use tokio_util::codec::LengthDelimitedCodec;
 #[cfg(feature = "tls")]
 use crate::service::config::TlsConfig;
 use crate::{
+    ProtocolId,
     protocol_select::SelectFn,
     secio::KeyProvider,
     service::{
-        config::{HandshakeType, Meta, ServiceConfig},
         ProtocolHandle, ProtocolMeta, Service, TcpSocket,
+        config::{HandshakeType, Meta, ServiceConfig},
     },
     traits::{Codec, ProtocolSpawn, ServiceHandle, ServiceProtocol, SessionProtocol},
     yamux::Config,
-    ProtocolId,
 };
 
 /// Builder for Service

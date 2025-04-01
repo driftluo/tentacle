@@ -1,18 +1,18 @@
 use futures::prelude::*;
 
 use std::fmt::Debug;
-use std::sync::{atomic::Ordering, Arc};
+use std::sync::{Arc, atomic::Ordering};
 use std::time::Duration;
 
 use crate::{
+    ProtocolId, SessionId,
     channel::mpsc,
     error::SendErrorKind,
     multiaddr::Multiaddr,
     service::{
-        event::{RawSessionInfo, ServiceTask},
         TargetProtocol, TargetSession,
+        event::{RawSessionInfo, ServiceTask},
     },
-    ProtocolId, SessionId,
 };
 use bytes::Bytes;
 use std::sync::atomic::AtomicBool;

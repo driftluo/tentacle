@@ -2,7 +2,7 @@ use crate::{
     error::TransportErrorKind,
     multiaddr::{Multiaddr, Protocol},
     service::config::TcpSocketConfig,
-    utils::{find_type, TransportType},
+    utils::{TransportType, find_type},
 };
 
 use std::{
@@ -94,7 +94,7 @@ mod os {
         service::config::TcpConfig,
     };
 
-    use futures::{prelude::Stream, FutureExt, StreamExt};
+    use futures::{FutureExt, StreamExt, prelude::Stream};
     use std::{
         collections::HashMap,
         fmt,
@@ -452,7 +452,7 @@ mod on_browser {
 
 #[cfg(test)]
 mod test {
-    use super::{find_type, Protocol, TransportType};
+    use super::{Protocol, TransportType, find_type};
     use std::borrow::Cow;
 
     #[test]

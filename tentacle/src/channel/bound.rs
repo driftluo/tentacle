@@ -1,6 +1,6 @@
 use crate::channel::{
-    decode_state, encode_state, queue::Queue, Priority, SendError, SendErrorKind, TryRecvError,
-    TrySendError, INIT_STATE, MAX_BUFFER, MAX_CAPACITY, OPEN_MASK,
+    INIT_STATE, MAX_BUFFER, MAX_CAPACITY, OPEN_MASK, Priority, SendError, SendErrorKind,
+    TryRecvError, TrySendError, decode_state, encode_state, queue::Queue,
 };
 use crate::lock::Mutex;
 
@@ -12,11 +12,11 @@ use futures::{
 use std::{
     pin::Pin,
     sync::{
+        Arc,
         atomic::{
             AtomicBool, AtomicUsize,
             Ordering::{Relaxed, SeqCst},
         },
-        Arc,
     },
     task::{Context, Poll},
 };
@@ -188,7 +188,7 @@ impl<T> BoundedSenderInner<T> {
                         kind: SendErrorKind::Disconnected,
                     },
                     val: msg,
-                })
+                });
             }
         };
 

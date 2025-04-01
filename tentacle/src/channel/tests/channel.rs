@@ -1,4 +1,4 @@
-use crate::channel::{mpsc, QuickSinkExt};
+use crate::channel::{QuickSinkExt, mpsc};
 use futures::executor::block_on;
 use futures::future::poll_fn;
 use futures::sink::SinkExt;

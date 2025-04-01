@@ -993,7 +993,7 @@ impl ::core::default::Default for PublicKeyUnion {
 impl ::core::fmt::Display for PublicKeyUnion {
     fn fmt(&self, f: &mut ::core::fmt::Formatter) -> ::core::fmt::Result {
         match self {
-            PublicKeyUnion::Secp256k1(ref item) => {
+            PublicKeyUnion::Secp256k1(item) => {
                 write!(f, "{}::{}({})", Self::NAME, Secp256k1::NAME, item)
             }
         }
@@ -1002,7 +1002,7 @@ impl ::core::fmt::Display for PublicKeyUnion {
 impl<'r> ::core::fmt::Display for PublicKeyUnionReader<'r> {
     fn fmt(&self, f: &mut ::core::fmt::Formatter) -> ::core::fmt::Result {
         match self {
-            PublicKeyUnionReader::Secp256k1(ref item) => {
+            PublicKeyUnionReader::Secp256k1(item) => {
                 write!(f, "{}::{}({})", Self::NAME, Secp256k1::NAME, item)
             }
         }
@@ -1011,14 +1011,14 @@ impl<'r> ::core::fmt::Display for PublicKeyUnionReader<'r> {
 impl PublicKeyUnion {
     pub(crate) fn display_inner(&self, f: &mut ::core::fmt::Formatter) -> ::core::fmt::Result {
         match self {
-            PublicKeyUnion::Secp256k1(ref item) => write!(f, "{}", item),
+            PublicKeyUnion::Secp256k1(item) => write!(f, "{}", item),
         }
     }
 }
 impl<'r> PublicKeyUnionReader<'r> {
     pub(crate) fn display_inner(&self, f: &mut ::core::fmt::Formatter) -> ::core::fmt::Result {
         match self {
-            PublicKeyUnionReader::Secp256k1(ref item) => write!(f, "{}", item),
+            PublicKeyUnionReader::Secp256k1(item) => write!(f, "{}", item),
         }
     }
 }
