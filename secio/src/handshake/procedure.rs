@@ -100,13 +100,13 @@ where
         let data_to_sign = crate::sha256_compat::sha256(&data_to_sign);
 
         exchanges.signature = {
-            #[cfg(not(feature = "async-trait"))]
+            #[cfg(not(feature = "async-sign"))]
             let signature = ephemeral_context
                 .config
                 .key_provider
                 .sign_ecdsa(AsRef::<[u8]>::as_ref(&data_to_sign))
                 .map_err(Into::into)?;
-            #[cfg(feature = "async-trait")]
+            #[cfg(feature = "async-sign")]
             let signature = ephemeral_context
                 .config
                 .key_provider

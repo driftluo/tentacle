@@ -81,7 +81,7 @@ default = ["tokio-runtime", "tokio-timer"]
 ws = ["tokio-tungstenite", "httparse"]
 tls = ["tokio-rustls"]
 upnp = ["igd"]
-secio-async-trait = ["secio/async-trait"]
+secio-async = ["secio/async-sign"]
 unstable = []
 
 openssl-vendored = ["secio/openssl-vendored"]

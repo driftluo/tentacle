@@ -89,7 +89,7 @@ pub(crate) fn listen(addr: SocketAddr, tcp_config: TcpSocketConfig) -> io::Resul
         // which allows “socket hijacking”, so we explicitly don't set it here.
         // https://docs.microsoft.com/en-us/windows/win32/winsock/using-so-reuseaddr-and-so-exclusiveaddruse
         //
-        // user can disable it on tcp_config
+        // user can disable it on socket_transformer
         #[cfg(not(windows))]
         socket.set_reuse_address(true)?;
         let transformer_context = TransformerContext::new_listen(addr);

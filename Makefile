@@ -22,7 +22,7 @@ clippy:
 test:
 	$(Change_Work_Path) && RUSTFLAGS='-W warnings' RUST_BACKTRACE=full cargo test --all --features ws,unstable,tls,upnp
 	cargo clean
-	$(Change_Work_Path) && RUSTFLAGS='-W warnings' RUST_BACKTRACE=full cargo test --all --features ws,unstable,tls,upnp,secio-async-trait
+	$(Change_Work_Path) && RUSTFLAGS='-W warnings' RUST_BACKTRACE=full cargo test --all --features ws,unstable,tls,upnp,secio-async
 
 fuzz:
 	cargo +nightly fuzz run secio_crypto_decrypt_cipher -- -max_total_time=60
@@ -41,10 +41,11 @@ features-check:
 	$(Change_Work_Path) && cargo build --features tls
 	$(Change_Work_Path) && cargo build --features parking_lot
 	$(Change_Work_Path) && cargo build --features unstable
+	$(Change_Work_Path) && cargo build --features secio-async
 	$(Change_Work_Path) && cargo build --features tokio-runtime,generic-timer,unstable --no-default-features
 	# required wasm32-unknown-unknown target
 	$(Change_Work_Path) && cargo build --features wasm-timer,unstable --no-default-features --target=wasm32-unknown-unknown
-	$(Change_Work_Path) && cargo build --features wasm-timer,unstable,secio-async-trait --no-default-features --target=wasm32-unknown-unknown
+	$(Change_Work_Path) && cargo build --features wasm-timer,unstable,secio-async --no-default-features --target=wasm32-unknown-unknown
 
 bench_p2p:
 	cd bench && cargo run --release

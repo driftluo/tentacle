@@ -34,6 +34,7 @@ fn run_server() {
     });
 }
 
+#[allow(static_mut_refs)]
 fn get_handle() -> &'static mut StreamHandle {
     static mut HANDLE: std::sync::OnceLock<StreamHandle> = std::sync::OnceLock::new();
     unsafe {
