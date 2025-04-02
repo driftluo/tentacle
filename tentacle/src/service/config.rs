@@ -13,7 +13,7 @@ use std::os::{
     fd::AsFd,
     unix::io::{AsRawFd, BorrowedFd, FromRawFd, IntoRawFd, RawFd},
 };
-use std::{sync::Arc, time::Duration};
+use std::{net::SocketAddr, sync::Arc, time::Duration};
 #[cfg(feature = "tls")]
 use tokio_rustls::rustls::{ClientConfig, ServerConfig};
 
@@ -86,11 +86,72 @@ impl Default for SessionConfig {
     }
 }
 
-pub(crate) type TcpSocketConfig =
-    Arc<dyn Fn(TcpSocket) -> Result<TcpSocket, std::io::Error> + Send + Sync + 'static>;
+/// This enum's purpose is to let socket_transformer know how the socket is created
+pub enum SocketState {
+    /// listen
+    Listen,
+    /// dial
+    Dial,
+}
+
+/// in socket_transformer
+pub struct TransformerContext {
+    /// dial or listen
+    pub state: SocketState,
+    /// if dial, remote address; if listen, local address
+    pub address: SocketAddr,
+}
+
+impl TransformerContext {
+    /// crate a listen context
+    pub fn new_listen(address: SocketAddr) -> Self {
+        TransformerContext {
+            state: SocketState::Listen,
+            address,
+        }
+    }
+
+    /// create a dial context
+    pub fn new_dial(address: SocketAddr) -> Self {
+        TransformerContext {
+            state: SocketState::Dial,
+            address,
+        }
+    }
+}
+
+pub(crate) type TcpSocketTransformer = Arc<
+    dyn Fn(TcpSocket, TransformerContext) -> Result<TcpSocket, std::io::Error>
+        + Send
+        + Sync
+        + 'static,
+>;
+
+#[derive(Clone)]
+pub(crate) struct TcpSocketConfig {
+    pub(crate) socket_transformer: TcpSocketTransformer,
+    pub(crate) proxy_url: Option<url::Url>,
+    pub(crate) onion_url: Option<url::Url>,
+    /// generates unique SOCKS credentials for proxy connection. Default: true
+    /// If the proxy_server is tor server, this prevents connection correlation,
+    /// and enhances privacy by forcing different Tor circuits.
+    /// see IsolateSOCKSAuth section in https://2019.www.torproject.org/docs/tor-manual.html.en
+    pub(crate) proxy_random_auth: bool,
+}
+
+impl Default for TcpSocketConfig {
+    fn default() -> Self {
+        Self {
+            socket_transformer: Arc::new(|tcp_socket, _| Ok(tcp_socket)),
+            proxy_url: None,
+            onion_url: None,
+            proxy_random_auth: true,
+        }
+    }
+}
 
 /// This config Allow users to set various underlying parameters of TCP
-#[derive(Clone)]
+#[derive(Clone, Default)]
 pub(crate) struct TcpConfig {
     /// When dial/listen on tcp, tentacle will call it allow user to set all tcp socket config
     pub tcp: TcpSocketConfig,
@@ -100,18 +161,6 @@ pub(crate) struct TcpConfig {
     /// When dial/listen on tls, tentacle will call it allow user to set all tcp socket config
     #[cfg(feature = "tls")]
     pub tls: TcpSocketConfig,
-}
-
-impl Default for TcpConfig {
-    fn default() -> Self {
-        TcpConfig {
-            tcp: Arc::new(Ok),
-            #[cfg(feature = "ws")]
-            ws: Arc::new(Ok),
-            #[cfg(feature = "tls")]
-            tls: Arc::new(Ok),
-        }
-    }
 }
 
 /// A TCP socket that has not yet been converted to a `TcpStream` or
@@ -137,7 +186,7 @@ impl AsRawFd for TcpSocket {
 impl FromRawFd for TcpSocket {
     /// Converts a `RawFd` to a `TcpSocket`.
     unsafe fn from_raw_fd(fd: RawFd) -> TcpSocket {
-        let inner = socket2::Socket::from_raw_fd(fd);
+        let inner = unsafe { socket2::Socket::from_raw_fd(fd) };
         TcpSocket { inner }
     }
 }

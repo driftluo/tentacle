@@ -45,7 +45,8 @@ mod helper;
 
 pub use crate::service::{
     config::{
-        HandshakeType, ProtocolHandle, ProtocolMeta, TargetProtocol, TargetSession, TcpSocket,
+        HandshakeType, ProtocolHandle, ProtocolMeta, SocketState, TargetProtocol, TargetSession,
+        TcpSocket, TransformerContext,
     },
     control::{ServiceAsyncControl, ServiceControl},
     event::{RawSessionInfo, ServiceError, ServiceEvent},

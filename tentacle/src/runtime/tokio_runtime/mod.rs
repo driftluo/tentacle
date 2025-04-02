@@ -1,10 +1,14 @@
+use super::proxy::{socks5, socks5_config::random_auth};
+use multiaddr::{MultiAddr, Protocol};
 pub use tokio::{
     net::{TcpListener, TcpStream},
     spawn,
     task::{JoinHandle, block_in_place, spawn_blocking, yield_now},
 };
 
-use crate::service::config::{TcpSocket, TcpSocketConfig};
+use crate::service::config::{
+    TcpSocket, TcpSocketConfig, TcpSocketTransformer, TransformerContext,
+};
 use socket2::{Domain, Protocol as SocketProtocol, Socket, Type};
 #[cfg(unix)]
 use std::os::unix::io::{FromRawFd, IntoRawFd};
@@ -88,7 +92,8 @@ pub(crate) fn listen(addr: SocketAddr, tcp_config: TcpSocketConfig) -> io::Resul
         // user can disable it on tcp_config
         #[cfg(not(windows))]
         socket.set_reuse_address(true)?;
-        let t = tcp_config(TcpSocket { inner: socket })?;
+        let transformer_context = TransformerContext::new_listen(addr);
+        let t = (tcp_config.socket_transformer)(TcpSocket { inner: socket }, transformer_context)?;
         t.inner.set_nonblocking(true)?;
         // safety: fd convert by socket2
         unsafe {
@@ -113,15 +118,16 @@ pub(crate) fn listen(addr: SocketAddr, tcp_config: TcpSocketConfig) -> io::Resul
     socket.listen(1024)
 }
 
-pub(crate) async fn connect(
+async fn connect_direct(
     addr: SocketAddr,
-    tcp_config: TcpSocketConfig,
+    socket_transformer: TcpSocketTransformer,
 ) -> io::Result<TcpStream> {
     let domain = Domain::for_address(addr);
     let socket = Socket::new(domain, Type::STREAM, Some(SocketProtocol::TCP))?;
 
     let socket = {
-        let t = tcp_config(TcpSocket { inner: socket })?;
+        let transformer_context = TransformerContext::new_dial(addr);
+        let t = socket_transformer(TcpSocket { inner: socket }, transformer_context)?;
         t.inner.set_nonblocking(true)?;
         // safety: fd convert by socket2
         unsafe {
@@ -134,4 +140,101 @@ pub(crate) async fn connect(
     };
 
     socket.connect(addr).await
+}
+
+async fn connect_by_proxy(
+    target_addr: String,
+    target_port: u16,
+    mut proxy_server_url: url::Url,
+    proxy_random_auth: bool,
+) -> io::Result<TcpStream> {
+    if proxy_random_auth {
+        // Generate random username and password for authentication
+        if proxy_server_url.username().is_empty() {
+            let (random_username, random_passwd) = random_auth();
+            proxy_server_url
+                .set_username(&random_username)
+                .map_err(|_| io::Error::other("failed to set username"))?;
+            proxy_server_url
+                .set_password(Some(&random_passwd))
+                .map_err(|_| io::Error::other("failed to set password"))?;
+        } else {
+            // if username is not empty, then use the original username and password
+        }
+    }
+
+    socks5::connect(proxy_server_url.clone(), target_addr.clone(), target_port)
+        .await
+        .map_err(|err| {
+            io::Error::new(
+                io::ErrorKind::Other,
+                format!(
+                    "socks5_connect to target_addr: {}, target_port: {} by proxy_server: {} failed, err: {}",
+                    target_addr, target_port, proxy_server_url, err
+                ),
+            )
+        })
+}
+
+pub(crate) async fn connect(
+    target_addr: SocketAddr,
+    tcp_config: TcpSocketConfig,
+) -> io::Result<TcpStream> {
+    let TcpSocketConfig {
+        socket_transformer,
+        proxy_url,
+        onion_url: _,
+        proxy_random_auth,
+    } = tcp_config;
+
+    match proxy_url {
+        Some(proxy_url) => connect_by_proxy(
+            target_addr.ip().to_string(),
+            target_addr.port(),
+            proxy_url.clone(),
+            proxy_random_auth,
+        )
+        .await
+        .map_err(|err| {
+            io::Error::new(
+                io::ErrorKind::Other,
+                format!("connect_by_proxy: {}, error: {}", proxy_url, err),
+            )
+        }),
+        None => connect_direct(target_addr, socket_transformer).await,
+    }
+}
+
+pub(crate) async fn connect_onion(
+    onion_addr: MultiAddr,
+    tcp_config: TcpSocketConfig,
+) -> io::Result<TcpStream> {
+    let TcpSocketConfig {
+        socket_transformer: _,
+        proxy_url,
+        onion_url,
+        proxy_random_auth,
+    } = tcp_config;
+    let tor_server_url = onion_url.or(proxy_url).ok_or(io::Error::other(
+        "need tor proxy server to connect to onion address",
+    ))?;
+
+    let onion_protocol = onion_addr
+        .iter()
+        .find_map(|protocol| {
+            if let Protocol::Onion3(onion_address) = protocol {
+                Some(onion_address)
+            } else {
+                None
+            }
+        })
+        .ok_or(io::Error::other(format!(
+            "No Onion3 address found. in {}",
+            onion_addr
+        )))?;
+
+    let onion_str = onion_protocol.hash_string() + ".onion";
+    let onion_port = onion_protocol.port();
+
+    connect_by_proxy(onion_str, onion_port, tor_server_url, proxy_random_auth).await
 }

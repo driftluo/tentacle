@@ -1,5 +1,6 @@
 use std::{io, sync::Arc, time::Duration};
 
+use crate::service::config::TransformerContext;
 use nohash_hasher::IntMap;
 use tokio_util::codec::LengthDelimitedCodec;
 
@@ -217,9 +218,49 @@ where
     #[cfg(not(target_family = "wasm"))]
     pub fn tcp_config<F>(mut self, f: F) -> Self
     where
-        F: Fn(TcpSocket) -> Result<TcpSocket, std::io::Error> + Send + Sync + 'static,
+        F: Fn(TcpSocket, TransformerContext) -> Result<TcpSocket, std::io::Error>
+            + Send
+            + Sync
+            + 'static,
     {
-        self.config.tcp_config.tcp = Arc::new(f);
+        self.config.tcp_config.tcp.socket_transformer = Arc::new(f);
+        self
+    }
+
+    fn must_parse_proxy_url(url: String) -> url::Url {
+        let url = url::Url::parse(&url)
+            .unwrap_or_else(|err| panic!("parse {} to url::Url failed: {}", url, err));
+        if url.scheme().ne("socks5") {
+            panic!("tentacle only support socks5 proxy");
+        }
+        url
+    }
+
+    /// Proxy config for tcp
+    ///
+    /// Example: socks5://127.0.0.1:9050
+    /// Example: socks5://username:password@127.0.0.1:9050
+    #[cfg(not(target_family = "wasm"))]
+    pub fn tcp_proxy_config(mut self, proxy_url: String) -> Self {
+        let proxy_url: url::Url = Self::must_parse_proxy_url(proxy_url);
+        self.config.tcp_config.tcp.proxy_url = Some(proxy_url);
+        self
+    }
+
+    /// Onion config for tcp
+    ///
+    /// Example: socks5://127.0.0.1:9050
+    #[cfg(not(target_family = "wasm"))]
+    pub fn tcp_onion_config(mut self, onion_url: String) -> Self {
+        let onion_url: url::Url = Self::must_parse_proxy_url(onion_url);
+        self.config.tcp_config.tcp.onion_url = Some(onion_url);
+        self
+    }
+
+    /// Onion config for proxy, use random username/password is set for proxy connection
+    #[cfg(not(target_family = "wasm"))]
+    pub fn tcp_proxy_random_auth(mut self, proxy_random_auth: bool) -> Self {
+        self.config.tcp_config.tcp.proxy_random_auth = proxy_random_auth;
         self
     }
 
@@ -228,9 +269,12 @@ where
     #[cfg_attr(docsrs, doc(cfg(feature = "ws")))]
     pub fn tcp_config_on_ws<F>(mut self, f: F) -> Self
     where
-        F: Fn(TcpSocket) -> Result<TcpSocket, std::io::Error> + Send + Sync + 'static,
+        F: Fn(TcpSocket, TransformerContext) -> Result<TcpSocket, std::io::Error>
+            + Send
+            + Sync
+            + 'static,
     {
-        self.config.tcp_config.ws = Arc::new(f);
+        self.config.tcp_config.ws.socket_transformer = Arc::new(f);
         self
     }
 
@@ -252,9 +296,12 @@ where
     #[cfg_attr(docsrs, doc(cfg(feature = "tls")))]
     pub fn tcp_config_on_tls<F>(mut self, f: F) -> Self
     where
-        F: Fn(TcpSocket) -> Result<TcpSocket, std::io::Error> + Send + Sync + 'static,
+        F: Fn(TcpSocket, TransformerContext) -> Result<TcpSocket, std::io::Error>
+            + Send
+            + Sync
+            + 'static,
     {
-        self.config.tcp_config.tls = Arc::new(f);
+        self.config.tcp_config.tls.socket_transformer = Arc::new(f);
         self
     }
 }
