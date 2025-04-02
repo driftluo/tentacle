@@ -121,22 +121,24 @@ impl<T> Queue<T> {
     ///
     /// This function is unsafe because only one thread can call it at a time.
     pub(super) unsafe fn pop(&self) -> PopResult<T> {
-        let tail = *self.tail.get();
-        let next = (*tail).next.load(Ordering::Acquire);
+        unsafe {
+            let tail = *self.tail.get();
+            let next = (*tail).next.load(Ordering::Acquire);
 
-        if !next.is_null() {
-            *self.tail.get() = next;
-            assert!((*tail).value.is_none());
-            assert!((*next).value.is_some());
-            let ret = (*next).value.take().unwrap();
-            drop(Box::from_raw(tail));
-            return PopResult::Data(ret);
-        }
+            if !next.is_null() {
+                *self.tail.get() = next;
+                assert!((*tail).value.is_none());
+                assert!((*next).value.is_some());
+                let ret = (*next).value.take().unwrap();
+                drop(Box::from_raw(tail));
+                return PopResult::Data(ret);
+            }
 
-        if self.head.load(Ordering::Acquire) == tail {
-            PopResult::Empty
-        } else {
-            PopResult::Inconsistent
+            if self.head.load(Ordering::Acquire) == tail {
+                PopResult::Empty
+            } else {
+                PopResult::Inconsistent
+            }
         }
     }
 
@@ -146,7 +148,7 @@ impl<T> Queue<T> {
     /// This function is unsafe because only one thread can call it at a time.
     pub(super) unsafe fn pop_spin(&self) -> Option<T> {
         loop {
-            match self.pop() {
+            match unsafe { self.pop() } {
                 PopResult::Empty => return None,
                 PopResult::Data(t) => return Some(t),
                 // Inconsistent means that there will be a message to pop

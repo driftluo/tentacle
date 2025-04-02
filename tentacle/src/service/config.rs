@@ -137,7 +137,7 @@ impl AsRawFd for TcpSocket {
 impl FromRawFd for TcpSocket {
     /// Converts a `RawFd` to a `TcpSocket`.
     unsafe fn from_raw_fd(fd: RawFd) -> TcpSocket {
-        let inner = socket2::Socket::from_raw_fd(fd);
+        let inner = unsafe { socket2::Socket::from_raw_fd(fd) };
         TcpSocket { inner }
     }
 }
