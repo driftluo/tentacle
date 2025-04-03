@@ -1,3 +1,11 @@
+## tentacle 0.7.0 yamux 0.3.14 secio 0.6.6
+
+### Features
+- Upgrade to Rust 2024 edition(#402)
+- Drop async-runtime,async-timer features(#406)
+- Support session init from user(#405)
+- Support proxy and onion(#392)
+
 ## yamux 0.3.13
 
 ### Features
