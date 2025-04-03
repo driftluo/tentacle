@@ -1,6 +1,6 @@
 [package]
 name = "tentacle-multiaddr"
-version = "0.3.5"
+version = "0.3.6"
 authors = ["driftluo <driftluo@foxmail.com>"]
 edition = "2024"
 rust-version = "1.85.0"

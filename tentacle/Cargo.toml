@@ -1,6 +1,6 @@
 [package]
 name = "tentacle"
-version = "0.6.7"
+version = "0.7.0"
 license = "MIT"
 description = "Minimal implementation for a multiplexed p2p network framework."
 authors = ["piaoliu <driftluo@foxmail.com>", "Nervos Core Dev <dev@nervos.org>"]
@@ -18,8 +18,8 @@ no-default-features = true
 rustc-args = ["--cfg", "docsrs"]
 
 [dependencies]
-yamux = { path = "../yamux", version = "0.3.0", default-features = false, package = "tokio-yamux" }
-secio = { path = "../secio", version = "0.6.2", package = "tentacle-secio" }
+yamux = { path = "../yamux", version = "0.3.14", default-features = false, package = "tokio-yamux" }
+secio = { path = "../secio", version = "0.6.6", package = "tentacle-secio" }
 
 futures = { version = "0.3.0" }
 tokio = { version = "1.0.0", features = ["macros"] }
@@ -35,7 +35,7 @@ tokio-tungstenite = { version = "0.26", optional = true }
 httparse = { version = "1.9", optional = true }
 futures-timer = { version = "3.0.2", optional = true }
 
-multiaddr = { path = "../multiaddr", package = "tentacle-multiaddr", version = "0.3.4" }
+multiaddr = { path = "../multiaddr", package = "tentacle-multiaddr", version = "0.3.6" }
 url = "2.5.4"
 molecule = "0.8.0"
 
