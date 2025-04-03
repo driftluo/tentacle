@@ -110,13 +110,13 @@ impl Digest {
 }
 
 /// KeyProvider on ecdh procedure
-#[cfg_attr(feature = "async-trait", async_trait::async_trait)]
+#[cfg_attr(feature = "async-sign", async_trait::async_trait)]
 pub trait KeyProvider: std::clone::Clone + Send + Sync + 'static {
     /// Error
     type Error: Into<crate::error::SecioError>;
 
     /// Constructs a signature for `msg` using the secret key `sk`
-    #[cfg(feature = "async-trait")]
+    #[cfg(feature = "async-sign")]
     async fn sign_ecdsa_async<T: AsRef<[u8]> + Send>(
         &self,
         message: T,

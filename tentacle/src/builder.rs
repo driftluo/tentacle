@@ -187,7 +187,7 @@ where
     ///  use std::net::SocketAddr;
     ///
     ///  let mut server = ServiceBuilder::new();
-    ///  server.tcp_config(|socket: TcpSocket| {
+    ///  server.tcp_config(|socket: TcpSocket, ctxt: TransformerContext| {
     ///      let socket = unsafe {
     ///         #[cfg(unix)]
     ///         let socket = socket2::Socket::from_raw_fd(socket.into_raw_fd());
@@ -197,9 +197,10 @@ where
     ///      };
     ///      #[cfg(all(unix, not(target_os = "solaris"), not(target_os = "illumos")))]
     ///      socket.set_reuse_port(true)?;
-    ///
     ///      socket.set_reuse_address(true)?;
-    ///      socket.bind(&"127.0.0.1:1080".parse::<SocketAddr>().unwrap().into())?;
+    ///      if ctxt.is_dial() {
+    ///         socket.bind(&"127.0.0.1:1080".parse::<SocketAddr>().unwrap().into())?;
+    ///      }
     ///      socket.set_keepalive(true)?;
     ///      let socket = unsafe {
     ///         #[cfg(unix)]
@@ -215,6 +216,8 @@ where
     /// ## Note
     ///
     /// User use `listen(2)` or `connect(2)` on this closure will cause abnormal behavior
+    ///
+    /// Proxy and onion config will be ignored this config
     #[cfg(not(target_family = "wasm"))]
     pub fn tcp_config<F>(mut self, f: F) -> Self
     where
@@ -227,8 +230,8 @@ where
         self
     }
 
-    fn must_parse_proxy_url(url: String) -> url::Url {
-        let url = url::Url::parse(&url)
+    fn must_parse_proxy_url(url: &str) -> url::Url {
+        let url = url::Url::parse(url)
             .unwrap_or_else(|err| panic!("parse {} to url::Url failed: {}", url, err));
         if url.scheme().ne("socks5") {
             panic!("tentacle only support socks5 proxy");
@@ -241,7 +244,7 @@ where
     /// Example: socks5://127.0.0.1:9050
     /// Example: socks5://username:password@127.0.0.1:9050
     #[cfg(not(target_family = "wasm"))]
-    pub fn tcp_proxy_config(mut self, proxy_url: String) -> Self {
+    pub fn tcp_proxy_config(mut self, proxy_url: &str) -> Self {
         let proxy_url: url::Url = Self::must_parse_proxy_url(proxy_url);
         self.config.tcp_config.tcp.proxy_url = Some(proxy_url);
         self
@@ -251,7 +254,7 @@ where
     ///
     /// Example: socks5://127.0.0.1:9050
     #[cfg(not(target_family = "wasm"))]
-    pub fn tcp_onion_config(mut self, onion_url: String) -> Self {
+    pub fn tcp_onion_config(mut self, onion_url: &str) -> Self {
         let onion_url: url::Url = Self::must_parse_proxy_url(onion_url);
         self.config.tcp_config.tcp.onion_url = Some(onion_url);
         self
