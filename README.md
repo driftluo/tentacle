@@ -91,6 +91,15 @@ all wasm code generate from [book](https://rustwasm.github.io/docs/book/game-of-
 
 4. Now you can see the connection on the server workbench or on browser's console
 
+## Event Order Guarantees
+
+Tentacle provides the following guarantees regarding event ordering:
+
+1. All protocol events **always occur after** the initial `SessionOpen` event
+2. The `SessionClose` event is guaranteed to be the final event in a session's lifecycle
+3. When multiple protocols are opened simultaneously, no specific ordering is guaranteed between their events
+4. Critical errors such as `SessionTimeOut` or `MuxerError` will immediately trigger a `SessionClose` event, causing the connection to terminate automatically
+
 ## Other Languages
 
 Implementations in other languages
