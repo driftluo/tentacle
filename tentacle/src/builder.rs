@@ -1,6 +1,6 @@
 use std::{io, sync::Arc, time::Duration};
 
-use crate::service::config::TransformerContext;
+use crate::service::config::{ServiceTimeout, TransformerContext};
 use nohash_hasher::IntMap;
 use tokio_util::codec::LengthDelimitedCodec;
 
@@ -83,9 +83,12 @@ where
 
     /// Timeout for handshake and connect
     ///
-    /// Default 10 second
-    pub fn timeout(mut self, timeout: Duration) -> Self {
-        self.config.timeout = timeout;
+    /// Default timeout is 10 second, default onion_timeout is 120 second
+    pub fn timeout(mut self, timeout: Duration, onion_timeout: Duration) -> Self {
+        self.config.timeout = ServiceTimeout {
+            timeout,
+            onion_timeout,
+        };
         self
     }
 
