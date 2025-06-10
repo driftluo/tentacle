@@ -20,9 +20,10 @@ use tokio_rustls::rustls::{ClientConfig, ServerConfig};
 /// Default max buffer size
 const MAX_BUF_SIZE: usize = 24 * 1024 * 1024;
 
+#[derive(Clone, Copy)]
 pub(crate) struct ServiceTimeout {
-    timeout: Duration,
-    onion_timeout: Duration,
+    pub timeout: Duration,
+    pub onion_timeout: Duration,
 }
 
 impl Default for ServiceTimeout {

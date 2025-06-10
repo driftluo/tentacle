@@ -62,7 +62,7 @@ impl TcpTransport {
         listen_mode: TcpListenMode,
     ) -> Self {
         Self {
-            timeout: multi_transport.timeout,
+            timeout: multi_transport.timeout.timeout,
             tcp_config: match listen_mode {
                 TcpListenMode::Tcp => multi_transport.tcp_config.tcp,
                 #[cfg(feature = "ws")]
