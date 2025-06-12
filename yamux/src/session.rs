@@ -1023,8 +1023,7 @@ mod test {
         }
     }
 
-    // should panic after TIMEOUT time
-    #[should_panic]
+    // after TIMEOUT time, will finished
     #[test]
     fn test_keepalive_should_work_on_no_communication_scenario() {
         let rt = rt();
@@ -1057,11 +1056,14 @@ mod test {
                         });
                     }
                     Some(Err(err)) => {
-                        panic!("Error receiving frame: {:?}", err);
+                        if err.kind() == io::ErrorKind::TimedOut {
+                            // This is expected, since we are not sending any data
+                            break;
+                        }
                     }
                     None => {
                         // Session closed
-                        break;
+                        unreachable!();
                     }
                 }
             }

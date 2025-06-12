@@ -1,3 +1,8 @@
+## yamux 0.3.15
+
+### Bug Fix
+- fix keep alive should work on no communication scenario(#412)
+
 ## tentacle 0.7.0 yamux 0.3.14 secio 0.6.6
 
 ### Features
