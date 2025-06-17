@@ -31,7 +31,7 @@ thiserror = "1.0"
 nohash-hasher = "0.2"
 
 parking_lot = { version = "0.12", optional = true }
-tokio-tungstenite = { version = "0.26", optional = true }
+tokio-tungstenite = { version = "0.27", optional = true }
 httparse = { version = "1.9", optional = true }
 futures-timer = { version = "3.0.2", optional = true }
 

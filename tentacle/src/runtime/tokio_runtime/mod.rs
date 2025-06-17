@@ -166,8 +166,7 @@ async fn connect_by_proxy(
     socks5::connect(proxy_server_url.clone(), target_addr.clone(), target_port)
         .await
         .map_err(|err| {
-            io::Error::new(
-                io::ErrorKind::Other,
+            io::Error::other(
                 format!(
                     "socks5_connect to target_addr: {}, target_port: {} by proxy_server: {} failed, err: {}",
                     target_addr, target_port, proxy_server_url, err
@@ -196,10 +195,7 @@ pub(crate) async fn connect(
         )
         .await
         .map_err(|err| {
-            io::Error::new(
-                io::ErrorKind::Other,
-                format!("connect_by_proxy: {}, error: {}", proxy_url, err),
-            )
+            io::Error::other(format!("connect_by_proxy: {}, error: {}", proxy_url, err))
         }),
         None => connect_direct(target_addr, socket_transformer).await,
     }
