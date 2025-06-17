@@ -1,8 +1,11 @@
+use url::Url;
+
 use crate::{
     multiaddr::{Multiaddr, Protocol},
     secio::PeerId,
 };
 use std::{
+    borrow::Cow,
     iter::{self},
     net::{IpAddr, SocketAddr},
 };
@@ -151,6 +154,37 @@ pub fn find_type(addr: &Multiaddr) -> TransportType {
         }
     })
     .unwrap_or(TransportType::Tcp)
+}
+
+/// Function to redact the username and password from a URL:
+/// This function takes a URL of the form "https://user:password@example.com/path?key=value#hash"
+/// and returns a modified version where the password is replaced with "****", resulting in:
+/// "https://user:****@example.com/path?key=value#hash".
+/// If the URL does not contain a username or password, it is returned unchanged.
+/// Returns a `Cow<'_, Url>` to manage ownership efficiently, using `Borrowed` when possible.
+///
+/// # Parameters
+/// - `url`: A reference to a `Url` object representing the original input URL.
+///
+/// # Returns
+/// - A `Cow<'_, Url>` object representing the URL with redacted credentials.
+pub fn redact_auth_from_url(url: &Url) -> Cow<'_, Url> {
+    let mut owned_url = url.clone();
+    let mut modified = false;
+
+    if url.username() != "" && owned_url.set_username("****").is_ok() {
+        modified = true;
+    }
+
+    if url.password().is_some() && owned_url.set_password(Some("****")).is_ok() {
+        modified = true;
+    }
+
+    if modified {
+        Cow::Owned(owned_url)
+    } else {
+        Cow::Borrowed(url)
+    }
 }
 
 #[cfg(test)]
