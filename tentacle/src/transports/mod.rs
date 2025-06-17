@@ -20,7 +20,7 @@ mod onion;
 #[cfg(not(target_family = "wasm"))]
 mod tcp;
 #[cfg(not(target_family = "wasm"))]
-mod tcp_base_listen;
+pub(crate) mod tcp_base_listen;
 #[cfg(all(feature = "tls", not(target_family = "wasm")))]
 mod tls;
 #[cfg(all(feature = "ws", not(target_family = "wasm")))]

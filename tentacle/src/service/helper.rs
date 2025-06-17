@@ -163,6 +163,14 @@ pub struct Listener<K> {
     pub(crate) timeout: Duration,
     pub(crate) listen_addr: Multiaddr,
     pub(crate) future_task_sender: mpsc::Sender<BoxedFutureTask>,
+    pub(crate) listens_upgrade_modes: std::sync::Arc<
+        crate::lock::Mutex<
+            std::collections::HashMap<
+                std::net::SocketAddr,
+                crate::transports::tcp_base_listen::UpgradeMode,
+            >,
+        >,
+    >,
 }
 
 #[cfg(not(target_family = "wasm"))]
@@ -174,15 +182,198 @@ where
         let mut event_sender = self.event_sender.clone();
         let mut future_sender = self.future_task_sender.clone();
         let address = self.listen_addr.clone();
+        let mode = {
+            use crate::utils::multiaddr_to_socketaddr;
+
+            let global = self.listens_upgrade_modes.lock();
+            match multiaddr_to_socketaddr(&address) {
+                Some(net_addr) => global.get(&net_addr).map(|u| u.to_enum()),
+                None => None,
+            }
+        };
+        #[cfg(any(feature = "ws", feature = "tls"))]
+        use crate::multiaddr::Protocol;
+        use crate::transports::tcp_base_listen::UpgradeModeEnum;
         let report_task = async move {
-            if let Err(err) = event_sender
-                .send(SessionEvent::ListenError {
-                    address,
-                    error: TransportErrorKind::Io(io_err),
-                })
-                .await
-            {
-                error!("Listen address result send back error: {:?}", err);
+            match mode {
+                None => {
+                    if let Err(err) = event_sender
+                        .send(SessionEvent::ListenError {
+                            address,
+                            error: TransportErrorKind::Io(io_err),
+                        })
+                        .await
+                    {
+                        error!("Listen address result send back error: {:?}", err);
+                    }
+                }
+                Some(UpgradeModeEnum::OnlyTcp) => {
+                    if let Err(err) = event_sender
+                        .send(SessionEvent::ListenError {
+                            address,
+                            error: TransportErrorKind::Io(io_err),
+                        })
+                        .await
+                    {
+                        error!("Listen address result send back error: {:?}", err);
+                    }
+                }
+                #[cfg(feature = "ws")]
+                Some(UpgradeModeEnum::OnlyWs) => {
+                    if let Err(err) = event_sender
+                        .send(SessionEvent::ListenError {
+                            address,
+                            error: TransportErrorKind::Io(io_err),
+                        })
+                        .await
+                    {
+                        error!("Listen address result send back error: {:?}", err);
+                    }
+                }
+                #[cfg(feature = "tls")]
+                Some(UpgradeModeEnum::OnlyTls) => {
+                    let clear_addr = address
+                        .into_iter()
+                        .map(|p| {
+                            if let Protocol::Tls(_) = p {
+                                Protocol::Tls(Default::default())
+                            } else {
+                                p
+                            }
+                        })
+                        .collect::<Multiaddr>();
+                    if let Err(err) = event_sender
+                        .send(SessionEvent::ListenError {
+                            address: clear_addr,
+                            error: TransportErrorKind::Io(io_err),
+                        })
+                        .await
+                    {
+                        error!("Listen address result send back error: {:?}", err);
+                    }
+                }
+                #[cfg(feature = "tls")]
+                Some(UpgradeModeEnum::TcpAndTls) => {
+                    let base_net: Multiaddr = address
+                        .iter()
+                        .filter_map(|p| {
+                            if matches!(p, Protocol::Tls(_)) {
+                                None
+                            } else {
+                                Some(p)
+                            }
+                        })
+                        .collect();
+                    let mut tls_net = base_net.clone();
+                    tls_net.push(Protocol::Tls(Default::default()));
+                    if let Err(err) = event_sender
+                        .send(SessionEvent::ListenError {
+                            address: base_net,
+                            error: TransportErrorKind::Io(std::io::Error::new(
+                                io_err.kind(),
+                                io_err.to_string(),
+                            )),
+                        })
+                        .await
+                    {
+                        error!("Listen address result send back error: {:?}", err);
+                    }
+                    if let Err(err) = event_sender
+                        .send(SessionEvent::ListenError {
+                            address: tls_net,
+                            error: TransportErrorKind::Io(io_err),
+                        })
+                        .await
+                    {
+                        error!("Listen address result send back error: {:?}", err);
+                    }
+                }
+                #[cfg(feature = "ws")]
+                Some(UpgradeModeEnum::TcpAndWs) => {
+                    let base_net: Multiaddr = address
+                        .iter()
+                        .filter_map(|p| {
+                            if matches!(p, Protocol::Ws) {
+                                None
+                            } else {
+                                Some(p)
+                            }
+                        })
+                        .collect();
+                    let mut ws_net = base_net.clone();
+                    ws_net.push(Protocol::Ws);
+                    if let Err(err) = event_sender
+                        .send(SessionEvent::ListenError {
+                            address: base_net,
+                            error: TransportErrorKind::Io(std::io::Error::new(
+                                io_err.kind(),
+                                io_err.to_string(),
+                            )),
+                        })
+                        .await
+                    {
+                        error!("Listen address result send back error: {:?}", err);
+                    }
+                    if let Err(err) = event_sender
+                        .send(SessionEvent::ListenError {
+                            address: ws_net,
+                            error: TransportErrorKind::Io(io_err),
+                        })
+                        .await
+                    {
+                        error!("Listen address result send back error: {:?}", err);
+                    }
+                }
+                #[cfg(all(feature = "ws", feature = "tls"))]
+                Some(UpgradeModeEnum::All) => {
+                    let base_net: Multiaddr = address
+                        .iter()
+                        .filter_map(|p| {
+                            if matches!(p, Protocol::Ws | Protocol::Tls(_)) {
+                                None
+                            } else {
+                                Some(p)
+                            }
+                        })
+                        .collect();
+                    let mut ws_net = base_net.clone();
+                    let mut tls_net = base_net.clone();
+                    ws_net.push(Protocol::Ws);
+                    tls_net.push(Protocol::Tls(Default::default()));
+                    if let Err(err) = event_sender
+                        .send(SessionEvent::ListenError {
+                            address: base_net,
+                            error: TransportErrorKind::Io(std::io::Error::new(
+                                io_err.kind(),
+                                io_err.to_string(),
+                            )),
+                        })
+                        .await
+                    {
+                        error!("Listen address result send back error: {:?}", err);
+                    }
+                    if let Err(err) = event_sender
+                        .send(SessionEvent::ListenError {
+                            address: ws_net,
+                            error: TransportErrorKind::Io(std::io::Error::new(
+                                io_err.kind(),
+                                io_err.to_string(),
+                            )),
+                        })
+                        .await
+                    {
+                        error!("Listen address result send back error: {:?}", err);
+                    }
+                    if let Err(err) = event_sender
+                        .send(SessionEvent::ListenError {
+                            address: tls_net,
+                            error: TransportErrorKind::Io(io_err),
+                        })
+                        .await
+                    {
+                        error!("Listen address result send back error: {:?}", err);
+                    }
+                }
             }
         };
         crate::runtime::spawn(async move {

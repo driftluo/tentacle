@@ -227,7 +227,17 @@ where
                 if let Some(client) = inner.igd_client.as_mut() {
                     client.register(&listen_address)
                 }
-                inner.listens.insert(listen_address.clone());
+                let clear_addr = listen_address
+                    .into_iter()
+                    .map(|p| {
+                        if let Protocol::Tls(_) = p {
+                            Protocol::Tls(Default::default())
+                        } else {
+                            p
+                        }
+                    })
+                    .collect::<Multiaddr>();
+                inner.listens.insert(clear_addr);
 
                 if !matches!(incoming, MultiIncoming::TcpUpgrade) {
                     inner.spawn_listener(incoming, listen_address);
@@ -312,6 +322,7 @@ where
             timeout: self.config.timeout,
             listen_addr: listen_address,
             future_task_sender: self.future_task_sender.clone(),
+            listens_upgrade_modes: self.multi_transport.listens_upgrade_modes.clone(),
         };
         let mut sender = self.future_task_sender.clone();
         crate::runtime::spawn(async move {
@@ -1071,7 +1082,17 @@ where
                         .into(),
                     )
                     .await;
-                self.listens.insert(listen_address.clone());
+                let clear_addr = listen_address
+                    .into_iter()
+                    .map(|p| {
+                        if let Protocol::Tls(_) = p {
+                            Protocol::Tls(Default::default())
+                        } else {
+                            p
+                        }
+                    })
+                    .collect::<Multiaddr>();
+                self.listens.insert(clear_addr);
                 self.state.decrease();
                 self.try_update_listens().await;
                 #[cfg(feature = "upnp")]
@@ -1136,7 +1157,17 @@ where
                 }
             }
             ServiceTask::Listen { address } => {
-                if !self.listens.contains(&address) {
+                let clear_addr = address
+                    .into_iter()
+                    .map(|p| {
+                        if let Protocol::Tls(_) = p {
+                            Protocol::Tls(Default::default())
+                        } else {
+                            p
+                        }
+                    })
+                    .collect::<Multiaddr>();
+                if !self.listens.contains(&clear_addr) {
                     if let Err(e) = self.listen_inner(address.clone()) {
                         let _ignore = self
                             .handle_sender
