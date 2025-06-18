@@ -93,7 +93,7 @@ mod os {
 
     use crate::{
         runtime::{TcpListener, TcpStream},
-        service::config::TcpConfig,
+        service::config::{ServiceTimeout, TcpConfig},
     };
 
     use futures::{FutureExt, StreamExt, prelude::Stream};
@@ -136,7 +136,7 @@ mod os {
 
     #[derive(Clone)]
     pub(crate) struct MultiTransport {
-        pub(crate) timeout: Duration,
+        pub(crate) timeout: ServiceTimeout,
         pub(crate) tcp_config: TcpConfig,
         pub(crate) listens_upgrade_modes: Arc<crate::lock::Mutex<HashMap<SocketAddr, UpgradeMode>>>,
         #[cfg(feature = "tls")]
@@ -144,7 +144,7 @@ mod os {
     }
 
     impl MultiTransport {
-        pub fn new(timeout: Duration, tcp_config: TcpConfig) -> Self {
+        pub fn new(timeout: ServiceTimeout, tcp_config: TcpConfig) -> Self {
             MultiTransport {
                 timeout,
                 tcp_config,
@@ -217,20 +217,23 @@ mod os {
         fn dial(self, address: Multiaddr) -> Result<Self::DialFuture> {
             match find_type(&address) {
                 TransportType::Tcp => {
-                    match TcpTransport::new(self.timeout, self.tcp_config.tcp).dial(address) {
+                    match TcpTransport::new(self.timeout.timeout, self.tcp_config.tcp).dial(address)
+                    {
                         Ok(res) => Ok(MultiDialFuture::Tcp(res)),
                         Err(e) => Err(e),
                     }
                 }
                 TransportType::Onion => {
-                    match OnionTransport::new(self.timeout, self.tcp_config.tcp).dial(address) {
+                    match OnionTransport::new(self.timeout.onion_timeout, self.tcp_config.tcp)
+                        .dial(address)
+                    {
                         Ok(res) => Ok(MultiDialFuture::Tcp(res)),
                         Err(e) => Err(e),
                     }
                 }
                 #[cfg(feature = "ws")]
                 TransportType::Ws => {
-                    match WsTransport::new(self.timeout, self.tcp_config.ws).dial(address) {
+                    match WsTransport::new(self.timeout.timeout, self.tcp_config.ws).dial(address) {
                         Ok(future) => Ok(MultiDialFuture::Ws(future)),
                         Err(e) => Err(e),
                     }
@@ -247,7 +250,7 @@ mod os {
                     let tls_config = self.tls_config.ok_or_else(|| {
                         TransportErrorKind::TlsError("tls config is not set".to_string())
                     })?;
-                    TlsTransport::new(self.timeout, tls_config, self.tcp_config.tls)
+                    TlsTransport::new(self.timeout.timeout, tls_config, self.tcp_config.tls)
                         .dial(address)
                         .map(MultiDialFuture::Tls)
                 }

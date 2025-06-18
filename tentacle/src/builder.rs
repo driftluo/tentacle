@@ -83,9 +83,17 @@ where
 
     /// Timeout for handshake and connect
     ///
-    /// Default 10 second
+    /// Default timeout is 10 second
     pub fn timeout(mut self, timeout: Duration) -> Self {
-        self.config.timeout = timeout;
+        self.config.timeout.timeout = timeout;
+        self
+    }
+
+    /// Onion Timeout for handshake and connect
+    ///
+    /// Default onion_timeout is 120 second
+    pub fn onion_timeout(mut self, onion_timeout: Duration) -> Self {
+        self.config.timeout.onion_timeout = onion_timeout;
         self
     }
 

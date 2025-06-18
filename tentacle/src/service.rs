@@ -170,7 +170,7 @@ where
                 handshake_type,
                 multi_transport: {
                     #[cfg(target_family = "wasm")]
-                    let transport = MultiTransport::new(config.timeout);
+                    let transport = MultiTransport::new(config.timeout.timeout);
                     #[allow(clippy::let_and_return)]
                     #[cfg(not(target_family = "wasm"))]
                     let transport = MultiTransport::new(config.timeout, config.tcp_config.clone());
@@ -319,7 +319,7 @@ where
             handshake_type: self.handshake_type.clone(),
             event_sender: self.session_event_sender.clone(),
             max_frame_length: self.config.max_frame_length,
-            timeout: self.config.timeout,
+            timeout: self.config.timeout.timeout,
             listen_addr: listen_address,
             future_task_sender: self.future_task_sender.clone(),
             listens_upgrade_modes: self.multi_transport.listens_upgrade_modes.clone(),
@@ -373,7 +373,7 @@ where
         self.dial_protocols.insert(address.clone(), target);
 
         let handshake_type = self.handshake_type.clone();
-        let timeout = self.config.timeout;
+        let timeout = self.config.timeout.timeout;
         let max_frame_length = self.config.max_frame_length;
 
         let mut sender = self.session_event_sender.clone();
@@ -553,7 +553,7 @@ where
             handshake_type: self.handshake_type.clone(),
             event_sender: self.session_event_sender.clone(),
             max_frame_length: self.config.max_frame_length,
-            timeout: self.config.timeout,
+            timeout: self.config.timeout.timeout,
         }
         .handshake(socket);
 
@@ -692,7 +692,7 @@ where
         });
 
         let meta = SessionMeta::new(
-            self.config.timeout,
+            self.config.timeout.timeout,
             session_context.clone(),
             service_event_sender,
             self.service_context.control().clone(),
