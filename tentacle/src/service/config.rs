@@ -102,6 +102,7 @@ impl Default for SessionConfig {
 }
 
 /// This enum's purpose is to let socket_transformer know how the socket is created
+#[derive(Debug, Clone, PartialEq, Eq, Copy)]
 pub enum SocketState {
     /// listen
     Listen,
@@ -110,6 +111,7 @@ pub enum SocketState {
 }
 
 /// in socket_transformer
+#[derive(Debug, Clone, PartialEq, Eq, Copy)]
 pub struct TransformerContext {
     /// dial or listen
     pub state: SocketState,

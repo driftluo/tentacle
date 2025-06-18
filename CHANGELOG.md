@@ -1,3 +1,12 @@
+## tentacle 0.7.1
+
+### Bug Fix
+- fix listen drop with upgrade mode(#413)
+
+### Features
+- Add onion_timeout to ServiceConfig(#410)
+- Add redact_auth_from_url for for safe credential-free display(#414)
+
 ## yamux 0.3.15
 
 ### Bug Fix
