@@ -6,8 +6,9 @@ pub use tokio::{
     task::{JoinHandle, block_in_place, spawn_blocking, yield_now},
 };
 
-use crate::service::config::{
-    TcpSocket, TcpSocketConfig, TcpSocketTransformer, TransformerContext,
+use crate::{
+    service::config::{TcpSocket, TcpSocketConfig, TcpSocketTransformer, TransformerContext},
+    utils::redact_auth_from_url,
 };
 use socket2::{Domain, Protocol as SocketProtocol, Socket, Type};
 #[cfg(unix)]
@@ -169,7 +170,7 @@ async fn connect_by_proxy(
             io::Error::other(
                 format!(
                     "socks5_connect to target_addr: {}, target_port: {} by proxy_server: {} failed, err: {}",
-                    target_addr, target_port, proxy_server_url, err
+                    target_addr, target_port, redact_auth_from_url(&proxy_server_url), err
                 ),
             )
         })
