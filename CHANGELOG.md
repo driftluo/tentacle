@@ -1,3 +1,8 @@
+## yamux 0.3.15
+
+### Bug Fix
+- Fixed state transition of a stream(#416)
+
 ## tentacle 0.7.1
 
 ### Bug Fix
