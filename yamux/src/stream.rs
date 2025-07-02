@@ -178,7 +178,7 @@ impl StreamHandle {
 
     fn process_flags(&mut self, flags: Flags) -> Result<(), Error> {
         if flags.contains(Flag::Ack) && self.state == StreamState::SynSent {
-            self.state = StreamState::SynReceived;
+            self.state = StreamState::Established;
         }
         if flags.contains(Flag::Fin) {
             match self.state {
