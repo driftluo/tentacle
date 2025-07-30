@@ -1,3 +1,8 @@
+## tentacle 0.7.2
+
+### Features
+- Add peerid filter before dial
+
 ## yamux 0.3.15
 
 ### Bug Fix
