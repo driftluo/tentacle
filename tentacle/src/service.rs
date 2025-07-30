@@ -252,16 +252,32 @@ where
     /// Dial the given address, doesn't actually make a request, just generate a future
     pub async fn dial(&mut self, address: Multiaddr, target: TargetProtocol) -> Result<&mut Self> {
         let inner = self.inner_service.as_mut().unwrap();
-        let dial_future = inner.multi_transport.clone().dial(address.clone())?;
+        if !(inner.dial_protocols.contains_key(&address)
+            || extract_peer_id(&address)
+                .map(|peer_id| {
+                    inner.dial_protocols.keys().any(|addr| {
+                        if let Some(addr_peer_id) = extract_peer_id(&addr) {
+                            addr_peer_id == peer_id
+                        } else {
+                            false
+                        }
+                    })
+                })
+                .unwrap_or_default())
+        {
+            let dial_future = inner.multi_transport.clone().dial(address.clone())?;
 
-        match dial_future.await {
-            Ok((addr, incoming)) => {
-                inner.handshake(incoming, SessionType::Outbound, addr, None);
-                inner.dial_protocols.insert(address, target);
-                inner.state.increase();
-                Ok(self)
+            match dial_future.await {
+                Ok((addr, incoming)) => {
+                    inner.handshake(incoming, SessionType::Outbound, addr, None);
+                    inner.dial_protocols.insert(address, target);
+                    inner.state.increase();
+                    Ok(self)
+                }
+                Err(err) => Err(err),
             }
-            Err(err) => Err(err),
+        } else {
+            Ok(self)
         }
     }
 
@@ -1141,7 +1157,19 @@ where
                 self.handle_message(target, proto_id, priority, data).await;
             }
             ServiceTask::Dial { address, target } => {
-                if !self.dial_protocols.contains_key(&address) {
+                if !(self.dial_protocols.contains_key(&address)
+                    || extract_peer_id(&address)
+                        .map(|peer_id| {
+                            self.dial_protocols.keys().any(|addr| {
+                                if let Some(addr_peer_id) = extract_peer_id(&addr) {
+                                    addr_peer_id == peer_id
+                                } else {
+                                    false
+                                }
+                            })
+                        })
+                        .unwrap_or_default())
+                {
                     if let Err(e) = self.dial_inner(address.clone(), target) {
                         let _ignore = self
                             .handle_sender

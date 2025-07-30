@@ -4,19 +4,33 @@ on:
   release:
     types: [created]
 
-permissions:
-  contents: write
-
 jobs:
   release:
     runs-on: ubuntu-latest
+    permissions:
+      id-token: write # Required for OIDC token exchange
     steps:
       - uses: actions/checkout@v4
+      - uses: rust-lang/crates-io-auth-action@v1
+        id: auth
       - run: sudo apt-get update && sudo apt-get install libssl-dev pkg-config libclang-dev -y
-      - name: Publish
-        run: |
-          cargo login ${{ secrets.CARGO_REGISTRY_TOKEN }}
-          cd multiaddr && cargo publish || true
-          cd ../secio && cargo publish || true
-          cd ../yamux && cargo publish || true
-          cd ../tentacle && cargo publish || true
+      - name: Publish multiaddr
+        run: cargo publish || true
+        working-directory: multiaddr
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
+      - name: Publish secio
+        run: cargo publish || true
+        working-directory: secio
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
+      - name: Publish yamux
+        run: cargo publish || true
+        working-directory: yamux
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
+      - name: Publish tentacle
+        run: cargo publish || true
+        working-directory: tentacle
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
