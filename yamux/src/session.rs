@@ -226,6 +226,16 @@ where
         self.remote_go_away && self.local_go_away || self.eof
     }
 
+    #[cfg(not(all(target_family = "wasm", not(target_os = "unknown"))))]
+    fn now(&self) -> Instant {
+        Instant::now()
+    }
+
+    #[cfg(all(target_family = "wasm", not(target_os = "unknown")))]
+    fn now(&self) -> Instant {
+        Instant::from_u64(self.time_mock.load(std::sync::atomic::Ordering::Acquire) as u64)
+    }
+
     fn send_ping(&mut self, cx: &mut Context, ping_id: Option<u32>) -> Result<u32, io::Error> {
         let (flag, ping_id) = match ping_id {
             Some(ping_id) => (Flag::Ack, ping_id),
@@ -291,6 +301,8 @@ where
             .iter()
             .any(|(_id, time)| ping_at.saturating_duration_since(*time) > TIMEOUT)
         {
+            #[cfg(feature = "metrics")]
+            metrics::counter!("yamux.ping_timeout").increment(1);
             return Err(io::ErrorKind::TimedOut.into());
         }
 
@@ -509,10 +521,19 @@ where
             // Send ping back
             self.send_ping(cx, Some(frame.length()))?;
         } else if flags.contains(Flag::Ack) {
-            self.pings.remove(&frame.length());
+            let ping_id = frame.length();
+            let sent_ping_at = self.pings.remove(&ping_id);
+            #[cfg(feature = "metrics")]
+            if let Some(sent_at) = sent_ping_at {
+                let now = self.now();
+                let latency = now.saturating_duration_since(sent_at);
+                metrics::histogram!("yamux.ping_latency").record(latency.as_millis() as f64);
+            }
+            #[cfg(not(feature = "metrics"))]
+            let _ = sent_ping_at;
             // If the remote peer does not follow the protocol,
             // there may be a memory leak, so here need to discard all ping ids below the ack.
-            self.pings = self.pings.split_off(&frame.length());
+            self.pings = self.pings.split_off(&ping_id);
         } else {
             // TODO: unexpected case, send a GoAwayCode::ProtocolError ?
         }
@@ -652,12 +673,7 @@ where
                         // Assume that remote peer has gone away and this session should be closed.
                         self.remote_go_away = true;
                     } else {
-                        #[cfg(not(all(target_family = "wasm", not(target_os = "unknown"))))]
-                        let now = Instant::now();
-                        #[cfg(all(target_family = "wasm", not(target_os = "unknown")))]
-                        let now = Instant::from_u64(
-                            self.time_mock.load(std::sync::atomic::Ordering::Acquire) as u64,
-                        );
+                        let now = self.now();
                         self.keep_alive(cx, now)?;
                     }
                 }

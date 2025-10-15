@@ -83,6 +83,7 @@ tls = ["tokio-rustls"]
 upnp = ["igd"]
 secio-async = ["secio/async-sign"]
 unstable = []
+metrics = ["yamux/metrics"]
 
 openssl-vendored = ["secio/openssl-vendored"]
 
