@@ -1,7 +1,12 @@
+## tentacle 0.7.2 yamux 0.3.17
+
+### Features
+- Add metrics for yamux(#419)
+
 ## tentacle 0.7.2
 
 ### Features
-- Add peerid filter before dial
+- Add peerid filter before dial(#418)
 
 ## yamux 0.3.15
 
