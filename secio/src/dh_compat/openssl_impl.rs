@@ -19,14 +19,14 @@ struct Algorithm {
 
 static ECDH_P256: Algorithm = Algorithm {
     _private_len: 256 / 8,
-    pubkey_len: 1 + (2 * ((256 + 7) / 8)),
+    pubkey_len: 1 + (2 * 256_usize.div_ceil(8)),
     pairs_generate: p256_generate,
     from_pubkey: p256_from_pubkey,
 };
 
 static ECDH_P384: Algorithm = Algorithm {
     _private_len: 384 / 8,
-    pubkey_len: 1 + (2 * ((384 + 7) / 8)),
+    pubkey_len: 1 + (2 * 384_usize.div_ceil(8)),
     pairs_generate: p384_generate,
     from_pubkey: p384_from_pubkey,
 };

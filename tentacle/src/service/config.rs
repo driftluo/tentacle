@@ -13,7 +13,11 @@ use std::os::{
     fd::AsFd,
     unix::io::{AsRawFd, BorrowedFd, FromRawFd, IntoRawFd, RawFd},
 };
-use std::{net::SocketAddr, sync::Arc, time::Duration};
+use std::{
+    net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr},
+    sync::Arc,
+    time::Duration,
+};
 #[cfg(feature = "tls")]
 use tokio_rustls::rustls::{ClientConfig, ServerConfig};
 
@@ -46,6 +50,11 @@ pub(crate) struct ServiceConfig {
     pub tcp_config: TcpConfig,
     #[cfg(feature = "tls")]
     pub tls_config: Option<TlsConfig>,
+    /// Trusted proxy addresses for HAProxy PROXY protocol and X-Forwarded-For header parsing.
+    /// When a connection comes from one of these addresses, the real client IP will be extracted
+    /// from PROXY protocol headers (for TCP) or X-Forwarded-For headers (for WebSocket).
+    /// By default, loopback addresses (127.0.0.1 and ::1) are included in this list.
+    pub trusted_proxies: Vec<IpAddr>,
 }
 
 impl Default for ServiceConfig {
@@ -61,6 +70,11 @@ impl Default for ServiceConfig {
             tcp_config: Default::default(),
             #[cfg(feature = "tls")]
             tls_config: None,
+            // Default: trust loopback addresses
+            trusted_proxies: vec![
+                IpAddr::V4(Ipv4Addr::LOCALHOST),
+                IpAddr::V6(Ipv6Addr::LOCALHOST),
+            ],
         }
     }
 }

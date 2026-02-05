@@ -147,6 +147,34 @@ where
         self
     }
 
+    /// Set trusted proxy addresses for HAProxy PROXY protocol and X-Forwarded-For header parsing.
+    ///
+    /// When a connection comes from one of these addresses, tentacle will extract the real client IP from:
+    /// - PROXY protocol v1/v2 headers (for TCP connections)
+    /// - X-Forwarded-For headers (for WebSocket connections)
+    ///
+    /// By default, loopback addresses (127.0.0.1 and ::1) are trusted. This method will **replace**
+    /// the default list with the provided addresses.
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// use std::net::IpAddr;
+    /// use tentacle::builder::ServiceBuilder;
+    ///
+    /// // Replace default loopback with custom proxy addresses
+    /// let builder = ServiceBuilder::new()
+    ///     .trusted_proxies(vec![
+    ///         "192.168.1.100".parse().unwrap(),
+    ///         "10.0.0.1".parse().unwrap(),
+    ///     ]);
+    /// ```
+    #[cfg(not(target_family = "wasm"))]
+    pub fn trusted_proxies(mut self, proxies: Vec<std::net::IpAddr>) -> Self {
+        self.config.trusted_proxies = proxies;
+        self
+    }
+
     /// Whether to allow tentative registration upnp, default is disable(false)
     ///
     /// upnp: https://en.wikipedia.org/wiki/Universal_Plug_and_Play

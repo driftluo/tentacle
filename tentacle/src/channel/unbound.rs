@@ -500,6 +500,7 @@ impl<T> Stream for UnboundedReceiver<T> {
 }
 
 impl<T> Drop for UnboundedReceiver<T> {
+    #[allow(clippy::unnecessary_unwrap)]
     fn drop(&mut self) {
         // Drain the channel of all pending messages
         self.close();

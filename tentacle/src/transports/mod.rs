@@ -18,6 +18,8 @@ mod memory;
 #[cfg(not(target_family = "wasm"))]
 mod onion;
 #[cfg(not(target_family = "wasm"))]
+pub(crate) mod proxy_protocol;
+#[cfg(not(target_family = "wasm"))]
 mod tcp;
 #[cfg(not(target_family = "wasm"))]
 pub(crate) mod tcp_base_listen;
@@ -141,16 +143,23 @@ mod os {
         pub(crate) listens_upgrade_modes: Arc<crate::lock::Mutex<HashMap<SocketAddr, UpgradeMode>>>,
         #[cfg(feature = "tls")]
         pub(crate) tls_config: Option<TlsConfig>,
+        /// Trusted proxy addresses for HAProxy PROXY protocol and X-Forwarded-For header parsing.
+        pub(crate) trusted_proxies: Arc<Vec<std::net::IpAddr>>,
     }
 
     impl MultiTransport {
-        pub fn new(timeout: ServiceTimeout, tcp_config: TcpConfig) -> Self {
+        pub fn new(
+            timeout: ServiceTimeout,
+            tcp_config: TcpConfig,
+            trusted_proxies: Vec<std::net::IpAddr>,
+        ) -> Self {
             MultiTransport {
                 timeout,
                 tcp_config,
                 listens_upgrade_modes: Arc::new(crate::lock::Mutex::new(Default::default())),
                 #[cfg(feature = "tls")]
                 tls_config: None,
+                trusted_proxies: Arc::new(trusted_proxies),
             }
         }
 
