@@ -696,6 +696,7 @@ impl<T> Stream for Receiver<T> {
 }
 
 impl<T> Drop for Receiver<T> {
+    #[allow(clippy::unnecessary_unwrap)]
     fn drop(&mut self) {
         // Drain the channel of all pending messages
         self.close();

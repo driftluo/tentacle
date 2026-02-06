@@ -43,6 +43,8 @@ pub struct TcpTransport {
     global: Arc<crate::lock::Mutex<HashMap<SocketAddr, UpgradeMode>>>,
     #[cfg(feature = "tls")]
     tls_config: TlsConfig,
+    /// Trusted proxy addresses for HAProxy PROXY protocol and X-Forwarded-For header parsing.
+    trusted_proxies: Arc<Vec<std::net::IpAddr>>,
 }
 
 impl TcpTransport {
@@ -54,6 +56,7 @@ impl TcpTransport {
             global: Arc::new(crate::lock::Mutex::new(Default::default())),
             #[cfg(feature = "tls")]
             tls_config: Default::default(),
+            trusted_proxies: Arc::new(Vec::new()),
         }
     }
 
@@ -74,6 +77,7 @@ impl TcpTransport {
             global: multi_transport.listens_upgrade_modes,
             #[cfg(feature = "tls")]
             tls_config: multi_transport.tls_config.unwrap_or_default(),
+            trusted_proxies: multi_transport.trusted_proxies,
         }
     }
 }
@@ -100,6 +104,7 @@ impl TransportListen for TcpTransport {
                     self.tls_config,
                     self.global,
                     self.timeout,
+                    self.trusted_proxies,
                 );
                 Ok(TransportFuture::new(Box::pin(task)))
             }
@@ -112,6 +117,7 @@ impl TransportListen for TcpTransport {
                     self.tls_config,
                     self.global,
                     self.timeout,
+                    self.trusted_proxies,
                 );
                 Ok(TransportFuture::new(Box::pin(task)))
             }

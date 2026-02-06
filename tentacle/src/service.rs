@@ -173,7 +173,11 @@ where
                     let transport = MultiTransport::new(config.timeout.timeout);
                     #[allow(clippy::let_and_return)]
                     #[cfg(not(target_family = "wasm"))]
-                    let transport = MultiTransport::new(config.timeout, config.tcp_config.clone());
+                    let transport = MultiTransport::new(
+                        config.timeout,
+                        config.tcp_config.clone(),
+                        config.trusted_proxies.clone(),
+                    );
                     #[cfg(feature = "tls")]
                     let transport = transport.tls_config(config.tls_config.clone());
                     transport
@@ -256,7 +260,7 @@ where
             || extract_peer_id(&address)
                 .map(|peer_id| {
                     inner.dial_protocols.keys().any(|addr| {
-                        if let Some(addr_peer_id) = extract_peer_id(&addr) {
+                        if let Some(addr_peer_id) = extract_peer_id(addr) {
                             addr_peer_id == peer_id
                         } else {
                             false
@@ -1161,7 +1165,7 @@ where
                     || extract_peer_id(&address)
                         .map(|peer_id| {
                             self.dial_protocols.keys().any(|addr| {
-                                if let Some(addr_peer_id) = extract_peer_id(&addr) {
+                                if let Some(addr_peer_id) = extract_peer_id(addr) {
                                     addr_peer_id == peer_id
                                 } else {
                                     false

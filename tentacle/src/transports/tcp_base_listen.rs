@@ -2,7 +2,7 @@ use std::{
     collections::{HashMap, hash_map::Entry},
     future::Future,
     io,
-    net::SocketAddr,
+    net::{IpAddr, SocketAddr},
     pin::Pin,
     sync::{
         Arc,
@@ -36,6 +36,7 @@ use crate::{
     multiaddr::Multiaddr,
     runtime::{TcpListener, TcpStream},
     service::config::TcpSocketConfig,
+    transports::proxy_protocol::{ProxyProtocolResult, parse_proxy_protocol},
     transports::{MultiStream, Result, TcpListenMode, TransportErrorKind, tcp_listen},
     utils::{multiaddr_to_socketaddr, socketaddr_to_multiaddr},
 };
@@ -53,6 +54,7 @@ pub async fn bind(
     #[cfg(feature = "tls")] config: TlsConfig,
     global: Arc<crate::lock::Mutex<HashMap<SocketAddr, UpgradeMode>>>,
     timeout: Duration,
+    trusted_proxies: Arc<Vec<IpAddr>>,
 ) -> Result<(Multiaddr, TcpBaseListenerEnum)> {
     let addr = address.await?;
     let upgrade_mode: UpgradeMode = listen_mode.into();
@@ -132,8 +134,14 @@ pub async fn bind(
             Ok((
                 listen_addr,
                 TcpBaseListenerEnum::New({
-                    let tcp_listen =
-                        TcpBaseListener::new(timeout, tcp, local_addr, upgrade_mode, global);
+                    let tcp_listen = TcpBaseListener::new(
+                        timeout,
+                        tcp,
+                        local_addr,
+                        upgrade_mode,
+                        global,
+                        trusted_proxies,
+                    );
                     #[cfg(feature = "tls")]
                     let tcp_listen = tcp_listen.tls_config(tls_server_config);
                     tcp_listen
@@ -237,6 +245,8 @@ pub struct TcpBaseListener {
     global: Arc<crate::lock::Mutex<HashMap<SocketAddr, UpgradeMode>>>,
     #[cfg(feature = "tls")]
     tls_config: Arc<ServerConfig>,
+    /// Trusted proxy addresses for HAProxy PROXY protocol and X-Forwarded-For header parsing.
+    trusted_proxies: Arc<Vec<IpAddr>>,
 }
 
 impl Drop for TcpBaseListener {
@@ -252,6 +262,7 @@ impl TcpBaseListener {
         local_addr: SocketAddr,
         upgrade_mode: UpgradeMode,
         global: Arc<crate::lock::Mutex<HashMap<SocketAddr, UpgradeMode>>>,
+        trusted_proxies: Arc<Vec<IpAddr>>,
     ) -> Self {
         let (tx, rx) = mpsc::channel(128);
 
@@ -269,6 +280,7 @@ impl TcpBaseListener {
                     .with_no_client_auth()
                     .with_cert_resolver(Arc::new(ResolvesServerCertUsingSni::new())),
             ),
+            trusted_proxies,
         }
     }
 
@@ -296,6 +308,7 @@ impl TcpBaseListener {
                         let timeout = self.timeout;
                         let sender = self.sender.clone();
                         let upgrade_mode = self.upgrade_mode.to_enum();
+                        let trusted_proxies = Arc::clone(&self.trusted_proxies);
                         #[cfg(feature = "tls")]
                         let acceptor = TlsAcceptor::from(Arc::clone(&self.tls_config));
                         crate::runtime::spawn(protocol_select(
@@ -304,6 +317,7 @@ impl TcpBaseListener {
                             upgrade_mode,
                             sender,
                             remote_address,
+                            trusted_proxies,
                             #[cfg(feature = "tls")]
                             acceptor,
                         ));
@@ -343,11 +357,12 @@ impl Stream for TcpBaseListener {
 }
 
 async fn protocol_select(
-    stream: TcpStream,
+    mut stream: TcpStream,
     timeout: Duration,
     #[allow(unused_mut)] mut upgrade_mode: UpgradeModeEnum,
     mut sender: Sender<(Multiaddr, MultiStream)>,
-    remote_address: SocketAddr,
+    #[allow(unused_mut)] mut remote_address: SocketAddr,
+    trusted_proxies: Arc<Vec<IpAddr>>,
     #[cfg(feature = "tls")] acceptor: TlsAcceptor,
 ) {
     let mut peek_buf = [0u8; 16];
@@ -375,9 +390,25 @@ async fn protocol_select(
         }
     }
 
+    // Track whether PROXY protocol has been parsed (to avoid double parsing when
+    // TcpAndTls continues to OnlyTcp or OnlyTls)
+    #[allow(unused_mut)]
+    let mut proxy_parsed = false;
+
+    #[allow(clippy::never_loop)]
     loop {
         match upgrade_mode {
             UpgradeModeEnum::OnlyTcp => {
+                // Check if connection is from trusted proxy and try to parse PROXY protocol
+                if !proxy_parsed
+                    && trusted_proxies.contains(&remote_address.ip())
+                    && try_parse_proxy_protocol(&mut stream, timeout, &mut remote_address)
+                        .await
+                        .is_err()
+                {
+                    return;
+                }
+
                 if sender
                     .send((
                         socketaddr_to_multiaddr(remote_address),
@@ -392,8 +423,16 @@ async fn protocol_select(
             }
             #[cfg(feature = "ws")]
             UpgradeModeEnum::OnlyWs => {
+                // Check if connection is from trusted proxy and try to extract X-Forwarded-For
+                if trusted_proxies.contains(&remote_address.ip()) {
+                    remote_address =
+                        extract_forwarded_for_from_ws_handshake(&stream, remote_address).await;
+                }
+
                 match crate::runtime::timeout(timeout, accept_async(stream)).await {
-                    Err(_) => debug!("accept websocket stream timeout"),
+                    Err(_) => {
+                        debug!("accept websocket stream timeout");
+                    }
                     Ok(res) => match res {
                         Ok(stream) => {
                             let mut addr = socketaddr_to_multiaddr(remote_address);
@@ -415,6 +454,16 @@ async fn protocol_select(
             }
             #[cfg(feature = "tls")]
             UpgradeModeEnum::OnlyTls => {
+                // Check if connection is from trusted proxy and try to parse PROXY protocol
+                if !proxy_parsed
+                    && trusted_proxies.contains(&remote_address.ip())
+                    && try_parse_proxy_protocol(&mut stream, timeout, &mut remote_address)
+                        .await
+                        .is_err()
+                {
+                    return;
+                }
+
                 match crate::runtime::timeout(timeout, acceptor.accept(stream)).await {
                     Err(_) => debug!("accept tls server stream timeout"),
                     Ok(res) => match res {
@@ -438,6 +487,65 @@ async fn protocol_select(
             }
             #[cfg(feature = "tls")]
             UpgradeModeEnum::TcpAndTls => {
+                // Parse PROXY protocol first if from trusted proxy, then re-peek for protocol detection
+                let current_peek_buf = if trusted_proxies.contains(&remote_address.ip()) {
+                    match crate::runtime::timeout(timeout, parse_proxy_protocol(&mut stream)).await
+                    {
+                        Ok(ProxyProtocolResult::Success(addr)) => {
+                            debug!(
+                                "PROXY protocol parsed successfully: {} -> {}",
+                                remote_address, addr
+                            );
+                            proxy_parsed = true;
+                            remote_address = addr;
+                            // After parsing PROXY protocol, we need to peek fresh data
+                            let mut new_peek_buf = [0u8; 16];
+                            let peek_now = std::time::Instant::now();
+                            loop {
+                                match stream.peek(&mut new_peek_buf).await {
+                                    Ok(n) if n == 16 => break,
+                                    Ok(_) => {
+                                        if peek_now.elapsed() > timeout {
+                                            debug!(
+                                                "Failed to peek 16 bytes after PROXY protocol parsing"
+                                            );
+                                            return;
+                                        }
+                                        continue;
+                                    }
+                                    Err(e) => {
+                                        debug!("stream encountered err after PROXY parsing: {}", e);
+                                        return;
+                                    }
+                                }
+                            }
+                            new_peek_buf
+                        }
+                        Ok(ProxyProtocolResult::NotProxyProtocol) => {
+                            debug!("Not a PROXY protocol connection from {}", remote_address);
+                            proxy_parsed = true;
+                            peek_buf
+                        }
+                        Ok(ProxyProtocolResult::Error(e)) => {
+                            log::warn!(
+                                "PROXY protocol parse error from trusted proxy {}: {}",
+                                remote_address,
+                                e
+                            );
+                            return;
+                        }
+                        Err(_) => {
+                            log::warn!(
+                                "PROXY protocol parse timeout from trusted proxy {}",
+                                remote_address
+                            );
+                            return;
+                        }
+                    }
+                } else {
+                    peek_buf
+                };
+
                 // The first sixteen bytes of secio's Propose message's mode is fixed
                 // it's bytes like follow:
                 //
@@ -448,14 +556,18 @@ async fn protocol_select(
                 // LengthDelimitedCodec header is big-end total len
                 // molecule propose header is little-end total len
                 // rand start offset is 24 = (5(feild count) + 1(total len))* 4
-                let length_delimited_header =
-                    u32::from_be_bytes(TryInto::<[u8; 4]>::try_into(&peek_buf[..4]).unwrap());
-                let molecule_header =
-                    u32::from_le_bytes(TryInto::<[u8; 4]>::try_into(&peek_buf[4..8]).unwrap());
-                let rand_start =
-                    u32::from_le_bytes(TryInto::<[u8; 4]>::try_into(&peek_buf[8..12]).unwrap());
-                let rand_end =
-                    u32::from_le_bytes(TryInto::<[u8; 4]>::try_into(&peek_buf[12..16]).unwrap());
+                let length_delimited_header = u32::from_be_bytes(
+                    TryInto::<[u8; 4]>::try_into(&current_peek_buf[..4]).unwrap(),
+                );
+                let molecule_header = u32::from_le_bytes(
+                    TryInto::<[u8; 4]>::try_into(&current_peek_buf[4..8]).unwrap(),
+                );
+                let rand_start = u32::from_le_bytes(
+                    TryInto::<[u8; 4]>::try_into(&current_peek_buf[8..12]).unwrap(),
+                );
+                let rand_end = u32::from_le_bytes(
+                    TryInto::<[u8; 4]>::try_into(&current_peek_buf[12..16]).unwrap(),
+                );
 
                 // The first twelve bytes of yamux's message's mode is fixed
                 // it's bytes like follow:
@@ -469,12 +581,14 @@ async fn protocol_select(
                 // open window message stream id = 0x1(client standard implementation, but does not check, but can't be zero), ping message steam id = 0x0
                 // header_len is not a fixed value.
                 // It may be the ping_id or the window length value expressed in windowupdate.
-                let yamux_version = peek_buf[0];
-                let yamux_ty = peek_buf[1];
-                let yamux_flags =
-                    u16::from_be_bytes(TryInto::<[u8; 2]>::try_into(&peek_buf[2..4]).unwrap());
-                let yamux_stream_id =
-                    u32::from_be_bytes(TryInto::<[u8; 4]>::try_into(&peek_buf[4..8]).unwrap());
+                let yamux_version = current_peek_buf[0];
+                let yamux_ty = current_peek_buf[1];
+                let yamux_flags = u16::from_be_bytes(
+                    TryInto::<[u8; 2]>::try_into(&current_peek_buf[2..4]).unwrap(),
+                );
+                let yamux_stream_id = u32::from_be_bytes(
+                    TryInto::<[u8; 4]>::try_into(&current_peek_buf[4..8]).unwrap(),
+                );
 
                 if (length_delimited_header == molecule_header
                     && rand_start == 24
@@ -525,5 +639,118 @@ async fn protocol_select(
                 }
             }
         }
+    }
+}
+
+/// Try to parse PROXY protocol from stream.
+/// Returns Ok is successful.
+async fn try_parse_proxy_protocol(
+    stream: &mut TcpStream,
+    timeout: Duration,
+    remote_address: &mut SocketAddr,
+) -> std::result::Result<(), ()> {
+    match crate::runtime::timeout(timeout, parse_proxy_protocol(stream)).await {
+        Ok(ProxyProtocolResult::Success(addr)) => {
+            debug!(
+                "PROXY protocol parsed successfully: {} -> {}",
+                remote_address, addr
+            );
+            *remote_address = addr;
+            Ok(())
+        }
+        Ok(ProxyProtocolResult::NotProxyProtocol) => {
+            debug!("Not a PROXY protocol connection from {}", remote_address);
+            Ok(())
+        }
+        Ok(ProxyProtocolResult::Error(e)) => {
+            log::warn!(
+                "PROXY protocol parse error from trusted proxy {}: {}",
+                remote_address,
+                e
+            );
+            Err(())
+        }
+        Err(_) => {
+            log::warn!(
+                "PROXY protocol parse timeout from trusted proxy {}",
+                remote_address
+            );
+            Err(())
+        }
+    }
+}
+
+/// Extract X-Forwarded-For from WebSocket HTTP upgrade request using peek
+/// This function peeks the HTTP headers without consuming them, so the WebSocket
+/// handshake can proceed normally afterwards.
+///
+/// # Security Warning
+///
+/// This function takes the FIRST IP from the X-Forwarded-For header chain.
+/// In a multi-proxy setup (Client -> Proxy1 -> Proxy2 -> Server), a malicious
+/// client could forge the first IP. For maximum security with multiple proxies,
+/// you should know how many trusted proxies are in front of your server and
+/// count from the right side of the chain.
+///
+/// Current behavior is suitable for single-proxy setups where only one trusted
+/// proxy directly connects to the server.
+#[cfg(feature = "ws")]
+async fn extract_forwarded_for_from_ws_handshake(
+    stream: &TcpStream,
+    fallback_address: SocketAddr,
+) -> SocketAddr {
+    use std::net::IpAddr;
+
+    // Peek enough bytes to read HTTP headers (4KB should be enough for most cases)
+    let mut peek_buf = [0u8; 4096];
+    let n = match stream.peek(&mut peek_buf).await {
+        Ok(n) => n,
+        Err(_) => return fallback_address,
+    };
+
+    // Parse HTTP request headers
+    let mut headers = [httparse::EMPTY_HEADER; 32];
+    let mut req = httparse::Request::new(&mut headers);
+
+    if req.parse(&peek_buf[..n]).is_err() {
+        return fallback_address;
+    }
+
+    // Look for X-Forwarded-For and X-Forwarded-Port headers
+    let mut forwarded_ip: Option<IpAddr> = None;
+    let mut forwarded_port: Option<u16> = None;
+
+    for header in req.headers.iter() {
+        if header.name.eq_ignore_ascii_case("x-forwarded-for") {
+            if let Ok(value_str) = std::str::from_utf8(header.value) {
+                // X-Forwarded-For can contain multiple IPs: "client, proxy1, proxy2"
+                // We want the first one (the original client)
+                if let Some(first_ip) = value_str.split(',').next() {
+                    let ip_str = first_ip.trim();
+                    if let Ok(ip) = ip_str.parse::<IpAddr>() {
+                        forwarded_ip = Some(ip);
+                    }
+                }
+            }
+        } else if header.name.eq_ignore_ascii_case("x-forwarded-port") {
+            if let Ok(value_str) = std::str::from_utf8(header.value) {
+                // X-Forwarded-Port can also contain multiple ports, take the first one
+                if let Some(first_port) = value_str.split(',').next() {
+                    if let Ok(port) = first_port.trim().parse::<u16>() {
+                        forwarded_port = Some(port);
+                    }
+                }
+            }
+        }
+    }
+
+    match forwarded_ip {
+        Some(ip) => {
+            // Use X-Forwarded-Port if available, otherwise fallback to the original port
+            let port = forwarded_port.unwrap_or(fallback_address.port());
+            debug!("X-Forwarded-For header found: {}:{}", ip, port);
+            SocketAddr::new(ip, port)
+        }
+        None => fallback_address,
     }
 }
