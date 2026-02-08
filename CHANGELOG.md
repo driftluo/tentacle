@@ -1,3 +1,14 @@
+## tentacle 0.7.4 secio 0.6.7
+
+### Features
+- Support parsing haproxy protocol on TCP(#422)
+- Support parsing X-Forwarded-For/X-Forwarded-Port on WebSocket(#422)
+
+## tentacle 0.7.3
+
+### Features
+- Add metrics of yamux ping timeout and latency by @jjyr in(#419)
+
 ## tentacle 0.7.2 yamux 0.3.17
 
 ### Features

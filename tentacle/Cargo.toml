@@ -1,6 +1,6 @@
 [package]
 name = "tentacle"
-version = "0.7.3"
+version = "0.7.4"
 license = "MIT"
 description = "Minimal implementation for a multiplexed p2p network framework."
 authors = ["piaoliu <driftluo@foxmail.com>", "Nervos Core Dev <dev@nervos.org>"]
@@ -9,7 +9,7 @@ readme = "README.md"
 keywords = ["network", "peer-to-peer"]
 categories = ["network-programming", "asynchronous"]
 edition = "2024"
-rust-version = "1.85.0"
+rust-version = "1.88.0"
 
 [package.metadata.docs.rs]
 features = ["tokio-runtime", "tokio-timer", "upnp", "ws", "unstable", "tls"]
