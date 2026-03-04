@@ -319,16 +319,16 @@ impl StreamHandle {
                 return Err(Error::SubStreamRemoteClosing);
             }
 
-            match self.frame_receiver.try_next() {
-                Ok(Some(frame)) => {
+            match self.frame_receiver.try_recv() {
+                Ok(frame) => {
                     self.handle_frame(frame)?;
                     has_new_frame = true;
                 }
-                Ok(None) => {
+                Err(futures::channel::mpsc::TryRecvError::Closed) => {
                     self.state = StreamState::RemoteClosing;
                     return Err(Error::SubStreamRemoteClosing);
                 }
-                Err(_) => break,
+                Err(futures::channel::mpsc::TryRecvError::Empty) => break,
             }
         }
         Ok(has_new_frame)
@@ -923,8 +923,8 @@ mod test {
 
             let jh = tokio::spawn(tokio::time::timeout(std::time::Duration::from_secs(4), async move {
                 loop {
-                    match unbound_receiver.try_next() {
-                        Ok(Some(ref event)) if matches!(event, StreamEvent::Frame(frame) if frame.length() == TEXT.len() as u32) => break,
+                    match unbound_receiver.try_recv() {
+                        Ok(ref event) if matches!(event, StreamEvent::Frame(frame) if frame.length() == TEXT.len() as u32) => break,
                         Err(_) => (),
                         _ => panic!("must be frame with written text"),
                     }
@@ -1168,7 +1168,7 @@ mod test {
             // poll_read will drain the window-update frame and internally call
             // writeable_wake.wake(), which notifies write_fw.
             // (The window-update has no data so read returns Pending again.)
-            let _ = Pin::new(&mut stream).poll_read(&mut read_cx, &mut rbuf2);
+            let _ignore = Pin::new(&mut stream).poll_read(&mut read_cx, &mut rbuf2);
 
             // After handle_window_update → writeable_wake.wake(), the write task
             // (write_waker) must now be notified so it can retry and succeed.
