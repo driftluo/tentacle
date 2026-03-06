@@ -10,7 +10,7 @@ use std::{
     time::Duration,
 };
 use tokio::io::{AsyncRead, AsyncWrite};
-use tokio_util::codec::{Framed, FramedParts, FramedRead, FramedWrite, LengthDelimitedCodec};
+use tokio_util::codec::{Framed, FramedParts, LengthDelimitedCodec};
 use yamux::{Control, Session as YamuxSession, StreamHandle};
 
 use crate::{
@@ -35,6 +35,19 @@ use crate::{
 pub trait AsyncRw: AsyncWrite + AsyncRead {}
 
 impl<T: AsyncRead + AsyncWrite> AsyncRw for T {}
+
+fn split_spawn_framed<T, U>(
+    part: FramedParts<T, U>,
+) -> (
+    futures::stream::SplitSink<Framed<T, U>, bytes::Bytes>,
+    futures::stream::SplitStream<Framed<T, U>>,
+)
+where
+    T: AsyncRead + AsyncWrite,
+    U: crate::traits::Codec,
+{
+    Framed::from_parts(part).split()
+}
 
 /// Event generated/received by the Session
 pub(crate) enum SessionEvent {
@@ -432,13 +445,13 @@ impl Session {
 
         match proto.spawn {
             Some(ref spawn) => {
-                let (read, write) = crate::runtime::split(raw_part.io);
+                let mut part = FramedParts::new(raw_part.io, (proto.codec)());
+                part.read_buf = raw_part.read_buf;
+                part.write_buf = raw_part.write_buf;
+                let (write, read) = split_spawn_framed(part);
                 let read_part = {
-                    let mut frame = FramedRead::new(read, (proto.codec)());
-                    *frame.read_buffer_mut() = raw_part.read_buf;
-
                     SubstreamReadPart {
-                        substream: frame,
+                        substream: read,
                         before_receive: before_receive_fn,
                         proto_id,
                         stream_id: self.next_stream,
@@ -455,7 +468,7 @@ impl Session {
                 .proto_id(proto_id)
                 .stream_id(self.next_stream)
                 .config(self.config)
-                .build(FramedWrite::new(write, (proto.codec)()));
+                .build(write);
 
                 crate::runtime::spawn(write_part.for_each(|_| future::ready(())));
                 spawn.spawn(self.context.clone(), &self.service_control, read_part);
@@ -797,6 +810,37 @@ impl Stream for Session {
         } else {
             Poll::Ready(Some(()))
         }
+    }
+}
+
+#[cfg(all(test, not(target_family = "wasm")))]
+mod tests {
+    use super::split_spawn_framed;
+    use bytes::{Bytes, BytesMut};
+    use futures::StreamExt;
+    use tokio::io::duplex;
+    use tokio_util::codec::{Encoder, FramedParts, LengthDelimitedCodec};
+
+    #[tokio::test]
+    async fn split_spawn_framed_reads_buffered_first_frame() {
+        let (io, _peer) = duplex(64);
+        let mut codec = LengthDelimitedCodec::new();
+        let mut read_buf = BytesMut::new();
+        codec
+            .encode(Bytes::from_static(b"init"), &mut read_buf)
+            .expect("encode buffered first frame");
+
+        let mut parts = FramedParts::new(io, codec);
+        parts.read_buf = read_buf;
+
+        let (_write, mut read) = split_spawn_framed(parts);
+        let first = read
+            .next()
+            .await
+            .expect("buffered frame should be available")
+            .expect("buffered frame should decode");
+
+        assert_eq!(first.freeze(), Bytes::from_static(b"init"));
     }
 }
 
