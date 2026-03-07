@@ -1,4 +1,7 @@
-use futures::{SinkExt, StreamExt, channel::mpsc, prelude::*, stream::iter};
+use futures::{
+    SinkExt, StreamExt, channel::mpsc, prelude::*, stream::SplitSink, stream::SplitStream,
+    stream::iter,
+};
 use log::debug;
 use std::{
     collections::VecDeque,
@@ -8,7 +11,7 @@ use std::{
     task::{Context, Poll},
 };
 use tokio::io::AsyncWrite;
-use tokio_util::codec::{Framed, FramedRead, FramedWrite, length_delimited::LengthDelimitedCodec};
+use tokio_util::codec::{Framed, length_delimited::LengthDelimitedCodec};
 
 use crate::{
     ProtocolId, StreamId,
@@ -589,7 +592,7 @@ impl SubstreamBuilder {
 /* Code organization under read-write separation */
 
 pub(crate) struct SubstreamWritePart<U> {
-    substream: FramedWrite<crate::runtime::WriteHalf<StreamHandle>, U>,
+    substream: SplitSink<Framed<StreamHandle, U>, bytes::Bytes>,
     id: StreamId,
     proto_id: ProtocolId,
 
@@ -748,7 +751,7 @@ where
             Poll::Ready(None) => {
                 // Must be session close
                 self.dead = true;
-                if let Poll::Ready(Err(e)) = Pin::new(self.substream.get_mut()).poll_shutdown(cx) {
+                if let Poll::Ready(Err(e)) = Pin::new(&mut self.substream).poll_close(cx) {
                     log::trace!("sub stream poll shutdown err {}", e)
                 }
                 Poll::Ready(None)
@@ -777,7 +780,7 @@ where
 
     fn close_proto_stream(&mut self, cx: &mut Context) {
         self.event_receiver.close();
-        if let Poll::Ready(Err(e)) = Pin::new(self.substream.get_mut()).poll_shutdown(cx) {
+        if let Poll::Ready(Err(e)) = Pin::new(&mut self.substream).poll_close(cx) {
             log::trace!("sub stream poll shutdown err {}", e)
         }
         if !self.context.closed.load(Ordering::SeqCst) {
@@ -860,8 +863,7 @@ where
 
 /// Protocol Stream read part
 pub struct SubstreamReadPart {
-    pub(crate) substream:
-        FramedRead<crate::runtime::ReadHalf<StreamHandle>, Box<dyn Codec + Send + 'static>>,
+    pub(crate) substream: SplitStream<Framed<StreamHandle, Box<dyn Codec + Send + 'static>>>,
     pub(crate) before_receive: Option<BeforeReceive>,
     pub(crate) proto_id: ProtocolId,
     pub(crate) stream_id: StreamId,
@@ -964,7 +966,7 @@ impl SubstreamWritePartBuilder {
 
     pub fn build<U>(
         self,
-        substream: FramedWrite<crate::runtime::WriteHalf<StreamHandle>, U>,
+        substream: SplitSink<Framed<StreamHandle, U>, bytes::Bytes>,
     ) -> SubstreamWritePart<U>
     where
         U: Codec,
