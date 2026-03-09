@@ -1,3 +1,9 @@
+## tentacle 0.7.5 yamux 0.3.18
+
+### Bug fix
+- Fixed yamux `SteamHandle` support split
+- Fixed `ProtocolSpawn` impl
+
 ## tentacle 0.7.4 secio 0.6.7
 
 ### Features
