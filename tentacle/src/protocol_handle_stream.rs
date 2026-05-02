@@ -249,7 +249,7 @@ where
                 Some(token) = self.notify_receiver.next() => {
                     self.handle_event(ServiceProtocolEvent::Notify { token }).await;
                 },
-                res = &mut self.handle.poll(&mut self.handle_context), if self.need_poll => {
+                res = self.handle.poll(&mut self.handle_context), if self.need_poll => {
                     self.need_poll = res.is_some();
                 },
                 _ = &mut recv => break,
