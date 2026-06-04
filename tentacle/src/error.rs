@@ -22,6 +22,10 @@ pub enum TransportErrorKind {
     #[error("tls setting error: `{0:?}`")]
     #[cfg(feature = "tls")]
     TlsError(String),
+    /// QUIC transport error
+    #[error("quic error: `{0:?}`")]
+    #[cfg(feature = "quic")]
+    QuicError(crate::quic::error::QuicErrorKind),
 }
 
 #[derive(Error, Debug)]

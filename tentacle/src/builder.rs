@@ -343,6 +343,23 @@ where
         self.config.tcp_config.tls.socket_transformer = Arc::new(f);
         self
     }
+
+    /// Enable QUIC transport.
+    ///
+    /// Once configured, the service will route addresses of the form
+    /// `/ip{4,6}/<addr>/udp/<port>/quic-v1` through the QUIC stack instead
+    /// of the classic secio + yamux pipeline. Other transports are
+    /// untouched.
+    ///
+    /// QUIC requires a [`crate::secio::KeyProvider`] (via
+    /// [`HandshakeType::Secio`]) since the secio identity is bound into
+    /// the QUIC TLS certificate (see `quic::identity`).
+    #[cfg(feature = "quic")]
+    #[cfg_attr(docsrs, doc(cfg(feature = "quic")))]
+    pub fn quic_config(mut self, config: crate::quic::config::QuicConfig) -> Self {
+        self.config.quic_config = Some(config);
+        self
+    }
 }
 
 pub(crate) type NameFn = Box<dyn Fn(ProtocolId) -> String + Send + Sync>;

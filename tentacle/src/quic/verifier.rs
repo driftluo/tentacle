@@ -285,16 +285,14 @@ fn verify_tentacle_cert<K: KeyProvider>(
     // Note: we intentionally skip checking the `peer_id` field in the extension
     // against `secio_pubkey` — it is a redundant deterministic derivation with
     // no security value. The verifier always derives PeerId from `secio_pubkey`.
-    let secio_pubkey_bytes = identity.secio_pubkey().raw_data();
-    let secio_pubkey = secio::PublicKey::from_raw_key(secio_pubkey_bytes.to_vec());
+    let secio_pubkey = secio::PublicKey::from_raw_key(identity.secio_pubkey);
     let derived_peer_id = secio_pubkey.peer_id();
 
     // Step 8: pull SPKI DER from the parsed cert for the binding check.
     let spki_der = parsed.public_key().raw;
 
     // Step 9: verify the secio binding signature over the SPKI DER.
-    let binding_sig = identity.binding_sig().raw_data();
-    verify_binding(local_key, &secio_pubkey, spki_der, binding_sig.as_ref())
+    verify_binding(local_key, &secio_pubkey, spki_der, &identity.binding_sig)
         .map_err(|e| RustlsError::General(format!("binding signature invalid: {}", e)))?;
 
     // Step 10: client-only pinned peer_id check. Server-side verifier passes

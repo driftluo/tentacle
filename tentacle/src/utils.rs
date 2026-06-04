@@ -62,6 +62,37 @@ pub fn is_reachable(ip: IpAddr) -> bool {
     }
 }
 
+/// Change multiaddr to UDP socketaddr
+pub fn multiaddr_to_udp_socketaddr(addr: &Multiaddr) -> Option<SocketAddr> {
+    let mut iter = addr.iter().peekable();
+
+    while iter.peek().is_some() {
+        match iter.peek() {
+            Some(Protocol::Ip4(_)) | Some(Protocol::Ip6(_)) => (),
+            _ => {
+                // ignore is true
+                let _ignore = iter.next();
+                continue;
+            }
+        }
+
+        let proto1 = iter.next()?;
+        let proto2 = iter.next()?;
+
+        match (proto1, proto2) {
+            (Protocol::Ip4(ip), Protocol::Udp(port)) => {
+                return Some(SocketAddr::new(ip.into(), port));
+            }
+            (Protocol::Ip6(ip), Protocol::Udp(port)) => {
+                return Some(SocketAddr::new(ip.into(), port));
+            }
+            _ => (),
+        }
+    }
+
+    None
+}
+
 /// Change multiaddr to socketaddr
 pub fn multiaddr_to_socketaddr(addr: &Multiaddr) -> Option<SocketAddr> {
     let mut iter = addr.iter().peekable();
@@ -132,6 +163,8 @@ pub enum TransportType {
     Memory,
     /// Onion
     Onion,
+    /// Quic-v1
+    QuicV1,
 }
 
 /// Confirm the transport used by multiaddress
@@ -149,6 +182,8 @@ pub fn find_type(addr: &Multiaddr) -> TransportType {
             Some(TransportType::Memory)
         } else if let Protocol::Onion3(_) = proto {
             Some(TransportType::Onion)
+        } else if let Protocol::QuicV1 = proto {
+            Some(TransportType::QuicV1)
         } else {
             None
         }

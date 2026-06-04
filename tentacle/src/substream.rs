@@ -10,7 +10,7 @@ use std::{
     sync::{Arc, atomic::Ordering},
     task::{Context, Poll},
 };
-use tokio::io::AsyncWrite;
+use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 use tokio_util::codec::{Framed, length_delimited::LengthDelimitedCodec};
 
 use crate::{
@@ -22,8 +22,58 @@ use crate::{
     protocol_handle_stream::{ServiceProtocolEvent, SessionProtocolEvent},
     service::config::SessionConfig,
     traits::Codec,
-    yamux::StreamHandle,
 };
+
+#[derive(Debug)]
+pub(crate) enum SubstreamInner {
+    Yamux(yamux::StreamHandle),
+    #[cfg(feature = "quic")]
+    Quic(crate::quic::stream::QuicBiStream),
+}
+
+impl AsyncRead for SubstreamInner {
+    fn poll_read(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &mut ReadBuf<'_>,
+    ) -> Poll<io::Result<()>> {
+        match self.get_mut() {
+            Self::Yamux(s) => Pin::new(s).poll_read(cx, buf),
+            #[cfg(feature = "quic")]
+            Self::Quic(s) => Pin::new(s).poll_read(cx, buf),
+        }
+    }
+}
+
+impl AsyncWrite for SubstreamInner {
+    fn poll_write(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &[u8],
+    ) -> Poll<io::Result<usize>> {
+        match self.get_mut() {
+            Self::Yamux(s) => Pin::new(s).poll_write(cx, buf),
+            #[cfg(feature = "quic")]
+            Self::Quic(s) => Pin::new(s).poll_write(cx, buf),
+        }
+    }
+
+    fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        match self.get_mut() {
+            Self::Yamux(s) => Pin::new(s).poll_flush(cx),
+            #[cfg(feature = "quic")]
+            Self::Quic(s) => Pin::new(s).poll_flush(cx),
+        }
+    }
+
+    fn poll_shutdown(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        match self.get_mut() {
+            Self::Yamux(s) => Pin::new(s).poll_shutdown(cx),
+            #[cfg(feature = "quic")]
+            Self::Quic(s) => Pin::new(s).poll_shutdown(cx),
+        }
+    }
+}
 
 /// Event generated/received by the protocol stream
 #[derive(Debug)]
@@ -32,8 +82,8 @@ pub(crate) enum ProtocolEvent {
     Open {
         /// Protocol name
         proto_name: String,
-        /// Yamux sub stream handle handshake framed
-        substream: Box<Framed<StreamHandle, LengthDelimitedCodec>>,
+        /// Framed substream handle for the negotiated protocol
+        substream: Box<Framed<SubstreamInner, LengthDelimitedCodec>>,
         /// Protocol version
         version: String,
     },
@@ -65,7 +115,7 @@ pub(crate) enum ProtocolEvent {
 /// Each custom protocol in a session corresponds to a sub stream
 /// Can be seen as the route of each protocol
 pub(crate) struct Substream<U> {
-    substream: Framed<StreamHandle, U>,
+    substream: Framed<SubstreamInner, U>,
     id: StreamId,
     proto_id: ProtocolId,
 
@@ -562,7 +612,7 @@ impl SubstreamBuilder {
         self
     }
 
-    pub fn build<U>(self, substream: Framed<StreamHandle, U>) -> Substream<U>
+    pub fn build<U>(self, substream: Framed<SubstreamInner, U>) -> Substream<U>
     where
         U: Codec,
     {
@@ -592,7 +642,7 @@ impl SubstreamBuilder {
 /* Code organization under read-write separation */
 
 pub(crate) struct SubstreamWritePart<U> {
-    substream: SplitSink<Framed<StreamHandle, U>, bytes::Bytes>,
+    substream: SplitSink<Framed<SubstreamInner, U>, bytes::Bytes>,
     id: StreamId,
     proto_id: ProtocolId,
 
@@ -863,7 +913,7 @@ where
 
 /// Protocol Stream read part
 pub struct SubstreamReadPart {
-    pub(crate) substream: SplitStream<Framed<StreamHandle, Box<dyn Codec + Send + 'static>>>,
+    pub(crate) substream: SplitStream<Framed<SubstreamInner, Box<dyn Codec + Send + 'static>>>,
     pub(crate) before_receive: Option<BeforeReceive>,
     pub(crate) proto_id: ProtocolId,
     pub(crate) stream_id: StreamId,
@@ -966,7 +1016,7 @@ impl SubstreamWritePartBuilder {
 
     pub fn build<U>(
         self,
-        substream: SplitSink<Framed<StreamHandle, U>, bytes::Bytes>,
+        substream: SplitSink<Framed<SubstreamInner, U>, bytes::Bytes>,
     ) -> SubstreamWritePart<U>
     where
         U: Codec,

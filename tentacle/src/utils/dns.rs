@@ -90,6 +90,9 @@ impl DnsResolver {
                     TransportType::Onion => {
                         warn!("Onion transport type should not have dns resolve")
                     }
+                    TransportType::QuicV1 => {
+                        warn!("QUIC dns resolve is not supported in v1");
+                    }
                 }
 
                 if let Some(peer_id) = self.peer_id.take() {

@@ -13,8 +13,18 @@ pub const BINDING_DOMAIN: &[u8] = b"tentacle-quic-binding/v1";
 /// Payload version in the identity extension.
 pub const IDENTITY_VERSION: u8 = 1;
 
+/// A freshly-generated self-signed TLS certificate carrying the
+/// tentacle identity extension, ready to be plugged into a
+/// `rustls::ServerConfig` / `rustls::ClientConfig`.
+///
+/// Both fields are DER-encoded. `cert_der` is the X.509 leaf with the
+/// tentacle private extension attached; `key_der` is the matching
+/// PKCS#8 private key for the embedded TLS keypair (K_tls). The secio
+/// private key is **not** stored here.
 pub struct TentacleQuicCert {
+    /// DER-encoded X.509 leaf certificate.
     pub cert_der: Vec<u8>,
+    /// PKCS#8 DER-encoded private key for the embedded TLS keypair.
     pub key_der: Vec<u8>,
 }
 
@@ -93,7 +103,45 @@ fn encode_identity_payload(secio_pubkey: &[u8], binding_sig: &[u8]) -> Vec<u8> {
         .to_vec()
 }
 
-pub fn extract_identity(leaf_der: &[u8]) -> Result<TentacleQuicIdentityV1, QuicErrorKind> {
+/// Decoded contents of the tentacle QUIC identity X.509 extension.
+///
+/// Returned by [`extract_identity`]. Wrapping the molecule type in a
+/// plain struct keeps the auto-generated `identity_mol` codec out of
+/// the public API surface, so consumers don't have to reach through
+/// molecule's reader / entity types to inspect the fields.
+#[derive(Debug, Clone)]
+pub struct TentacleQuicIdentity {
+    /// Identity payload version. Always equal to [`IDENTITY_VERSION`]
+    /// for a successfully-extracted v1 payload.
+    pub version: u8,
+    /// Raw bytes of the peer's secio public key (`K_secio`). The
+    /// `PeerId` is derived from this with
+    /// [`secio::PublicKey::from_raw_key`] + [`secio::PublicKey::peer_id`].
+    pub secio_pubkey: Vec<u8>,
+    /// Raw bytes of the secp256k1 binding signature, which proves the
+    /// holder of `K_secio` also controls the leaf certificate's TLS
+    /// keypair (`K_tls`). Verified by
+    /// [`verify_binding`].
+    pub binding_sig: Vec<u8>,
+}
+
+/// Pull the tentacle identity payload out of a peer-presented leaf
+/// certificate.
+///
+/// Walks the X.509 extensions, locates the unique extension with OID
+/// [`TENTACLE_QUIC_IDENT_OID`], molecule-decodes its payload, and
+/// validates that the version field equals [`IDENTITY_VERSION`].
+///
+/// Returns:
+/// - [`QuicErrorKind::CertificateError`] if the cert can't be parsed
+///   or the molecule payload is malformed.
+/// - [`QuicErrorKind::ExtensionNotFound`] if no extension with the
+///   tentacle OID is present.
+/// - [`QuicErrorKind::MultipleIdentityFound`] if more than one such
+///   extension is present (a tampered or malformed cert).
+/// - [`QuicErrorKind::IdentityVersionUnsupported`] if the payload
+///   version is not 1.
+pub fn extract_identity(leaf_der: &[u8]) -> Result<TentacleQuicIdentity, QuicErrorKind> {
     let (_, parsed_cert) = x509_parser::parse_x509_certificate(leaf_der)
         .map_err(|e| QuicErrorKind::CertificateError(e.to_string()))?;
     let mut identity = None;
@@ -122,7 +170,11 @@ pub fn extract_identity(leaf_der: &[u8]) -> Result<TentacleQuicIdentityV1, QuicE
         if version != IDENTITY_VERSION {
             return Err(QuicErrorKind::IdentityVersionUnsupported(version));
         }
-        return Ok(identity);
+        return Ok(TentacleQuicIdentity {
+            version,
+            secio_pubkey: identity.secio_pubkey().raw_data().to_vec(),
+            binding_sig: identity.binding_sig().raw_data().to_vec(),
+        });
     } else {
         Err(QuicErrorKind::ExtensionNotFound)
     }
@@ -173,22 +225,20 @@ mod tests {
         let identity = extract_identity(&cert.cert_der).expect("extract identity");
 
         // version must be 1
-        let version: u8 = identity.version().nth0().into();
-        assert_eq!(version, IDENTITY_VERSION);
+        assert_eq!(identity.version, IDENTITY_VERSION);
 
         // secio_pubkey must round-trip exactly
         assert_eq!(
-            identity.secio_pubkey().raw_data().as_ref(),
+            identity.secio_pubkey.as_slice(),
             key.public_key().inner_ref()
         );
 
         // PeerId can be derived from secio_pubkey (no separate field stored)
-        let derived =
-            secio::PublicKey::from_raw_key(identity.secio_pubkey().raw_data().to_vec()).peer_id();
+        let derived = secio::PublicKey::from_raw_key(identity.secio_pubkey.clone()).peer_id();
         assert_eq!(derived, key.public_key().peer_id());
 
         // binding_sig must be non-empty
-        assert!(!identity.binding_sig().raw_data().is_empty());
+        assert!(!identity.binding_sig.is_empty());
     }
 
     #[test]
@@ -198,9 +248,8 @@ mod tests {
 
         let spki_der = spki_der_of(&cert.cert_der);
         let identity = extract_identity(&cert.cert_der).expect("extract identity");
-        let binding_sig = identity.binding_sig().raw_data().to_vec();
 
-        verify_binding(&key, &key.public_key(), &spki_der, &binding_sig)
+        verify_binding(&key, &key.public_key(), &spki_der, &identity.binding_sig)
             .expect("binding verification should pass");
     }
 
@@ -211,7 +260,7 @@ mod tests {
 
         let spki_der = spki_der_of(&cert.cert_der);
         let identity = extract_identity(&cert.cert_der).expect("extract identity");
-        let mut sig = identity.binding_sig().raw_data().to_vec();
+        let mut sig = identity.binding_sig.clone();
 
         // Flip the last byte
         let last = sig.len() - 1;
@@ -233,10 +282,14 @@ mod tests {
 
         let spki_der = spki_der_of(&cert_a.cert_der);
         let identity = extract_identity(&cert_a.cert_der).expect("extract identity");
-        let sig = identity.binding_sig().raw_data().to_vec();
 
         // Signature was made by key_a, but we try to verify with key_b's public key
-        let result = verify_binding(&key_a, &key_b.public_key(), &spki_der, &sig);
+        let result = verify_binding(
+            &key_a,
+            &key_b.public_key(),
+            &spki_der,
+            &identity.binding_sig,
+        );
         assert!(
             matches!(result, Err(QuicErrorKind::SigningError(_))),
             "expected SigningError, got {:?}",
@@ -249,7 +302,7 @@ mod tests {
         let key = SecioKeyPair::secp256k1_generated();
         let cert = build_self_signed(&key).expect("build cert");
         let identity = extract_identity(&cert.cert_der).expect("extract identity");
-        let sig = identity.binding_sig().raw_data().to_vec();
+        let sig = identity.binding_sig.clone();
 
         // Use an unrelated byte string as SPKI
         let fake_spki = b"not the real SPKI der".to_vec();

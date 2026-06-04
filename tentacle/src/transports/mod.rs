@@ -217,6 +217,10 @@ mod os {
                 TransportType::Tls => Err(TransportErrorKind::NotSupported(address)),
 
                 TransportType::Onion => Err(TransportErrorKind::NotSupported(address)),
+                // QUIC routing is handled by `InnerService::listen_inner_quic`
+                // before this dispatch sees the address. If we got here,
+                // QUIC support is either disabled or misconfigured.
+                TransportType::QuicV1 => Err(TransportErrorKind::NotSupported(address)),
             }
         }
     }
@@ -265,6 +269,9 @@ mod os {
                 }
                 #[cfg(not(feature = "tls"))]
                 TransportType::Tls => Err(TransportErrorKind::NotSupported(address)),
+                // QUIC routing is handled by `InnerService::dial_inner_quic`
+                // before this dispatch sees the address.
+                TransportType::QuicV1 => Err(TransportErrorKind::NotSupported(address)),
             }
         }
     }

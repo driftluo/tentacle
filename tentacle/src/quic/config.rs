@@ -1,6 +1,7 @@
 use std::time::Duration;
 
 /// Configuration for Quic protocol service
+#[derive(Clone)]
 pub struct QuicConfig {
     /// Max idle timeout, corresponding to quinn::TransportConfig::max_idle_timeout
     /// Default to 30 seconds

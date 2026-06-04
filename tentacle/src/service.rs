@@ -37,6 +37,16 @@ use crate::{
     utils::extract_peer_id,
 };
 
+#[cfg(feature = "quic")]
+use crate::{
+    quic::{
+        endpoint::{QuicEndpoint, QuicEndpointHandle},
+        session::QuicSession,
+    },
+    session::QuicListenAccepted,
+    utils::{TransportType, find_type},
+};
+
 pub(crate) mod config;
 mod control;
 pub(crate) mod event;
@@ -59,12 +69,53 @@ pub use crate::service::config::TlsConfig;
 
 type Result<T> = std::result::Result<T, TransportErrorKind>;
 
+/// Output of the transport-agnostic session-registration steps. The caller
+/// uses these fields to build a per-multiplexer session loop (`Session` for
+/// yamux, `QuicSession` for QUIC).
+struct SessionOpenContext {
+    target: TargetProtocol,
+    meta: SessionMeta,
+    service_event_receiver: priority_mpsc::Receiver<SessionEvent>,
+}
+
+/// Outcome of resolving `(HandshakeType, quic_config)` at service
+/// construction time. Each variant is dispatched to a different user-
+/// visible error by [`InnerService::resolve_quic_endpoint`], so the
+/// caller can distinguish "user didn't enable QUIC" from "user enabled
+/// it incorrectly" from "user enabled it correctly but build failed".
+#[cfg(feature = "quic")]
+enum QuicEndpointSlot {
+    /// `(HandshakeType::Noop, None)` — neither secio nor QUIC was
+    /// requested. Dial / listen of `/quic-v1` surfaces as
+    /// [`TransportErrorKind::NotSupported`].
+    NotRequested,
+    /// `(HandshakeType::Secio, None)` — service has a secio identity
+    /// but `ServiceBuilder::quic_config(...)` was not called. Surfaces
+    /// as [`QuicErrorKind::NotConfigured`] so the user gets an
+    /// actionable hint instead of the generic `NotSupported`.
+    NotConfigured,
+    /// `(HandshakeType::Noop, Some)` — user enabled QUIC but the
+    /// service has no secio identity to bind into the TLS cert, or
+    /// `QuicEndpoint::new` failed at build time. Surfaces as
+    /// [`QuicErrorKind::Misconfigured`].
+    Misconfigured(String),
+    /// `(HandshakeType::Secio, Some)` and `QuicEndpoint::new` succeeded.
+    Ready(Arc<dyn QuicEndpointHandle>),
+}
+
 struct InnerService<K> {
     protocol_configs: IntMap<ProtocolId, ProtocolMeta>,
 
     sessions: IntMap<SessionId, SessionController>,
 
     multi_transport: MultiTransport,
+
+    /// Five-state QUIC endpoint slot capturing every distinct outcome of
+    /// `(HandshakeType, quic_config)` so each can be reported with a
+    /// precise error instead of collapsing into `NotSupported`.
+    /// See [`QuicEndpointSlot`] for the per-state user-visible error.
+    #[cfg(feature = "quic")]
+    quic_endpoint: QuicEndpointSlot,
 
     handshake_type: HandshakeType<K>,
 
@@ -152,6 +203,35 @@ where
 
         let service_context = ServiceContext::new(task_sender, shutdown.clone());
 
+        // QUIC endpoint is built up-front (binding nothing) so that listen /
+        // dial calls can clone it. Each `(HandshakeType, quic_config)`
+        // combination is recorded as a distinct `QuicEndpointSlot` so
+        // subsequent listen / dial calls can report a precise error
+        // instead of collapsing into `NotSupported`.
+        #[cfg(feature = "quic")]
+        let quic_endpoint: QuicEndpointSlot = match (&handshake_type, config.quic_config.as_ref()) {
+            (HandshakeType::Secio(key), Some(cfg)) => {
+                match QuicEndpoint::new(key.clone(), cfg.clone()) {
+                    Ok(ep) => QuicEndpointSlot::Ready(Arc::new(ep) as Arc<dyn QuicEndpointHandle>),
+                    Err(e) => {
+                        let msg = format!("failed to build quic endpoint: {:?}", e);
+                        log::error!("{}", msg);
+                        QuicEndpointSlot::Misconfigured(msg)
+                    }
+                }
+            }
+            (HandshakeType::Noop, Some(_)) => {
+                let msg = "ServiceBuilder::quic_config(...) was set but \
+                           HandshakeType::Noop has no secio identity to bind \
+                           into the QUIC TLS certificate"
+                    .to_string();
+                log::error!("{}", msg);
+                QuicEndpointSlot::Misconfigured(msg)
+            }
+            (HandshakeType::Secio(_), None) => QuicEndpointSlot::NotConfigured,
+            (HandshakeType::Noop, None) => QuicEndpointSlot::NotRequested,
+        };
+
         Service {
             handle,
             service_context: service_context.clone_self(),
@@ -168,6 +248,8 @@ where
                 handle_sender: user_handle_sender,
                 future_task_sender,
                 handshake_type,
+                #[cfg(feature = "quic")]
+                quic_endpoint,
                 multi_transport: {
                     #[cfg(target_family = "wasm")]
                     let transport = MultiTransport::new(config.timeout.timeout);
@@ -208,6 +290,12 @@ where
     /// it will return original value, and create a future task to DNS resolver later.
     pub async fn listen(&mut self, address: Multiaddr) -> Result<Multiaddr> {
         let inner = self.inner_service.as_mut().unwrap();
+
+        #[cfg(feature = "quic")]
+        if matches!(find_type(&address), TransportType::QuicV1) {
+            return inner.listen_quic(address).await;
+        }
+
         let listen_future = inner.multi_transport.clone().listen(address.clone())?;
 
         #[cfg(target_family = "wasm")]
@@ -256,7 +344,12 @@ where
     /// Dial the given address, doesn't actually make a request, just generate a future
     pub async fn dial(&mut self, address: Multiaddr, target: TargetProtocol) -> Result<&mut Self> {
         let inner = self.inner_service.as_mut().unwrap();
-        if !(inner.dial_protocols.contains_key(&address)
+
+        // Skip if the exact address or any other address with the same
+        // /p2p/<peer_id> is already being dialed. Mirrors the check in
+        // `handle_service_task`'s `ServiceTask::Dial` arm so both entry
+        // points behave identically across transports.
+        if inner.dial_protocols.contains_key(&address)
             || extract_peer_id(&address)
                 .map(|peer_id| {
                     inner.dial_protocols.keys().any(|addr| {
@@ -267,21 +360,27 @@ where
                         }
                     })
                 })
-                .unwrap_or_default())
+                .unwrap_or_default()
         {
-            let dial_future = inner.multi_transport.clone().dial(address.clone())?;
+            return Ok(self);
+        }
 
-            match dial_future.await {
-                Ok((addr, incoming)) => {
-                    inner.handshake(incoming, SessionType::Outbound, addr, None);
-                    inner.dial_protocols.insert(address, target);
-                    inner.state.increase();
-                    Ok(self)
-                }
-                Err(err) => Err(err),
+        #[cfg(feature = "quic")]
+        if matches!(find_type(&address), TransportType::QuicV1) {
+            inner.dial_inner_quic(address, target)?;
+            return Ok(self);
+        }
+
+        let dial_future = inner.multi_transport.clone().dial(address.clone())?;
+
+        match dial_future.await {
+            Ok((addr, incoming)) => {
+                inner.handshake(incoming, SessionType::Outbound, addr, None);
+                inner.dial_protocols.insert(address, target);
+                inner.state.increase();
+                Ok(self)
             }
-        } else {
-            Ok(self)
+            Err(err) => Err(err),
         }
     }
 
@@ -357,6 +456,11 @@ where
 
     /// Use by inner
     fn listen_inner(&mut self, address: Multiaddr) -> Result<()> {
+        #[cfg(feature = "quic")]
+        if matches!(find_type(&address), TransportType::QuicV1) {
+            return self.listen_inner_quic(address);
+        }
+
         let listen_future = self.multi_transport.clone().listen(address.clone())?;
 
         #[cfg(not(target_family = "wasm"))]
@@ -389,6 +493,11 @@ where
     /// Use by inner
     #[inline(always)]
     fn dial_inner(&mut self, address: Multiaddr, target: TargetProtocol) -> Result<()> {
+        #[cfg(feature = "quic")]
+        if matches!(find_type(&address), TransportType::QuicV1) {
+            return self.dial_inner_quic(address, target);
+        }
+
         let dial_future = self.multi_transport.clone().dial(address.clone())?;
         self.dial_protocols.insert(address.clone(), target);
 
@@ -428,6 +537,227 @@ where
         let mut sender = self.future_task_sender.clone();
         crate::runtime::spawn(async move {
             let _ignore = sender.send(Box::pin(task)).await;
+        });
+        self.state.increase();
+        Ok(())
+    }
+
+    /// Resolve the QUIC endpoint slot for an operation on `address`,
+    /// translating each [`QuicEndpointSlot`] state into a distinct
+    /// user-visible error:
+    ///
+    /// | Slot                         | Surfaced error                                |
+    /// |------------------------------|-----------------------------------------------|
+    /// | `Ready(ep)`                  | `Ok(ep)`                                      |
+    /// | `NotRequested`               | `TransportErrorKind::NotSupported(addr)`      |
+    /// | `NotConfigured`              | `QuicError(QuicErrorKind::NotConfigured)`     |
+    /// | `Misconfigured(msg)`         | `QuicError(QuicErrorKind::Misconfigured(_))`  |
+    #[cfg(feature = "quic")]
+    fn resolve_quic_endpoint(&self, address: &Multiaddr) -> Result<Arc<dyn QuicEndpointHandle>> {
+        match &self.quic_endpoint {
+            QuicEndpointSlot::Ready(ep) => Ok(ep.clone()),
+            QuicEndpointSlot::NotRequested => {
+                Err(TransportErrorKind::NotSupported(address.clone()))
+            }
+            QuicEndpointSlot::NotConfigured => Err(TransportErrorKind::QuicError(
+                crate::quic::error::QuicErrorKind::NotConfigured,
+            )),
+            QuicEndpointSlot::Misconfigured(msg) => Err(TransportErrorKind::QuicError(
+                crate::quic::error::QuicErrorKind::Misconfigured(msg.clone()),
+            )),
+        }
+    }
+
+    /// QUIC dial path: bypass `MultiTransport` (which only handles byte
+    /// streams) and drive [`crate::quic::endpoint::QuicEndpoint::dial`]
+    /// asynchronously, surfacing the result via
+    /// [`SessionEvent::QuicListenAccepted`] for unified registration.
+    #[cfg(feature = "quic")]
+    fn dial_inner_quic(&mut self, address: Multiaddr, target: TargetProtocol) -> Result<()> {
+        let endpoint = self.resolve_quic_endpoint(&address)?;
+
+        self.dial_protocols.insert(address.clone(), target);
+
+        let mut sender = self.session_event_sender.clone();
+        let task = async move {
+            match endpoint.dial_dyn(address.clone()).await {
+                Ok(handshake) => {
+                    let public_key = handshake.remote_pubkey().clone();
+                    let event = SessionEvent::QuicListenAccepted(QuicListenAccepted {
+                        session: handshake,
+                        public_key,
+                        address,
+                        listen_address: None,
+                        ty: SessionType::Outbound,
+                    });
+                    if let Err(err) = sender.send(event).await {
+                        error!("quic dial result send back error: {:?}", err);
+                    }
+                }
+                Err(error) => {
+                    let event = SessionEvent::DialError {
+                        address,
+                        error: TransportErrorKind::QuicError(error),
+                    };
+                    if let Err(err) = sender.send(event).await {
+                        error!("quic dial error send back error: {:?}", err);
+                    }
+                }
+            }
+        };
+
+        let mut sender = self.future_task_sender.clone();
+        crate::runtime::spawn(async move {
+            let _ignore = sender.send(Box::pin(task)).await;
+        });
+        self.state.increase();
+        Ok(())
+    }
+
+    /// Public-API `Service::listen` counterpart for QUIC: bind synchronously
+    /// (so the caller learns the bound port immediately) and then spawn the
+    /// accept loop directly. Mirrors the structure of the non-QUIC branch
+    /// in [`Service::listen`].
+    #[cfg(feature = "quic")]
+    async fn listen_quic(&mut self, address: Multiaddr) -> Result<Multiaddr> {
+        let endpoint = self.resolve_quic_endpoint(&address)?;
+
+        let listener = endpoint
+            .listen_dyn(address.clone())
+            .map_err(TransportErrorKind::QuicError)?;
+
+        let listen_address = listener.listen_addr().clone();
+
+        let _ignore = self
+            .handle_sender
+            .send(
+                ServiceEvent::ListenStarted {
+                    address: listen_address.clone(),
+                }
+                .into(),
+            )
+            .await;
+
+        self.listens.insert(listen_address.clone());
+
+        let mut sender = self.session_event_sender.clone();
+        let listen_addr_for_loop = listen_address.clone();
+        let task = async move {
+            loop {
+                match listener.accept().await {
+                    Ok(Some((remote_addr, handshake))) => {
+                        let public_key = handshake.remote_pubkey().clone();
+                        let event = SessionEvent::QuicListenAccepted(QuicListenAccepted {
+                            session: handshake,
+                            public_key,
+                            address: remote_addr,
+                            listen_address: Some(listen_addr_for_loop.clone()),
+                            ty: SessionType::Inbound,
+                        });
+                        if sender.send(event).await.is_err() {
+                            break;
+                        }
+                    }
+                    Ok(None) => break,
+                    // Per-connection handshake failure (bad cert, peer-id
+                    // mismatch, dropped client, …). The endpoint is still
+                    // alive — log and keep accepting.
+                    Err(error) => {
+                        log::debug!(
+                            "quic accept handshake failed: {:?} for address {:?}",
+                            error,
+                            listen_addr_for_loop
+                        );
+                    }
+                }
+            }
+        };
+        let mut future_sender = self.future_task_sender.clone();
+        crate::runtime::spawn(async move {
+            let _ignore = future_sender.send(Box::pin(task)).await;
+        });
+
+        Ok(listen_address)
+    }
+
+    /// QUIC listen path: bind a QUIC server endpoint and spawn an accept
+    /// loop that emits [`SessionEvent::QuicListenAccepted`] for each
+    /// successfully-handshaken inbound connection.
+    #[cfg(feature = "quic")]
+    fn listen_inner_quic(&mut self, address: Multiaddr) -> Result<()> {
+        let endpoint = self.resolve_quic_endpoint(&address)?;
+
+        let listener = match endpoint.listen_dyn(address.clone()) {
+            Ok(l) => l,
+            Err(error) => {
+                let mut sender = self.session_event_sender.clone();
+                let event = SessionEvent::ListenError {
+                    address,
+                    error: TransportErrorKind::QuicError(error),
+                };
+                let mut future_sender = self.future_task_sender.clone();
+                crate::runtime::spawn(async move {
+                    let _ignore = future_sender
+                        .send(Box::pin(async move {
+                            let _ignore = sender.send(event).await;
+                        }))
+                        .await;
+                });
+                self.state.increase();
+                return Ok(());
+            }
+        };
+
+        let listen_address = listener.listen_addr().clone();
+        let mut sender = self.session_event_sender.clone();
+
+        let listen_address_for_start = listen_address.clone();
+        let task = async move {
+            // Tell the service main loop the listen completed.
+            if let Err(err) = sender
+                .send(SessionEvent::ListenStart {
+                    listen_address: listen_address_for_start.clone(),
+                    incoming: MultiIncoming::TcpUpgrade,
+                })
+                .await
+            {
+                error!("quic listen start send back error: {:?}", err);
+                return;
+            }
+
+            // Drive the accept loop until the endpoint is closed.
+            loop {
+                match listener.accept().await {
+                    Ok(Some((remote_addr, handshake))) => {
+                        let public_key = handshake.remote_pubkey().clone();
+                        let event = SessionEvent::QuicListenAccepted(QuicListenAccepted {
+                            session: handshake,
+                            public_key,
+                            address: remote_addr,
+                            listen_address: Some(listen_address.clone()),
+                            ty: SessionType::Inbound,
+                        });
+                        if sender.send(event).await.is_err() {
+                            break;
+                        }
+                    }
+                    Ok(None) => break,
+                    // Per-connection handshake failure; endpoint is still
+                    // alive — log and keep accepting.
+                    Err(error) => {
+                        log::debug!(
+                            "quic accept handshake failed: {:?} for address {:?}",
+                            error,
+                            listen_address_for_start
+                        );
+                    }
+                }
+            }
+        };
+
+        let mut future_sender = self.future_task_sender.clone();
+        crate::runtime::spawn(async move {
+            let _ignore = future_sender.send(Box::pin(task)).await;
         });
         self.state.increase();
         Ok(())
@@ -607,18 +937,24 @@ where
             .unwrap_or_default()
     }
 
-    /// Session open
-    #[inline]
-    async fn session_open<H>(
+    /// Common session-registration steps shared by yamux and QUIC paths
+    /// (steps 1–5 of `session_open`):
+    /// 1. duplicate-connection check (by remote public key)
+    /// 2. /p2p/<peer_id> validation
+    /// 3. SessionId assignment
+    /// 4. SessionContext + SessionController construction
+    /// 5. session-protocol handle init + SessionMeta build + emit `SessionOpen`
+    ///
+    /// Returns `None` if the session was rejected (duplicate / peer-id
+    /// mismatch); otherwise returns a [`SessionOpenContext`] that the caller
+    /// uses to perform step 6 (constructing the per-multiplexer session loop).
+    async fn session_open_common(
         &mut self,
-        mut handle: H,
         remote_pubkey: Option<PublicKey>,
         mut address: Multiaddr,
         ty: SessionType,
         listen_addr: Option<Multiaddr>,
-    ) where
-        H: AsyncRead + AsyncWrite + Send + 'static + Unpin,
-    {
+    ) -> Option<SessionOpenContext> {
         let target = self
             .dial_protocols
             .remove(&address)
@@ -633,9 +969,6 @@ where
             {
                 Some(context) => {
                     trace!("Connected to the connected node");
-                    crate::runtime::spawn(async move {
-                        let _ignore = handle.shutdown().await;
-                    });
                     if ty.is_outbound() {
                         let _ignore = self
                             .handle_sender
@@ -653,7 +986,7 @@ where
                             }))
                             .await;
                     }
-                    return;
+                    return None;
                 }
                 None => {
                     // if peer id doesn't match return an error
@@ -667,7 +1000,7 @@ where
                                     address,
                                 }))
                                 .await;
-                            return;
+                            return None;
                         }
                     } else {
                         address.push(Protocol::P2P(Cow::Owned(key.peer_id().into_bytes())))
@@ -742,47 +1075,140 @@ where
         )
         .session_proto_handles(handles);
 
-        let mut session = Session::new(
-            handle,
-            self.session_event_sender.clone(),
-            service_event_receiver,
-            meta,
-            self.future_task_sender.clone(),
-        );
-
         // session open event must be notified first, and then the protocol is enabled
         let (tx, rx) = futures::channel::oneshot::channel();
         let _ignore = self
             .handle_sender
             .send(
-                Into::<ServiceEventAndError>::into(ServiceEvent::SessionOpen { session_context })
-                    .wait_response(tx),
+                Into::<ServiceEventAndError>::into(ServiceEvent::SessionOpen {
+                    session_context: session_context.clone(),
+                })
+                .wait_response(tx),
             )
             .await;
         // Don't care about it's drop or response
         let _ignore = rx.await;
 
-        if ty.is_outbound() {
-            match target {
-                TargetProtocol::All => {
-                    self.protocol_configs
-                        .values()
-                        .for_each(|meta| session.open_proto_stream(&meta.name()));
-                }
-                TargetProtocol::Single(proto_id) => {
-                    if let Some(meta) = self.protocol_configs.get(&proto_id) {
-                        session.open_proto_stream(&meta.name());
-                    }
-                }
-                TargetProtocol::Filter(filter) => self
-                    .protocol_configs
-                    .iter()
-                    .filter(|(id, _)| filter(id))
-                    .for_each(|(_, meta)| session.open_proto_stream(&meta.name())),
+        Some(SessionOpenContext {
+            target,
+            meta,
+            service_event_receiver,
+        })
+    }
+
+    /// Session open (classic / yamux path)
+    #[inline]
+    async fn session_open<H>(
+        &mut self,
+        mut handle: H,
+        remote_pubkey: Option<PublicKey>,
+        address: Multiaddr,
+        ty: SessionType,
+        listen_addr: Option<Multiaddr>,
+    ) where
+        H: AsyncRead + AsyncWrite + Send + 'static + Unpin,
+    {
+        let ctx = match self
+            .session_open_common(remote_pubkey, address, ty, listen_addr)
+            .await
+        {
+            Some(c) => c,
+            None => {
+                // Rejected (duplicate / peer-id mismatch); ensure the byte
+                // stream is closed.
+                crate::runtime::spawn(async move {
+                    let _ignore = handle.shutdown().await;
+                });
+                return;
             }
+        };
+
+        let mut session = Session::new(
+            handle,
+            self.session_event_sender.clone(),
+            ctx.service_event_receiver,
+            ctx.meta,
+            self.future_task_sender.clone(),
+        );
+
+        if ty.is_outbound() {
+            self.open_target_protocols(&mut session, ctx.target, |s, name| {
+                s.open_proto_stream(name)
+            });
         }
 
         crate::runtime::spawn(session.for_each(|_| future::ready(())));
+    }
+
+    /// Session open (QUIC path).
+    ///
+    /// Mirrors [`Self::session_open`] but consumes a [`crate::quic::session::QuicHandshake`]
+    /// (TLS + tentacle identity already validated) instead of a raw byte stream,
+    /// and starts a [`crate::quic::session::QuicSession`] loop instead of the
+    /// yamux-backed [`Session`].
+    #[cfg(feature = "quic")]
+    async fn quic_session_open(
+        &mut self,
+        quic_handshake: crate::quic::session::QuicHandshake,
+        remote_pubkey: PublicKey,
+        address: Multiaddr,
+        ty: SessionType,
+        listen_addr: Option<Multiaddr>,
+    ) {
+        let ctx = match self
+            .session_open_common(Some(remote_pubkey.clone()), address, ty, listen_addr)
+            .await
+        {
+            Some(c) => c,
+            None => {
+                quic_handshake.connection().close(0u32.into(), b"rejected");
+                return;
+            }
+        };
+
+        let (conn, _pubkey) = quic_handshake.into_inner();
+        let mut session = QuicSession::new(
+            conn,
+            remote_pubkey,
+            self.session_event_sender.clone(),
+            ctx.service_event_receiver,
+            ctx.meta,
+            self.future_task_sender.clone(),
+        );
+
+        if ty.is_outbound() {
+            self.open_target_protocols(&mut session, ctx.target, |s, name| {
+                s.open_proto_stream(name)
+            });
+        }
+
+        crate::runtime::spawn(session.for_each(|_| future::ready(())));
+    }
+
+    #[inline]
+    fn open_target_protocols<S>(
+        &self,
+        session: &mut S,
+        target: TargetProtocol,
+        mut opener: impl FnMut(&mut S, &str),
+    ) {
+        match target {
+            TargetProtocol::All => {
+                self.protocol_configs
+                    .values()
+                    .for_each(|meta| opener(session, &meta.name()));
+            }
+            TargetProtocol::Single(proto_id) => {
+                if let Some(meta) = self.protocol_configs.get(&proto_id) {
+                    opener(session, &meta.name());
+                }
+            }
+            TargetProtocol::Filter(filter) => self
+                .protocol_configs
+                .iter()
+                .filter(|(id, _)| filter(id))
+                .for_each(|(_, meta)| opener(session, &meta.name())),
+        }
     }
 
     /// Close the specified session, clean up the handle
@@ -968,6 +1394,27 @@ where
                 if !self.reached_max_connection_limit() {
                     self.session_open(handle, public_key, address, ty, listen_address)
                         .await;
+                }
+            }
+            #[cfg(feature = "quic")]
+            SessionEvent::QuicListenAccepted(accepted) => {
+                if accepted.ty.is_outbound() {
+                    self.state.decrease();
+                }
+                if !self.reached_max_connection_limit() {
+                    self.quic_session_open(
+                        accepted.session,
+                        accepted.public_key,
+                        accepted.address,
+                        accepted.ty,
+                        accepted.listen_address,
+                    )
+                    .await;
+                } else {
+                    accepted
+                        .session
+                        .connection()
+                        .close(0u32.into(), b"capacity");
                 }
             }
             SessionEvent::HandshakeError { ty, error, address } => {

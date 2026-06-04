@@ -105,8 +105,7 @@ fn peer_identity_peer_id_bytes(conn: &quinn::Connection) -> Vec<u8> {
         .downcast::<Vec<CertificateDer<'static>>>()
         .expect("cert chain downcast");
     let identity = extract_identity(chain[0].as_ref()).expect("extract identity");
-    let secio_pubkey =
-        tentacle::secio::PublicKey::from_raw_key(identity.secio_pubkey().raw_data().to_vec());
+    let secio_pubkey = tentacle::secio::PublicKey::from_raw_key(identity.secio_pubkey);
     secio_pubkey.peer_id().into_bytes()
 }
 
