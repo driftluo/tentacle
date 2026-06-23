@@ -27,7 +27,7 @@ pub fn agree(
     my_private_key: EphemeralPrivateKey,
     other_public_key: &[u8],
 ) -> Result<Vec<u8>, SecioError> {
-    if !matches!(algorithm, KeyAgreement::X25519) || other_public_key.len() < 32 {
+    if !matches!(algorithm, KeyAgreement::X25519) || other_public_key.len() != 32 {
         return Err(SecioError::SecretGenerationFailed);
     }
     let mut bytes = [0; 32];
