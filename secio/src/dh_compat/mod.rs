@@ -67,6 +67,8 @@ mod ring_openssl_unix {
 
 #[cfg(test)]
 mod test {
+    use crate::error::SecioError;
+
     use super::*;
 
     #[test]
@@ -78,5 +80,20 @@ mod test {
         let secret_wasm = wasm_compat::agree(KeyAgreement::X25519, pk_wasm, &sk_native).unwrap();
 
         assert_eq!(secret_native, secret_wasm)
+    }
+
+    #[test]
+    fn test_wasm_agree_rejects_invalid_public_key_lengths() {
+        let (short_private_key, _) = wasm_compat::generate_agreement(KeyAgreement::X25519).unwrap();
+        let (long_private_key, _) = wasm_compat::generate_agreement(KeyAgreement::X25519).unwrap();
+
+        assert_eq!(
+            wasm_compat::agree(KeyAgreement::X25519, short_private_key, &[0; 31]).unwrap_err(),
+            SecioError::SecretGenerationFailed
+        );
+        assert_eq!(
+            wasm_compat::agree(KeyAgreement::X25519, long_private_key, &[0; 33]).unwrap_err(),
+            SecioError::SecretGenerationFailed
+        );
     }
 }
