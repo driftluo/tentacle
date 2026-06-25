@@ -705,7 +705,15 @@ where
             }
 
             let mut is_pending = self.control_poll(cx)?.is_pending();
-            is_pending &= self.recv_frames(cx)?.is_pending();
+            if self.read_pending_frames.is_empty() {
+                is_pending &= self.recv_frames(cx)?.is_pending();
+            } else {
+                trace!(
+                    "[{:?}] skip recv_frames while read_pending_frames is backpressured: {}",
+                    self.ty,
+                    self.read_pending_frames.len()
+                );
+            }
             is_pending &= self.recv_events(cx)?.is_pending();
 
             if is_pending {
@@ -939,6 +947,7 @@ mod test {
         SinkExt, Stream, StreamExt,
         channel::mpsc::{Receiver, Sender, channel},
         stream::FusedStream,
+        task::noop_waker_ref,
     };
     use std::{
         io,
@@ -1239,6 +1248,53 @@ mod test {
             assert!(reset_msg.flags().contains(Flag::Ack));
             assert!(reset_msg.flags().contains(Flag::Rst));
             assert_eq!(reset_msg.stream_id(), 5)
+        });
+    }
+
+    #[test]
+    fn test_backpressure_read_pending_frames() {
+        let rt = rt();
+
+        rt.block_on(async {
+            let (remote, local) = MockSocket::new();
+            let config = Config {
+                enable_keepalive: false,
+                ..Default::default()
+            };
+            let mut session = Session::new_server(local, config);
+            let mut cx = Context::from_waker(noop_waker_ref());
+
+            let stream_id = 3;
+            let (mut frame_sender, _frame_receiver) = channel(1);
+            frame_sender
+                .try_send(Frame::new_data(
+                    Flags::from(Flag::Ack),
+                    stream_id,
+                    bytes::BytesMut::from(&[0][..]),
+                ))
+                .unwrap();
+            session.streams.insert(stream_id, frame_sender);
+            session.read_pending_frames.push_back(Frame::new_data(
+                Flags::from(Flag::Ack),
+                stream_id,
+                bytes::BytesMut::from(&[1][..]),
+            ));
+
+            assert_eq!(session.read_pending_frames.len(), 1);
+
+            let mut client = Framed::new(
+                remote,
+                FrameCodec::default().max_frame_size(config.max_stream_window_size),
+            );
+            let frame = Frame::new_data(
+                Flags::from(Flag::Ack),
+                stream_id,
+                bytes::BytesMut::from(&[2][..]),
+            );
+            client.send(frame).await.unwrap();
+
+            assert!(Pin::new(&mut session).poll_next(&mut cx).is_pending());
+            assert_eq!(session.read_pending_frames.len(), 1);
         });
     }
 
