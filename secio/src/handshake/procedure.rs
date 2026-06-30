@@ -202,10 +202,7 @@ where
         }
     };
 
-    trace!(
-        "local info: {:?}, remote_info: {:?}",
-        local_infos, remote_infos
-    );
+    trace!("derived local and remote secio key material");
 
     let encode_cipher = generate_stream_cipher_and_hmac(
         chosen_cipher,
