@@ -21,7 +21,6 @@ use futures::{
     channel::mpsc::{Receiver, Sender, UnboundedReceiver, UnboundedSender, channel, unbounded},
 };
 use log::{debug, log_enabled, trace};
-use nohash_hasher::IntMap;
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio_util::codec::Framed;
 
@@ -68,7 +67,7 @@ pub struct Session<T> {
     ping_id: u32,
 
     // streams maps a stream id to a sender of stream,
-    streams: IntMap<StreamId, Sender<Frame>>,
+    streams: HashMap<StreamId, Sender<Frame>>,
     // The StreamHandle not yet been polled
     pending_streams: VecDeque<StreamHandle>,
     // The buffer which will send to underlying network
