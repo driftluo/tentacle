@@ -149,15 +149,8 @@ where
         cx: &mut Context<'_>,
         buf: &mut ReadBuf<'_>,
     ) -> Poll<io::Result<()>> {
-        // see https://github.com/tokio-rs/tokio/issues/3417
-        let slice = unsafe {
-            let buf = buf.unfilled_mut();
-            ::std::slice::from_raw_parts_mut(buf.as_mut_ptr().cast::<u8>(), buf.len())
-        };
+        let slice = buf.initialize_unfilled();
         let n = ready!(FutureAsyncRead::poll_read(self, cx, slice))?;
-        unsafe {
-            buf.assume_init(n);
-        }
         buf.advance(n);
         Poll::Ready(Ok(()))
     }
@@ -277,5 +270,54 @@ impl<T> CompatStream<T> {
     /// Returns the wrapped item.
     pub fn into_inner(self) -> T {
         self.0
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{CompatStream2, FutureAsyncRead};
+    use futures::task::noop_waker_ref;
+    use std::{
+        io,
+        mem::MaybeUninit,
+        pin::Pin,
+        task::{Context, Poll},
+    };
+    use tokio::io::ReadBuf;
+
+    struct InspectingReader {
+        observed: Vec<u8>,
+    }
+
+    impl FutureAsyncRead for InspectingReader {
+        fn poll_read(
+            mut self: Pin<&mut Self>,
+            _cx: &mut Context<'_>,
+            buf: &mut [u8],
+        ) -> Poll<io::Result<usize>> {
+            self.observed.extend_from_slice(&buf[..4]);
+            buf[..4].copy_from_slice(b"done");
+            Poll::Ready(Ok(4))
+        }
+    }
+
+    #[test]
+    fn compat_stream2_initializes_read_buf_before_future_read() {
+        let mut stream = CompatStream2::new(InspectingReader {
+            observed: Vec::new(),
+        });
+        let mut bytes = [MaybeUninit::new(0xAA); 8];
+        let mut read_buf = ReadBuf::uninit(&mut bytes);
+        let waker = noop_waker_ref();
+        let mut cx = Context::from_waker(waker);
+
+        assert!(
+            tokio::io::AsyncRead::poll_read(Pin::new(&mut stream), &mut cx, &mut read_buf)
+                .is_ready()
+        );
+
+        let inner = stream.into_inner();
+        assert_eq!(inner.observed, vec![0, 0, 0, 0]);
+        assert_eq!(read_buf.filled(), b"done");
     }
 }
